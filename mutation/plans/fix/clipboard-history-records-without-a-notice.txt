@@ -1,0 +1,96 @@
+# SONNY-439 — clipboard history records on a fresh install, from the first launch, and what it
+# records is what is copied while it is on. Property: the Settings switch, the Memory recording
+# policy and the run's recording policy are the whole gate; the historical dismissed-notice flag
+# decides nothing; a start from stopped marks the pasteboard as seen before it polls, so neither
+# what was on the clipboard before launch nor what was copied while a switch was off is recorded.
+# Killers, each measured by applying the mutant by hand at the fix round's tree (PR #226, 2026-09-11):
+# C1 by the timer assertions of aFreshInstallStartsRecordingAndLeavesWhatWasAlreadyOnTheClipboard,
+# aSettingsFileWhoseNoticeWasNeverDismissedStillRecords and ClarificationExitTests'
+# aDoorOpenedDuringASuppressedRunDoesNotRestartClipboardHistory (its fresh-install cases never see
+# monitoring start); C2 by theSwitchOffStillStopsRecordingWhateverTheNoticeFlagSays THROUGH ITS
+# TIMER ASSERTION ONLY — ClipboardHistoryMonitor.poll() re-reads the switch and records nothing
+# either way, so the recorded-nothing assertion cannot see C2 (PR #226's second review); C3 by the
+# timer assertions of theMasterSwitchStopsTheClipboardMonitorRatherThanJustTheRowItRenders and of
+# aSwitchOffAndOnDoesNotRecordWhatWasCopiedWhileItWasOff's master-switch case, since with the
+# resync at the start door a wrongly armed start's first poll records nothing either way; C4 by
+# aSwitchOffAndOnDoesNotRecordWhatWasCopiedWhileItWasOff on all three doors, the fresh-install test,
+# and ClarificationExitTests' abandoningAClarificationResumesClipboardHistoryThroughTheGuardedReset,
+# which counts the start door's read; C5 by aDoorOpenedDuringASuppressedRunDoesNotRestartClipboardHistory
+# on all three doors and both files; C6 by theDontSaveSettingWithNothingRunningDoesNotStopClipboardHistory
+# on all three of its doors (PR #226's delta review, F4: the guard read the setting and never asked
+# whether a run existed).
+
+>>> mutant C1 the dismissed-flag gate put back beside the switch
+>>> file Sources/MacAgent/AgentViewModel.swift
+>>> from
+        if settings.isEnabled {
+            startClipboardHistoryMonitoring()
+        } else {
+            stopClipboardHistoryMonitoring()
+        }
+>>> to
+        if settings.noticeDismissed && settings.isEnabled {
+            startClipboardHistoryMonitoring()
+        } else {
+            stopClipboardHistoryMonitoring()
+        }
+>>> end
+
+>>> mutant C2 the switch ignored: monitoring starts whatever the setting says
+>>> file Sources/MacAgent/AgentViewModel.swift
+>>> from
+        if settings.isEnabled {
+            startClipboardHistoryMonitoring()
+        } else {
+            stopClipboardHistoryMonitoring()
+        }
+>>> to
+        startClipboardHistoryMonitoring()
+>>> end
+
+>>> mutant C3 the Memory recording policy no longer asked at the start door
+>>> file Sources/MacAgent/AgentViewModel.swift
+>>> from
+        guard memorySettings.allowsRecording(in: .clipboardHistory) else {
+            stopClipboardHistoryMonitoring()
+            return
+        }
+>>> to
+>>> end
+
+>>> mutant C4 the resynchronise before a start dropped: the first poll after a launch or a switch records what was already there (PR #226's F1 and F3)
+>>> file Sources/MacAgent/AgentViewModel.swift
+>>> from
+        clipboardHistoryMonitor.resynchronize()
+        pollClipboardHistory()
+        clipboardHistoryTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+>>> to
+        pollClipboardHistory()
+        clipboardHistoryTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+>>> end
+
+>>> mutant C5 the run's recording policy no longer asked at the start door: a refresh during a suppressed run re-arms the poll (PR #226's F4)
+>>> file Sources/MacAgent/AgentViewModel.swift
+>>> from
+        guard !aSuppressedRunIsInFlight else {
+            stopClipboardHistoryMonitoring()
+            return
+        }
+        guard clipboardHistoryTimer == nil else {
+>>> to
+        guard clipboardHistoryTimer == nil else {
+>>> end
+
+>>> mutant C6 the start door gates on the setting alone again: with nothing running, a door stops clipboard history and leaves it stopped (PR #226's delta review, F4)
+>>> file Sources/MacAgent/AgentViewModel.swift
+>>> from
+        guard !aSuppressedRunIsInFlight else {
+            stopClipboardHistoryMonitoring()
+            return
+        }
+>>> to
+        guard !taskRecordingPolicy.suppressesTraces else {
+            stopClipboardHistoryMonitoring()
+            return
+        }
+>>> end

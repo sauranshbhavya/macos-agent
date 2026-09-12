@@ -668,6 +668,14 @@ final class AgentViewModel: ObservableObject {
     /// `resolveTaskScope` both read it, so the assessment and the scope agree on what a path is.
     private let whitelist: PathWhitelist
     private var clipboardHistoryTimer: Timer?
+    /// Whether the clipboard poll timer is armed — the thing `refreshClipboardHistoryNotice`'s gate
+    /// decides (SONNY-439, PR #226's second review). Internal so a test can hold that the switch
+    /// off leaves the timer unarmed, because nothing else can see it: `ClipboardHistoryMonitor.poll()`
+    /// re-reads the same switch from the same file every tick and records nothing either way, so a
+    /// mutant that armed the timer regardless of the switch read as caught by a test that only
+    /// looked at what was recorded, while in fact costing a settings-file read every second for
+    /// nothing. The recorded-nothing assertion is defence in depth; this is the gate's own answer.
+    var isMonitoringClipboardHistory: Bool { clipboardHistoryTimer != nil }
     private var routineScheduleTimer: Timer?
     /// Label for the currently-running scheduled routine. Separate from `lastCommand` so a
     /// background run can drive the running indicator without becoming the retry or follow-up
@@ -1379,6 +1387,15 @@ final class AgentViewModel: ObservableObject {
     /// widget's copy onto this property is that file's owner's call, and the two agree today.
     var isTaskInFlight: Bool {
         isRunning || isAwaitingApproval || clarificationQuestion != nil
+    }
+
+    /// A "Don't save this task" run that is running or parked — the one state in which the
+    /// clipboard monitor must not start (SONNY-439). The setting alone is not it: the widget sets
+    /// the policy before any task is sent, so the setting is on with nothing running whenever the
+    /// user has pressed the button and not yet typed, and a gate that read the setting alone
+    /// stopped clipboard history at that moment and left it stopped (PR #226's delta review, F4).
+    private var aSuppressedRunIsInFlight: Bool {
+        taskRecordingPolicy.suppressesTraces && isTaskInFlight
     }
 
     /// Hands `start` a command on behalf of a *programmatic* caller, and guarantees that a refused
@@ -4180,7 +4197,16 @@ final class AgentViewModel: ObservableObject {
 
         clipboardHistoryEnabled = settings.isEnabled
 
-        if settings.noticeDismissed && settings.isEnabled {
+        // **The switch alone decides, and `noticeDismissed` gates nothing** (SONNY-439). This read
+        // `settings.noticeDismissed && settings.isEnabled` for as long as a one-time notice in the
+        // old menu-bar popover was the setting's only surface: dismissing it was the consent, and
+        // that dismissal was what let monitoring start. The popover went, a persistent Settings
+        // toggle replaced the notice, and the flag kept gating — so a fresh install read the
+        // toggle as on while nothing polled, and `clipboard history` answered an empty list until
+        // the toggle was touched once (the founders' pass, test 18, versus test 73 which touches
+        // it). Consent lives on the two switches that exist: this one, and the Memory page's
+        // recording policy that `startClipboardHistoryMonitoring` asks before it starts.
+        if settings.isEnabled {
             startClipboardHistoryMonitoring()
         } else {
             stopClipboardHistoryMonitoring()
@@ -4617,9 +4643,9 @@ final class AgentViewModel: ObservableObject {
     ///
     /// Clipboard history routes to the setting it already had, for the reason on
     /// `MemoryCategory.clipboardHistory`: a second flag over the same behaviour is how a surface
-    /// ends up saying "on" while nothing is recording. The side effect that carries — the first-run
-    /// notice counts as answered — is correct rather than incidental: choosing here *is* answering
-    /// it.
+    /// ends up saying "on" while nothing is recording. The commit path still writes the historical
+    /// `noticeDismissed` flag `true`, which since SONNY-439 decides nothing; it stays so the file's
+    /// shape does not change (PR #226's F6 retired the sentence that called it a consent step).
     func setMemoryCategoryEnabled(_ category: MemoryCategory, to isEnabled: Bool) {
         guard !memorySettings.isDisabledByPolicy else {
             return
@@ -5701,10 +5727,40 @@ final class AgentViewModel: ObservableObject {
             stopClipboardHistoryMonitoring()
             return
         }
+        // **Never while a suppressed run is in flight — and never on the setting alone**
+        // (SONNY-439, PR #226's F4, founder decision 2026-09-11; narrowed to a live run by the
+        // delta review's F4). A "Don't save this task" run stops monitoring when it starts, and
+        // every door that can start it again while that run is running or parked — Command
+        // Center's `.onAppear`, a Memory delete's refresh, the master switch — ends here; before
+        // this guard each of them re-armed the poll and the first tick recorded what the user had
+        // copied during the pause. The first version of this guard read the policy and never asked
+        // whether a run existed, and the widget sets the policy before anything is sent: with the
+        // setting on and nothing running, opening Command Center or turning a switch on stopped
+        // clipboard history and left it stopped while the toggle read on — the defect the ticket
+        // was filed for, reached a new way. `isTaskInFlight` is the same predicate the widget's
+        // panels use, so a parked question or approval counts as the run it is.
+        // `finishRecordingPolicyIfSettled` puts the policy back to `.record` before it refreshes,
+        // so the resume at the run's end still passes.
+        guard !aSuppressedRunIsInFlight else {
+            stopClipboardHistoryMonitoring()
+            return
+        }
         guard clipboardHistoryTimer == nil else {
             return
         }
 
+        // **A start marks the pasteboard as already seen before its first poll** (SONNY-439,
+        // PR #226's F1 and F3, founder decision 2026-09-11: clipboard history records on by default
+        // from the first launch, and what it records is what is copied while it is on). `poll()`
+        // records whenever the change count differs from the last one it saw; that counter is
+        // `nil` at launch and is left behind by a stop, so the first poll of a launch swept in
+        // whatever was on the clipboard before Sonny opened, and the first poll after any of the
+        // three switches went off and on recorded what was copied while it was off (the review
+        // measured all three doors). One resynchronise at the one place a stopped monitor starts
+        // covers every case: the first start in a launch, the Settings toggle, the Memory row's
+        // switch, the master switch, a Memory delete's restart, and the suppressed run's resume,
+        // which resynchronises once more itself and loses nothing by it.
+        clipboardHistoryMonitor.resynchronize()
         pollClipboardHistory()
         clipboardHistoryTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             Task { @MainActor in

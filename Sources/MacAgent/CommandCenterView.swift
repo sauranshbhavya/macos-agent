@@ -5979,11 +5979,13 @@ private struct SettingsSecurityAccessPage: View {
 
             // Previously a one-time dismissible notice inside the now-removed menu-bar popover —
             // that was this setting's only UI anywhere, and dismissing it was the actual action
-            // that let clipboard monitoring start (see AgentViewModel.refreshClipboardHistoryNotice's
-            // `noticeDismissed && isEnabled` gate). A persistent Settings toggle replaces it here,
+            // that let clipboard monitoring start. A persistent Settings toggle replaces it here,
             // reusing the same commit path (`applyClipboardHistoryNoticeChoice`) so every interaction
             // still both persists the choice and starts/stops monitoring, not just cosmetically
-            // flips a switch.
+            // flips a switch. **The dismissal itself gates nothing any more** (SONNY-439): for a
+            // while after the notice went, `refreshClipboardHistoryNotice` still required the
+            // dismissed flag beside `isEnabled`, so a fresh install read this toggle as on while
+            // nothing polled until it was touched once. The switch's own value is the whole gate.
             SettingsSectionBlock(title: "Clipboard History") {
                 SettingsToggleRow(
                     title: "Watch clipboard history",

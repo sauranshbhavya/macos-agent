@@ -162,9 +162,11 @@ struct ClarificationExitTests {
     /// Clipboard history is paused for the whole of a suppressed run and resumed by
     /// `finishRecordingPolicyIfSettled()`, which does two distinct things in order: resynchronise
     /// the monitor so the pause's own copies are dropped rather than recorded on the first poll
-    /// back, then restart monitoring from settings. Each reads `changeCount` exactly once, and
-    /// nothing else here reads it — so a delta of two is both halves having run, and this is what
-    /// fails if the exit is ever rewired around that function.
+    /// back, then restart monitoring from settings. The resume reads `changeCount` once, the start
+    /// door's own resynchronise reads it once more, and the start's immediate poll a third time;
+    /// nothing else here reads it — so a delta of three is the whole path having run, and this is
+    /// what fails if the exit is ever rewired around that function (the delta review of PR #226's
+    /// fix round: this said two, from before the start door resynchronised).
     ///
     /// What it does not prove, stated rather than implied: the live one-second poll timer never
     /// fires in a test process, so "and it keeps recording a minute later" is a manual-test item.
@@ -198,14 +200,111 @@ struct ClarificationExitTests {
         viewModel.cancelCurrentRun()
 
         #expect(viewModel.taskRecordingPolicy == .record)
-        // Read 1: `resynchronize()`. Read 2: the immediate poll inside
+        // Read 1: `finishRecordingPolicyIfSettled`'s own `resynchronize()`. Read 2: the start
+        // door's `resynchronize()`, which every start from stopped makes since SONNY-439's fix
+        // round (the two agree, and the second costs one read). Read 3: the immediate poll inside
         // `startClipboardHistoryMonitoring()`, which is the only thing that polls and only does so
         // when it genuinely restarts the timer.
-        #expect(fixture.pasteboard.changeCountReads - readsBefore == 2)
+        #expect(fixture.pasteboard.changeCountReads - readsBefore == 3)
         // Resynchronising is what makes the pause a real pause: the copy made during it is dropped,
         // not recorded late.
         let recorded = try fixture.clipboardHistoryStore.loadAll().map(\.text)
         #expect(!recorded.contains("8-digit code from my authenticator"))
+    }
+
+    /// **A door opened during a suppressed run does not restart clipboard history** (SONNY-439,
+    /// PR #226's fresh review, F4, founder decision 2026-09-11). "Don't save this task" stops the
+    /// monitor at the run's start; Command Center's `.onAppear` refresh, a Memory delete's refresh
+    /// and the master switch turned off and on (the delta review: no test drove that door mid-run)
+    /// all reach the start door while the run is parked at its question, and before the fix each
+    /// re-armed the poll and recorded what the user copied during the pause — on a fresh install
+    /// (no settings file) and with the dismissed flag on file alike, which is why both are driven.
+    /// The pause ends with the run: a cancel puts the policy back and monitoring resumes, with the
+    /// copy made during the pause dropped rather than recorded late.
+    @Test(arguments: SuppressedRunDoor.allCases, ClipboardSettingsFile.allCases)
+    func aDoorOpenedDuringASuppressedRunDoesNotRestartClipboardHistory(
+        door: SuppressedRunDoor,
+        file: ClipboardSettingsFile
+    ) async throws {
+        let fixture = try ClarificationExitFixture()
+        defer { fixture.tearDown() }
+        let viewModel = fixture.viewModel
+        if case .dismissedFlagOnFile = file {
+            try fixture.clipboardSettingsStore.save(
+                ClipboardHistorySettings(noticeDismissed: true, isEnabled: true)
+            )
+        }
+        viewModel.refreshClipboardHistoryNotice()
+        #expect(viewModel.isMonitoringClipboardHistory, "\(file): monitoring did not start at launch")
+
+        viewModel.taskRecordingPolicy = .suppressTraces
+        viewModel.command = "="
+        viewModel.start(origin: .widget, fromComposer: true)
+        try await fixture.waitUntilIdle()
+        #expect(viewModel.clarificationQuestion != nil)
+        #expect(!viewModel.isMonitoringClipboardHistory, "\(file): the suppressed run did not pause monitoring")
+
+        fixture.pasteboard.text = "copied during a suppressed run"
+        fixture.pasteboard.setChangeCount(9)
+        door.open(viewModel)
+
+        #expect(viewModel.taskRecordingPolicy == .suppressTraces)
+        #expect(!viewModel.isMonitoringClipboardHistory, "\(door) on \(file) restarted monitoring during a suppressed run")
+        #expect(try fixture.clipboardHistoryStore.loadAll().isEmpty)
+
+        viewModel.cancelCurrentRun()
+        #expect(viewModel.taskRecordingPolicy == .record)
+        #expect(viewModel.isMonitoringClipboardHistory, "\(door) on \(file): monitoring did not resume when the run ended")
+        #expect(try fixture.clipboardHistoryStore.loadAll().isEmpty, "the copy made during the pause was recorded late")
+    }
+
+    /// **The setting alone, with nothing running, stops nothing** (SONNY-439, the delta review of
+    /// PR #226's fix round, F4). The widget's "Don't save this task" button sets the policy before
+    /// any task is sent, so the setting is on with nothing in flight whenever the user has pressed
+    /// it and not yet typed. The first guard read the policy alone: opening Command Center, or
+    /// turning the Settings toggle or the master switch on, then stopped clipboard history and
+    /// nothing restarted it while the toggle read on — the ticket's own defect, reached a new way.
+    /// Each door is driven in the order the UI would: for the switches, off first, so the door is
+    /// an off-to-on; then the setting; then the door; then the setting cleared; then an ordinary
+    /// run parked at its question and cancelled. Monitoring stays armed throughout, the toggle
+    /// reads on, and a copy made in between is recorded, which is the control.
+    @Test(arguments: IdleSuppressedDoor.allCases)
+    func theDontSaveSettingWithNothingRunningDoesNotStopClipboardHistory(door: IdleSuppressedDoor) async throws {
+        let fixture = try ClarificationExitFixture()
+        defer { fixture.tearDown() }
+        let viewModel = fixture.viewModel
+        try fixture.clipboardSettingsStore.save(
+            ClipboardHistorySettings(noticeDismissed: true, isEnabled: true)
+        )
+        viewModel.refreshClipboardHistoryNotice()
+        #expect(viewModel.isMonitoringClipboardHistory)
+
+        door.turnOffFirst(viewModel)
+        viewModel.taskRecordingPolicy = .suppressTraces
+        #expect(!viewModel.isTaskInFlight, "nothing was sent, so nothing is in flight")
+
+        door.open(viewModel)
+
+        #expect(viewModel.isMonitoringClipboardHistory, "\(door) with the setting on and nothing running stopped clipboard history")
+        #expect(viewModel.clipboardHistoryEnabled, "\(door): the toggle reads off")
+
+        // The chip is cleared: the setting goes back with no run having happened.
+        viewModel.taskRecordingPolicy = .record
+        #expect(viewModel.isMonitoringClipboardHistory, "\(door): clearing the setting left monitoring stopped")
+
+        fixture.pasteboard.text = "copied with the setting on and nothing running"
+        fixture.pasteboard.setChangeCount(5)
+        viewModel.pollClipboardHistory()
+        #expect(try fixture.clipboardHistoryStore.loadAll().map(\.text) == ["copied with the setting on and nothing running"], "\(door): recording did not continue")
+
+        // An ordinary run afterwards neither stops nor restarts it.
+        viewModel.command = "="
+        viewModel.start(origin: .widget, fromComposer: true)
+        try await fixture.waitUntilIdle()
+        #expect(viewModel.clarificationQuestion != nil)
+        viewModel.cancelCurrentRun()
+        #expect(viewModel.taskRecordingPolicy == .record)
+        #expect(viewModel.isMonitoringClipboardHistory, "\(door): an ordinary run after the setting left monitoring stopped")
     }
 
     /// `submitClarification()` sets "Enter an answer before continuing." when Send is pressed on an
@@ -616,6 +715,94 @@ private final class CountingPasteboardReader: PasteboardReading {
 
     func stringValue() -> String? {
         text
+    }
+}
+
+/// The three doors that can reach the clipboard monitor's start while a run is parked (SONNY-439's
+/// fix round, and its delta review for the third): Command Center's `.onAppear`, which is
+/// `refreshClipboardHistoryNotice()`; a Memory delete, whose `refreshMemorySurfaces()` calls the
+/// same; and the master switch turned off and on, whose `setMemoryEnabled` calls it too.
+enum SuppressedRunDoor: CaseIterable, CustomStringConvertible {
+    case commandCenterRefresh
+    case memoryDelete
+    case masterSwitch
+
+    var description: String {
+        switch self {
+        case .commandCenterRefresh: return "a Command Center refresh"
+        case .memoryDelete: return "a Memory delete"
+        case .masterSwitch: return "the master switch off and on"
+        }
+    }
+
+    @MainActor
+    func open(_ viewModel: AgentViewModel) {
+        switch self {
+        case .commandCenterRefresh:
+            viewModel.refreshClipboardHistoryNotice()
+        case .memoryDelete:
+            viewModel.deleteMemory(in: .routines)
+        case .masterSwitch:
+            viewModel.setMemoryEnabled(false)
+            viewModel.setMemoryEnabled(true)
+        }
+    }
+}
+
+/// The three doors the delta review of PR #226's fix round drove with the "Don't save this task"
+/// setting on and nothing running: Command Center opening, the Settings toggle turned on, and the
+/// master switch turned on. The two switches are turned off first, so the door is an off-to-on.
+enum IdleSuppressedDoor: CaseIterable, CustomStringConvertible {
+    case commandCenterOpen
+    case settingsToggle
+    case masterSwitch
+
+    var description: String {
+        switch self {
+        case .commandCenterOpen: return "Command Center opening"
+        case .settingsToggle: return "the Settings toggle on"
+        case .masterSwitch: return "the master switch on"
+        }
+    }
+
+    @MainActor
+    func turnOffFirst(_ viewModel: AgentViewModel) {
+        switch self {
+        case .commandCenterOpen:
+            return
+        case .settingsToggle:
+            viewModel.clipboardHistoryEnabled = false
+            viewModel.applyClipboardHistoryNoticeChoice()
+        case .masterSwitch:
+            viewModel.setMemoryEnabled(false)
+        }
+    }
+
+    @MainActor
+    func open(_ viewModel: AgentViewModel) {
+        switch self {
+        case .commandCenterOpen:
+            viewModel.refreshClipboardHistoryNotice()
+        case .settingsToggle:
+            viewModel.clipboardHistoryEnabled = true
+            viewModel.applyClipboardHistoryNoticeChoice()
+        case .masterSwitch:
+            viewModel.setMemoryEnabled(true)
+        }
+    }
+}
+
+/// What the clipboard settings file holds before the run: nothing at all (a fresh install), or the
+/// file the Settings toggle writes.
+enum ClipboardSettingsFile: CaseIterable, CustomStringConvertible {
+    case freshInstall
+    case dismissedFlagOnFile
+
+    var description: String {
+        switch self {
+        case .freshInstall: return "a fresh install"
+        case .dismissedFlagOnFile: return "the dismissed flag on file"
+        }
     }
 }
 

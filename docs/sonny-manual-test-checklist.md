@@ -4297,6 +4297,39 @@ choice. Compare against `main` at `6d7bf058` where a row says "as before".
 **The founders' fifth round (2026-09-10)**
 - [ ] Tasks: select a task. The list is 60% of the panel and the receipt 40% at the default window, and still 60/40 at full screen, in both sidebar states; at the 900-wide minimum the receipt holds its width and the list gives (the list about 434pt with the sidebar collapsed, 270 with it expanded), and the receipt's title, metadata, buttons and sections read whole (the buttons may fall to two rows); the Show picker and the search field share one row in the list; a thin rule separates the two and there is no drag handle.
 
+### Clipboard history on a fresh install (new 2026-09-11, SONNY-439)
+
+The recording gate used to wait for a one-time notice that no surface shows any more, so a fresh
+install read the Settings toggle as on while nothing was recorded (the founders' pass, test 18).
+The toggle's own value is the whole gate now, recording is on from the first launch (the founders'
+decision of 2026-09-11), and what launch records is nothing that was already on the clipboard.
+Do these on a Mac whose Settings › Security & Access clipboard toggle has never been touched: a
+fresh install, or, with Sonny quit, `rm ~/Library/Application\ Support/Sonny/clipboard-history-settings.json ~/Library/Application\ Support/Sonny/clipboard-history.json`
+(both files, so entries from earlier passes do not remain in the list).
+
+- [ ] Copy something *before* launching Sonny; launch; copy three different texts from any app;
+      type `clipboard history`: the three are listed newest first, the text copied before launch
+      is not, and Settings was never opened.
+- [ ] Type `clip <a word from one of them>`: only the matching entry is shown.
+- [ ] Settings › Security & Access › Watch clipboard history off; copy something new; `clipboard
+      history`: the new copy is not listed. Toggle it on; `clipboard history`: still not listed.
+      Copy once more: listed.
+- [ ] Memory › the clipboard row's own switch off; copy; on; `clipboard history`: the copy made
+      while it was off is not listed; copy once more: listed.
+- [ ] Memory › the master switch off; copy; on; the same: the copy made while memory was off is
+      not listed; a new copy is.
+- [ ] Widget › "Don't save this task" on; type `=` so the run parks at Sonny's question; copy
+      something; open Command Center (or close and reopen it), then delete a Memory row that is not
+      clipboard history, then Memory › the master switch off and on; answer or cancel the question.
+      `clipboard history`: the copy made during the paused run is not listed; a new copy after the
+      run is.
+- [ ] Widget › "Don't save this task" on, and type **nothing** (the delta review of PR #226's fix
+      round, F4: the first guard stopped clipboard history here and left it stopped). Open Command
+      Center (or close and reopen it); Settings › Security & Access › Watch clipboard history off
+      and on; Memory › the master switch off and on; clear the widget's chip. Copy something;
+      `clipboard history`: it is listed, and the Settings toggle reads on throughout. **What would
+      be a finding:** the copy missing from the list while the toggle reads on.
+
 ## 8. How to report back
 
 For each real finding, give me:
