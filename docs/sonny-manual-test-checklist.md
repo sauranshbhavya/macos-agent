@@ -4831,6 +4831,17 @@ Signed in, gateway up, screen control allowed for the account.
       in front for the whole session; when the session ends, the app you were in beforehand comes
       back. Lock the screen mid-session and unlock: while the session waited, your app was in front;
       on Resume the controlled app comes forward again and the session continues.
+- [ ] **(Founder decision 2026-09-12: restoring focus never starts an app that has quit.)** Open
+      TextEdit, then start a `[s]` session long enough to act on (for example `[s] tidy the reading
+      list in Safari`). While it runs, quit TextEdit with Cmd-Q. When the session ends, **TextEdit
+      must not open again** — nothing comes forward in its place, and Safari simply stays where it
+      is. **What would be a finding:** TextEdit relaunching, with or without a window, when the
+      session ends. (The same rule covers an open step, where the window is a fraction of a second
+      and cannot be hit by hand; the automated suite holds that one.)
+- [ ] During a `[s]` session the widget minimises into the controlling pill, as any session does:
+      the pill names the app under control and carries Pause and Stop. Press **Pause**: the app you
+      were in comes back while the session waits; press Resume in the widget and the controlled app
+      comes forward again **before** Sonny does anything else.
 
 ## 8. How to report back
 
