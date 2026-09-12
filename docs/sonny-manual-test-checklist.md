@@ -4492,6 +4492,30 @@ seconds now; idle still collapses after six.
       Settings, then a voice command) collapses to the capsule after about twenty seconds, where it
       was six, and expanding the capsule still shows it.
 
+### A refusal in Sonny's own words (new 2026-09-11, SONNY-447)
+
+"what is the weather today" failed with "Unsupported: there is no registered weather lookup tool
+available." — the planner's own sentence, naming tools and registrations (the founders' pass,
+test 16). A refused request reads "Sonny can't do that yet." now, whatever the planner wrote; the
+planner's reason goes to the log.
+
+- [ ] Signed in: `what is the weather today`, `what's on my calendar`, `remind me in 5 minutes`.
+      Each that the planner refuses fails with "Sonny can't do that yet." and Retry; no
+      "Unsupported:", no "tool", no "registered" anywhere on screen. The founders' pass saw the
+      weather one refused; the planner may instead answer one of the others with a question (a
+      missing detail, such as which reminder), which is not this row's failure — note which.
+- [ ] Command Center › Tasks: the refused rows are under Failed, each reading its command and
+      "Failed after …"; select one, and the pane shows "Sonny can't do that yet." and nothing of
+      the planner's.
+- [ ] `log show --last 5m --predicate 'subsystem == "com.sonny.macagent" AND category == "planner"'`
+      in Terminal: one line per command the planner refused, reading "The planner refused a
+      request: <private>" — up to three, fewer if the planner answered one with a question — the
+      reason redacted, because a model-authored sentence can echo your command; with private
+      logging enabled for the process it reads in full. (The reason also goes to the run's act log,
+      which no screen shows — it lives in memory, is cleared at each run's start, and is read by
+      `aRefusedPlansReasonReachesTheActLog`; the delta pass on PR #232's fix round removed a row
+      here that sent you looking for it under a refused task.)
+
 ## 8. How to report back
 
 For each real finding, give me:

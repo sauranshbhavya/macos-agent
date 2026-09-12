@@ -238,6 +238,34 @@ struct BackendTaskIdentityTests {
         #expect(MacAgentSource.count(of: "recorder.record()", inText: recorderSource) == 0)
     }
 
+    /// **A refusal reads Sonny's sentence on every surface the user sees, and none of the
+    /// planner's words** (SONNY-447, PR #232's fresh review, F2). The unit tests hold the error's
+    /// own description; this drives a refused run through the view model, which is where the words
+    /// reach the widget, Command Center, the notification, the task row and the follow-up context,
+    /// and reads the three of those a test can read: `errorMessage`, the task-history row's result
+    /// and the prior-task context's planner text.
+    @Test
+    func aRefusalReadsSonnysSentenceOnEverySurfaceTheUserSees() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let seen = CapturedTaskContexts()
+        let viewModel = try makeViewModel(root: root, capturing: seen)
+
+        try await run(viewModel, command: "what is the weather today")
+
+        let sentence = AgentExecutionError.unsupportedRequestSentence
+        let reason = RecordingStubPlanner.reason
+        #expect(viewModel.errorMessage == sentence)
+        let record = try #require(viewModel.taskHistoryRecords.first)
+        #expect(record.result?.text == sentence)
+        let context = try #require(viewModel.priorTaskContext?.plannerContextText)
+        #expect(context.contains(sentence))
+        for surface in [viewModel.errorMessage ?? "", record.result?.text ?? "", context] {
+            #expect(!surface.contains(reason), "the planner's reason reached the user: \(surface)")
+            #expect(!surface.lowercased().contains("registered"), "\(surface)")
+        }
+    }
+
     @Test
     func stoppingWithNoRecordingInFlightStillReportsItself() throws {
         #expect(throws: VoiceRecordingError.noActiveRecording) {
@@ -279,6 +307,10 @@ private final class CapturedTaskContexts: @unchecked Sendable {
 /// failure and therefore writes a task-history row.
 @MainActor
 private final class RecordingStubPlanner: Planning {
+    /// The planner's own words, in the shape the founders' pass read: names a tool and a
+    /// registration, which is what must never reach a surface the user sees.
+    static let reason = "Unsupported: there is no registered weather lookup tool available."
+
     func plan(command: String, priorTaskContext: PriorTaskContext?) async throws -> AgentPlan {
         AgentPlan(
             summary: "Nothing Sonny can do.",
@@ -287,7 +319,7 @@ private final class RecordingStubPlanner: Planning {
                 AgentStep(
                     id: "unsupported",
                     operation: .unsupported,
-                    description: "Not a supported request."
+                    description: Self.reason
                 )
             ]
         )

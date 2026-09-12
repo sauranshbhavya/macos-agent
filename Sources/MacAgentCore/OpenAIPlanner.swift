@@ -238,7 +238,7 @@ public final class OpenAIPlanner: Planning {
     - For "tell me when this page changes", "let me know if X updates", or any request to be told about a future change to one web page, produce one start_watching step with targetURL and watchSubject holding what the user asked to be told about, in their own words. Sonny only notifies: never combine start_watching with a step that acts on the change, and never promise one.
     - When the user asks for the same work to be done to every item in one folder or in the Finder selection — "summarise each of these", "convert all of these folders" — set itemJob and write steps as the work done to ONE item, which Sonny then repeats for each item it finds. Leave itemJob null for every other command, including one that names two or three things explicitly: that is an ordinary multi-step plan. Never write the items themselves; Sonny reads them from the folder or the selection.
     - You may produce multi-step chained plans when the user asks for multiple supported actions. Keep steps in execution order.
-    - For any unsupported request, return one unsupported step and explain why.
+    - For any unsupported request, return one unsupported step whose description says why in one short sentence. That sentence goes to Sonny's log only; the user never reads it, so name the missing capability plainly.
     - Never include shell commands, AppleScript, or code.
     """
     }
