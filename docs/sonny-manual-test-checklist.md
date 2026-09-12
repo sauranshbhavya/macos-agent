@@ -4479,9 +4479,12 @@ seconds now; idle still collapses after six.
 - [ ] `calc 2*2`: the same twenty-second stay. Then leave the widget idle with nothing typed: it
       collapses to the capsule after about six to eight seconds, as before.
 - [ ] With the widget open, start a quick run from Command Center (Tasks › Run again on `calc 2*2`,
-      or a routine row): the widget shows only its composer, and it collapses after about six
-      seconds, not twenty — the twenty is for a result the widget is showing (PR #231's fresh
-      review, F2).
+      or a routine row) **and press Run again while the widget is still expanded** — within its
+      own six idle seconds of opening, or expand it again from the capsule first, since an idle
+      widget collapses six seconds after it opens and a collapsed one has nothing to time (the
+      delta pass on PR #231's fix round). The widget shows only its composer, and it collapses
+      after about six seconds, not twenty — the twenty is for a result the widget is showing (PR
+      #231's fresh review, F2).
 - [ ] A failure ("Sonny couldn't finish this one." with the gateway stopped) stays about twenty
       seconds and then clears; a notified outcome (a failure while you work in another app) still
       holds until you retry or submit another command, the two doors that clear it (as before —
