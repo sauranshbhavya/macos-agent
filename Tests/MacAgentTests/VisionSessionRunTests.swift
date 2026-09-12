@@ -593,11 +593,10 @@ struct VisionSessionRunTests {
         #expect(events.filter { $0 == .restored("com.other.App") }.count == 1)
     }
 
-    /// **An app the user quit during the session is not started again when the session ends**
-    /// (founder decision, 2026-09-12: restoring focus must never start an app that has quit). This
-    /// went through the synthesizer's `activateApp` until SONNY-451's rebase, which since SONNY-440
-    /// answers `true` for a launch as well as a switch and so started the quit app. The restore is
-    /// now the shipping `FocusRestorer`, whose liveness read here answers that the app is gone.
+    /// **An app the user quit during the session is not asked back when the session ends** (founder
+    /// decision, 2026-09-12: restoring focus must never start an app that has quit). The restore is
+    /// the shipping `FocusRestorer`, whose liveness read here answers that the app is gone, so it asks
+    /// Launch Services for nothing.
     @Test
     func anAppTheUserQuitDuringTheSessionIsNotStartedWhenItEnds() async throws {
         let fixture = try makeFixture(
@@ -615,10 +614,10 @@ struct VisionSessionRunTests {
         try await waitForIdle(fixture.viewModel)
 
         #expect(fixture.synthesizer.clickCount == 1, "the session ran")
-        // **By either route.** The defect this test exists for went through the synthesizer, which
-        // records an activation rather than a restore, so looking for the restore alone passed over
-        // the very route that started the app — a hand-applied mutant putting that route back
-        // (the plan's X9) survived this test until it looked for both.
+        // **By either route.** The session gave the user's app back through the synthesizer until
+        // SONNY-451's rebase, and the synthesizer records an activation rather than a restore, so
+        // looking for the restore alone passed over that route — a hand-applied mutant putting it
+        // back (the plan's X9) survived this test until it looked for both.
         #expect(!fixture.synthesizer.events.contains(.restored("com.other.App")), "a quit app was brought back by the restorer")
         #expect(!fixture.synthesizer.events.contains(.activated("com.other.App")), "a quit app was brought back through the synthesizer")
     }

@@ -116,7 +116,7 @@
         return await activation(noted)
 >>> end
 
->>> mutant X9 the session gives the user's app back through the synthesizer again, which starts one that quit
+>>> mutant X9 the session gives the user's app back through the synthesizer again, outside the restorer's rule
 >>> file Sources/MacAgentCore/VisionSessionRunner.swift
 >>> from
         _ = await focusRestorer.bringToFront(previous)

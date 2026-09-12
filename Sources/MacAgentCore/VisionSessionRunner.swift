@@ -253,13 +253,15 @@ final class VisionSessionRunner {
     ///
     /// **Through the `FocusRestorer`, not the synthesizer's `activateApp`** (SONNY-451's rebase over
     /// SONNY-440). This first went through the synthesizer, which is right for bringing the *target*
-    /// forward and wrong for giving the user's app back: since SONNY-440 that call re-reads the
-    /// running instances at the moment it activates and answers `true` for a launch as well as a
-    /// switch, so an app the user quit during the session — and a session runs for minutes — was
-    /// started again when the session ended. The restorer notes the instances at the start, asks
-    /// Launch Services nothing when none of them is still running, and counts only a switch, which is
-    /// the founders' rule for every focus restore: it must never start an app that has quit. The
-    /// synthesizer keeps the one job that is the session's own, bringing the controlled app forward.
+    /// forward and holds the user's app to the wrong rule: since SONNY-440 it re-reads the running
+    /// instances at the moment it activates and answers `true` for a launch as well as a switch, so
+    /// a copy of the app started after the user's own had quit is brought forward as though it were
+    /// theirs. The founders' rule for every focus restore is the restorer's: the instances are the
+    /// ones noted at the start, Launch Services is asked nothing when none of them is still running,
+    /// and only a switch counts. The synthesizer's re-read does keep an app that quit long before from
+    /// being started — it answers `false` when the running list holds none — and both routes share the
+    /// window between a check and the open. The synthesizer keeps the one job that is the session's
+    /// own, bringing the controlled app forward.
     private func restorePreviousFrontmost() async {
         guard let previous = previousFrontmost, previous.app.bundleIdentifier != target.bundleIdentifier else {
             return
