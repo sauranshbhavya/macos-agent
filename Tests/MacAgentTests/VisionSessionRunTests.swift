@@ -615,7 +615,12 @@ struct VisionSessionRunTests {
         try await waitForIdle(fixture.viewModel)
 
         #expect(fixture.synthesizer.clickCount == 1, "the session ran")
-        #expect(!fixture.synthesizer.events.contains(.restored("com.other.App")), "a quit app was brought back")
+        // **By either route.** The defect this test exists for went through the synthesizer, which
+        // records an activation rather than a restore, so looking for the restore alone passed over
+        // the very route that started the app — a hand-applied mutant putting that route back
+        // (the plan's X9) survived this test until it looked for both.
+        #expect(!fixture.synthesizer.events.contains(.restored("com.other.App")), "a quit app was brought back by the restorer")
+        #expect(!fixture.synthesizer.events.contains(.activated("com.other.App")), "a quit app was brought back through the synthesizer")
     }
 
     /// **A pause gives the user's app back, and no action ever lands while it is in front.** The
