@@ -4803,41 +4803,72 @@ the app you name; if Sonny asks for that permission first, grant it and carry on
 ### Screen use by the [s] prefix, and opening apps without stealing focus (new 2026-09-11, SONNY-451)
 
 Typing `[s]` at the start of a command makes screen use the route for that command, whatever its
-wording; the app is read from the command's own words, and Sonny asks which app when none is
-named. Separately, an open (an app, a workspace, a URL) puts the app you were working in back in
-front once it has finished, and a screen-control session does the same when it ends or pauses.
+wording; the app is read from the command's own words, and Sonny asks for whatever is missing.
+Separately, an open (an app, a workspace, a URL) puts the app you were working in back in front
+once it has finished, and a screen-control session does the same when it ends or pauses.
 Signed in, gateway up, screen control allowed for the account.
 
-- [ ] `[s] open Notes and make a note called wave 7`: a screen-control session starts in Notes
-      straight away — no planner round trip (the Tasks page's plan shows one `vision_session`
-      step, appName Notes). In Normal mode with Notes not yet allowed, Sonny asks to control Notes
-      first, exactly as a planned session does; in Safe mode it asks before every action.
-- [ ] The same command without `[s]`: behaves exactly as before this branch (the planner decides).
-- [ ] `[s] make a note called wave 7`: Sonny asks "Which app should Sonny control for that?";
-      answer `Notes`; the session starts in Notes.
-- [ ] `[s] archive every newsletter in Mail` and `[S] Notes: make a note`: both start a session in
-      the named app; `[s]` alone asks what to do and in which app; `[s] Notes` asks what to do in
-      Notes.
+- [ ] **Quit Notes first.** `[s] open Notes and make a note called wave 7`: Sonny opens Notes and
+      then starts a screen-control session in it, with no planner round trip (the Tasks page's plan
+      shows an `open_app` step and then a `vision_session` step, both naming Notes). **What would be
+      a finding:** "Sonny could not bring Notes to the front. Is it running?" In Normal mode with
+      Notes not yet allowed, Sonny asks to control Notes first, exactly as a planned session does;
+      in Safe mode it asks before every action.
+- [ ] The same command with Notes already open: the plan shows the one `vision_session` step, and
+      the session starts in Notes.
+- [ ] The same command without `[s]`, with TextEdit in front: the planner decides the route. When it
+      opens Notes and then controls it, Notes stays in front from the open until the session ends,
+      and TextEdit comes back once, at the end. **What would be a finding:** TextEdit flashing to the
+      front between Notes opening and the session starting.
+- [ ] `[s] make a note called wave 7`: Sonny asks "Which app should Sonny control for that?"; answer
+      `Notes`; the session starts in Notes.
+- [ ] `[s] Notes`: Sonny asks "What should Sonny do in Notes?"; answer `make a note`; the session
+      starts in Notes. `[s]` alone asks what to do and in which app; answer `Notes` and Sonny asks
+      what to do in Notes; answer `make a note` and the session starts. **What would be a finding:**
+      any of these answers ending with Sonny saying it cannot do that, or planning something other
+      than a session in Notes.
+- [ ] `[s] Google Chrome` and `[s] Chrome` each ask "What should Sonny do in Chrome?" rather than
+      starting a session.
+- [ ] `[s] tell the team in Slack that I am listening to Music` asks which app, naming Slack and the
+      Music app; answer `Slack`; the session starts in Slack. `[s] archive every newsletter in Mail`
+      and `[S] Notes: make a note` both start a session in the named app.
 - [ ] With screen control's allowance exhausted (or the account signed out), `[s] …` is refused
       by the same billing gate a planned session meets, before anything is clicked.
 - [ ] Press Ctrl-Opt-Esc during a `[s]` session: it stops exactly as any session does.
+- [ ] Type in TextEdit (a document open), start a `[s]` session on Safari, and press **Stop** in the
+      pill while it runs: the session stops and TextEdit comes back in front.
 - [ ] Type in another app (TextEdit, a document open), then run `open workspace test` from the
       widget: the workspace's apps and pages open, and once they have, TextEdit is back in front
       with the cursor where it was. The task's trace (Command Center › Tasks) reads "Brought TextEdit
       back in front".
+- [ ] **The same, with every app in `test` quit first.** **What to look for:** once the apps have
+      launched, TextEdit ends up in front and stays there. **What would be a finding:** one of the
+      workspace's apps coming forward a moment after TextEdit came back, and keeping the front, or
+      the trace not saying TextEdit came back.
 - [ ] The same with `open Safari` and with `open https://example.com`: each opens and hands focus
-      back. With Safari already in front, `open https://example.com` moves nothing.
+      back. Then quit Safari and run `open Safari` again: the same **finding** as the row above
+      applies if Safari ends up in front. With Safari already in front, `open https://example.com`:
+      Safari stays in front and no other app comes forward.
+- [ ] **Finder in front with no window open.** Close every Finder window, click the desktop so Finder
+      is the active app, then run `open Safari`. **What to look for:** whether a new Finder window
+      appears when focus comes back. **What would be a finding:** a Finder window that was not there
+      before — report it, since whether that is acceptable is the founders' call.
 - [ ] Start a `[s]` session and, while it runs, do not touch the keyboard: the controlled app stays
       in front for the whole session; when the session ends, the app you were in beforehand comes
       back. Lock the screen mid-session and unlock: while the session waited, your app was in front;
       on Resume the controlled app comes forward again and the session continues.
 - [ ] **(Founder decision 2026-09-12: restoring focus never starts an app that has quit.)** Open
       TextEdit, then start a `[s]` session long enough to act on (for example `[s] tidy the reading
-      list in Safari`). While it runs, quit TextEdit with Cmd-Q. When the session ends, **TextEdit
-      must not open again** — nothing comes forward in its place, and Safari simply stays where it
-      is. **What would be a finding:** TextEdit relaunching, with or without a window, when the
-      session ends. (The same rule covers an open step, where the window is a fraction of a second
-      and cannot be hit by hand; the automated suite holds that one.)
+      list in Safari`). While it runs, quit TextEdit from the Dock — right-click its Dock icon and
+      choose Quit — rather than with Cmd-Q, which would quit Safari, the app under control. When the
+      session ends, **TextEdit must not open again** — nothing comes forward in its place, and Safari
+      simply stays where it is. **What would be a finding:** TextEdit relaunching, with or without a
+      window, when the session ends. (The same rule covers an open step, where the window is a
+      fraction of a second and cannot be hit by hand; the automated suite holds that one.)
+- [ ] **Only with two copies of one app installed** (Xcode and Xcode-beta, say). Work in Xcode-beta
+      with Xcode also running, start a `[s]` session on another app, and quit Xcode-beta from the
+      Dock while it runs. When the session ends, **Xcode-beta must not start again**, and Xcode must
+      not come forward in its place.
 - [ ] During a `[s]` session the widget minimises into the controlling pill, as any session does:
       the pill names the app under control and carries Pause and Stop. Press **Pause**: the app you
       were in comes back while the session waits; press Resume in the widget and the controlled app
