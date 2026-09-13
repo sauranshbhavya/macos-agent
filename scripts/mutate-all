@@ -38,14 +38,15 @@
 #      harness errors, exactly as `scripts/mutate` treats them — and both are listed in the summary
 #      by plan file and target file, the shape `WORKFLOW.md`'s Weekly battery section files
 #      tickets from directly.
-#   3  nothing survived or came back unattributed, but at least one plan was not run: SKIPPED
-#      because its `from` block no longer matches the committed tree — the tree has moved since
-#      that plan was written, which is expected and not fatal — or REFUSED because its mutants sit
-#      in both halves (below). Each is named in the summary, a stale plan with `scripts/mutate`'s
-#      own refused-mutant lines quoted underneath and a mixed one with every mutant and its half,
-#      so a run that left a plan unmeasured can never be read as a clean one the way a bare 0
-#      would read. Both describe the plan rather than the checkout, which is why neither stops the
-#      run.
+#   3  nothing survived or came back unattributed, but at least one plan was not run, for one of
+#      three reasons, each listed under its own heading in the summary: SKIPPED (stale), because
+#      its `from` block no longer matches the committed tree — the tree has moved since that plan
+#      was written, which is expected and not fatal — with `scripts/mutate`'s own refused-mutant
+#      lines quoted underneath; SKIPPED (no database), a server plan in a run whose `DATABASE_URL`
+#      is unset (below); or REFUSED (mixed halves), because its mutants sit in both halves (below),
+#      with every mutant and its half. A run that left a plan unmeasured can never be read as a
+#      clean one the way a bare 0 would read, and a run that exits 2 names the same unrun plans on
+#      its exit line. None of the three describes the checkout, which is why none stops the run.
 #
 # WHICH SUITE A PLAN RUNS AGAINST (SONNY-455, founders' decision 2026-09-12). This repository has
 # two halves with two suites, and a mutant is only measured by the suite that compiles and runs
@@ -92,15 +93,18 @@
 #       `scripts/mutate` runs would, at the second one's lock acquisition for whichever plan it
 #       reaches first. Nothing new is needed here because nothing new is being shared — the lock is
 #       `scripts/mutate`'s, per plan, same as always.
-#     * The half is read from `>>> file` paths and nothing else. A plan whose every path is under
-#       `server/` runs against vitest; every other plan — a mutant in `scripts/` or `docs/`
+#     * The half is read from `>>> file` paths and nothing else. A plan whose every path git names
+#       under `server/` runs against vitest; every other plan — a mutant in `scripts/` or `docs/`
 #       included — runs against the flagged Swift suite, which is the right suite for `Sources/`
 #       and `Tests/` and no suite at all for anything else.
-#     * A server plan's killers that live in a database test file run only when this run's own
-#       environment carries `DATABASE_URL`: the server's database suites skip themselves without it
-#       (CLAUDE.md, the server half), so a mutant only a database test kills reads SURVIVED. This
-#       script passes the variable through untouched and says in each server plan's block whether
-#       it was set — never its value — and does not refuse a run over it.
+#     * A server plan runs only when this run's own environment carries `DATABASE_URL`, and is
+#       otherwise SKIPPED (no database) by name after its `--check` (founders' decision on
+#       SONNY-455, 2026-09-13): the server's database suites skip themselves without it (CLAUDE.md,
+#       the server half), so a mutant only a database test kills would read SURVIVED. The cost the
+#       founders accepted is that a server plan needing no database is skipped too. What the skip
+#       does not cover is a `DATABASE_URL` that is set and reaches no database: the database suites
+#       then fail, the plan's baseline is red, and the run stops with exit 1 exactly as for any red
+#       baseline. The variable is passed through untouched and its value is never printed.
 #     * The server half runs the whole vitest suite, not the narrower file a plan's own header may
 #       name. That can only add killers, and it can add a flaky one exactly as the whole Swift suite
 #       can; `scripts/mutate-untrusted-failures` is where either half's untrustworthy failures are
@@ -145,10 +149,11 @@ Exit codes
      "0 plans, nothing measured".
   2  at least one mutant SURVIVED or came back UNATTRIBUTED, in any plan — both are listed with
      their plan file and target file.
-  3  nothing survived or came back unattributed, but at least one plan was not run: SKIPPED
-     because its `from` block no longer matches the tree — named, with scripts/mutate's own
-     refused-mutant lines quoted underneath — or REFUSED because it mixes the two halves — named,
-     with every mutant and its half listed.
+  3  nothing survived or came back unattributed, but at least one plan was not run, each named
+     under its own heading: SKIPPED (stale), its `from` block no longer matching the tree, with
+     scripts/mutate's own refused-mutant lines quoted underneath; SKIPPED (no database), a server
+     plan in a run with DATABASE_URL unset; REFUSED (mixed halves), with every mutant and its half.
+     A run that exits 2 names any such plans on its exit line as well.
   1  the run could not start, or had to stop partway: not a git checkout, mutation/plans/ missing,
      scripts/mutate missing beside this script, MUTATE_TEST_CMD set, or scripts/mutate itself
      refusing for a reason that is NOT a stale plan (a dirty tree, another battery's lock, a red
@@ -156,7 +161,9 @@ Exit codes
      script can read whole (an interrupted or killed run, or counts that do not add up). Stops
      immediately and names every plan not attempted, the one it was on included.
 
-Which suite each plan runs against is read from the plan's own `>>> file` paths (SONNY-455):
+Which suite each plan runs against is read from the plan's own `>>> file` paths (SONNY-455), each
+taken as the name git gives the file, so ./server/x.ts, server//x.ts, scripts/../server/x.ts and
+an absolute path are all server/x.ts, and server/../Package.swift is Package.swift:
   server  every path is under server/     cd server && npx vitest run
   swift   no path is under server/        scripts/mutate's default, the flagged swift test
   mixed   paths on both sides             REFUSED by name — neither suite can see both halves, so
@@ -164,9 +171,15 @@ Which suite each plan runs against is read from the plan's own `>>> file` paths 
                                           split it into one plan per half
 Every plan's block names its half on a `suite :` line, and every row of the summary's Reports,
 SKIPPED, SURVIVORS, UNATTRIBUTED and REFUSED lists carries `swift`, `server` or `mixed` beside the
-plan file. A
-server plan's block also says whether DATABASE_URL was set, never its value: the server's database
-suites skip themselves without it, so a mutant only a database test kills reads SURVIVED.
+plan file.
+
+A server plan runs only when DATABASE_URL is set. With it unset the plan is checked and then
+SKIPPED (no database), by name, and the run ends in exit 3 or 2, never 0: the server's database
+suites skip themselves without it, so a mutant only a database test kills would read SURVIVED
+(founders' decision, 2026-09-13). This skips a server plan that needs no database as well. Start
+a test database first — WORKFLOW.md's Weekly battery section has the commands. The value is never
+printed. A DATABASE_URL that is set but reaches no database turns the plan's baseline red, which
+stops the run with exit 1.
 
 MUTATE_TEST_CMD is refused, because it would put one command back over every plan. Replace one
 half's command instead, with MUTATE_ALL_SWIFT_TEST_CMD or MUTATE_ALL_SERVER_TEST_CMD — each is
@@ -215,18 +228,51 @@ list_plans() {
 # Which half a plan belongs to (SONNY-455). Read from the plan's own `>>> file` lines, with the
 # same state machine as `scripts/mutate`'s parse_plan, so a line inside a `from` or `to` block that
 # happens to start `>>> file ` is content and is never read as a path — the block ends only at
-# `>>> to` and `>>> end` respectively, exactly as there. A leading `./` is dropped, because
-# `scripts/mutate`'s tracked-file check accepts `./server/src/x.ts` as the same file as
-# `server/src/x.ts`. A plan this cannot parse whole is classified by the paths it did read and then
-# refused by `scripts/mutate --check`, which is the one place a malformed plan is reported.
+# `>>> to` and `>>> end` respectively, exactly as there. A plan this cannot parse whole is
+# classified by the paths it did read and then refused by `scripts/mutate --check`, which is the
+# one place a malformed plan is reported.
+#
+# The half is decided on git's own name for the file, never on the spelling the plan wrote
+# (PR #239's review, F2). `scripts/mutate` accepts any spelling its `[[ -f ]]` and
+# `git ls-files --error-unmatch` both accept, and those take `./server/x.ts`, `server//x.ts`,
+# `scripts/../server/x.ts` and an absolute path alike. A prefix test on the written string read
+# the last two as the Swift half, so a server mutant ran against the Swift suite and came back
+# SURVIVED — the phantom survivor this script exists to prevent — and the same spelling carried a
+# server path past the mixed-plan refusal. The reverse was reachable too: `server/../Package.swift`
+# starts with `server/` and is a Swift-half file.
 # ---------------------------------------------------------------------------------------------
 readonly SERVER_DEFAULT_TEST_CMD='cd server && npx vitest run'
 readonly SWIFT_DEFAULT_LABEL="scripts/mutate's default, the flagged swift test"
 
-# plan_mutant_halves <plan> — one "<half><TAB><mutant id><TAB><path>" line per mutant.
+# canonical_path <path> — the repository-root-relative name git gives a tracked file, run from the
+# repository root as the whole script is. `--literal-pathspecs` because a plan path is a file name,
+# not a pattern: without it `server/src/*.ts` would expand to every file it matches. Anything git
+# does not answer with exactly one tracked file — an untracked path, a directory, a path outside
+# the repository — keeps its written spelling less any leading `./`, and `scripts/mutate --check`
+# refuses it whichever half that puts it in.
+canonical_path() {
+  local listed
+  listed="$(git --literal-pathspecs ls-files --full-name -- "$1" 2>/dev/null)" || listed=""
+  if [[ -n "$listed" && "$listed" != *$'\n'* ]]; then
+    printf '%s\n' "$listed"
+    return 0
+  fi
+  local written="$1"
+  while [[ "$written" == ./* ]]; do written="${written#./}"; done
+  printf '%s\n' "$written"
+}
+
+# plan_mutant_halves <plan> — one "<half><TAB><mutant id><TAB><path as the plan wrote it>" line per
+# mutant, the half taken from canonical_path.
 plan_mutant_halves() {
-  awk '
-    function half(path) { return (path ~ /^server\//) ? "server" : "swift" }
+  local id path half
+  while IFS=$'\t' read -r id path; do
+    case "$(canonical_path "$path")" in
+      server/*) half="server" ;;
+      *) half="swift" ;;
+    esac
+    printf '%s\t%s\t%s\n' "$half" "$id" "$path"
+  done < <(awk '
     state == "" || state == "top" {
       if ($0 ~ /^>>> mutant /) {
         id = substr($0, length(">>> mutant ") + 1)
@@ -236,18 +282,14 @@ plan_mutant_halves() {
       next
     }
     state == "want-file" {
-      if ($0 ~ /^>>> file /) {
-        path = substr($0, length(">>> file ") + 1)
-        while (path ~ /^\.\//) path = substr(path, 3)
-        printf "%s\t%s\t%s\n", half(path), id, path
-      }
+      if ($0 ~ /^>>> file /) printf "%s\t%s\n", id, substr($0, length(">>> file ") + 1)
       state = "want-from"
       next
     }
     state == "want-from" { state = ($0 == ">>> from") ? "in-from" : "top"; next }
     state == "in-from"   { if ($0 == ">>> to") state = "in-to"; next }
     state == "in-to"     { if ($0 == ">>> end") state = "top"; next }
-  ' "$1"
+  ' "$1")
 }
 
 # plan_half <plan> — prints swift, server or mixed. A plan naming no path at all is swift, the
@@ -433,7 +475,7 @@ run_all_plans() {
   fi
 
   local ran_total=0
-  local skipped_plans=() refused_plans=() survivor_rows=() unattr_rows=() plan_reports=()
+  local skipped_plans=() no_database_plans=() refused_plans=() survivor_rows=() unattr_rows=() plan_reports=()
 
   local idx=0 half
   for p in "${plans[@]}"; do
@@ -452,12 +494,22 @@ run_all_plans() {
       continue
     fi
     printf '    suite      : %s — %s\n' "$half" "$(suite_label "$half")"
+    # A server plan with no database is skipped, by name, after its --check (founders' decision on
+    # SONNY-455, 2026-09-13). The server's database suites skip themselves without DATABASE_URL, so
+    # a mutant only a database test kills would read SURVIVED — a finding the Weekly battery files —
+    # when nothing was measured. The check still runs first, because it needs no database and a
+    # plan that no longer applies is stale whatever the environment, and a stale listing is a ticket
+    # to file where a no-database one is not. An empty value is unset here, as scripts/mutate reads
+    # an empty MUTATE_TEST_CMD. The value is never printed: it can carry a password.
+    local no_database=""
     if [[ "$half" == "server" ]]; then
       if [[ -n "${DATABASE_URL:-}" ]]; then
         printf '    database   : DATABASE_URL is set (its value is not printed) — the database suites run\n'
       else
-        printf '    database   : DATABASE_URL is unset — the database suites skip themselves, so a mutant\n'
-        printf '                 only a database test kills reads SURVIVED in this run\n'
+        no_database=1
+        printf '    database   : DATABASE_URL is unset — without it the database suites skip themselves\n'
+        printf '                 and a mutant only a database test kills would read SURVIVED, so this plan\n'
+        printf '                 is checked and then skipped\n'
       fi
     fi
 
@@ -479,6 +531,14 @@ run_all_plans() {
       printf '    A refusal here describes the checkout (a dirty tree, another battery'"'"'s lock, a\n'
       printf '    red baseline), not this one plan, and would repeat identically for every plan left.\n'
       exit 1
+    fi
+
+    if [[ -n "$no_database" ]]; then
+      printf '    SKIPPED — no database: its mutants still apply, and nothing ran. Start a test database,\n'
+      printf '    export DATABASE_URL and run the battery again (WORKFLOW.md, Weekly battery).\n'
+      no_database_plans+=("$p")
+      printf '\n'
+      continue
     fi
 
     local run_out="" run_rc=0
@@ -539,8 +599,8 @@ run_all_plans() {
   done
 
   printf '==> Summary at %s\n' "$SHA"
-  printf '    %d plan(s) found, %d ran, %d skipped (stale), %d refused (mixed halves)\n' \
-    "$plan_total" "$ran_total" "${#skipped_plans[@]}" "${#refused_plans[@]}"
+  printf '    %d plan(s) found, %d ran, %d skipped (stale), %d skipped (no database), %d refused (mixed halves)\n' \
+    "$plan_total" "$ran_total" "${#skipped_plans[@]}" "${#no_database_plans[@]}" "${#refused_plans[@]}"
   if [[ ${#plan_reports[@]} -gt 0 ]]; then
     printf '\n    Reports, one per plan that ran, each with its half:\n'
     local pr
@@ -553,6 +613,14 @@ run_all_plans() {
     local sp
     for sp in "${skipped_plans[@]}"; do
       printf '      %-6s  %s\n' "$(plan_half "$sp")" "$sp"
+    done
+  fi
+  if [[ ${#no_database_plans[@]} -gt 0 ]]; then
+    printf '\n    SKIPPED (no database) — DATABASE_URL was unset, so these server plans did not run; not a\n'
+    printf '    finding and not stale: start a test database and run the battery again:\n'
+    local np
+    for np in "${no_database_plans[@]}"; do
+      printf '      %-6s  %s\n' "server" "$np"
     done
   fi
   if [[ ${#refused_plans[@]} -gt 0 ]]; then
@@ -568,14 +636,23 @@ run_all_plans() {
     "${unattr_rows[@]+"${unattr_rows[@]}"}"
   printf '\n'
 
+  # Exit 2 outranks 3, so a run with a survivor AND an unrun plan says both on its exit line: the
+  # code alone names only the survivor, and the unrun plans are the half a reader stops looking for.
+  local not_run=$(( ${#skipped_plans[@]} + ${#no_database_plans[@]} + ${#refused_plans[@]} ))
   if [[ ${#survivor_rows[@]} -gt 0 || ${#unattr_rows[@]} -gt 0 ]]; then
     printf '    Exiting 2 — at least one mutant survived or came back unattributed. Measured at %s.\n' "$SHA"
+    if [[ $not_run -gt 0 ]]; then
+      printf '    %d plan(s) were also not run: %d skipped as stale, %d skipped with no database, %d refused\n' \
+        "$not_run" "${#skipped_plans[@]}" "${#no_database_plans[@]}" "${#refused_plans[@]}"
+      printf '    for mixing the two halves — each is listed above.\n'
+    fi
     exit 2
   fi
-  if [[ ${#skipped_plans[@]} -gt 0 || ${#refused_plans[@]} -gt 0 ]]; then
-    printf '    Exiting 3 — nothing survived, but %d plan(s) were not run: %d skipped as stale, %d refused\n' \
-      "$(( ${#skipped_plans[@]} + ${#refused_plans[@]} ))" "${#skipped_plans[@]}" "${#refused_plans[@]}"
-    printf '    for mixing the two halves. Measured at %s.\n' "$SHA"
+  if [[ $not_run -gt 0 ]]; then
+    printf '    Exiting 3 — nothing survived, but %d plan(s) were not run: %d skipped as stale, %d skipped\n' \
+      "$not_run" "${#skipped_plans[@]}" "${#no_database_plans[@]}"
+    printf '    with no database, %d refused for mixing the two halves. Measured at %s.\n' \
+      "${#refused_plans[@]}" "$SHA"
     exit 3
   fi
   printf '    Every plan ran and every mutant was killed. Measured at %s.\n' "$SHA"
@@ -1131,6 +1208,9 @@ PLAN
 PLAN
   git add mutation/plans/server-half.txt mutation/plans/swift-half.txt
   git commit -q -m "one plan per half"
+  # A server plan runs only with DATABASE_URL set (scenario 13b is the unset side), so scenarios 11
+  # to 13 plant one. It points nowhere and carries a password-shaped string scenario 13 hunts for.
+  export DATABASE_URL='postgres://selftest:not-a-real-password-8c1f@localhost:1/none'
   : >"$ST_SUITES_LOG"
   st_run "$swift_half_suite" "$server_half_suite"
   local suites logdir
@@ -1147,7 +1227,7 @@ PLAN
   st_eq "no killed mutant is listed as a survivor" "$(st_count "$ST_OUT" '^      plan .* (S1|V1) ')" "0"
   st_contains "the reports list marks the server plan" "$ST_OUT" "server  mutation/plans/server-half.txt ->"
   st_contains "the reports list marks the Swift plan" "$ST_OUT" "swift   mutation/plans/swift-half.txt ->"
-  st_contains "a server plan run without a database says so" "$ST_OUT" "DATABASE_URL is unset"
+  st_contains "a server plan run with DATABASE_URL set says so" "$ST_OUT" "DATABASE_URL is set (its value is not printed)"
   st_eq "the Swift suite never ran with a server mutant in the tree" "$(st_count "$suites" '^swift saw:.*server-')" "0"
   st_eq "vitest never ran with a Swift mutant in the tree" "$(st_count "$suites" '^server saw:.*swift-')" "0"
   st_eq "the Swift suite did see its own mutant (the zero above can be non-zero)" \
@@ -1181,7 +1261,6 @@ PLAN
 
   # --- Scenario 13: DATABASE_URL set is reported, and its value never printed ---
   printf '\n==> A server plan run with DATABASE_URL says so and never prints the value\n'
-  export DATABASE_URL='postgres://selftest:not-a-real-password-8c1f@localhost:1/none'
   st_run "$swift_half_suite" "$server_half_suite"
   unset DATABASE_URL
   logdir="$(printf '%s\n' "$ST_OUT" | sed -n 's/^    logs       : //p' | head -1)"
@@ -1194,6 +1273,83 @@ PLAN
     st_fail "could not find the logs directory the header printed"
   fi
   git rm -q mutation/plans/server-half.txt mutation/plans/swift-half.txt
+  git commit -q -m "clear plans for the next scenario"
+
+  # --- Scenario 13b: DATABASE_URL unset — a server plan is checked, then skipped by name, never
+  # listed as stale, and the run never exits 0 (founders' decision on SONNY-455, 2026-09-13) ---
+  printf '\n==> With DATABASE_URL unset a server plan is skipped by name, apart from the stale list, exit 3\n'
+  cat >mutation/plans/db-server.txt <<'PLAN'
+>>> mutant V1 the free tier given one more
+>>> file server/src/sample.ts
+>>> from
+  if (tier === "free") return 10;
+>>> to
+  if (tier === "free") return 11;
+>>> end
+PLAN
+  cat >mutation/plans/db-stale-server.txt <<'PLAN'
+>>> mutant V9 a server mutant whose text is not in the file
+>>> file server/src/sample.ts
+>>> from
+  if (tier === "gold") return 999;
+>>> to
+  if (tier === "gold") return 998;
+>>> end
+PLAN
+  cat >mutation/plans/db-swift.txt <<'PLAN'
+>>> mutant S1 the morning boundary widened by an hour
+>>> file sample.swift
+>>> from
+        if hour < 12 { return "Morning" }
+>>> to
+        if hour < 13 { return "Morning" }
+>>> end
+PLAN
+  git add mutation/plans/db-server.txt mutation/plans/db-stale-server.txt mutation/plans/db-swift.txt
+  git commit -q -m "a server plan, a stale server plan and a Swift plan, run with no database"
+  : >"$ST_SUITES_LOG"
+  st_run "$swift_half_suite" "$server_half_suite"
+  suites="$(cat "$ST_SUITES_LOG")"
+  local no_database_list stale_list
+  no_database_list="$(printf '%s\n' "$ST_OUT" | awk '/^    SKIPPED \(no database\)/{f=1;next} /^$/{f=0} f')"
+  stale_list="$(printf '%s\n' "$ST_OUT" | awk '/^    SKIPPED \(stale\)/{f=1;next} /^$/{f=0} f')"
+  st_eq "a run whose only unrun plans are skipped exits 3, never 0" "$ST_RC" "3"
+  st_contains "the server plan's block says DATABASE_URL is unset" "$ST_OUT" "DATABASE_URL is unset"
+  st_contains "and that it was skipped for want of a database" "$ST_OUT" "SKIPPED — no database"
+  st_contains "the no-database list names the plan, marked server" "$no_database_list" "server  mutation/plans/db-server.txt"
+  st_absent "the no-database list does not carry the stale plan" "$no_database_list" "db-stale-server.txt"
+  st_contains "the stale plan is still listed as stale, its check having run" "$stale_list" "server  mutation/plans/db-stale-server.txt"
+  st_absent "the skipped plan is not listed as stale" "$stale_list" "mutation/plans/db-server.txt"
+  st_contains "the counts separate the two skips" "$ST_OUT" \
+    "3 plan(s) found, 1 ran, 1 skipped (stale), 1 skipped (no database), 0 refused (mixed halves)"
+  st_contains "the exit line names both" "$ST_OUT" "1 skipped as stale, 1 skipped"
+  st_absent "no clean verdict" "$ST_OUT" "Every plan ran and every mutant was killed"
+  st_eq "vitest never ran" "$(st_count "$suites" '^server saw:')" "0"
+  st_contains "the Swift plan beside it ran" "$ST_OUT" "swift   mutation/plans/db-swift.txt ->"
+
+  printf '\n==> With a survivor beside it the run exits 2, and the exit line still names the skipped plans\n'
+  cat >mutation/plans/db-swift-survivor.txt <<'PLAN'
+>>> mutant S2 a Swift mutant nothing catches
+>>> file sample.swift
+>>> from
+    static func fallback() -> String {
+        return "Afternoon"
+    }
+>>> to
+    static func fallback() -> String {
+        return "Never"
+    }
+>>> end
+PLAN
+  git add mutation/plans/db-swift-survivor.txt
+  git commit -q -m "a Swift survivor beside the skipped plans"
+  st_run "$swift_half_suite" "$server_half_suite"
+  st_eq "a survivor beside a skipped plan exits 2" "$ST_RC" "2"
+  st_contains "the exit line says which plans were also not run" "$ST_OUT" \
+    "2 plan(s) were also not run: 1 skipped as stale, 1 skipped with no database, 0 refused"
+  st_contains "the no-database list is still there" "$ST_OUT" "SKIPPED (no database)"
+  git rm -q mutation/plans/db-server.txt mutation/plans/db-stale-server.txt mutation/plans/db-swift.txt \
+    mutation/plans/db-swift-survivor.txt
   git commit -q -m "clear plans for the next scenario"
 
   # --- Scenario 14: a plan mixing the halves is refused by name, and the run carries on ---
@@ -1235,9 +1391,9 @@ PLAN
   st_eq "its server mutant is listed with its half" "$(st_count "$ST_OUT" '^      server +X2 +server/src/sample\.ts$')" "1"
   st_contains "the summary names it under REFUSED" "$ST_OUT" "mixed   mutation/plans/mixed.txt"
   st_contains "the counts say one ran and one was refused" "$ST_OUT" \
-    "2 plan(s) found, 1 ran, 0 skipped (stale), 1 refused (mixed halves)"
+    "2 plan(s) found, 1 ran, 0 skipped (stale), 0 skipped (no database), 1 refused (mixed halves)"
   st_contains "the Swift plan after it ran" "$ST_OUT" "swift   mutation/plans/swift-only.txt ->"
-  st_contains "the exit line says why" "$ST_OUT" "0 skipped as stale, 1 refused"
+  st_contains "the exit line says why" "$ST_OUT" "with no database, 1 refused for mixing the two halves"
   st_eq "no suite ever ran with the mixed plan's mutants applied" "$(st_count "$suites" 'mixed-plan-mutant')" "0"
   st_eq "vitest never ran at all" "$(st_count "$suites" '^server saw:')" "0"
   git rm -q mutation/plans/swift-only.txt
@@ -1250,7 +1406,7 @@ PLAN
   st_contains "the Swift half's default is scripts/mutate's own" "$ST_OUT" \
     "swift  — scripts/mutate's default, the flagged swift test"
   st_contains "the server half's default is vitest from server/" "$ST_OUT" "server — cd server && npx vitest run"
-  st_contains "nothing ran" "$ST_OUT" "1 plan(s) found, 0 ran, 0 skipped (stale), 1 refused (mixed halves)"
+  st_contains "nothing ran" "$ST_OUT" "1 plan(s) found, 0 ran, 0 skipped (stale), 0 skipped (no database), 1 refused (mixed halves)"
   git rm -q mutation/plans/mixed.txt
   git commit -q -m "clear plans for the next scenario"
 
@@ -1280,6 +1436,109 @@ PLAN
   st_contains "the refusal names the variable" "$ST_OUT" "MUTATE_TEST_CMD is set"
   st_contains "and the per-half replacements" "$ST_OUT" "MUTATE_ALL_SERVER_TEST_CMD"
   st_absent "no plan was attempted" "$ST_OUT" "==> [1/"
+  git rm -q mutation/plans/quotes-a-directive.txt
+  git commit -q -m "clear plans for the next scenario"
+
+  # --- Scenario 18: a server path in a spelling git normalises is still the server half (PR #239's
+  # review, F2). Each spelling is one plan with one mutant only vitest kills; a prefix test on the
+  # written string sends the `..` and absolute ones to the Swift suite, where the mutant survives. ---
+  printf '\n==> Server paths spelled with .., an absolute path or a doubled slash still run vitest\n'
+  cat >mutation/plans/spelled-dotdot.txt <<'PLAN'
+>>> mutant V1 the free tier given one more
+>>> file scripts/../server/src/sample.ts
+>>> from
+  if (tier === "free") return 10;
+>>> to
+  if (tier === "free") return 11;
+>>> end
+PLAN
+  cat >mutation/plans/spelled-absolute.txt <<PLAN
+>>> mutant V1 the free tier given one more
+>>> file $root/server/src/sample.ts
+>>> from
+  if (tier === "free") return 10;
+>>> to
+  if (tier === "free") return 11;
+>>> end
+PLAN
+  cat >mutation/plans/spelled-double-slash.txt <<'PLAN'
+>>> mutant V1 the free tier given one more
+>>> file server//src/sample.ts
+>>> from
+  if (tier === "free") return 10;
+>>> to
+  if (tier === "free") return 11;
+>>> end
+PLAN
+  git add mutation/plans/spelled-dotdot.txt mutation/plans/spelled-absolute.txt mutation/plans/spelled-double-slash.txt
+  git commit -q -m "one server plan per unusual spelling"
+  export DATABASE_URL='postgres://selftest:not-a-real-password-8c1f@localhost:1/none'
+  : >"$ST_SUITES_LOG"
+  st_run "$swift_half_suite" "$server_half_suite"
+  unset DATABASE_URL
+  suites="$(cat "$ST_SUITES_LOG")"
+  st_eq "every spelling's mutant is killed" "$ST_RC" "0"
+  st_eq "all three plans are the server half" "$(st_count "$ST_OUT" '^    suite      : server ')" "3"
+  st_eq "none is the Swift half" "$(st_count "$ST_OUT" '^    suite      : swift ')" "0"
+  st_eq "each killed its one mutant" "$(st_count "$ST_OUT" '^    RAN — 1 killed, 0 survived, 0 unattributed ')" "3"
+  st_eq "the Swift suite never ran with the server mutant applied" "$(st_count "$suites" '^swift saw:.*server-mutant')" "0"
+  st_eq "vitest ran with it once per plan at least" \
+    "$([[ $(st_count "$suites" '^server saw:.*server-mutant') -ge 3 ]] && echo yes || echo no)" "yes"
+  git rm -q mutation/plans/spelled-dotdot.txt mutation/plans/spelled-absolute.txt mutation/plans/spelled-double-slash.txt
+  git commit -q -m "clear plans for the next scenario"
+
+  # --- Scenario 19: the other direction — a Swift file whose written path starts with server/ ---
+  printf '\n==> A Swift path spelled server/../sample.swift is the Swift half, not the server one\n'
+  cat >mutation/plans/spelled-through-server.txt <<'PLAN'
+>>> mutant S1 the morning boundary widened by an hour
+>>> file server/../sample.swift
+>>> from
+        if hour < 12 { return "Morning" }
+>>> to
+        if hour < 13 { return "Morning" }
+>>> end
+PLAN
+  git add mutation/plans/spelled-through-server.txt
+  git commit -q -m "a Swift plan spelled through server/"
+  : >"$ST_SUITES_LOG"
+  st_run "$swift_half_suite" "$server_half_suite"
+  suites="$(cat "$ST_SUITES_LOG")"
+  st_eq "its mutant is killed by the Swift suite" "$ST_RC" "0"
+  st_contains "its block names the Swift half" "$ST_OUT" "suite      : swift"
+  st_absent "not the server half" "$ST_OUT" "suite      : server"
+  st_eq "vitest never ran" "$(st_count "$suites" '^server saw:')" "0"
+  git rm -q mutation/plans/spelled-through-server.txt
+  git commit -q -m "clear plans for the next scenario"
+
+  # --- Scenario 20: a mixed plan whose server path hides behind a .. spelling is still refused ---
+  printf '\n==> A plan mixing the halves through a .. spelling is still refused by name\n'
+  cat >mutation/plans/spelled-mixed.txt <<'PLAN'
+>>> mutant X1 a Swift mutant
+>>> file sample.swift
+>>> from
+        if hour < 12 { return "Morning" }
+>>> to
+        if hour < 14 { return "Morning" }
+>>> end
+
+>>> mutant X2 a server mutant, its path spelled through scripts/
+>>> file scripts/../server/src/sample.ts
+>>> from
+  if (tier === "free") return 10;
+>>> to
+  if (tier === "free") return 12;
+>>> end
+PLAN
+  git add mutation/plans/spelled-mixed.txt
+  git commit -q -m "a mixed plan hiding its server path"
+  : >"$ST_SUITES_LOG"
+  st_run "$swift_half_suite" "$server_half_suite"
+  suites="$(cat "$ST_SUITES_LOG")"
+  st_eq "the refused plan exits 3" "$ST_RC" "3"
+  st_contains "it is refused as mixed" "$ST_OUT" "suite      : none — REFUSED: this plan has mutants in both halves"
+  st_eq "its server mutant is listed as the server half, in the spelling the plan wrote" \
+    "$(st_count "$ST_OUT" '^      server +X2 +scripts/\.\./server/src/sample\.ts$')" "1"
+  st_eq "no suite ever ran with its mutants applied" "$(st_count "$suites" 'mixed-plan-mutant')" "0"
 
   printf '\n'
   if [[ $SELFTEST_FAILURES -eq 0 ]]; then

@@ -983,31 +983,63 @@ above has what changed and why, and `CLAUDE.md`'s mutation-battery paragraph is 
 record, unchanged. This section is the procedure for the founder side of that split.
 
 About once a week, on a clean `main` checkout — `git status --porcelain` empty, and no other
-battery already holding the checkout — run `scripts/mutate-all`. It walks every plan under
-`mutation/plans/` through `scripts/mutate` in turn, one after another, and prints one summary at
-the end (`scripts/mutate-all --help` has the format and the exit codes in full). The worktree is
-frozen for the whole run exactly as for a single battery — `scripts/mutate` re-checks the tree
-after every mutant it applies — and `scripts/warnings` refuses to run beside it, the same mutual
-refusal that already existed.
+battery already holding the checkout — run the battery from the repository root in these four
+steps. `scripts/mutate-all` walks every plan under `mutation/plans/` through `scripts/mutate` in
+turn, one after another, and prints one summary at the end (`scripts/mutate-all --help` has the
+format and the exit codes in full). The worktree is frozen for the whole run exactly as for a
+single battery — `scripts/mutate` re-checks the tree after every mutant it applies — and
+`scripts/warnings` refuses to run beside it, the same mutual refusal that already existed.
+
+```
+# 1. The server half's dependencies. `npm ci`, not `npm install`: it installs exactly what the
+#    lockfile says and never rewrites it, and a rewritten lockfile is a dirty tree every plan refuses.
+(cd server && npm ci)
+
+# 2. A test database, named and ported for this checkout — CLAUDE.md's server-half recipe.
+LANE="$(basename "$(git rev-parse --show-toplevel)")"
+docker run -d --name "sonny-gw-db-$LANE" -e POSTGRES_PASSWORD=postgres -p 0:5432 postgres:17
+PORT="$(docker port "sonny-gw-db-$LANE" 5432 | head -1 | sed 's/.*://')"
+: "${PORT:?no host port — did the docker run above fail?}"
+until docker exec "sonny-gw-db-$LANE" pg_isready -q -U postgres; do sleep 1; done
+export DATABASE_URL="postgres://postgres:postgres@localhost:$PORT/postgres"
+
+# 3. The battery, its exit read with nothing in between.
+scripts/mutate-all; echo "MUTATE_ALL_EXIT=$?"
+
+# 4. The database goes once the run is over.
+docker rm -f "sonny-gw-db-$LANE"
+```
+
+Step 1 is owed because the server default is `npx vitest run`, and a checkout without
+`server/node_modules` cannot pass that suite's baseline, which stops the run with exit 1 (PR #239's
+review, F6). The two lines in the middle of step 2 are the ones `CLAUDE.md` explains: the readiness
+wait, because `docker run -d` returns before Postgres accepts a connection, and the `PORT` guard,
+because an empty port quietly means 5432.
 
 **Each plan runs against its own half's suite, chosen from the plan's own `>>> file` paths**
-(SONNY-455, founders' decision 2026-09-12). A plan whose every path is under `server/` runs
-`cd server && npx vitest run`; every other plan runs the flagged Swift suite; a plan with paths on
-both sides is refused by name, because either suite would report the other half's mutants
-SURVIVED with no test having seen them — the phantom survivor that one command over every plan
-used to produce, in both directions. **Which half a report line came from is on the line**: each
-plan's block carries a `suite :` line naming `swift` or `server` and the command, and every row in
-the summary's Reports, SKIPPED, SURVIVORS, UNATTRIBUTED and REFUSED lists carries `swift`, `server`
-or `mixed` beside the plan file. Two things follow for the person running it:
+(SONNY-455, founders' decision 2026-09-12), each read as the name git gives the file, so
+`./server/x.ts`, `server//x.ts`, `scripts/../server/x.ts` and an absolute path are all `server/x.ts`
+(PR #239's review, F2). A plan whose every path is under `server/` runs `cd server && npx vitest
+run`; every other plan runs the flagged Swift suite; a plan with paths on both sides is refused by
+name, because either suite would report the other half's mutants SURVIVED with no test having seen
+them — the phantom survivor that one command over every plan used to produce, in both directions.
+**Which half a report line came from is on the line**: each plan's block carries a `suite :` line
+naming `swift` or `server` and the command, and every row in the summary's Reports, both SKIPPED
+lists, SURVIVORS, UNATTRIBUTED and REFUSED carries `swift`, `server` or `mixed` beside the plan
+file. Two things follow for the person running it:
 
-- **Export a `DATABASE_URL` if any server plan is killed by database tests** — `CLAUDE.md`'s
-  server-half recipe starts one. The server's database suites skip themselves without it, so a
-  mutant only a database test kills reads SURVIVED, and a server plan's block says whether the
-  variable was set (never its value). At `ae74415c` one of the two server plans is exactly that
-  shape (`git grep -l '^>>> file \(\./\)*server/' ae74415c -- mutation/plans | wc -l` → 2, of
-  `git ls-tree -r --name-only ae74415c -- mutation/plans | grep -c '\.txt$'` → 14): `mutation/plans/fix/a-settle-never-moves-a-row-off-granted.txt`'s header names
-  its killers in `test/topup.db.test.ts`. A survivor from a run whose block reads *DATABASE_URL is unset* is
-  checked against the plan's named killers before it is filed.
+- **A server plan runs only with `DATABASE_URL` set, which is why step 2 starts a database**
+  (founders' decision on SONNY-455, 2026-09-13). Without it the plan is checked and then skipped
+  by name, under its own summary heading `SKIPPED (no database)` — never under `SKIPPED (stale)` —
+  and the run cannot exit 0. The server's database suites skip themselves without the variable, so
+  running the plan anyway would report a mutant only a database test kills as SURVIVED, and at
+  `ae74415c` one of the two server plans is that shape (`git grep -l '^>>> file \(\./\)*server/'
+  ae74415c -- mutation/plans | wc -l` → 2, of `git ls-tree -r --name-only ae74415c --
+  mutation/plans | grep -c '\.txt$'` → 14): `mutation/plans/fix/a-settle-never-moves-a-row-off-granted.txt`'s
+  header names its killers in `test/topup.db.test.ts`. The other server plan needs no database and
+  is skipped as well; that is the cost the founders accepted. The variable's value is never
+  printed. A `DATABASE_URL` that is set but reaches no database fails the database suites, so that
+  plan's baseline is red and the run stops with exit 1, like any red baseline.
 - **Do not export `MUTATE_TEST_CMD`**: the run refuses it, exit 1, since it would put one command
   back over every plan. `MUTATE_ALL_SWIFT_TEST_CMD` and `MUTATE_ALL_SERVER_TEST_CMD` replace one
   half's command each.
@@ -1017,12 +1049,21 @@ Read the exit code with nothing between the command and `$?`:
 - **0** — every plan ran and every mutant was killed. Nothing to file.
 - **2** — at least one mutant SURVIVED or came back UNATTRIBUTED. File one ticket per such mutant
   (`scripts/plane create`), naming the mutant id, the plan file it came from, and the target file
-  it mutates, with the run's SHA.
-- **3** — nothing survived or came back unattributed, but at least one plan was not run: SKIPPED
-  because its `from` block no longer matches the tree, or REFUSED because it mixes the two halves.
-  Each is a ticket for the branch that owns the plan — to re-anchor a stale one against the current
-  tree, or to split a mixed one into one plan per half — not a survivor, and it is filed the same
-  way, naming the plan file and the run's SHA.
+  it mutates, with the run's SHA. **The same run can also have left plans unrun**: 2 outranks 3, so
+  the exit code says nothing about them, and the exit line then adds how many. Treat every plan the
+  summary lists under `SKIPPED (stale)`, `SKIPPED (no database)` or `REFUSED (mixed halves)` exactly
+  as the bullet for 3 says, in the same sitting (PR #239's review, F5).
+- **3** — nothing survived or came back unattributed, but at least one plan was not run. The
+  summary lists each under its own heading, and each heading has its own answer:
+  - `SKIPPED (stale)` — its `from` block no longer matches the tree. A ticket for the branch that
+    owns the plan, to re-anchor it against the current tree.
+  - `REFUSED (mixed halves)` — its mutants sit in both halves. A ticket for the branch that owns the
+    plan, to split it into one plan per half.
+  - `SKIPPED (no database)` — a server plan in a run with `DATABASE_URL` unset. **Not filed**: it
+    says nothing about the plan, only that step 2 did not happen. Start the database and run again.
+
+  The two tickets are not survivors, and are filed the same way, naming the plan file and the run's
+  SHA.
 - **1** — the run did not start, or had to stop partway through. Not filed as tickets;
   `scripts/mutate-all --help` has what to do (a dirty tree, another battery's lock, and a red
   baseline are the ordinary causes).
