@@ -107,7 +107,8 @@ struct ScreenUsePrefixTests {
         }
         #expect(closed.steps.map(\.operation) == [.openApp, .visionSession])
         #expect(closed.steps.map(\.appName) == ["Notes", "Notes"])
-        #expect(closed.steps[1].visionGoal == "open Notes and make a note called wave 7")
+        let session = try #require(closed.steps.last)
+        #expect(session.visionGoal == "open Notes and make a note called wave 7")
 
         guard case .plan(let open)? = makeResolver(running: ["COM.APPLE.NOTES"]).resolve(command: command) else {
             Issue.record("\(command) did not resolve to a plan with Notes running")
