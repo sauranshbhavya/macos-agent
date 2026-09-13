@@ -4887,6 +4887,37 @@ Signed in, gateway up, screen control allowed for the account.
       were in comes back while the session waits; press Resume in the widget and the controlled app
       comes forward again **before** Sonny does anything else.
 
+### An account wipe and the record of it commit together (new 2026-09-13, SONNY-436)
+
+Every account wipe — `DELETE /v1/account/content` (the Mac's *Delete Sonny local data*),
+`DELETE /v1/account`, and the closed-account sweep that finishes the second — used to clear the
+stored response bodies in a statement of its own before the transaction that deletes the content and
+writes the `sonny.content_deletion` row. A cancel between the two left the bodies gone with no row
+naming them, and the retry recorded `stored_responses: 0`. The clear now runs inside that
+transaction, last, just before the record, so a replay or a metering claim on the account's keys
+does not wait on the rest of the wipe (PR #242's review, F1). Server half only: nothing in the app
+changes, and nothing on the Mac reads the count.
+Needs a lane database up by `CLAUDE.md`'s recipe, with its port in `PORT`.
+
+- [ ] The cancel tests, at the lane database:
+
+      ```
+      cd server && npm install
+      DATABASE_URL="postgres://postgres:postgres@localhost:$PORT/postgres" npx vitest run test/content-deletion-audit.db.test.ts --reporter=verbose
+      ```
+
+      The runner names, and passes, five tests: `DELETE /v1/account/content cancelled between the
+      units leaves nothing half-done, and its retry records every body`, `DELETE /v1/account
+      cancelled between the units leaves the wipe whole for the sweep, which records every body`,
+      `the closed-account sweep cancelled between the units leaves nothing half-done, and its next
+      pass records every body`, `a wipe held in its content phase makes neither a replay nor a
+      metering claim on the account's key wait, and still records every body`, and
+      `DELETE /v1/account/content?before bounds the stored bodies it clears and records by
+      claimed_at`. The tally reads `Tests  5 passed (5)`. **What would be a finding:** any of the
+      five failing, or the tally reading `skipped` — a skipped database test reads like a passing
+      one, and it means `DATABASE_URL` did not reach the run, so nothing was tested.
+- [ ] `npm run test:db` at the lane database: the whole database suite passes with those five.
+
 ## 8. How to report back
 
 For each real finding, give me:

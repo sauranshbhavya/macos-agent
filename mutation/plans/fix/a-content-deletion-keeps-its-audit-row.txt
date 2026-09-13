@@ -1,0 +1,172 @@
+# SONNY-436 — an account wipe clears the stored response bodies inside the transaction that deletes
+# the content and writes the sonny.content_deletion row, so a cancel at any point leaves either
+# nothing done or all of it recorded, and the row's stored_responses is the count that transaction
+# cleared. Since PR #242's review (F1, founders' decision B) the clear runs last, just before the
+# row, so the account's idempotency-key rows are locked only to the commit.
+#
+# SERVER HALF, DATABASE SUITE. Every path below is under server/, so scripts/mutate-all runs this
+# plan against `cd server && npx vitest run`, and only with DATABASE_URL set (WORKFLOW.md's weekly
+# battery starts the database). Every killer below lives in a database test file and skips without
+# a database, so without one every mutant here would read as a survivor nobody tested.
+#
+# Not run on this branch (founder-triggered batteries, 2026-09-10). The killers below are the tests
+# each mutant was written against, not a measurement. What WAS measured on the branch is two whole
+# trees: the five tests of content-deletion-audit.db.test.ts at ef0fd5d5, run against `git archive`
+# of main at 95325331, fail the three cancel tests on `storedBodies: 0` and the waiter test on a
+# replay that re-claims; run against 400d1a14, the clear-first order, they fail the waiter test
+# alone, on a replay that waited. The changelog entry carries both runs.
+#
+# Intended killers, all in content-deletion-audit.db.test.ts unless named:
+#   M1 — the three cancel tests (bodies gone after the cancel) and the waiter test "a wipe held in its
+#        content phase makes neither a replay nor a metering claim on the account's key wait …"
+#        (the clear has committed before the content phase, so the replay re-claims).
+#   M2 — "DELETE /v1/account/content?before bounds the stored bodies it clears and records by
+#        claimed_at", the only test asserting which bodies a bounded wipe takes.
+#   M3 — "DELETE /v1/account/content cancelled between the units …" and the waiter test.
+#   M4 — "DELETE /v1/account cancelled between the units …" alone.
+#   M5 — "the closed-account sweep cancelled between the units …" alone.
+#   M6 — the retry, recovery and released-wipe count assertions in the three cancel tests, the waiter
+#        test and the cutoff test, and in content.db.test.ts "takes content, snapshot membership and
+#        the stored idempotency responses", "takes an account whose only residue is a stored response
+#        body" and "closes an account and takes its content, its lineage and its stored responses
+#        with it".
+#   M7 — the waiter test alone: the transaction is still whole, so every cancel test passes, and only
+#        a request on the key held for the whole wipe can see the difference.
+
+>>> mutant M1 the clear run outside the transaction, committed before BEGIN: the two-unit shape back for every caller
+>>> file server/src/content/store.ts
+>>> from
+  await client.query("BEGIN");
+  try {
+    const removed =
+      occurredAtOrBefore === undefined
+        ? await removeSnapshotMembers(client, "account_id = $1", [accountId])
+        : await removeSnapshotMembers(client, "account_id = $1 AND source_occurred_at <= $2", [
+            accountId,
+            occurredAtOrBefore,
+          ]);
+    const content =
+      occurredAtOrBefore === undefined
+        ? await client.query("DELETE FROM sonny.retained_content WHERE account_id = $1", [accountId])
+        : await client.query(
+            "DELETE FROM sonny.retained_content WHERE account_id = $1 AND occurred_at <= $2",
+            [accountId, occurredAtOrBefore],
+          );
+    // Last before the record, so the key rows it locks are held only to the commit (see above).
+    const storedResponses = await clearStoredResponses(client, accountId, occurredAtOrBefore);
+>>> to
+  const storedResponses = await clearStoredResponses(client, accountId, occurredAtOrBefore);
+  await client.query("BEGIN");
+  try {
+    const removed =
+      occurredAtOrBefore === undefined
+        ? await removeSnapshotMembers(client, "account_id = $1", [accountId])
+        : await removeSnapshotMembers(client, "account_id = $1 AND source_occurred_at <= $2", [
+            accountId,
+            occurredAtOrBefore,
+          ]);
+    const content =
+      occurredAtOrBefore === undefined
+        ? await client.query("DELETE FROM sonny.retained_content WHERE account_id = $1", [accountId])
+        : await client.query(
+            "DELETE FROM sonny.retained_content WHERE account_id = $1 AND occurred_at <= $2",
+            [accountId, occurredAtOrBefore],
+          );
+>>> end
+
+>>> mutant M2 the cutoff not handed to the clear: a delayed ?before delivery takes and records bodies the press never covered
+>>> file server/src/content/store.ts
+>>> from
+    const storedResponses = await clearStoredResponses(client, accountId, occurredAtOrBefore);
+>>> to
+    const storedResponses = await clearStoredResponses(client, accountId);
+>>> end
+
+>>> mutant M3 DELETE /v1/account/content clears as a unit of its own again and hands in the count
+>>> file server/src/routes/tasks.ts
+>>> from
+          const outcome = await deleteContentForAccount(
+            db,
+            accountId,
+            deleteStoredResponsesForAccount,
+>>> to
+          const cleared = await deleteStoredResponsesForAccount(db, accountId, before);
+          const outcome = await deleteContentForAccount(
+            db,
+            accountId,
+            async () => cleared,
+>>> end
+
+>>> mutant M4 DELETE /v1/account clears as a unit of its own again and hands in the count
+>>> file server/src/routes/auth.ts
+>>> from
+      wiped = await deleteContentForAccount(
+        client,
+        accountId,
+        deleteStoredResponsesForAccount,
+        "account",
+      );
+>>> to
+      const cleared = await deleteStoredResponsesForAccount(client, accountId);
+      wiped = await deleteContentForAccount(client, accountId, async () => cleared, "account");
+>>> end
+
+>>> mutant M5 the closed-account sweep clears as a unit of its own again and hands in the count
+>>> file server/src/content/store.ts
+>>> from
+    const outcome = await deleteContentForAccount(client, accountId, clearStoredResponses, "account");
+>>> to
+    const cleared = await clearStoredResponses(client, accountId);
+    const outcome = await deleteContentForAccount(client, accountId, async () => cleared, "account");
+>>> end
+
+>>> mutant M6 the deletion row's stored_responses is not the count the clear returned
+>>> file server/src/content/store.ts
+>>> from
+      snapshotsTouched: removed.snapshots,
+      storedResponses,
+>>> to
+      snapshotsTouched: removed.snapshots,
+      storedResponses: 0,
+>>> end
+
+>>> mutant M7 the clear moved back to first inside the transaction: the key rows locked for the whole wipe again (PR #242's F1)
+>>> file server/src/content/store.ts
+>>> from
+  await client.query("BEGIN");
+  try {
+    const removed =
+      occurredAtOrBefore === undefined
+        ? await removeSnapshotMembers(client, "account_id = $1", [accountId])
+        : await removeSnapshotMembers(client, "account_id = $1 AND source_occurred_at <= $2", [
+            accountId,
+            occurredAtOrBefore,
+          ]);
+    const content =
+      occurredAtOrBefore === undefined
+        ? await client.query("DELETE FROM sonny.retained_content WHERE account_id = $1", [accountId])
+        : await client.query(
+            "DELETE FROM sonny.retained_content WHERE account_id = $1 AND occurred_at <= $2",
+            [accountId, occurredAtOrBefore],
+          );
+    // Last before the record, so the key rows it locks are held only to the commit (see above).
+    const storedResponses = await clearStoredResponses(client, accountId, occurredAtOrBefore);
+>>> to
+  await client.query("BEGIN");
+  try {
+    const storedResponses = await clearStoredResponses(client, accountId, occurredAtOrBefore);
+    const removed =
+      occurredAtOrBefore === undefined
+        ? await removeSnapshotMembers(client, "account_id = $1", [accountId])
+        : await removeSnapshotMembers(client, "account_id = $1 AND source_occurred_at <= $2", [
+            accountId,
+            occurredAtOrBefore,
+          ]);
+    const content =
+      occurredAtOrBefore === undefined
+        ? await client.query("DELETE FROM sonny.retained_content WHERE account_id = $1", [accountId])
+        : await client.query(
+            "DELETE FROM sonny.retained_content WHERE account_id = $1 AND occurred_at <= $2",
+            [accountId, occurredAtOrBefore],
+          );
+>>> end

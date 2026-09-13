@@ -260,8 +260,9 @@ changelog's per-branch decisions, `.claude/rules/`). The v1 rigor bar is unchang
   the script's count and the SHA it stamped, the same way it carries the test count.
 - **Which half you verify is the half you touched.** The three commands above are the app
   half (`Sources/`, `Tests/`). A change under `server/` is verified by the server's own
-  commands — `npm run build`, `npm test`, `npm run typecheck`, `npm run check:secrets`
-  (CLAUDE.md's Commands section, "The server half") — and `swift build` / `scripts/warnings`
+  commands — `npm run build`, `npm test`, `npm run typecheck` (CLAUDE.md's Commands section,
+  "The server half"; `npm run check:secrets` is listed there too, and is owed by every branch —
+  the bullet after next) — and `swift build` / `scripts/warnings`
   say nothing about it: `scripts/warnings` measures a Swift compile a `server/` diff cannot
   alter, so it would report zero over a server change while never compiling what changed. A
   change touching both halves runs both halves' commands; neither substitutes for the other,
@@ -285,6 +286,19 @@ changelog's per-branch decisions, `.claude/rules/`). The v1 rigor bar is unchang
   search can find a tool this file does name. Both are readings at a commit rather than claims
   about the file: this bullet names both tools twice each, so the same two commands answer **2**
   and **13** here. Routed into SONNY-372's branch 2026-09-05; recorded on SONNY-410.)
+- **Credentials: `server/scripts/check-secrets.sh` — `npm run check:secrets` from `server/` — owed by
+  every branch, whichever half it touches.** Its reach is the whole repository and not only
+  `server/`, because it scans every tracked file for a credential's shape (`git ls-files` from the
+  repository root), so a string written in `scripts/`, `docs/`, `Sources/` or `Tests/` is its finding
+  exactly as one under `server/` is. It is a shell script: seconds, no database, no `npm install`.
+  Exit 0 is clean; 1 is a finding or a stale baseline entry; 2 is a usage error or a missing
+  baseline file. The closing comment carries the exit the same way it carries `scripts/no-attribution`'s.
+  **It sat only in the server list above until SONNY-477, and that placement is how `main` went red
+  unseen**: PR #239 touched nothing under `server/`, so its lane, its fresh review, both scoped
+  passes and the coordinator's verification all correctly skipped the server half — and with it the
+  one server command that reads `scripts/`, where that branch's selftest had written three database
+  URLs carrying a user and a password. The next server lane found it (founders' decision 2026-09-13,
+  option A, recorded on SONNY-477).
 - **Evidence, not assertion.** A ticket is done when its acceptance criteria are
   demonstrated by test output and exit codes, not when the work "looks done."
   `CLAUDE.md`'s claims-and-evidence conventions bind every claim made under this workflow —
@@ -607,6 +621,10 @@ than validating:
   Swift reruns are owed only when the diff actually touches the app half. A diff touching
   both halves reruns both. PR #85's reviewer reran the full Swift suite for a server-only
   diff for want of this branch (SONNY-193).
+- Reruns `server/scripts/check-secrets.sh` on every diff, whichever half it touches and even when
+  it is provably docs or comments only, since a credential pasted into prose is still one. The scan
+  reads every tracked file, so a branch outside `server/` can break it and nothing tied to
+  `server/` would notice — step 5's credentials bullet has the case that turned `main` red (SONNY-477).
 - Posts findings to the affected tickets (or the PR) carrying the same evidentiary bar as
   implementers: the literal command run and the tail of its output (exit code, test
   counts). Its "all green" is a spot-checkable record, not an assertion to trust.
