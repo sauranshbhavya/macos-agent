@@ -332,7 +332,11 @@ something up.)
   mutant plan into `mutation/plans/<branch-name>.txt` (`scripts/mutate --help` has the format;
   a slash in the branch name is a folder, so `fix/some-name`'s plan is
   `mutation/plans/fix/some-name.txt`, and `scripts/mutate-all` reads the folder recursively),
-  commits it, and names that path in its changelog entry's `Mutation plan:` line. `scripts/mutate
+  commits it, and names that path in its changelog entry's `Mutation plan:` line. A plan's
+  mutants sit in one half — all under `server/`, or none — because `scripts/mutate-all` runs each
+  plan against one suite and refuses a plan mixing the two (`## Weekly battery`, below); a branch
+  whose mutants sit in both writes one plan file per half beside each other and names both.
+  `scripts/mutate
   --help` still says to keep a plan outside the working tree; that describes the retired
   per-branch run, where a plan was a scratch file, and does not apply here — a branch's plan is
   committed, which is exactly what keeps the tree clean for the run. Nothing runs at PR time,
@@ -986,16 +990,39 @@ frozen for the whole run exactly as for a single battery — `scripts/mutate` re
 after every mutant it applies — and `scripts/warnings` refuses to run beside it, the same mutual
 refusal that already existed.
 
+**Each plan runs against its own half's suite, chosen from the plan's own `>>> file` paths**
+(SONNY-455, founders' decision 2026-09-12). A plan whose every path is under `server/` runs
+`cd server && npx vitest run`; every other plan runs the flagged Swift suite; a plan with paths on
+both sides is refused by name, because either suite would report the other half's mutants
+SURVIVED with no test having seen them — the phantom survivor that one command over every plan
+used to produce, in both directions. **Which half a report line came from is on the line**: each
+plan's block carries a `suite :` line naming `swift` or `server` and the command, and every row in
+the summary's Reports, SKIPPED, SURVIVORS, UNATTRIBUTED and REFUSED lists carries `swift`, `server`
+or `mixed` beside the plan file. Two things follow for the person running it:
+
+- **Export a `DATABASE_URL` if any server plan is killed by database tests** — `CLAUDE.md`'s
+  server-half recipe starts one. The server's database suites skip themselves without it, so a
+  mutant only a database test kills reads SURVIVED, and a server plan's block says whether the
+  variable was set (never its value). At `ae74415c` one of the two server plans is exactly that
+  shape (`git grep -l '^>>> file \(\./\)*server/' ae74415c -- mutation/plans | wc -l` → 2, of
+  `git ls-tree -r --name-only ae74415c -- mutation/plans | grep -c '\.txt$'` → 14): `mutation/plans/fix/a-settle-never-moves-a-row-off-granted.txt`'s header names
+  its killers in `test/topup.db.test.ts`. A survivor from a run whose block reads *DATABASE_URL is unset* is
+  checked against the plan's named killers before it is filed.
+- **Do not export `MUTATE_TEST_CMD`**: the run refuses it, exit 1, since it would put one command
+  back over every plan. `MUTATE_ALL_SWIFT_TEST_CMD` and `MUTATE_ALL_SERVER_TEST_CMD` replace one
+  half's command each.
+
 Read the exit code with nothing between the command and `$?`:
 
 - **0** — every plan ran and every mutant was killed. Nothing to file.
 - **2** — at least one mutant SURVIVED or came back UNATTRIBUTED. File one ticket per such mutant
   (`scripts/plane create`), naming the mutant id, the plan file it came from, and the target file
   it mutates, with the run's SHA.
-- **3** — nothing survived or came back unattributed, but at least one plan was SKIPPED because
-  its `from` block no longer matches the tree. That is a ticket for the branch that owns the plan
-  to re-anchor it against the current tree — it is not a survivor, and it is filed the same way,
-  naming the plan file and the run's SHA.
+- **3** — nothing survived or came back unattributed, but at least one plan was not run: SKIPPED
+  because its `from` block no longer matches the tree, or REFUSED because it mixes the two halves.
+  Each is a ticket for the branch that owns the plan — to re-anchor a stale one against the current
+  tree, or to split a mixed one into one plan per half — not a survivor, and it is filed the same
+  way, naming the plan file and the run's SHA.
 - **1** — the run did not start, or had to stop partway through. Not filed as tickets;
   `scripts/mutate-all --help` has what to do (a dirty tree, another battery's lock, and a red
   baseline are the ordinary causes).
