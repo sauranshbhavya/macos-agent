@@ -1,0 +1,51 @@
+# fix/key-hints-robots-groups-and-routine-refusals — SONNY-458, SONNY-454, SONNY-464.
+# Founder-triggered (WORKFLOW.md, Weekly battery); nothing here was run on the branch beyond --check.
+# Every killer named below is hand-traced, not measured.
+
+# SONNY-458 — the key-hint tests read what the model decided by running its hold task to its last
+# line, with no clock, so load can make them slower and never wrong. K1 is the kill a busy machine
+# could withhold from the two-second read this replaced; K4 survived every test before, because the
+# focus-loss test read the flag only at the instant of the focus loss.
+
+>>> mutant K1 the hold's cancellation guard dropped: a cancelled hold still shows the hints
+>>> file Sources/MacAgent/CommandKeyHints.swift
+>>> from
+            try? await Task.sleep(for: .seconds(holdDelay))
+            guard !Task.isCancelled else { return }
+            self?.isShowingHints = true
+>>> to
+            try? await Task.sleep(for: .seconds(holdDelay))
+            self?.isShowingHints = true
+>>> end
+
+>>> mutant K2 a release no longer cancels the hold it drops: it fires half a second later anyway
+>>> file Sources/MacAgent/CommandKeyHints.swift
+>>> from
+    func flagsChanged(commandHeldAlone: Bool) {
+        holdTask?.cancel()
+        holdTask = nil
+>>> to
+    func flagsChanged(commandHeldAlone: Bool) {
+        holdTask = nil
+>>> end
+
+>>> mutant K3 the hold never sets the flag: holding ⌘ alone shows nothing
+>>> file Sources/MacAgent/CommandKeyHints.swift
+>>> from
+            guard !Task.isCancelled else { return }
+            self?.isShowingHints = true
+>>> to
+            guard !Task.isCancelled else { return }
+            _ = self
+>>> end
+
+>>> mutant K4 focus loss and another key drop the hold without cancelling it
+>>> file Sources/MacAgent/CommandKeyHints.swift
+>>> from
+    private func cancelHoldAndHide() {
+        holdTask?.cancel()
+        holdTask = nil
+>>> to
+    private func cancelHoldAndHide() {
+        holdTask = nil
+>>> end
