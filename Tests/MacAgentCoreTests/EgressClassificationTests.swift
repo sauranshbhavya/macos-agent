@@ -53,6 +53,9 @@ struct EgressClassificationTests {
              // SONNY-385. One `moveItem` on a whitelisted path. It reads no file's contents and
              // opens no connection, so there is nothing for a redaction gate to be about.
              .rename,
+             // SONNY-453. EventKit reads and writes the calendar database on this Mac and opens no
+             // connection of Sonny's; what iCloud later syncs is the system's, not this step's.
+             .readCalendarEvents, .createReminder,
              .unsupported:
             return .neverLeavesDevice
         // `.writeMarkdown` is a local file write. It reads "no" honestly only because the

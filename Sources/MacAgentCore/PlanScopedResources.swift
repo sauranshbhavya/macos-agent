@@ -339,6 +339,17 @@ public enum PlanScopedResources {
             // Pure computation, or reads and writes confined to Sonny's own encrypted local stores.
             return .none
 
+        case .readCalendarEvents, .createReminder:
+            // **No resource, and not because nothing is touched** (SONNY-453). Both reach the user's
+            // calendar database through EventKit, which is none of the three things a workspace
+            // boundary is made of: no app is driven (Calendar and Reminders never launch), no file in
+            // the user's folders is read or written, and no URL is visited. A resource here would be
+            // a name no workspace could list, so every plan carrying one would sit permanently out
+            // of scope — `open_generated_artifact`'s argument above, for the same kind of reason.
+            // What gates these is not a scope: the tier, the reminder's escalation, and macOS's own
+            // prompt.
+            return .none
+
         case .clarify:
             // Asks the user a question and stops. No side effects by design.
             return .none

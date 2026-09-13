@@ -74,6 +74,10 @@ enum AgentActivityPresentation {
             // the same reasoning `startWatching` above gives for naming the page and not the
             // subject.
             return "Rename to \(step.newName ?? "a new name")"
+        case .readCalendarEvents:
+            return "Read calendar"
+        case .createReminder:
+            return "Add reminder"
         case .saveRoutine:
             return "Save routine"
         case .runRoutine:

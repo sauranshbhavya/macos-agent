@@ -242,7 +242,12 @@ struct AutomationStoresTests {
             // stripped — a saved routine that renames a named file to a named name is a routine a
             // user can legitimately author, and the tier-3 destructive escalation is what stops a
             // *scheduled* run of one from renaming anything unattended.
-            "newName"
+            "newName",
+            // SONNY-453. Words and numbers out of the user's own sentence. `calendarDay` is rewritten
+            // by the resolve phase into a date, but a date is a value the model could have written
+            // itself, so it is not a pin and is not stripped — and a routine cannot carry either
+            // operation that reads these anyway.
+            "calendarDay", "reminderTitle", "reminderMinutesFromNow", "reminderTime"
         ]
         /// Resolver-only: written by the executor, never decodable from a planner response, and
         /// therefore stripped by the routine store's read door — each one held by a behavioural test
@@ -371,6 +376,10 @@ struct AutomationStoresTests {
                 // create a watcher on every occurrence until the cap refuses — records the user
                 // never asked for, against a cap that exists to stop exactly that accumulation.
                 .startWatching,
+                // SONNY-453. A reminder asks first and a scheduled routine passes tier 2 without
+                // asking; a first calendar read raises macOS's prompt with nobody there to answer.
+                .readCalendarEvents,
+                .createReminder,
                 .clarify,
                 .unsupported
             ]
@@ -479,6 +488,8 @@ struct AutomationStoresTests {
             .switchRunningApp: "A routine can't bring an open app to the front.",
             .visionSession: "A routine can't control an app on your screen.",
             .startWatching: "A routine can't watch a page for changes.",
+            .readCalendarEvents: "A routine can't read your calendar.",
+            .createReminder: "A routine can't add a reminder.",
             .clarify: "A routine can't stop to ask you a question.",
             .unsupported: "A routine can't include something Sonny can't do yet."
         ]

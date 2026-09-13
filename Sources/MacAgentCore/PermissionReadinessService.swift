@@ -1,4 +1,5 @@
 import AVFoundation
+@preconcurrency import EventKit
 import Foundation
 
 // MARK: - Permission seam
@@ -23,6 +24,30 @@ public struct SystemMicrophonePermissionChecker: MicrophonePermissionChecking {
 
     public func microphoneAuthorizationStatus() -> AVAuthorizationStatus {
         AVCaptureDevice.authorizationStatus(for: .audio)
+    }
+}
+
+/// Live TCC state for Calendars and Reminders (SONNY-453).
+///
+/// **Its own seam, beside the microphone's rather than inside `EventKitAccessing`**, because the
+/// readiness service is built in places that have no capability wiring at all, and a status read
+/// is all a readiness row needs. It vends the platform status for `MicrophonePermissionChecking`'s
+/// reason; what a status *means* is `EventKitAccessState.init(_:)`, which the capabilities read too,
+/// so the row and the capability cannot disagree about one grant.
+public protocol EventKitPermissionChecking: Sendable {
+    func authorizationStatus(for kind: EventKitDataKind) -> EKAuthorizationStatus
+}
+
+public struct SystemEventKitPermissionChecker: EventKitPermissionChecking {
+    public init() {}
+
+    public func authorizationStatus(for kind: EventKitDataKind) -> EKAuthorizationStatus {
+        switch kind {
+        case .calendars:
+            return EKEventStore.authorizationStatus(for: .event)
+        case .reminders:
+            return EKEventStore.authorizationStatus(for: .reminder)
+        }
     }
 }
 
@@ -133,13 +158,16 @@ public struct PermissionReadinessItem: Identifiable, Codable, Equatable, Sendabl
 public struct PermissionReadinessService: Sendable {
     private let screenPermissionChecker: any ScreenCapturePermissionChecking
     private let microphonePermissionChecker: any MicrophonePermissionChecking
+    private let eventKitPermissionChecker: any EventKitPermissionChecking
 
     public init(
         screenPermissionChecker: any ScreenCapturePermissionChecking = SystemScreenCapturePermissionChecker(),
-        microphonePermissionChecker: any MicrophonePermissionChecking = SystemMicrophonePermissionChecker()
+        microphonePermissionChecker: any MicrophonePermissionChecking = SystemMicrophonePermissionChecker(),
+        eventKitPermissionChecker: any EventKitPermissionChecking = SystemEventKitPermissionChecker()
     ) {
         self.screenPermissionChecker = screenPermissionChecker
         self.microphonePermissionChecker = microphonePermissionChecker
+        self.eventKitPermissionChecker = eventKitPermissionChecker
     }
 
     /// **`planAccess` has no default, deliberately.** A defaulted `.undetermined` would let a call
@@ -180,7 +208,9 @@ public struct PermissionReadinessService: Sendable {
                 detail: "DOCX conversion may trigger an Automation prompt when Word is controlled."
             ),
             accessibilityStatus(),
-            screenRecordingStatus()
+            screenRecordingStatus(),
+            eventKitStatus(.calendars),
+            eventKitStatus(.reminders)
         ]
     }
 
@@ -290,6 +320,28 @@ public struct PermissionReadinessService: Sendable {
                 ? "Screen Recording is granted."
                 : "Screen-aware tools need Screen Recording. Enable Sonny in System Settings › Privacy & Security › Screen Recording, then relaunch Sonny."
         )
+    }
+
+    /// The Calendars and Reminders rows (SONNY-453), in the microphone row's three states: ready,
+    /// asked-for-at-first-use, and refused. Write-only calendar access reads as refused, because a
+    /// calendar read is the only thing Sonny does with it — `EventKitAccessState` is where that is
+    /// decided, for this row and the capability alike.
+    private func eventKitStatus(_ kind: EventKitDataKind) -> PermissionReadinessItem {
+        let state = EventKitAccessState(eventKitPermissionChecker.authorizationStatus(for: kind))
+        switch (kind, state) {
+        case (.calendars, .granted):
+            return PermissionReadinessItem(id: "calendars", title: "Calendars", state: .ready, detail: "Sonny can read your calendars.")
+        case (.calendars, .notDetermined):
+            return PermissionReadinessItem(id: "calendars", title: "Calendars", state: .unknown, detail: "Sonny will ask the first time you check your calendar.")
+        case (.calendars, .denied):
+            return PermissionReadinessItem(id: "calendars", title: "Calendars", state: .needsAction, detail: "Allow Sonny in System Settings \u{203A} Privacy & Security \u{203A} Calendars.")
+        case (.reminders, .granted):
+            return PermissionReadinessItem(id: "reminders", title: "Reminders", state: .ready, detail: "Sonny can add reminders.")
+        case (.reminders, .notDetermined):
+            return PermissionReadinessItem(id: "reminders", title: "Reminders", state: .unknown, detail: "Sonny will ask the first time you add a reminder.")
+        case (.reminders, .denied):
+            return PermissionReadinessItem(id: "reminders", title: "Reminders", state: .needsAction, detail: "Allow Sonny in System Settings \u{203A} Privacy & Security \u{203A} Reminders.")
+        }
     }
 
     private func microphoneStatus() -> PermissionReadinessItem {

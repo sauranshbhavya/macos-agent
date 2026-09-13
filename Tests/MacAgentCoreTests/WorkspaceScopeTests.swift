@@ -762,7 +762,7 @@ struct WorkspaceScopeTests {
         // names, and SONNY-382 is the operation that made it bite). It was
         // `…CoversAllThirtyTwoCases`, which the changelog's PR #94 entry cites by that name — that
         // citation is a dated record of what the test was called then and stays verbatim.
-        #expect(AgentOperation.allCases.count == 34)
+        #expect(AgentOperation.allCases.count == 36)
 
         let input = ScopedResource.fileLocation("~/Documents/Input")
         let output = ScopedResource.fileLocation("~/Documents/Output/out.md")
@@ -825,6 +825,10 @@ struct WorkspaceScopeTests {
             // below carries a `newName` at all. Reporting only `input` would answer a boundary about
             // the file being read and stay silent about the file being written.
             .rename: [input, .fileLocation("~/Documents/renamed.pdf")],
+            // SONNY-453. EventKit drives no app, touches no file in the user's folders and visits no
+            // URL, so a workspace boundary has nothing it could list for either.
+            .readCalendarEvents: [],
+            .createReminder: [],
             .clarify: [],
             .unsupported: []
         ]
