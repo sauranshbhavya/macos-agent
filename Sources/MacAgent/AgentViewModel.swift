@@ -1292,12 +1292,11 @@ final class AgentViewModel: ObservableObject {
         finderRevealer: @escaping @MainActor @Sendable ([URL]) -> Void,
         mediaOpener: any MediaOpening = NativeMediaOpener(),
         runningAppSwitcher: any RunningAppSwitching = WorkspaceRunningAppSwitcher.forThisMac(),
-        // Inert by default, unlike the switcher one line up, and the difference is measured
-        // (SONNY-451): a switch step is rare in a fixture, while an open step is common, and the real
-        // restorer reads `NSWorkspace` on every one — under the full parallel suite that read
-        // stalled three resumable-task tests for their whole thirty-second backstop. The shipping
-        // app passes `FocusRestorer.forThisMac()` in `atItsRealStoreLocations()`, and
-        // `FocusRestoreWiringTests` pins that it does.
+        // Inert by default, unlike the switcher one line up (SONNY-451): an open step is common in a
+        // fixture, and a real restorer there would read this Mac's frontmost app and could bring a
+        // real app forward on the developer's screen. The shipping app passes
+        // `FocusRestorer.forThisMac()` in `atItsRealStoreLocations()`, and `FocusRestoreWiringTests`
+        // pins that it does.
         focusRestorer: any FocusRestoring = FocusRestorer.inert(),
         shortcutInvoker: any ShortcutInvoking = ProcessShortcutInvoker(),
         finderContextReader: any FinderContextReading = AppleScriptFinderContextReader(),
@@ -3534,9 +3533,10 @@ final class AgentViewModel: ObservableObject {
     /// prepare, so the restatement `= 2 + 2` is taken and answers 4; `focus` answered `Focus Writer`
     /// joins to `focus Focus Writer`, which resolves and prepares whenever that app is running, so
     /// Sonny switches to the app the user named rather than to one called Writer. The dry run is
-    /// built with no vision environment: a resolver plan never carries a vision step, and the live
-    /// environment's construction assigns `visionUserPauseMonitor`, a side effect a routing decision
-    /// must not have. The resolver then runs once more on the chosen command inside `performStart`,
+    /// built with no vision environment, because the live environment's construction assigns
+    /// `visionUserPauseMonitor`, a side effect a routing decision must not have — and that is safe
+    /// for the one resolver plan that does carry a vision step, the `[s]` door's (SONNY-451), since
+    /// `prepare` resolves and assesses a session without needing the environment and runs nothing. The resolver then runs once more on the chosen command inside `performStart`,
     /// as the dispatch; the two agree because resolution is deterministic over the same stores.
     ///
     /// **When candidates resolved and none prepared, the first that resolved is dispatched — not
@@ -3587,6 +3587,13 @@ final class AgentViewModel: ObservableObject {
         guard case .clarify(let asked)? = resolver.resolve(command: request),
               asked.steps.first(where: { $0.operation == .clarify })?.question == question else {
             return nil
+        }
+        // **A prefixed request's answer stays on the prefixed route, whatever it completes to**
+        // (PR #238's F4). The door places the answer where it reads it, and the result is dispatched
+        // even when the door will ask again — an answer carrying only the app, say — because the
+        // alternative is the exchange going to the planner, which is the one route `[s]` rules out.
+        if let screenUse = resolver.screenUseCompletion(request: request, answer: answer) {
+            return screenUse
         }
         let dryRun = makeExecutor(recordingPolicy: nil, visionSession: nil)
         var firstResolved: String?
@@ -6115,7 +6122,10 @@ final class AgentViewModel: ObservableObject {
             recentArtifactStore: recentArtifactStore,
             routineStore: routineStore,
             workspaceStore: workspaceStore,
-            shortcutCatalog: shortcutCatalog
+            shortcutCatalog: shortcutCatalog,
+            // What the `[s]` door reads to open an app that is not running before its session
+            // (PR #238's F1), from the same list the switcher acts on.
+            runningAppBundleIdentifiers: Set(runningAppSwitcher.runningApps().map(\.bundleIdentifier))
         )
     }
 

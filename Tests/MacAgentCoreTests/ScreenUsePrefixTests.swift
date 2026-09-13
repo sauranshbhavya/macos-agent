@@ -4,23 +4,34 @@ import MacAgentTestSupport
 @testable import MacAgentCore
 
 /// SONNY-451. `[s]` at the start of a command routes it to screen use: the instant resolver builds
-/// the same one-step `vision_session` plan the planner would, with the app read from the command's
-/// own words and checked against what is installed, or asks which app when none is named. A
-/// command without the prefix takes no new door.
+/// the `vision_session` plan the planner would — opening the app first when it is not running —
+/// with the app read from the command's own words and checked against what is installed, or asks
+/// for what is missing, and the answer to that question stays on the prefixed route. A command
+/// without the prefix takes no new door.
 @Suite
 struct ScreenUsePrefixTests {
     private static let notes = InstalledApp(displayName: "Notes", bundleIdentifier: "com.apple.Notes", applicationURL: URL(fileURLWithPath: "/System/Applications/Notes.app"))
     private static let mail = InstalledApp(displayName: "Mail", bundleIdentifier: "com.apple.mail", applicationURL: URL(fileURLWithPath: "/System/Applications/Mail.app"))
     private static let chrome = InstalledApp(displayName: "Google Chrome", bundleIdentifier: "com.google.Chrome", applicationURL: URL(fileURLWithPath: "/Applications/Google Chrome.app"))
+    private static let slack = InstalledApp(displayName: "Slack", bundleIdentifier: "com.tinyspeck.slackmacgap", applicationURL: URL(fileURLWithPath: "/Applications/Slack.app"))
+    private static let music = InstalledApp(displayName: "Music", bundleIdentifier: "com.apple.Music", applicationURL: URL(fileURLWithPath: "/System/Applications/Music.app"))
 
-    private func makeResolver() -> InstantCommandResolver {
+    private static let installed = InstalledAppResolver(source: FixedAppSource([notes, mail, chrome, slack, music]))
+
+    private func makeResolver(running: Set<String>? = nil) -> InstantCommandResolver {
         InstantCommandResolver(
             snippetStore: UnreachableLocalStores.snippets(),
             recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
             routineStore: UnreachableLocalStores.routines(),
             workspaceStore: UnreachableLocalStores.workspaces(),
-            installedAppResolver: InstalledAppResolver(source: FixedAppSource([Self.notes, Self.mail, Self.chrome]))
+            installedAppResolver: Self.installed,
+            runningAppBundleIdentifiers: running
         )
+    }
+
+    /// The name the installed-app resolver gives an app, which is what a question or a plan says.
+    private func displayName(_ name: String) throws -> String {
+        try #require(Self.installed.resolve(name)).displayName
     }
 
     private func plan(_ command: String) throws -> AgentPlan {
@@ -82,23 +93,104 @@ struct ScreenUsePrefixTests {
         #expect(question == "Which app should Sonny control for that?")
     }
 
+    /// **An app that is not running is opened first, by an ordinary `open_app` step** (PR #238's
+    /// F1). A session never starts its target — its first activation fails with "Is it running?" —
+    /// so the headline command failed whenever Notes was closed. Running, or not known, it is the
+    /// one session step; the running list is matched whatever the case of its identifiers.
     @Test
-    func noAppNamedAsksWhichAppAndTheAnswerCompletesTheCommand() throws {
-        let request = "[s] make a note called wave 7"
-        #expect(try clarification(request) == "Which app should Sonny control for that?")
+    func anAppThatIsNotRunningIsOpenedBeforeItsSession() throws {
+        let command = "[s] open Notes and make a note called wave 7"
 
-        // The clarification's answer arrives appended to the request (`ClarifiedCommand.completions`).
-        let completed = ClarifiedCommand.completions(request: request, answer: "Notes")
-        let plan = try plan(try #require(completed.first))
+        guard case .plan(let closed)? = makeResolver(running: ["com.apple.mail"]).resolve(command: command) else {
+            Issue.record("\(command) did not resolve to a plan with Notes closed")
+            return
+        }
+        #expect(closed.steps.map(\.operation) == [.openApp, .visionSession])
+        #expect(closed.steps.map(\.appName) == ["Notes", "Notes"])
+        #expect(closed.steps[1].visionGoal == "open Notes and make a note called wave 7")
 
-        #expect(plan.steps[0].appName == "Notes")
-        #expect(plan.steps[0].operation == .visionSession)
+        guard case .plan(let open)? = makeResolver(running: ["COM.APPLE.NOTES"]).resolve(command: command) else {
+            Issue.record("\(command) did not resolve to a plan with Notes running")
+            return
+        }
+        #expect(open.steps.map(\.operation) == [.visionSession])
+    }
+
+    /// **The answer to each of the door's questions stays on the prefixed route** (PR #238's F4). The
+    /// answer used to be appended, so `[s] Notes` answered `make a note` read as `[s] Notes make a
+    /// note`, the door asked again, and the view model sent the exchange to the planner. Each
+    /// question here is answered the way a person would, and each completion is a prefixed command
+    /// the door turns into the session or, when the answer still lacks something, into its next
+    /// question — never into nothing.
+    @Test
+    func eachQuestionsNaturalAnswerStaysOnThePrefixedRoute() throws {
+        let resolver = makeResolver()
+
+        // Which app, answered with the app.
+        let noApp = "[s] make a note called wave 7"
+        #expect(try clarification(noApp) == "Which app should Sonny control for that?")
+        let withApp = try plan(try #require(resolver.screenUseCompletion(request: noApp, answer: "Notes")))
+        #expect(withApp.steps.map(\.appName) == ["Notes"])
+        #expect(withApp.steps[0].visionGoal?.contains("make a note called wave 7") == true)
+        // …or with a preposition and a full stop, the way it is often typed.
+        let typed = try plan(try #require(resolver.screenUseCompletion(request: noApp, answer: "in Notes.")))
+        #expect(typed.steps.map(\.appName) == ["Notes"])
+
+        // What to do, answered with the goal.
+        #expect(try clarification("[s] Notes") == "What should Sonny do in Notes?")
+        let withGoal = try plan(try #require(resolver.screenUseCompletion(request: "[s] Notes", answer: "make a note")))
+        #expect(withGoal.steps.map(\.appName) == ["Notes"])
+        #expect(withGoal.steps[0].visionGoal?.contains("make a note") == true)
+
+        // Both, answered with both.
+        #expect(try clarification("[s]") == "What should Sonny do on screen, and in which app?")
+        let withBoth = try plan(try #require(resolver.screenUseCompletion(request: "[s]", answer: "make a note in Notes")))
+        #expect(withBoth.steps.map(\.appName) == ["Notes"])
+
+        // Both, answered with only one: the door asks for the other, still on the prefixed route.
+        let onlyApp = try #require(resolver.screenUseCompletion(request: "[s]", answer: "Notes"))
+        #expect(try clarification(onlyApp) == "What should Sonny do in Notes?")
+        let onlyGoal = try #require(resolver.screenUseCompletion(request: "[s]", answer: "make a note"))
+        #expect(try clarification(onlyGoal) == "Which app should Sonny control for that?")
+
+        // Not the door's question, so not the door's to complete.
+        #expect(resolver.screenUseCompletion(request: "= ", answer: "2 + 2") == nil)
+        #expect(resolver.screenUseCompletion(request: "[s] make a note in Notes", answer: "Mail") == nil)
     }
 
     @Test
     func anEmptyPrefixAndABareAppNameEachAskForWhatIsMissing() throws {
         #expect(try clarification("[s]") == "What should Sonny do on screen, and in which app?")
         #expect(try clarification("[s] Notes") == "What should Sonny do in Notes?")
+    }
+
+    /// **An app's alias alone asks what to do, as its name alone does** (PR #238's F8). The check
+    /// compared the words with the app's display name, so `[s] Google Chrome` started a session whose
+    /// whole goal was "Google Chrome" and spent an allowance run on nothing.
+    @Test
+    func anAliasOfAnAppAloneAsksWhatToDoInIt() throws {
+        let chrome = try displayName("Chrome")
+        #expect(try clarification("[s] Google Chrome") == "What should Sonny do in \(chrome)?")
+        #expect(try clarification("[s] Chrome") == "What should Sonny do in \(chrome)?")
+        let music = try displayName("Music")
+        #expect(try clarification("[s] Music") == "What should Sonny do in \(music)?")
+    }
+
+    /// **Two apps in one sentence ask which, rather than taking one** (PR #238's F9). The last
+    /// preposition's app used to win, so this command went to Music — which Normal mode controls
+    /// without asking, being on the starter list. A label names the app outright and is not a guess,
+    /// so it still wins; one app named twice is still one app.
+    @Test
+    func twoAppsInOneSentenceAskWhichRatherThanPickingOne() throws {
+        let twoApps = "[s] tell the team in Slack that I am listening to Music"
+        let question = try clarification(twoApps)
+        #expect(question == "Which app should Sonny control for that: \(try displayName("Music")) or \(try displayName("Slack"))?")
+
+        let answered = try plan(try #require(makeResolver().screenUseCompletion(request: twoApps, answer: "Slack")))
+        #expect(answered.steps.map(\.appName) == [try displayName("Slack")])
+
+        #expect(try plan("[s] Slack: tell the team I am listening to Music").steps.map(\.appName) == [try displayName("Slack")])
+        #expect(try plan("[s] find the wave 7 tab in Google Chrome").steps.count == 1)
     }
 
     /// The route the founders mean by the "feature flag": without the prefix, a command reaches

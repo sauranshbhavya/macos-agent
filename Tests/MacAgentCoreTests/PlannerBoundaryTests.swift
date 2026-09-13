@@ -397,10 +397,13 @@ struct PlannerBoundaryTests {
             #expect(plan.steps.map(\.operation) == [operation], "\(command) must resolve to \(operation.rawValue).")
         }
 
-        // **SONNY-93's "vision-bearing plans come only from the planner", as a pin.** The instant
-        // resolver must not produce a vision step for anything, and the phrasings below are the ones
-        // a reasonable resolver pattern would be most tempted by. Now that the operation is
-        // planner-visible this is the assertion that keeps the second front door closed.
+        // **SONNY-93's "vision-bearing plans come only from the planner", as a pin — with one
+        // exception, and it is deliberate.** The `[s]` prefix (SONNY-451) is the user choosing screen
+        // use, and its door builds a vision step on purpose; `ScreenUsePrefixTests`'
+        // `thePrefixDoorIsTheFirstAndOnlyNewDoorInResolve` holds that it is the one such door. For
+        // every other phrasing the instant resolver must not produce a vision step, and the ones
+        // below are those a reasonable resolver pattern would be most tempted by — none carries the
+        // prefix, so this is still the assertion that keeps an unprefixed second front door closed.
         for command in [
             "control Safari",
             "use Notes to write a note",
