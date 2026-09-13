@@ -16,20 +16,48 @@ struct SkillWords {
     /// The folded text, for the currency-amount pattern, which needs symbols the word cut drops.
     let folded: String
 
+    /// Each word with the singular forms it might be, for the phrases that read plurals.
+    let singularForms: [[String]]
+
     init(_ text: String) {
         folded = SearchText.normalized(text)
         words = Self.cut(folded)
         casedWords = Self.cut(text)
+        singularForms = words.map(Self.singularCandidates(of:))
     }
 
     static func cut(_ text: String) -> [String] {
         text.split { !($0.isLetter || $0.isNumber) }.map(String.init)
     }
 
-    func contains(_ phrase: [String]) -> Bool {
+    /// `word` and every singular it might be: `-ies` → `-y`, `-es` dropped, or `-s` dropped (not
+    /// `-ss`). Every candidate is kept, since English does not say which is right, so a wrong one
+    /// ("codes" → "cod") can only add a match, never lose one.
+    ///
+    /// **The one copy of this rule** (PR #241's second scoped round). The money rule reads a money
+    /// object's plural through it, and `SkillPackTests.isOrdinary` reads a trigger word's through it,
+    /// so the two cannot drift apart.
+    static func singularCandidates(of word: String) -> [String] {
+        var candidates = [word]
+        if word.hasSuffix("ies"), word.count > 4 { candidates.append(String(word.dropLast(3)) + "y") }
+        if word.hasSuffix("es"), word.count > 3 { candidates.append(String(word.dropLast(2))) }
+        if word.hasSuffix("s"), !word.hasSuffix("ss"), word.count > 2 { candidates.append(String(word.dropLast())) }
+        return candidates
+    }
+
+    /// Whether the phrase's words appear here as a run of whole words. With `readingPlurals`, a word
+    /// here also matches a phrase word that is one of its singular forms, so "account numbers" and
+    /// "cards on file" match the phrases "account number" and "card on file". Only this side is read
+    /// that way: a phrase listed in the plural ("payment details") is not matched by its singular.
+    func contains(_ phrase: [String], readingPlurals: Bool = false) -> Bool {
         guard !phrase.isEmpty, phrase.count <= words.count else { return false }
-        for start in 0...(words.count - phrase.count) where Array(words[start..<start + phrase.count]) == phrase {
-            return true
+        for start in 0...(words.count - phrase.count) {
+            let matched = phrase.indices.allSatisfy { offset in
+                readingPlurals
+                    ? singularForms[start + offset].contains(phrase[offset])
+                    : words[start + offset] == phrase[offset]
+            }
+            if matched { return true }
         }
         return false
     }
@@ -43,8 +71,8 @@ struct SkillPhraseList {
         phrases = spellings.map { ($0, SkillWords.cut(SearchText.normalized($0))) }
     }
 
-    func first(in texts: [SkillWords]) -> String? {
-        phrases.first { phrase in texts.contains { $0.contains(phrase.words) } }?.spelling
+    func first(in texts: [SkillWords], readingPlurals: Bool = false) -> String? {
+        phrases.first { phrase in texts.contains { $0.contains(phrase.words, readingPlurals: readingPlurals) } }?.spelling
     }
 }
 
@@ -65,15 +93,21 @@ struct SkillPhraseList {
 ///    transfer, remove, connect, request, settle, split, tip and the rest of `actionVerbs`. Money objects are things money moves
 ///    through or to: money, funds, a payment, a payout, payroll, a bill, a beneficiary, a payee, an
 ///    IBAN, a wire, ACH, SEPA, a bank account, a card on file, payment details, a currency amount.
-///    A few objects are ordinary words elsewhere — a *recipient* in an email tool, a *card* on a
-///    Trello board, an *account*, a *balance* — and count only when the same unit also names money
-///    (bank, billing, payment, payout, transfer, IBAN, money, funds, an amount).
+///    **A money object is read in the plural too** (PR #241's second scoped round): each word of the
+///    text is tried with its singular forms, through `SkillWords.singularCandidates(of:)`, so "Add
+///    the IBANs", "Update the account numbers", "Set up direct deposits" and "Update the cards on
+///    file" are refused exactly as their singulars are. A few objects are ordinary words elsewhere —
+///    a *recipient* in an email tool, a *card* on a Trello board, an *account*, a *balance* — and
+///    count only when the same unit also names money (bank, billing, payment, payout, transfer, IBAN,
+///    money, funds, an amount); those two lists spell their plurals out and read no others.
 ///
-/// **It fails closed on the object only beside a listed action verb.** A money verb nobody listed is
-/// refused once its object sits in the same unit as any listed action verb, and reading verbs — open,
-/// view, find, filter, download, review, export — are not action verbs, so "Filter the payouts and
-/// payments by date" and "Download a statement" load. The cost is false refusals ("Run the payments
-/// report", "View the charge", "Find the wire"), which surface in
+/// **An object is refused only beside a listed action verb.** The verb and the object need not be
+/// joined: any listed action verb anywhere in the unit is enough, so a money act whose own verb is
+/// unlisted is refused when the unit holds a listed one elsewhere ("Open Payouts, then push the
+/// funds to the vendor and confirm"). Reading verbs — open, view, find, filter, download, review,
+/// export — are not action verbs, so "Filter the payouts and payments by date" and "Download a
+/// statement" load. The cost is false refusals ("Run the payments report", "View the charge", "Find
+/// the wire"), which surface in
 /// `everyShippedPackLoadsAndEveryOneIsARowOfTheCommittedCatalogue` before a pack ships.
 ///
 /// **Nouns alone are allowed on purpose.** The phrase list this replaced refused "payee", "payment
@@ -88,6 +122,10 @@ struct SkillPhraseList {
 ///   the flow is;
 /// - **a contextual object with no money word beside it** — "Move the balance to savings." loads,
 ///   because *balance* counts as money only beside one;
+/// - **a plural the three suffix rules do not reach** — "Transfer the monies." loads, since no
+///   candidate of "monies" is "money" — **and a phrase listed only in the plural, written in the
+///   singular** — "Update the bank detail." loads, since only the text's words are read for
+///   plurals;
 /// - **a money act in words neither list names at all**;
 /// - **a flow that reaches a money page through steps that name nothing about money**;
 /// - **spellings outside first-party writing** — a zero-width space inside a word, or a Cyrillic
@@ -155,7 +193,7 @@ enum SkillPackMoneyRule {
         guard let action = actionVerbs.first(in: units) else {
             return nil
         }
-        if let object = moneyObjects.first(in: units) {
+        if let object = moneyObjects.first(in: units, readingPlurals: true) {
             return "\(action) + \(object)"
         }
         if units.contains(where: hasCurrencyAmount) {

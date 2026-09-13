@@ -135,8 +135,9 @@ struct SkillPackTests {
     /// changing.
     ///
     /// **What this check still cannot catch:** an ordinary phrase that contains the site's name
-    /// ("close deal"); a modern word neither list holds, and an irregular plural ("people"); and what
-    /// a command means.
+    /// ("close deal"); a modern word neither list holds; an irregular plural the system list does not
+    /// spell and the suffix rules do not reach ("women", "feet" — "people" is in the list and is
+    /// refused); and what a command means.
     @Test
     func everyShippedTriggerIsDistinctiveOrAnchoredToItsSite() throws {
         let ordinary = try Self.ordinaryWords()
@@ -319,9 +320,12 @@ struct SkillPackTests {
             ("Request a payout", ["Open Payouts.", "Click Request payout."]),
             ("Tip", ["Open it.", "Tip the driver $5."]),
             ("Get paid", ["Open it.", "Click Get paid now."]),
-            ("Move money", ["Open it.", "Make a transfer."]),
+            // Neutral titles, so each of these three is refused by its step's phrase and by nothing
+            // else: removing a phrase from the rule turns this table red (PR #241's second scoped
+            // round — "Move money" and "Put money in" were refused by their titles).
+            ("Finish the month", ["Open it.", "Make a transfer."]),
             ("Transfer out", ["Open it.", "Send a transfer."]),
-            ("Put money in", ["Open it.", "Make a deposit."])
+            ("Start the week", ["Open it.", "Make a deposit."])
         ]
         for testFlow in flows {
             var object = SkillPackFixtures.object(id: "store", name: "Store", domain: "store.example.com", category: category)
@@ -331,6 +335,36 @@ struct SkillPackTests {
                 continue
             }
         }
+    }
+
+    /// A listed money object written in the plural is refused exactly as its singular is (PR #241's
+    /// second scoped round: every plural here loaded at `9d0f8942` while its singular was refused).
+    /// Each pair has to fail with the same words, so the plural is read as the same object rather than
+    /// refused for some other reason.
+    @Test
+    func aMoneyObjectInThePluralIsRefusedAsItsSingularIs() throws {
+        func error(_ step: String) -> SkillPackLoadError? {
+            var object = SkillPackFixtures.object(id: "store", name: "Store", domain: "store.example.com")
+            object["flows"] = [SkillPackFixtures.flow(title: "Do a thing", steps: ["Open it.", step], on: "store.example.com")]
+            return Self.error(object)
+        }
+        let pairs: [(singular: String, plural: String)] = [
+            ("Add the IBAN.", "Add the IBANs."),
+            ("Update the account number.", "Update the account numbers."),
+            ("Change the routing number.", "Change the routing numbers."),
+            ("Update the sort code.", "Update the sort codes."),
+            ("Set up direct deposit.", "Set up direct deposits."),
+            ("Update the card on file.", "Update the cards on file."),
+            ("Add the SWIFT code.", "Add the SWIFT codes."),
+            ("Update the card number.", "Update the card numbers.")
+        ]
+        for pair in pairs {
+            let singular = error(pair.singular)
+            #expect(singular != nil, "\(pair.singular) loaded")
+            #expect(error(pair.plural) == singular, "\(pair.plural) → \(String(describing: error(pair.plural)))")
+        }
+        // The control: naming them without an action verb still loads.
+        #expect(error("Find the account numbers and the cards on file.") == nil)
     }
 
     /// The summary and the sections reach the planner too, so they are read by the same rule — each
@@ -575,14 +609,10 @@ struct SkillPackTests {
         "screenshot", "selfie", "meme", "livestream", "ebook", "todo", "checklist", "whiteboard"
     ]
 
-    /// Whether `word` or its singular form is ordinary. The singular is `-ies` → `-y`, `-es` dropped,
-    /// or `-s` dropped (not `-ss`), and every candidate is tried, since English does not say which.
+    /// Whether `word` or one of its singular forms is ordinary. The forms come from
+    /// `SkillWords.singularCandidates(of:)`, the copy the money rule reads plurals through as well.
     static func isOrdinary(_ word: String, ordinary: Set<String>) -> Bool {
-        var candidates = [word]
-        if word.hasSuffix("ies"), word.count > 4 { candidates.append(String(word.dropLast(3)) + "y") }
-        if word.hasSuffix("es"), word.count > 3 { candidates.append(String(word.dropLast(2))) }
-        if word.hasSuffix("s"), !word.hasSuffix("ss"), word.count > 2 { candidates.append(String(word.dropLast())) }
-        return candidates.contains { ordinary.contains($0) || modernWords.contains($0) }
+        SkillWords.singularCandidates(of: word).contains { ordinary.contains($0) || modernWords.contains($0) }
     }
 
     /// Why `trigger` would match ordinary language for a site called `siteName`, or `nil`.
