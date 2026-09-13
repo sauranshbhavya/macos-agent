@@ -687,7 +687,8 @@ to do.
   no third-cycle reviewer session.
 - The full cycle-3 re-check stays reserved for fix rounds that could themselves introduce
   defects: production-code changes, test-integrity rebuilds (vacuous-test rewrites),
-  rebases carrying conflict resolutions.
+  rebases carrying conflict resolutions. In a stack, the rebase pass decides this per branch, and
+  a branch that needs it gets the scoped delta pass `## Stacked pull requests` clause 2 describes.
 
 The ceiling itself does not move, and the fix-in-branch rule is untouched either way — nor
 does the scoped verification round below move it, because what that bounds is verification
@@ -920,17 +921,36 @@ one of them.
    had been tested. (Those three figures are that wave's own record on SONNY-438, carried here and
    not re-measured.)
 2. **A fix round low in the stack is followed by one rebase pass upward, before anything merges.**
-   Record every cut point first — `git merge-base <branch> <old head of the branch beneath>`,
-   posted on the run log — because the old head is what the rebase has to name and the fix round
-   is what moves it. Then, for each branch in turn from the bottom up:
+   The coordinator records every cut point first — `git merge-base <branch> <old head of the branch
+   beneath>`, posted on the run log — because the old head is what the rebase has to name and the
+   fix round is what moves it. **Each branch is then rebased by its own session, or by the session
+   the founder routes to that ticket, one branch at a time from the bottom up** (founders' decision
+   on PR #239's review, F4, 2026-09-13), with
    `git rebase --onto <new head of the branch beneath> <its recorded cut point> <branch>`, which
    replays that branch's own commits and nothing else. A conflict in the changelog or the checklist
    is resolved by keeping the newer entry above and taking the older entry as its own branch's
    final text — the branch beneath owns that text, and the copy being replayed is the stale one.
-   Push with `--force-with-lease` (step 3's standing authorization: the session's own ticket
-   branch, never bare `--force`), and only then start the next branch up. Each PR's diff against
-   its base does not change, so a review already posted on it stands; its reviewer re-runs the
-   ancestry check.
+   That session pushes with `--force-with-lease` — step 3's standing authorization, which covers a
+   session's own ticket branch and nothing else, never bare `--force` — and only then does the
+   next branch up start. No one session rebases the whole stack, because no authorization lets a
+   session force-push a branch it does not own.
+
+   **Whether a review already posted on the rebased branch still stands is decided by what moved,
+   not by the PR's diff** (founders' decision on PR #239's review, F1, 2026-09-13). The diff can
+   be the same while the code under it has stopped agreeing with its new base: `CLAUDE.md`'s rebase
+   gotcha is exactly that shape, a type changed beneath and a user of it added above with no
+   conflict anywhere. So the session doing the rebase states what moved — every file in the range
+   it rebased across, `git diff --name-only <its recorded cut point> <new head of the branch
+   beneath>`, not the conflict list — and whether the branch uses any of it, by enumerating the
+   branch's uses across the tree rather than reading its own diff. **The review stands only when
+   nothing the branch uses changed in that range and the rebase resolved no conflict**; its
+   reviewer then re-runs the ancestry check and nothing more. **A conflict resolution, or a change
+   to anything the branch uses — a type, a signature, a fixture, a helper — gets a scoped delta
+   pass on that branch**, in its review worktree re-pointed at the new head, reading the resolution
+   and the moved code the branch uses and searching for nothing else. That is the re-check step 7
+   reserves for a rebase carrying a conflict resolution — a reviewing session's pass, not the
+   coordinator's direct verification — and like every re-check it is scoped to what the round it
+   follows moved, which here is the range the rebase crossed.
 3. **After that rebase, every figure a branch's entry cites is re-measured at its new head or
    dropped**, carried only with step 5's tree-identity proof — in the braced `${old}:Sources` form,
    and never with a loop variable named `path` (`CLAUDE.md`, Claims and evidence, has both traps).
@@ -953,9 +973,13 @@ one of them.
    expected cost. State it on the run log and answer the hook's block with it; never reorder or
    remove an entry to satisfy it. It clears one merge at a time.
 7. **Parallel lanes in a stack cut from the branch beneath as it stands** — empty, if the lanes
-   start together — and expect the rebase pass at the end. The disjointness rule of step 3 still
-   holds between them for every file they edit, so the pass is conflict-free apart from the
-   changelog and the checklist, which every lane touches by design.
+   start together — and expect the rebase pass at the end. **Step 3's disjointness rule holds
+   between them in full**: no overlapping files *and* no shared assumptions — a store contract, a
+   shared type — not files alone (founders' decision on PR #239's review, F3, 2026-09-13), because
+   two lanes can build on one assumption and break each other without touching a common file. So
+   the pass is expected to be conflict-free apart from the changelog and the checklist, which every
+   lane touches by design, and clause 2 still decides, branch by branch, whether a posted review
+   stands.
 8. **One session, many PRs, is sequential by construction.** The session finishes a branch's
    review and fix round before it cuts the next, and never reviews branch n while building branch
    n + 1.
