@@ -8,41 +8,46 @@ import Testing
 /// feeds it lives in `AppWindowCoordinator` and is view/AppKit wiring no test process can drive (the
 /// same boundary `MicHoverArrivalTests` states for the tracking view one layer below its model).
 ///
-/// **Nothing here awaits the model's own hold task, and that is deliberate — the phase 12 lesson.**
-/// The receipt rework's auto-stop tests once awaited a *cancelled* task's `.value` directly; a
-/// mutant that dropped the cancellation left the old sleep still running underneath, and the battery
-/// stalled on it rather than reporting a kill (`docs/ui-ux-claude-worklog.md`, phase 12). A mutant
-/// that breaks cancellation here must read as "the hints came on late, or stayed on" — never as a
-/// hang — so every test below reads `isShowingHints` instead, and cancels whatever hold it armed in
-/// its own teardown so no task outlives the test that started it.
+/// **Every wait below is the hold task itself, run to its last line, and nothing here reads a clock**
+/// (SONNY-458). The hold is a `Task<Void, Never>` whose last line is the one that sets
+/// `isShowingHints`, so once its `.value` returns the flag says what the model decided — however late
+/// a busy machine got round to running it. Nothing can give up first, so load makes these tests
+/// slower and never makes them wrong.
 ///
-/// **Waiting for "becomes true" polls the flag rather than sleeping a fixed margin past the delay.**
-/// `WidgetMicHoverHintTests` documents a full-suite run stalling an ordinary MainActor task for tens
-/// of seconds under load; this file hit exactly that measuring its own first draft — five tests with
-/// a 20 ms hold and a 150 ms wait passed in 0.3 seconds run alone and failed under the full 3,121-test
-/// suite with the flag still `false` after 60+ real seconds, not because the model was wrong but
-/// because the scheduler had not yet run the sleeping task's continuation. Polling on a short
-/// interval up to a generous ceiling resolves the instant the real answer arrives instead of racing
-/// a guess at how long a busy machine might take, and only costs the ceiling when the model is
-/// genuinely broken.
+/// **What this replaced, because it was the second wall-clock bet this file lost.** The first draft
+/// slept a 150 ms margin past a 20 ms hold, passed in 0.3 seconds alone, and failed under the full
+/// suite with the flag still `false` after 60+ real seconds. Its replacement polled the flag every
+/// 5 ms up to a 90-second ceiling, and on 2026-09-11 that went red three times under load, on exactly
+/// the four tests that used it (`heldAloneShowsAfterTheDelay`, `anotherKeyPressedWhileShowingHidesAtOnce`,
+/// `aFreshHoldAfterAHideShowsAgain`, `focusLostWhileShowingHidesAtOnce`), each after 100 to 120
+/// seconds — PR #226's and PR #228's reviews and the wave 7 session's first run. A ceiling is still a
+/// threshold the test races: the poll's own resumption is queued on the main actor ahead of the
+/// hold's, so a stall longer than the ceiling lets the poll wake, find the flag unset and give up
+/// while the hold that sets it sits next in the queue. That is reproducible on demand — hold the main
+/// thread for 500 ms beside a 20 ms hold, and a poll with a 200 ms ceiling reads `false` where
+/// awaiting the hold reads `true`, three runs of three each (the changelog entry for
+/// `fix/key-hints-robots-groups-and-routine-refusals` has the probe).
+///
+/// **Awaiting the task is safe here for one reason, and it is a rule for anyone editing this file:
+/// every hold armed below is short.** Phase 12 is why this file used to forbid it — a battery stalled
+/// on the mutant that dropped a cancellation, because two tests awaited a cancelled task whose sleep
+/// was a day long (`docs/ui-ux-claude-worklog.md`, phase 12). Here a dropped cancellation costs the
+/// hold's delay, 20 ms or half a second, and then reads as the hints coming on — a kill, not a hang.
+/// A long `holdDelay` in this file would bring the stall back. Every test still cancels whatever hold
+/// it armed in its own teardown, so no task outlives the test that started it.
 @Suite
 @MainActor
 struct CommandKeyHintsTests {
-    /// Short enough that a correct model resolves almost immediately once polled, and specific to
-    /// this file rather than the shipping 0.35, so nothing here could pass by coincidence with the
-    /// real number.
+    /// Short, so a test waiting on the hold costs almost nothing and a dropped cancellation costs no
+    /// more (the type's doc comment), and specific to this file rather than the shipping 0.35, so
+    /// nothing here could pass by coincidence with the real number.
     static let shortDelay: TimeInterval = 0.02
 
-    /// How long a poll below is willing to wait for the flag to become true before concluding the
-    /// model is actually broken rather than merely scheduled late. Generous on purpose — see the
-    /// type's own doc comment for the run that motivated it — and it costs this only when a test
-    /// would otherwise fail anyway.
-    private static func waitUntilShowing(_ model: CommandKeyHintModel, timeout: Duration = .seconds(90)) async throws {
-        let deadline = ContinuousClock.now + timeout
-        while !model.isShowingHints {
-            guard ContinuousClock.now < deadline else { return }
-            try await Task.sleep(for: .milliseconds(5))
-        }
+    /// Runs the hold `model` armed most recently to its last line. `#require` rather than an
+    /// optional chain, so a model that armed nothing ends the test instead of waiting on nothing.
+    private static func runTheArmedHold(of model: CommandKeyHintModel) async throws {
+        let hold = try #require(model.holdTask, "no hold is armed to wait for")
+        await hold.value
     }
 
     @Test
@@ -53,26 +58,35 @@ struct CommandKeyHintsTests {
         model.flagsChanged(commandHeldAlone: true)
         #expect(model.isShowingHints == false, "the hold has not counted yet")
 
-        try await Self.waitUntilShowing(model)
+        try await Self.runTheArmedHold(of: model)
         #expect(model.isShowingHints == true)
     }
 
     /// The release and the hold both land synchronously, with no `await` between them — so the hold
     /// task, which cannot begin running until this function suspends or returns, is cancelled before
-    /// it has ever had a chance to start sleeping. That makes the assertion below true by
-    /// construction regardless of how busy the machine is or how late the cancelled task eventually
-    /// gets scheduled: `Task.sleep` checks cancellation up front and returns immediately rather than
-    /// waiting out `holdDelay`, so there is no window in which the flag could flip to `true` first.
+    /// it has ever had a chance to start sleeping. The first two assertions are therefore true by
+    /// construction however busy the machine is.
+    ///
+    /// **The cancelled hold is then run to its last line, which is what makes "never" a claim about
+    /// the model rather than about one instant** (SONNY-458). A cancelled task still runs its body:
+    /// `Task.sleep` throws at once, and the task's own `guard !Task.isCancelled` is the only line
+    /// between it and setting the flag. So this reaches that guard on every run, in any order the
+    /// machine schedules things — which the checks above, read before the task has run at all, never
+    /// could (phase 14's review, F7 of the rules lane, found a model without the guard passing them).
     @Test
-    func releasedBeforeTheDelayNeverShows() {
+    func releasedBeforeTheDelayNeverShows() async throws {
         let model = CommandKeyHintModel(holdDelay: Self.shortDelay)
         defer { model.holdTask?.cancel() }
 
         model.flagsChanged(commandHeldAlone: true)
+        let hold = try #require(model.holdTask, "setup: holding ⌘ alone arms a hold")
         model.flagsChanged(commandHeldAlone: false)
 
         #expect(model.isShowingHints == false, "released before the hold fired must cancel it, not merely hide a shown result")
         #expect(model.holdTask == nil, "nothing should be left counting toward a hold that was released")
+
+        await hold.value
+        #expect(model.isShowingHints == false, "a released hold must never show, even once its cancelled task has run")
     }
 
     @Test
@@ -81,7 +95,7 @@ struct CommandKeyHintsTests {
         defer { model.holdTask?.cancel() }
 
         model.flagsChanged(commandHeldAlone: true)
-        try await Self.waitUntilShowing(model)
+        try await Self.runTheArmedHold(of: model)
         #expect(model.isShowingHints == true, "setup: the hold must have fired before this test can prove a key hides it")
 
         model.otherKeyPressed()
@@ -108,7 +122,7 @@ struct CommandKeyHintsTests {
         defer { model.holdTask?.cancel() }
 
         model.flagsChanged(commandHeldAlone: true)
-        try await Self.waitUntilShowing(model)
+        try await Self.runTheArmedHold(of: model)
         #expect(model.isShowingHints == true)
 
         model.otherKeyPressed()
@@ -116,35 +130,40 @@ struct CommandKeyHintsTests {
 
         // Released and held again — a fresh hold, not a resumed one.
         model.flagsChanged(commandHeldAlone: true)
-        try await Self.waitUntilShowing(model)
+        try await Self.runTheArmedHold(of: model)
         #expect(model.isShowingHints == true, "a fresh hold after a hide must show the hints again")
     }
 
-    /// The one path where the hold task's own cancellation guard matters, and the one
-    /// `releasedBeforeTheDelayNeverShows` cannot reach (phase 14's review, F7 of the rules lane):
-    /// there the release lands before the task has ever run, so `flagsChanged`'s synchronous branch
-    /// decides everything and a model without `guard !Task.isCancelled` passes it. Here the test
-    /// suspends after arming so the task is genuinely counting, releases, and then keeps reading the
-    /// flag for a while: a model that dropped the guard flips it to true the moment the cancelled
-    /// sleep throws, which is what this reads for. It is a bounded read of the flag, never an await
-    /// of the task (the file's own rule), and a correct model passes it whatever the machine is
-    /// doing — if a stall let the hold fire before the release, the release itself hides the hints,
-    /// and nothing can show them again afterwards. The hold is long on purpose, so the release lands
-    /// while it is still counting on any ordinary run.
+    /// The release landing while the hold is part-way through its sleep, where
+    /// `releasedBeforeTheDelayNeverShows` lands it before the task has run at all. The test suspends
+    /// after arming so the hold's first turn — the one that starts its sleep — can run, releases,
+    /// and then runs the cancelled hold to its last line: a model that dropped
+    /// `guard !Task.isCancelled` sets the flag the moment the cancelled sleep throws, and one that
+    /// dropped the cancellation sets it half a second later. Either reads here as the hints showing.
+    ///
+    /// **This read the flag for two seconds until SONNY-458, and that was a bet in the other
+    /// direction** — not a red test on a correct model, but a kill a busy machine could withhold: a
+    /// cancelled task whose next turn came more than two seconds late left the flag unset inside the
+    /// window, and a model without the guard passed. Running the hold to its end has no window.
+    ///
+    /// The five-millisecond sleep is a suspension, not a window, and nothing is asserted across it.
+    /// The hold's first turn was queued before this test's resumption, and its half second starts
+    /// only when that turn runs, so a main actor taking turns in the order they were queued has the
+    /// release land while the hold counts. Were it ever to land after the hold fired, the release
+    /// hides the hints and the assertion below is still right; only the guard's evidence moves, and
+    /// `releasedBeforeTheDelayNeverShows` holds that on every run.
     @Test
     func releasedWhileTheHoldIsCountingNeverShowsAfterwards() async throws {
         let model = CommandKeyHintModel(holdDelay: 0.5)
         defer { model.holdTask?.cancel() }
 
         model.flagsChanged(commandHeldAlone: true)
+        let hold = try #require(model.holdTask, "setup: holding ⌘ alone arms a hold")
         try await Task.sleep(for: .milliseconds(5))
         model.flagsChanged(commandHeldAlone: false)
         #expect(model.holdTask == nil, "the release drops the hold")
 
-        let deadline = ContinuousClock.now + .seconds(2)
-        while ContinuousClock.now < deadline, !model.isShowingHints {
-            try await Task.sleep(for: .milliseconds(5))
-        }
+        await hold.value
         #expect(model.isShowingHints == false, "a hold released while counting must never show, however late its cancelled task runs")
     }
 
@@ -157,23 +176,30 @@ struct CommandKeyHintsTests {
         defer { model.holdTask?.cancel() }
 
         model.flagsChanged(commandHeldAlone: true)
-        try await Self.waitUntilShowing(model)
+        try await Self.runTheArmedHold(of: model)
         #expect(model.isShowingHints == true, "setup: the hold must have fired before this test can prove focus loss hides it")
 
         model.focusLost()
         #expect(model.isShowingHints == false, "a glimpse on screen when focus left would otherwise stay until the window's next event")
     }
 
+    /// "Must not fire into it later" is checked later, too: the hold is run to its last line after
+    /// the focus loss, the way `releasedBeforeTheDelayNeverShows` runs a released one (SONNY-458).
+    /// Read only at the instant of the focus loss, a model whose `focusLost` forgot to cancel the
+    /// hold passed this, since it still dropped the reference and cleared the flag.
     @Test
-    func focusLostWhileTheHoldIsCountingCancelsIt() {
+    func focusLostWhileTheHoldIsCountingCancelsIt() async throws {
         let model = CommandKeyHintModel(holdDelay: Self.shortDelay)
         defer { model.holdTask?.cancel() }
 
         model.flagsChanged(commandHeldAlone: true)
-        #expect(model.holdTask != nil, "setup: a hold is counting")
+        let hold = try #require(model.holdTask, "setup: a hold is counting")
 
         model.focusLost()
         #expect(model.holdTask == nil, "a hold armed in a window that is no longer key must not fire into it later")
         #expect(model.isShowingHints == false)
+
+        await hold.value
+        #expect(model.isShowingHints == false, "the hold a focus loss cancelled must not show the hints once its task has run")
     }
 }
