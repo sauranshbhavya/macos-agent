@@ -12,12 +12,34 @@ discussion -> agreed plan -> Plane tickets -> claim ticket -> worktree -> implem
 ```
 
 The repository is
-[exploringthroughbuilding/macos-agent](https://github.com/exploringthroughbuilding/macos-agent). It
-moved there from a personal account on 2026-08-26, after PR #123, when the founders' organisation
-took it over. A merge subject records the namespace that was current when the PR merged, not the one
+[sauranshbhavya/macos-agent](https://github.com/sauranshbhavya/macos-agent)
+(`gh api repos/{owner}/{repo} --jq .full_name` → `sauranshbhavya/macos-agent`, and
+`git remote get-url origin` → `https://github.com/sauranshbhavya/macos-agent.git`, both read
+2026-09-13). That is its third namespace. It began under a personal account, `sauranshbhardwaj`, and
+moved to the founders' organisation `exploringthroughbuilding` on 2026-08-26, after PR #123. It
+moved again, to `sauranshbhavya`, some time between PR #190's merge at 2026-09-02 19:14:21 and PR
+#191's at 2026-09-03 14:03:57 (−04:00). #190's merge subject is the last to read
+`from exploringthroughbuilding/`, and #191's is the first to read `from sauranshbhavya/`:
+
+```
+git log --first-parent --merges --format='%h %cI %s' 65a50865 | grep -m1 'from exploringthroughbuilding/'
+  → 15c7bd9f 2026-09-02T19:14:21-04:00 Merge pull request #190 from exploringthroughbuilding/…
+git log --first-parent --merges --format='%h %cI %s' 65a50865 | grep 'from sauranshbhavya/' | tail -1
+  → f1005896 2026-09-03T14:03:57-04:00 Merge pull request #191 from sauranshbhavya/…
+```
+
+GitHub's own `mergedAt` for the two PRs gives the same two instants in UTC. **How the second move
+happened, and when inside that window, is not established**: `gh api users/exploringthroughbuilding`
+answers 404, and the repository's events API reaches back only to 2026-09-07 (both read 2026-09-13),
+so nothing reachable from here says whether the repository was transferred or its organisation
+renamed. A merge subject records the namespace that was current when the PR merged, not the one
 current now, so all 116 on `main` today still read `from sauranshbhardwaj/...`
 (`git log --first-parent --merges --format='%s' main | grep -c 'from sauranshbhardwaj/'` → 116 at
-`66c0f84`) — §8's log excerpt among them. None of those is stale, and none is anyone's to rewrite.
+`66c0f84`) — §8's log excerpt among them. At `65a50865` the three namespaces split the 235 merge
+subjects 116, 67 and 52
+(`git log --first-parent --merges --format=%s 65a50865 | cut -d' ' -f6 | cut -d/ -f1 | sort | uniq -c`
+→ `67 exploringthroughbuilding`, `116 sauranshbhardwaj`, `52 sauranshbhavya`). None of those is
+stale, and none is anyone's to rewrite.
 
 The Plane project is [Sonny](https://app.plane.so/sonny/projects/c61e4035-d3a0-4089-a25a-1fb4f0aa813e/issues/).
 API behavior is documented in the [Plane API reference](https://developers.plane.so/api-reference/introduction).
@@ -906,7 +928,8 @@ PR opens, so late failures need an explicit path, not improvisation:
 
 Then: the user runs the aggregated manual items — the unchecked rows in
 `docs/sonny-manual-test-checklist.md` — in the real packaged app, and merges — at
-GitHub's control with "Create a merge commit", never the squash the page may offer first (§8).
+GitHub's control with "Create a merge commit", never a squash or a rebase merge, whatever the page
+offers (§8).
 Delete the branch, remove the worktree if its session's sequence ends here (step 3's
 lifecycle rule — a session with tickets still ahead of it keeps the same one), confirm the
 tickets' final states. **When more than one PR is in flight they are one stack**, and the merge
@@ -1139,12 +1162,18 @@ stated a strategy, so no session could have known which was intended — which i
 stated here rather than left to be inferred from `git log`, the way it was found.
 
 **At GitHub's merge control that means "Create a merge commit" — never "Squash and merge", never
-"Rebase and merge".** All three are enabled on the repository
-(`gh api repos/{owner}/{repo} --jq '{allow_merge_commit,allow_squash_merge,allow_rebase_merge}'`
-→ each `true`, read 2026-08-26), so nothing greys the wrong ones out, and the control does not
-come up on the right one by itself: on 2026-08-25 it came up on Squash and merge and was pressed,
-which is how PR #118 landed as a squash and had to be reverted and re-merged — the last subsection
-of this section is that record. Rebase and merge is the other wrong answer, and the worse one: it
+"Rebase and merge".** **Today the repository itself refuses the two wrong ones**:
+`gh api repos/{owner}/{repo} --jq '{allow_merge_commit,allow_squash_merge,allow_rebase_merge}'`
+→ `allow_merge_commit: true`, `allow_squash_merge: false`, `allow_rebase_merge: false`, read
+2026-09-13. **That is a setting, not the rule, and it has not always been set.** The same command
+read 2026-08-26 answered `true` for all three, so nothing greyed the wrong ones out, and the control
+did not come up on the right one by itself: on 2026-08-25 it came up on Squash and merge and was
+pressed, which is how PR #118 landed as a squash and had to be reverted and re-merged — the last
+subsection of this section is that record. When the setting changed between those two readings is
+not recorded anywhere this file can cite. It lives in GitHub's repository options, not in this
+repository, and one toggle puts it back the way it was on 2026-08-25. So the rule is still the
+reason to press Create a merge commit, and the setting is what refuses a wrong press while it
+stays as read. Rebase and merge is the other wrong answer, and the worse one: it
 keeps the commits but gives every one a new SHA as it lands, so every stamp the branch's entry
 carries goes non-ancestral at once, with nothing to revert.
 
@@ -1475,8 +1504,11 @@ commit it makes — 96 on `main` at `5ea62ed` (`git log --format='%ae' 5ea62ed |
 founder's address, the rewrite's eighteen merges included.
 
 **The rule for the person at the control**, since the decision at the top of this section says
-"merge commit" and the page offers three buttons: **Create a merge commit**, chosen by hand,
-every time — the page does not hold the rule, and on 2026-08-25 it came up on the squash. A
+"merge commit" and the page offered three buttons when this was written: **Create a merge commit**,
+every time. The page did not hold the rule then, and on 2026-08-25 it came up on the squash. Read
+2026-09-13, the repository has switched the other two off (this section's second paragraph), so a
+wrong press is refused while that setting stays. A setting is one toggle from how it stood on
+2026-08-25, and the rule does not depend on it. A
 squash is undone the way this record shows, with a revert and a re-merge, at the cost of two
 harmless commits; a rebase-and-merge cannot be undone that way at all, because there is nothing
 to revert — the commits land, each under a new SHA, and every stamp beneath the branch's entry
