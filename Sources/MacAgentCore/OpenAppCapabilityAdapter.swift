@@ -99,10 +99,9 @@ public struct OpenAppCapabilityAdapter: CapabilityAdapter {
         let spec = try spec(in: plan, context: context)
         log(.act, "Opening \(spec.app.displayName)")
         // The app the user was in comes back in front once the open has completed (SONNY-451):
-        // opening is a background step, not a request to switch.
-        try await context.focusRestorer.restoringFocus(
-            onRestore: { log(.act, "Brought \($0.displayName) back in front") }
-        ) {
+        // opening is a background step, not a request to switch — unless the next step controls
+        // this app, which then gives the user's app back when it ends.
+        try await context.restoringFocus(afterOpening: [spec.app.bundleIdentifier], log: log) {
             try await context.appOpener.open(bundleIdentifier: spec.app.bundleIdentifier)
         }
         log(.summarize, "Opened \(spec.app.displayName)")

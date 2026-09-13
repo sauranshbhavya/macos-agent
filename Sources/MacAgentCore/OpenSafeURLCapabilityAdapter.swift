@@ -50,10 +50,9 @@ public struct OpenSafeURLCapabilityAdapter: CapabilityAdapter {
         log(.act, "Opening \(spec.url.absoluteString)")
         // The app the user was in comes back in front once the browser has the page (SONNY-451),
         // a browser that was already in front included: the open moved nothing, so nothing moves.
-        try await context.focusRestorer.restoringFocus(
-            onRestore: { log(.act, "Brought \($0.displayName) back in front") }
-        ) {
-            try await context.browserOpener.open(spec.url, using: context.browser(for: .openURL, in: plan))
+        let browser = context.browser(for: .openURL, in: plan)
+        try await context.restoringFocus(afterOpening: browser.map { [$0.bundleIdentifier] } ?? [], log: log) {
+            try await context.browserOpener.open(spec.url, using: browser)
         }
         log(.summarize, "Opened URL")
         return AgentRunResult(plan: plan, previews: previews, summary: "Opened \(spec.url.absoluteString).")

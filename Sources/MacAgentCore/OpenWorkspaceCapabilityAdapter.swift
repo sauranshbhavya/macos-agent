@@ -78,9 +78,13 @@ public struct OpenWorkspaceCapabilityAdapter: CapabilityAdapter {
         // One restore around the whole workspace, not one per app (SONNY-451): the user's app comes
         // back once everything is open, so the opens do not fight it for the front in between.
         var apps: [MacApp] = []
-        try await context.focusRestorer.restoringFocus(
-            onRestore: { log(.act, "Brought \($0.displayName) back in front") }
-        ) {
+        let launchable = spec.entries.compactMap { entry -> String? in
+            if case .launchable(_, let app) = entry {
+                return app.bundleIdentifier
+            }
+            return nil
+        }
+        try await context.restoringFocus(afterOpening: launchable, log: log) {
             for entry in spec.entries {
                 switch entry {
                 case .launchable(_, let app):

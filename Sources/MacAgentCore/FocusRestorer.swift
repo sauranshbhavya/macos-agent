@@ -20,11 +20,12 @@ import Foundation
 /// **Both requirements are main-actor isolated, and the read is synchronous.** They are AppKit
 /// calls (`NSWorkspace.frontmostApplication`, an `NSRunningApplication` activation), the adapters'
 /// `execute` is already `@MainActor`, and a nonisolated `async` read would cost four executor hops
-/// per open step for an answer the inert restorer gives without moving. Measured: with the read
-/// declared `async` and nonisolated, the first test of each of `ResumableTaskRunTests.swift`'s
-/// three serialized suites — the three that start when every suite in the run is contending for
-/// the main actor — crossed their 30 s idle backstop in two consecutive full runs (`ebcf113e`,
-/// `a8d40159`) and passed in 0.1 s each alone; on the main actor the same runs cost nothing.
+/// per open step for an answer the inert restorer gives without moving. Measured on this branch
+/// before its rebase onto `main`, at two heads the rebase replaced: with the read declared `async`
+/// and nonisolated, the first test of each of `ResumableTaskRunTests.swift`'s three serialized
+/// suites — the three that start when every suite in the run is contending for the main actor —
+/// crossed their 30 s idle backstop in two consecutive full runs and passed in 0.1 s each alone; on
+/// the main actor the same runs cost nothing.
 public protocol FocusRestoring: Sendable {
     /// What is in front right now, noted with every instance the running list holds for it, or
     /// `nil` when nothing is (or the restorer is inert).
@@ -65,11 +66,19 @@ public extension FocusRestoring {
     /// `onRestore` is told which app came back, so the run's trace can say so — and it is told only
     /// when the app really was switched back to. A launch is not a restore (see `restored(_:)`).
     ///
+    /// **`carry` hands the app on instead of bringing it back** (PR #238's F5). When the run's next
+    /// unit is a screen-control session on the app this open brings forward, restoring here would
+    /// put the user's app in front for the moment before the session takes the front again — Notes,
+    /// then the user's app, then Notes. So a completed open holds what was in front in `carry`, and
+    /// the session gives it back when it ends. An open that throws still restores at once: there is
+    /// no session to hand it to.
+    ///
     /// Main-actor isolated like the adapters that call it, so an adapter's non-`Sendable` `log` and
     /// context are captured by both closures without crossing an executor.
     @MainActor
     func restoringFocus<T>(
         onRestore: (RunningApp) -> Void = { _ in },
+        handingOnTo carry: FocusCarry? = nil,
         _ work: () async throws -> T
     ) async rethrows -> T {
         let before = frontmost()
@@ -81,6 +90,12 @@ public extension FocusRestoring {
                 onRestore(before.app)
             }
             throw error
+        }
+        if let carry {
+            if let before {
+                carry.hold(before)
+            }
+            return result
         }
         if let before, await restored(before) {
             onRestore(before.app)
@@ -101,6 +116,55 @@ public extension FocusRestoring {
             return false
         }
         return await bringToFront(before) == .switched
+    }
+}
+
+/// The app the user was in, handed from an open step to the screen-control session that runs right
+/// after it in the same run (PR #238's F5).
+///
+/// One per chain run, made by `AgentActionExecutor.executeChain` and reached through
+/// `CapabilityExecutionContext.focusHandoff`. It holds the first app it is given and hands it out
+/// once, so a later open in the same run cannot replace the app the user was really in.
+@MainActor
+public final class FocusCarry {
+    private var held: NotedFrontmost?
+
+    public init() {}
+
+    /// Keeps `noted` for the session to give back, unless something is already held.
+    public func hold(_ noted: NotedFrontmost) {
+        if held == nil {
+            held = noted
+        }
+    }
+
+    /// What was held, once; `nil` afterwards.
+    public func take() -> NotedFrontmost? {
+        defer { held = nil }
+        return held
+    }
+}
+
+/// What the rest of a run says about the front, for one unit of it (PR #238's F5).
+public struct FocusHandoff: Sendable {
+    /// The bundle identifier of the app the run's next unit takes control of itself — a
+    /// screen-control session's pinned target — or `nil` when the next unit brings no app forward.
+    public let nextUnitControls: String?
+    public let carry: FocusCarry
+
+    public init(nextUnitControls: String?, carry: FocusCarry) {
+        self.nextUnitControls = nextUnitControls
+        self.carry = carry
+    }
+
+    /// The carry to hand the user's app to when an open brings `bundleIdentifiers` forward and the
+    /// next unit controls one of them; `nil` when the open should give the user's app back itself.
+    public func carry(forOpening bundleIdentifiers: [String]) -> FocusCarry? {
+        guard let nextUnitControls,
+              bundleIdentifiers.contains(where: { $0.caseInsensitiveCompare(nextUnitControls) == .orderedSame }) else {
+            return nil
+        }
+        return carry
     }
 }
 
@@ -135,9 +199,34 @@ public struct FocusRestorer: FocusRestoring {
     /// `NSWorkspace`'s frontmost app with every instance running for its bundle identifier, a
     /// liveness read over those instances, and Launch Services to bring it back — the switcher's route.
     public static func forThisMac() -> FocusRestorer {
+        composed(
+            frontmostApplication: { NSWorkspace.shared.frontmostApplication },
+            runningApplications: { NSRunningApplication.runningApplications(withBundleIdentifier: $0) },
+            activation: { bundleURL, held in
+                await RunningAppActivation.activate(bundleURL: bundleURL, amongHeld: held)
+            }
+        )
+    }
+
+    public typealias FrontmostApplication = @Sendable @MainActor () -> NSRunningApplication?
+    public typealias RunningApplications = @Sendable @MainActor (String) -> [NSRunningApplication]
+    public typealias LaunchServicesActivation = @Sendable @MainActor (URL, [NSRunningApplication]) async -> RunningAppActivationOutcome
+
+    /// The shipping composition over its three AppKit calls, so a test runs this exact wiring with
+    /// real `NSRunningApplication` values (PR #238's F12) — `forThisMac()` names the real calls and
+    /// nothing else.
+    ///
+    /// **The running instances are read once, when the app in front is noted**, and the activation is
+    /// handed those same instances rather than a fresh read: a set re-read at restore time would
+    /// include a copy started after the user's own had quit, and that launch would read as a switch.
+    static func composed(
+        frontmostApplication: @escaping FrontmostApplication,
+        runningApplications: @escaping RunningApplications,
+        activation: @escaping LaunchServicesActivation
+    ) -> FocusRestorer {
         FocusRestorer(
             frontmost: {
-                guard let app = NSWorkspace.shared.frontmostApplication,
+                guard let app = frontmostApplication(),
                       let bundleIdentifier = app.bundleIdentifier else {
                     return nil
                 }
@@ -151,25 +240,35 @@ public struct FocusRestorer: FocusRestoring {
                     // Every instance for the bundle identifier, as the switcher reads them: a second
                     // instance, or Launch Services substituting another running copy, is still the
                     // user's app and counts as the switch it is.
-                    heldInstances: NSRunningApplication.runningApplications(withBundleIdentifier: bundleIdentifier)
+                    heldInstances: runningApplications(bundleIdentifier)
                 )
             },
             stillRunning: { noted in
-                anyStillRunning(noted.heldInstances)
+                anyStillRunning(noted.heldInstances, at: noted.app.bundleURL)
             },
             activation: { noted in
                 guard let bundleURL = noted.app.bundleURL else {
                     return .refused
                 }
-                return await RunningAppActivation.activate(bundleURL: bundleURL, amongHeld: noted.heldInstances)
+                return await activation(bundleURL, noted.heldInstances)
             }
         )
     }
 
-    /// Whether any of `instances` is still running. Empty is `false`: nothing noted is nothing to
-    /// bring back.
-    public static func anyStillRunning(_ instances: [NSRunningApplication]) -> Bool {
-        instances.contains { !$0.isTerminated }
+    /// Whether any of `instances` is still running **from `bundleURL`**, the bundle the restore
+    /// will ask Launch Services to open. Empty is `false`: nothing noted is nothing to bring back.
+    ///
+    /// **Only a copy at the same bundle counts** (PR #238's F7). Two apps can share a bundle
+    /// identifier — Xcode and Xcode-beta both answer `com.apple.dt.Xcode` — and the restore opens
+    /// the noted app's own bundle. With the user in Xcode-beta, Xcode-beta quit and Xcode still
+    /// running, a check over every instance would pass and Launch Services would be asked to open
+    /// Xcode-beta.app, which starts it. A noted app with no bundle URL is never brought back at all,
+    /// so it has nothing to be live at.
+    public static func anyStillRunning(_ instances: [NSRunningApplication], at bundleURL: URL?) -> Bool {
+        guard let bundleURL else {
+            return false
+        }
+        return instances.contains { !$0.isTerminated && $0.bundleURL?.standardizedFileURL == bundleURL.standardizedFileURL }
     }
 
     /// Reads nothing and moves nothing: the default a fixture gets by saying nothing.

@@ -183,6 +183,7 @@ final class VisionSessionRunner {
         environment: VisionSessionEnvironment,
         containment: VisionSessionContainment,
         focusRestorer: any FocusRestoring,
+        handedOnFrontmost: NotedFrontmost? = nil,
         log: @escaping (AgentPhase, String) -> Void
     ) {
         self.goal = goal
@@ -190,6 +191,7 @@ final class VisionSessionRunner {
         self.environment = environment
         self.containment = containment
         self.focusRestorer = focusRestorer
+        self.handedOnFrontmost = handedOnFrontmost
         self.log = log
         self.record = VisionSessionRecord(
             goal: goal,
@@ -202,8 +204,10 @@ final class VisionSessionRunner {
         // The app the user was in before the session took the target forward (SONNY-451), noted with
         // the instances of it that were running. It comes back on every exit and at an attention
         // pause, and never while Sonny acts: the controlled app stays in front for the whole of a
-        // session, because a session is exactly the thing that must keep it there.
-        previousFrontmost = focusRestorer.frontmost()
+        // session, because a session is exactly the thing that must keep it there. An open just
+        // before this session in the same run has already noted it and left the target in front,
+        // so that note is the one to give back (PR #238's F5).
+        previousFrontmost = handedOnFrontmost ?? focusRestorer.frontmost()
         do {
             let outcome = try await runLoop()
             await restorePreviousFrontmost()
@@ -247,6 +251,9 @@ final class VisionSessionRunner {
 
     /// What was in front before the session; `nil` when nothing was.
     private var previousFrontmost: NotedFrontmost?
+
+    /// The app an open step just before this session noted and handed on instead of bringing back.
+    private let handedOnFrontmost: NotedFrontmost?
 
     /// Brings the app the user was in back in front, if the session moved it. Idempotent: a second
     /// call after the first restored finds it in front and does nothing.

@@ -153,6 +153,9 @@ public struct CapabilityExecutionContext {
     public var browserOpener: any BrowserOpening
     /// Puts the app the user was in back in front after an open (SONNY-451); see `FocusRestoring`.
     public var focusRestorer: any FocusRestoring
+    /// What the run's next unit does with the front, set by `AgentActionExecutor.executeChain` for
+    /// each unit of a chain and `nil` everywhere else (PR #238's F5). See `restoringFocus(afterOpening:log:_:)`.
+    public var focusHandoff: FocusHandoff?
     public var hackerNewsFetcher: any HackerNewsFetching
     /// The alias table — which names mean the same app. Not a roster of what may be opened; that
     /// question moved to `installedAppResolver` when C12 dissolved the launch allowlist (SONNY-82).
@@ -353,6 +356,7 @@ public struct CapabilityExecutionContext {
         // fixture that says nothing cannot bring a real app forward on the developer's Mac. The
         // shipping executor passes `FocusRestorer.forThisMac()` and a scan test pins that it does.
         focusRestorer: any FocusRestoring = FocusRestorer.inert(),
+        focusHandoff: FocusHandoff? = nil,
         fileOpener: any FileOpening,
         mediaOpener: any MediaOpening,
         spotifyPlaybackProvider: any SpotifyPlaybackProviding,
@@ -404,6 +408,7 @@ public struct CapabilityExecutionContext {
         self.documentConverter = documentConverter
         self.browserOpener = browserOpener
         self.focusRestorer = focusRestorer
+        self.focusHandoff = focusHandoff
         self.hackerNewsFetcher = hackerNewsFetcher
         self.appCatalog = appCatalog
         self.installedAppResolver = installedAppResolver
@@ -440,6 +445,28 @@ public struct CapabilityExecutionContext {
         self.previewNestedPlan = previewNestedPlan
         self.executeNestedPlan = executeNestedPlan
         self.visionSession = visionSession
+    }
+}
+
+public extension CapabilityExecutionContext {
+    /// Runs an open of `bundleIdentifiers` and gives the user's app back once it has completed — or,
+    /// when the run's next unit is a screen-control session on one of those apps, hands the user's
+    /// app to that session to give back when it ends (SONNY-451; the hand-over is PR #238's F5).
+    ///
+    /// **Why the hand-over.** A planned `open Notes and make a note` is an `open_app` step and then a
+    /// session on Notes; restoring between them put the user's app in front for a moment before the
+    /// session brought Notes forward again. The trace line is the one every open step writes.
+    @MainActor
+    func restoringFocus<T>(
+        afterOpening bundleIdentifiers: [String],
+        log: @escaping (AgentPhase, String) -> Void,
+        _ work: () async throws -> T
+    ) async rethrows -> T {
+        try await focusRestorer.restoringFocus(
+            onRestore: { log(.act, "Brought \($0.displayName) back in front") },
+            handingOnTo: focusHandoff?.carry(forOpening: bundleIdentifiers),
+            work
+        )
     }
 }
 

@@ -139,9 +139,10 @@ public struct VisionSessionCapabilityAdapter: CapabilityAdapter {
             // fallback. This is the iTerm2 lesson as structure: the spike's vision fallback defaulted
             // to whatever was frontmost and typed shell commands into a live terminal, and the reason
             // that cannot happen here is not a better default, it is that there is no default to
-            // misfire. Nothing in this file reads frontmost state; the only frontmost read in the
-            // whole vision path is `VisionSessionContainment`'s per-iteration *boundary*, which
-            // refuses when the pinned app is not in front rather than adopting whatever is.
+            // misfire. Nothing in this file reads frontmost state, and no frontmost read anywhere in
+            // the vision path chooses the target: `VisionSessionContainment`'s per-iteration
+            // *boundary* refuses when the pinned app is not in front rather than adopting whatever
+            // is, and the runner's own reads (SONNY-451) only note which app to give back.
             guard let rawName = Self.targetName(for: step, precededBy: Array(resolved.steps[..<index])) else {
                 return Self.clarifyPlan(
                     question: "Which app should Sonny control to do that? Name the app and I will work inside it."
@@ -321,8 +322,10 @@ public struct VisionSessionCapabilityAdapter: CapabilityAdapter {
                 permissionChecker: environment.permissionChecker
             ),
             // The one restorer the run carries, so a session gives the user's app back by the same
-            // rule an open step does (SONNY-451).
+            // rule an open step does (SONNY-451) — and the app an open just before it in this run
+            // handed on rather than brought back (PR #238's F5).
             focusRestorer: context.focusRestorer,
+            handedOnFrontmost: context.focusHandoff?.carry.take(),
             log: log
         )
         let outcome = try await session.run()

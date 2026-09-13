@@ -203,40 +203,138 @@ struct FocusRestorerTests {
         #expect(restored.isEmpty)
     }
 
-    /// **The instances handed to the activation are the ones noted with the app**, not a fresh read
-    /// at restore time: a set re-read then would include a copy started after the user's own quit,
-    /// and a launch would read as a switch.
-    @Test
-    @MainActor
-    func theActivationIsHandedTheInstancesNotedWithTheApp() async throws {
-        let probe = Probe()
-        let held = [NSRunningApplication.current]
-        let restorer = probe.restorer(frontmost: [Self.noted(Self.xcode, held: held), Self.noted(Self.safari)])
+    // MARK: - forThisMac()'s composition, with real `NSRunningApplication` values (PR #238's F12)
 
-        _ = await restorer.restoringFocus { "opened" }
-
-        let handed = try #require(probe.activatedWith.first)
-        #expect(handed.heldInstances.count == 1)
-        #expect(handed.heldInstances.first === held.first)
+    /// The Dock's instance — a real `NSRunningApplication` with a bundle identifier and a bundle URL
+    /// that runs for as long as anyone is logged in — and the `#require` makes a machine without one
+    /// fail here by name rather than assert something false.
+    ///
+    /// **Not `NSRunningApplication.current`**, which the first version of these tests used: inside
+    /// the test helper process it is a placeholder — measured: process identifier −1, no bundle
+    /// identifier, and `isTerminated` true.
+    private static func dock() throws -> NSRunningApplication {
+        try #require(
+            NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.dock").first,
+            "no Dock is running, so this machine has no live instance to measure against"
+        )
     }
 
-    /// The liveness read the shipping restorer uses: the Dock's instance is running, and an empty set
-    /// is nothing to bring back.
+    /// **The instances handed to the activation are the ones read when the app was noted, and the
+    /// running list is read exactly once** — the founders' rule of 2026-09-12, through the shipping
+    /// composition itself rather than a closure this test writes. A composition that re-read the
+    /// running instances when it activated would hand over this later, empty read and read twice.
     ///
-    /// **Not `NSRunningApplication.current`, which the first version of this test used and which is
-    /// wrong in exactly the way that matters.** Inside the test helper process it is a placeholder —
-    /// measured: process identifier −1, no bundle identifier, and `isTerminated` true — so it read as
-    /// an app that had quit, and the assertion that a live instance counts failed on its own sample.
-    /// The Dock runs for as long as anyone is logged in, and the `#require` makes a machine without
-    /// one fail here by name rather than assert something false.
+    /// The earlier test under this rule passed its own activation closure, so `forThisMac()` could
+    /// re-read at restore time and it stayed green (PR #238's F12).
     @Test
     @MainActor
-    func theLivenessReadCountsOnlyInstancesThatAreStillRunning() throws {
-        let dock = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.dock")
-        try #require(!dock.isEmpty, "no Dock is running, so this machine has no live instance to measure against")
+    func theShippingCompositionHandsTheActivationTheInstancesItNotedAndReadsThemOnce() async throws {
+        let dock = try Self.dock()
+        var fronts: [NSRunningApplication?] = [dock, nil]
+        var runningReads = 0
+        var handed: (url: URL, held: [NSRunningApplication])?
+        let restorer = FocusRestorer.composed(
+            frontmostApplication: { fronts.isEmpty ? nil : fronts.removeFirst() },
+            runningApplications: { _ in
+                runningReads += 1
+                return runningReads == 1 ? [dock] : []
+            },
+            activation: { url, held in
+                handed = (url, held)
+                return .switched
+            }
+        )
+        var restored: [RunningApp] = []
 
-        #expect(FocusRestorer.anyStillRunning(dock))
-        #expect(!FocusRestorer.anyStillRunning([]))
+        _ = await restorer.restoringFocus(onRestore: { restored.append($0) }) { "opened" }
+
+        let activation = try #require(handed, "the noted app was not asked back")
+        #expect(runningReads == 1, "the running instances were read again after the app was noted")
+        #expect(activation.held.count == 1)
+        #expect(activation.held.first === dock)
+        #expect(activation.url == dock.bundleURL)
+        #expect(restored.map(\.bundleIdentifier) == ["com.apple.dock"])
+    }
+
+    /// The liveness read the shipping restorer uses: the Dock's instance is running from the Dock's
+    /// own bundle, and nothing else counts.
+    ///
+    /// **Only a copy at the noted bundle is live** (PR #238's F7): Xcode and Xcode-beta share a
+    /// bundle identifier, and a check over every instance would let a restore open Xcode-beta.app —
+    /// starting it — because Xcode was still running. The same instance read against another bundle
+    /// is the case that must answer `false`.
+    @Test
+    @MainActor
+    func theLivenessReadCountsOnlyInstancesStillRunningFromTheNotedBundle() throws {
+        let dock = try Self.dock()
+        let dockBundle = try #require(dock.bundleURL)
+
+        #expect(FocusRestorer.anyStillRunning([dock], at: dockBundle))
+        #expect(!FocusRestorer.anyStillRunning([dock], at: URL(fileURLWithPath: "/Applications/Xcode-beta.app")))
+        #expect(!FocusRestorer.anyStillRunning([], at: dockBundle))
+        #expect(!FocusRestorer.anyStillRunning([dock], at: nil))
+    }
+
+    // MARK: - Handing the user's app on to the next unit (PR #238's F5)
+
+    /// **An open handing on brings nothing back and holds what was in front**, so a session that
+    /// takes the front right after it gives that app back once, at its end.
+    @Test
+    @MainActor
+    func anOpenHandingOnBringsNothingBackAndHoldsTheAppThatWasInFront() async throws {
+        let restorer = ScriptedRestorer(frontmost: [Self.xcode, Self.safari])
+        let carry = FocusCarry()
+        var restored: [RunningApp] = []
+
+        _ = await restorer.restoringFocus(onRestore: { restored.append($0) }, handingOnTo: carry) { "opened" }
+
+        #expect(restorer.broughtToFront.isEmpty)
+        #expect(restored.isEmpty)
+        #expect(carry.take()?.app == Self.xcode)
+        #expect(carry.take() == nil, "a held app is handed out once")
+    }
+
+    /// An open that throws has no session to hand the app to, so it restores at once.
+    @Test
+    @MainActor
+    func anOpenHandingOnThatThrowsStillBringsTheAppBack() async {
+        struct OpenFailed: Error {}
+        let restorer = ScriptedRestorer(frontmost: [Self.xcode, Self.safari])
+        let carry = FocusCarry()
+
+        await #expect(throws: OpenFailed.self) {
+            try await restorer.restoringFocus(handingOnTo: carry) { throw OpenFailed() }
+        }
+
+        #expect(restorer.broughtToFront == [Self.xcode])
+        #expect(carry.take() == nil)
+    }
+
+    /// The carry holds the first app it is given, so a second open in the same run cannot replace the
+    /// app the user was really in.
+    @Test
+    @MainActor
+    func theCarryKeepsTheFirstAppItIsGiven() {
+        let carry = FocusCarry()
+        carry.hold(Self.noted(Self.xcode))
+        carry.hold(Self.noted(Self.safari))
+
+        #expect(carry.take()?.app == Self.xcode)
+    }
+
+    /// A hand-off applies only to an open of the app the next unit controls, by bundle identifier and
+    /// whatever its case.
+    @Test
+    @MainActor
+    func aHandoffAppliesOnlyToAnOpenOfTheAppTheNextUnitControls() {
+        let carry = FocusCarry()
+        let toNotes = FocusHandoff(nextUnitControls: "com.apple.Notes", carry: carry)
+
+        #expect(toNotes.carry(forOpening: ["com.apple.notes"]) === carry)
+        #expect(toNotes.carry(forOpening: ["com.apple.Safari", "com.apple.Notes"]) === carry)
+        #expect(toNotes.carry(forOpening: ["com.apple.Safari"]) == nil)
+        #expect(toNotes.carry(forOpening: []) == nil)
+        #expect(FocusHandoff(nextUnitControls: nil, carry: carry).carry(forOpening: ["com.apple.Notes"]) == nil)
     }
 
     @Test
