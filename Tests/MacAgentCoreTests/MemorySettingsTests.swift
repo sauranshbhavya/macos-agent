@@ -14,7 +14,7 @@ struct MemorySettingsTests {
     // MARK: - The mapping
 
     /// **The exhaustiveness guard, in the direction the compiler cannot check.** `memoryCategory`'s
-    /// switch has no `default`, so a fifteenth `LocalStore` fails to compile until someone answers for
+    /// switch has no `default`, so a new `LocalStore` fails to compile until someone answers for
     /// it — but "answers" includes answering `nil`, and a store excluded by accident is invisible in
     /// the surface built to show the user everything Sonny remembers. This asserts the union
     /// explicitly, so an exclusion has to be a decision recorded in a test rather than a shrug.
@@ -129,7 +129,10 @@ struct MemorySettingsTests {
             .clipboardHistory: ("copied item", "copied items"),
             .snippets: ("snippet", "snippets"),
             .approvedApps: ("app", "apps"),
-            .resumableTasks: ("unfinished task", "unfinished tasks")
+            .resumableTasks: ("unfinished task", "unfinished tasks"),
+            // The ticket's proposed noun (SONNY-452), matching the page it counts. Founders to
+            // confirm.
+            .skills: ("skill", "skills")
         ]
 
         // The table covers the population rather than a subset of it, so a tenth row fails here too.

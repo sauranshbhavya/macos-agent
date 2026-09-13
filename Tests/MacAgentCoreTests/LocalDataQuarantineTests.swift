@@ -9,7 +9,7 @@ import Testing
 /// meant "almost certainly every local store, not just this one", and asked for that to be
 /// established rather than assumed. `everyLocalStoreIsUnreadableWhenItsFileWasWrittenUnderAnotherKey`
 /// walks `LocalStore.allCases` and proves it for every store that does not recover on its own, and
-/// the switch inside `probe(_:at:)` is exhaustive with no `default`, so a fifteenth store joins the
+/// the switch inside `probe(_:at:)` is exhaustive with no `default`, so a new store joins the
 /// population by failing to compile rather than by being remembered.
 ///
 /// **One store recovers on its own, and it is enumerated rather than excused** (SONNY-333, PR #194
@@ -24,7 +24,7 @@ import Testing
 /// **The failure is reproduced the way the founder's Mac produced it**, not with random bytes: each
 /// file is written as a valid `SONNYENC1` blob under one key and read back under another. That is
 /// what SONNY-240's fixtures did to `output-locations.json` and `resumable-tasks.json`, and it is
-/// also what a Keychain item replaced by a restore or a migration would do to all fourteen at once.
+/// also what a Keychain item replaced by a restore or a migration would do to every store at once.
 /// Bytes that merely fail to parse would exercise the JSON half of `decode` and say nothing about
 /// the decrypt half, which is the half that actually happened.
 @Suite(.serialized)
@@ -47,7 +47,7 @@ struct LocalDataQuarantineTests {
 
         // The population, so a broken enumerator cannot pass this vacuously — and so the number
         // lives in exactly one assertion rather than in a test name that goes stale.
-        #expect(LocalStore.allCases.count == 14)
+        #expect(LocalStore.allCases.count == 15)
         #expect(Self.selfHealingStores.count == 1)
     }
 
@@ -442,7 +442,7 @@ struct LocalDataQuarantineTests {
 
     /// One store, built at `root`, plus the read door a load failure surfaces through.
     ///
-    /// Exhaustive over `LocalStore` with no `default`, which is the point: a fifteenth store cannot
+    /// Exhaustive over `LocalStore` with no `default`, which is the point: a new store cannot
     /// be added without somebody deciding how this suite reads it, and the two walks above then
     /// cover it for free.
     private static func probe(_ store: LocalStore, at root: URL) -> (fileURL: URL, read: () throws -> Void) {
@@ -488,6 +488,9 @@ struct LocalDataQuarantineTests {
             return (store.fileURL, { _ = try store.loadAll() })
         case .pendingServerDeletions:
             let store = PendingServerDeletionStore(fileURL: root.appendingPathComponent("pending-server-deletions.json"), encryption: readerEncryption)
+            return (store.fileURL, { _ = try store.loadAll() })
+        case .addedSkills:
+            let store = SkillSelectionStore(fileURL: root.appendingPathComponent("added-skills.json"), encryption: readerEncryption)
             return (store.fileURL, { _ = try store.loadAll() })
         }
     }

@@ -55,6 +55,9 @@ struct TaskRecordingPolicyTests {
             .snippets,
             .clipboardHistorySettings,
             .approvedApps,
+            // The skills the user added (SONNY-452) — a choice made by hand on the Skills page, kept
+            // for the same reason a saved routine is.
+            .addedSkills,
             // Task deletions this Mac owes the gateway (SONNY-333) — kept, and this is the one
             // entry here whose *reason* is a live defect rather than a classification preference.
             // No task writes it, so there is nothing to withhold; and withholding it anyway would

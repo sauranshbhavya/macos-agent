@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "docusign",
+  "name": "Docusign",
+  "domain": "docusign.com",
+  "category": "documents_storage",
+  "summary": "Electronic signatures and agreements.",
+  "signInURL": "https://app.docusign.com/login",
+  "triggers": ["docusign"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

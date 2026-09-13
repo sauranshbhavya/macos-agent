@@ -1,0 +1,48 @@
+{
+  "format": 1,
+  "id": "notion",
+  "name": "Notion",
+  "domain": "notion.so",
+  "category": "knowledge_bases",
+  "summary": "Pages, docs and databases in a shared workspace.",
+  "signInURL": "https://notion.so/login",
+  "triggers": ["notion"],
+  "sections": [],
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Create a page",
+      "startURL": "https://www.notion.so/",
+      "steps": [
+        "Click the new page icon at the top of the left sidebar. In the desktop app, cmd/ctrl + N does the same.",
+        "The new page opens. Type the page's title at the top.",
+        "Start writing in the body of the page."
+      ],
+      "source": "https://www.notion.com/help/create-your-first-page",
+      "effect": "changes"
+    },
+    {
+      "title": "Find a page",
+      "startURL": "https://www.notion.so/",
+      "steps": [
+        "Click Search in the sidebar, or press cmd/ctrl + P.",
+        "Type the words to look for. Put a phrase in quotes to match it exactly.",
+        "Pick the page from the results. Recently viewed pages are listed first, and the sort and filter options narrow the list."
+      ],
+      "source": "https://www.notion.com/help/search",
+      "effect": "reads"
+    },
+    {
+      "title": "Share a page with someone",
+      "startURL": "https://www.notion.so/",
+      "steps": [
+        "Open the page and click Share at the top.",
+        "Enter a workspace member's name or a guest's email address.",
+        "Choose their permission level from the menu beside their name: Full access, Can edit, Can comment or Can view.",
+        "Click Invite."
+      ],
+      "source": "https://www.notion.com/help/sharing-and-permissions",
+      "effect": "changes"
+    }
+  ]
+}

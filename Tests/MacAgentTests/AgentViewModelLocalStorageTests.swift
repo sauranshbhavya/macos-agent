@@ -935,6 +935,9 @@ private func makeViewModel(
         pendingServerDeletionStore: PendingServerDeletionStore(
             fileURL: root.appendingPathComponent("pending-server-deletions.json")
         ),
+        skillSelectionStore: SkillSelectionStore(
+            fileURL: root.appendingPathComponent("added-skills.json")
+        ),
         standingWatcherObserver: UnreachableStandingWatcherObserver(),
         clipboardHistoryMonitor: ClipboardHistoryMonitor(
             reader: FakePasteboardReader(),

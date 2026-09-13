@@ -207,6 +207,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // widget shows the panel off published state, so the state has to exist before it renders.
         viewModel.refreshResumableTasks()
 
+        // The skills the user added (SONNY-452), read once at launch for the same reason: the planner
+        // is the reader that needs them, and a command from the widget reaches it without any page
+        // having appeared.
+        viewModel.refreshAddedSkills()
+
         // The deliveries a previous run could not make (SONNY-333), retried once at launch — the
         // "retry it on next launch" half of the founders' decision of 2026-08-30.
         //
@@ -469,35 +474,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .store(in: &cancellables)
     }
 
-    /// Deliberately not `Bundle.module` (SwiftPM's auto-generated resource accessor). That
-    /// generated code resolves the resource bundle via `Bundle.main.bundleURL.appendingPathComponent(
-    /// "MacAgent_MacAgent.bundle")` — correct for a bare `swift run` executable, where
-    /// `Bundle.main.bundleURL` is `.build/.../debug/` and the bundle sits right next to it, but
-    /// wrong for a real packaged `.app`: there, `Bundle.main.bundleURL` is the outer `.app`
-    /// directory, and Apple's code-signing format refuses to seal anything at that top level
-    /// outside `Contents/` (confirmed directly: `codesign` fails with "unsealed contents present
-    /// in the bundle root" when the resource bundle sits there) — so a real signed `.app` can
-    /// never satisfy that lookup, and `Bundle.module`'s generated accessor calls `fatalError` the
-    /// instant anything touches it if the bundle isn't found. This resolves the same bundle by
-    /// trying both real locations (packaged `.app`'s codesign-safe `Contents/Resources/`, ordered
-    /// first since it's the common real-usage case going forward, and the bare-executable
-    /// top-level layout `swift run` already produces) and degrades to system fonts instead of
-    /// crashing the app over a missing decorative asset if neither is found.
-    private static func resolvedResourceBundle() -> Bundle? {
-        let candidateURLs = [
-            Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/MacAgent_MacAgent.bundle"),
-            Bundle.main.bundleURL.appendingPathComponent("MacAgent_MacAgent.bundle")
-        ]
-        for url in candidateURLs {
-            if let bundle = Bundle(url: url) {
-                return bundle
-            }
-        }
-        return nil
-    }
-
     private func registerBundledFonts() {
-        guard let resourceBundle = Self.resolvedResourceBundle() else {
+        // `SonnyResourceBundle` says why this is not `Bundle.module`.
+        guard let resourceBundle = SonnyResourceBundle.resolved() else {
             print("Sonny could not locate its bundled fonts resource bundle — using system fonts instead.")
             return
         }

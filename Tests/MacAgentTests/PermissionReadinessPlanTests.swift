@@ -323,6 +323,7 @@ struct PlanReadinessFixture {
             ),
             resumableTaskStore: ResumableTaskStore(fileURL: root.appendingPathComponent("resumable-tasks.json")),
             pendingServerDeletionStore: UnreachableLocalStores.pendingServerDeletions(),
+            skillSelectionStore: UnreachableLocalStores.skillSelections(),
             standingWatcherObserver: UnreachableStandingWatcherObserver(),
             clipboardHistoryMonitor: ClipboardHistoryMonitor(
                 reader: FakePasteboardReader(),

@@ -3676,7 +3676,9 @@ struct MemoryCommandCenterTests {
             // Row 13's unfinished runs (SONNY-210) open the sheet, and it is the one type where that
             // is a decision rather than an absence: an unfinished run has no task-history row to
             // open, because a row is written when a run terminates.
-            .resumableTasks: .entriesSheet
+            .resumableTasks: .entriesSheet,
+            // The Skills page lists every pack with its Add or Remove already (SONNY-452).
+            .skills: .page(.skills)
         ]
         #expect(
             Set(expected.keys) == Set(MemoryCategory.allCases),
@@ -3904,7 +3906,8 @@ struct MemoryCommandCenterTests {
             (.insights, "InsightsView", "CommandCenterRunningIndicator("),
             (.routines, "RoutinesView", "CommandCenterRunningIndicator("),
             (.workspaces, "WorkspacesView", "CommandCenterRunningIndicator("),
-            (.memory, "MemoryView", "CommandCenterRunningIndicator(")
+            (.memory, "MemoryView", "CommandCenterRunningIndicator("),
+            (.skills, "SkillsView", "CommandCenterRunningIndicator(")
         ]
         // The population is the enum, so a destination added without a row here fails rather than
         // going unchecked.
@@ -4067,6 +4070,7 @@ private struct MemoryFixture {
     let clipboardSettingsStore: ClipboardHistorySettingsStore
     let clipboardHistoryStore: ClipboardHistoryStore
     let outputLocationStore: OutputLocationStore
+    let skillSelectionStore: SkillSelectionStore
     /// The whitelist's single root, and deliberately **not** `root` (SONNY-209).
     ///
     /// In production Sonny's own stores live under Application Support and the user's outputs never
@@ -4260,11 +4264,17 @@ private struct MemoryFixture {
 /// A second view model over the *same* directory and the same `UserDefaults` suite, for asserting
 /// that a preference outlived the instance that wrote it.
 @MainActor
-private func makeMemoryFixture(reusing fixture: MemoryFixture) throws -> MemoryFixture {
+private func makeMemoryFixture(
+    reusing fixture: MemoryFixture,
+    skillPackCatalog: SkillPackCatalog = .empty,
+    backendClient: SonnyBackendClient? = nil
+) throws -> MemoryFixture {
     try makeMemoryFixture(
         root: fixture.root,
         userDefaults: fixture.userDefaults,
         userDefaultsSuiteName: fixture.userDefaultsSuiteName,
+        skillPackCatalog: skillPackCatalog,
+        backendClient: backendClient,
         removesRoot: false
     )
 }
@@ -4276,7 +4286,9 @@ private func makeMemoryFixture(
     /// `deleteLocalData()` deletes nothing and, since SONNY-266, `setAsideFilesSummary` counts
     /// nothing. The tests about the wipe emptying the Memory lists, and the ones about Settings'
     /// set-aside line, need it pointed at this fixture's own directory and nothing else.
-    wipesRealStoreFiles: Bool = false
+    wipesRealStoreFiles: Bool = false,
+    skillPackCatalog: SkillPackCatalog = .empty,
+    backendClient: SonnyBackendClient? = nil
 ) throws -> MemoryFixture {
     let suiteName = "MemoryCommandCenterTests-\(UUID().uuidString)"
     let userDefaults = try #require(UserDefaults(suiteName: suiteName))
@@ -4290,6 +4302,8 @@ private func makeMemoryFixture(
         userDefaultsSuiteName: suiteName,
         policyProvider: policyProvider,
         wipesRealStoreFiles: wipesRealStoreFiles,
+        skillPackCatalog: skillPackCatalog,
+        backendClient: backendClient,
         removesRoot: true
     )
 }
@@ -4301,6 +4315,8 @@ private func makeMemoryFixture(
     userDefaultsSuiteName: String,
     policyProvider: any MemoryPolicyProviding = UnmanagedMemoryPolicyProvider(),
     wipesRealStoreFiles: Bool = false,
+    skillPackCatalog: SkillPackCatalog = .empty,
+    backendClient: SonnyBackendClient? = nil,
     removesRoot: Bool
 ) throws -> MemoryFixture {
     let encryption = LocalStorageEncryption(
@@ -4356,6 +4372,10 @@ private func makeMemoryFixture(
         fileURL: root.appendingPathComponent("resumable-tasks.json"),
         encryption: encryption
     )
+    let skillSelectionStore = SkillSelectionStore(
+        fileURL: root.appendingPathComponent("added-skills.json"),
+        encryption: encryption
+    )
     let deletionService = wipesRealStoreFiles
         ? LocalDataDeletionService(
             fileURLs: [
@@ -4371,7 +4391,8 @@ private func makeMemoryFixture(
                 clipboardHistoryStore.fileURL,
                 approvedAppStore.fileURL,
                 outputLocationStore.fileURL,
-                resumableTaskStore.fileURL
+                resumableTaskStore.fileURL,
+                skillSelectionStore.fileURL
             ]
         )
         : LocalDataDeletionService(fileURLs: [])
@@ -4406,6 +4427,7 @@ private func makeMemoryFixture(
         outputLocationStore: outputLocationStore,
         resumableTaskStore: resumableTaskStore,
         pendingServerDeletionStore: UnreachableLocalStores.pendingServerDeletions(),
+        skillSelectionStore: skillSelectionStore,
         standingWatcherObserver: UnreachableStandingWatcherObserver(),
         clipboardHistoryMonitor: ClipboardHistoryMonitor(
             reader: pasteboard,
@@ -4416,7 +4438,8 @@ private func makeMemoryFixture(
         // SONNY-130: undefaulted like the stores, and for a worse reason — this client holds the
         // Keychain session every packaged build on this Mac shares. Hermetic: no environment, so
         // every request fails before a URL is built, and an in-memory Keychain of its own.
-        backendClient: makeHermeticBackendClient(),
+        backendClient: backendClient ?? makeHermeticBackendClient(),
+        skillPackCatalog: skillPackCatalog,
         memoryPolicyProvider: policyProvider,
         priorTaskContextStore: PriorTaskContextStore(),
         taskUsageRecorder: TaskUsageRecorder(),
@@ -4440,6 +4463,7 @@ private func makeMemoryFixture(
         clipboardSettingsStore: clipboardSettingsStore,
         clipboardHistoryStore: clipboardHistoryStore,
         outputLocationStore: outputLocationStore,
+        skillSelectionStore: skillSelectionStore,
         outputsRoot: outputsRoot,
         pasteboard: pasteboard,
         userDefaults: userDefaults,
@@ -4555,3 +4579,167 @@ enum ClipboardSwitchDoor: CaseIterable, CustomStringConvertible {
         }
     }
 }
+
+// MARK: - Skills (SONNY-452)
+
+/// The Skills page's store, its Memory row, the wipe, and the planner seam, through the one view
+/// model both surfaces share. Here rather than in a file of its own because the Memory fixture is
+/// what builds a view model over real temp stores with the wipe pointed at them, and the added
+/// skills are one of its rows.
+@Suite
+@MainActor
+struct SkillsCommandCenterTests {
+    @Test
+    func anAddedSkillSurvivesARelaunchAndCountsOnItsMemoryRow() throws {
+        let catalogue = try Self.catalogue()
+        let fixture = try makeMemoryFixture(skillPackCatalog: catalogue)
+        defer { fixture.cleanUp() }
+        let notion = try #require(catalogue.pack(id: "notion"))
+        let linear = try #require(catalogue.pack(id: "linear"))
+
+        fixture.viewModel.addSkill(notion)
+        fixture.viewModel.addSkill(linear)
+        #expect(fixture.viewModel.errorMessage == nil)
+
+        let relaunched = try makeMemoryFixture(reusing: fixture, skillPackCatalog: catalogue)
+        #expect(relaunched.viewModel.addedSkills.isEmpty, "nothing is read until launch asks")
+        relaunched.viewModel.refreshAddedSkills()
+
+        #expect(Set(relaunched.viewModel.addedSkills.map(\.id)) == ["notion", "linear"])
+        #expect(relaunched.viewModel.isSkillAdded(notion))
+        #expect(relaunched.viewModel.memoryEntryCount(for: .skills) == 2)
+        #expect(MemoryCategory.skills.countedEntries(2) == "2 skills")
+        // Name order — Docusign, Linear, Notion — and only the two added say Remove.
+        #expect(SkillRowPresentation.rows(for: relaunched.viewModel, query: "").map(\.buttonTitle) == ["Add", "Remove", "Remove"])
+
+        relaunched.viewModel.removeSkill(notion)
+        #expect(relaunched.viewModel.addedSkills.map(\.id) == ["linear"])
+        #expect(try fixture.skillSelectionStore.loadAll().map(\.id) == ["linear"])
+    }
+
+    /// Settings' whole wipe takes the added skills, and the page and the planner come back empty.
+    @Test
+    func theWholeDataWipeClearsTheAddedSkills() async throws {
+        let catalogue = try Self.catalogue()
+        let fixture = try makeMemoryFixture(wipesRealStoreFiles: true, skillPackCatalog: catalogue)
+        defer { fixture.cleanUp() }
+        fixture.viewModel.addSkill(try #require(catalogue.pack(id: "notion")))
+        #expect(FileManager.default.fileExists(atPath: fixture.skillSelectionStore.fileURL.path))
+        #expect(fixture.viewModel.addedSkills.count == 1)
+
+        fixture.viewModel.deleteLocalData()
+        await fixture.viewModel.localDataWipeForTests?.value
+
+        #expect(fixture.viewModel.addedSkills.isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: fixture.skillSelectionStore.fileURL.path))
+    }
+
+    /// The Memory row's Delete takes the file, and its View goes to the Skills page.
+    @Test
+    func theSkillsMemoryRowsDeleteRemovesEveryAddedSkill() throws {
+        let catalogue = try Self.catalogue()
+        let fixture = try makeMemoryFixture(skillPackCatalog: catalogue)
+        defer { fixture.cleanUp() }
+        fixture.viewModel.addSkill(try #require(catalogue.pack(id: "linear")))
+        fixture.memoryPageAppears()
+        #expect(MemoryRowPresentation.row(for: .skills, viewModel: fixture.viewModel).canDelete)
+
+        fixture.viewModel.deleteMemory(in: .skills)
+
+        #expect(fixture.viewModel.addedSkills.isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: fixture.skillSelectionStore.fileURL.path))
+        #expect(MemoryRowDestination.of(.skills) == .page(.skills))
+        #expect(MemorySection.all.first { $0.kind == .artifact }?.categories.contains(.skills) == true)
+    }
+
+    /// With Skills memory off, Add is refused out loud and nothing is written; Remove still works.
+    @Test
+    func addingWhileSkillsMemoryIsOffIsRefusedOutLoud() throws {
+        let catalogue = try Self.catalogue()
+        let fixture = try makeMemoryFixture(skillPackCatalog: catalogue)
+        defer { fixture.cleanUp() }
+        let notion = try #require(catalogue.pack(id: "notion"))
+
+        fixture.viewModel.setMemoryCategoryEnabled(.skills, to: false)
+        fixture.viewModel.addSkill(notion)
+
+        #expect(fixture.viewModel.errorMessage == MemoryDisabledError(category: .skills).errorDescription)
+        #expect(fixture.viewModel.addedSkills.isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: fixture.skillSelectionStore.fileURL.path))
+    }
+
+    /// The manual row's claim, held end to end through the shipping planner factory: an added pack a
+    /// command names is in that command's plan request, and once removed, the same command sends the
+    /// fixed prompt. An un-added pack the command also names never joins.
+    @Test
+    func aCommandNamingAnAddedSkillCarriesItsPackToThePlannerAndStopsOnceRemoved() async throws {
+        let catalogue = try Self.catalogue()
+        let backend = SignedInBackendFixture()
+        let requests = RecordedBackendRequests()
+        backend.register { request in
+            requests.append(request)
+            // §4.2's response shape, the same body `BackendTaskIdentityTests` answers its routes with.
+            let body = try! JSONSerialization.data(withJSONObject: ["request_id": "req_plan_skills", "output_text": clarifyingPlanJSON])
+            return .reply(statusCode: 200, headers: ["Content-Type": "application/json"], body: body)
+        }
+        defer { backend.unregister() }
+        let fixture = try makeMemoryFixture(skillPackCatalog: catalogue, backendClient: backend.client)
+        defer { fixture.cleanUp() }
+        let notion = try #require(catalogue.pack(id: "notion"))
+        let linear = try #require(catalogue.pack(id: "linear"))
+        let command = "create a page in Notion called wave 7 notes about the linear bug"
+
+        fixture.viewModel.addSkill(notion)
+        fixture.viewModel.command = command
+        fixture.viewModel.start()
+        try await fixture.waitUntilIdle()
+        fixture.viewModel.cancelCurrentRun()
+
+        fixture.viewModel.removeSkill(notion)
+        fixture.viewModel.command = command
+        fixture.viewModel.start()
+        try await fixture.waitUntilIdle()
+
+        let systems = requests.all
+            .filter { $0.path == "/v1/plan" }
+            .map { ($0.json["messages"] as? [[String: Any]])?.first?["text"] as? String }
+        #expect(systems.count == 2)
+        let withNotion = try #require(systems.first ?? nil)
+        #expect(withNotion.hasSuffix(SkillGuidance.header + "\n\n" + notion.guidance))
+        #expect(!withNotion.contains(linear.guidance), "Linear was never added")
+        #expect(systems.last == OpenAIPlanner.systemPrompt(toolRegistry: .default))
+    }
+
+    @Test
+    func theSearchNarrowsByNameDomainOrLineAndSaysSoWhenNothingMatches() throws {
+        let catalogue = try Self.catalogue()
+        let rows = { (query: String) in
+            SkillRowPresentation.rows(packs: catalogue.packs, addedIDs: ["linear"], query: query).map(\.id)
+        }
+
+        #expect(rows("") == ["docusign", "linear", "notion"])
+        #expect(rows("NOTION") == ["notion"])
+        #expect(rows("linear.app") == ["linear"])
+        #expect(rows("zzz-no-such-site") == [])
+        let linear = try #require(SkillRowPresentation.rows(packs: catalogue.packs, addedIDs: ["linear"], query: "linear").first)
+        #expect(linear.isAdded)
+        #expect(linear.buttonTitle == "Remove")
+        #expect(linear.buttonAccessibilityLabel == "Remove Linear")
+    }
+
+    /// The shipped packs, read from the source tree the app target's resources come from.
+    static func catalogue() throws -> SkillPackCatalog {
+        let directory = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/MacAgent/Resources/SkillPacks")
+        let catalogue = SkillPackCatalog.load(from: directory)
+        try #require(catalogue.failures.isEmpty)
+        try #require(catalogue.packs.count >= 3)
+        return catalogue
+    }
+}
+
+/// A plan that stops at a clarification, so a run reaches the planner and executes nothing.
+private let clarifyingPlanJSON = #"{"summary":"Ask first.","requiresConfirmation":false,"steps":[{"id":"clarify","operation":"clarify","description":"Ask which workspace.","inputPath":null,"outputPath":null,"count":null,"targetURL":null,"appName":null,"question":"Which workspace?","mediaProvider":null,"mediaTitle":null,"mediaArtist":null,"contextSource":null,"routineName":null,"routineSteps":null,"workspaceName":null,"workspaceApps":null,"workspaceURLs":null,"sourceURLs":null,"searchQuery":null,"draftTitle":null,"draftContent":null,"shortcutName":null,"shortcutInput":null}]}"#

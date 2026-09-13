@@ -59,6 +59,10 @@ public enum MemoryCategory: String, CaseIterable, Identifiable, Sendable {
     /// cannot reach them, and the founder's lifecycle for this store — it lives until the task
     /// completes **or the user deletes it** — needs a delete the user can actually press.
     case resumableTasks
+    /// The skills the user added on the Skills page (SONNY-452). Its own row, under "Saved by you":
+    /// every entry is a press of Add, and the row's View opens that page rather than a sheet, since
+    /// the page is where adding and removing already live.
+    case skills
 
     public var id: String { rawValue }
 
@@ -92,6 +96,8 @@ public enum MemoryCategory: String, CaseIterable, Identifiable, Sendable {
             // the same sentence the widget's offer makes ("you were partway through X"), so the row
             // and the offer name one thing.
             return "Unfinished tasks"
+        case .skills:
+            return "Skills"
         }
     }
 
@@ -149,6 +155,10 @@ public enum MemoryCategory: String, CaseIterable, Identifiable, Sendable {
             // is written when a run terminates and this store holds the runs that have not — so a
             // bare "1 task" beside "184 tasks" invites the one arithmetic the page cannot support.
             return "unfinished task"
+        case .skills:
+            // The ticket's proposed noun, matching the sidebar page it counts. Founders to confirm
+            // (SONNY-452).
+            return "skill"
         }
     }
 
@@ -175,6 +185,8 @@ public enum MemoryCategory: String, CaseIterable, Identifiable, Sendable {
             return "apps"
         case .resumableTasks:
             return "unfinished tasks"
+        case .skills:
+            return "skills"
         }
     }
 
@@ -253,6 +265,8 @@ extension LocalStore {
             return .approvedApps
         case .resumableTasks:
             return .resumableTasks
+        case .addedSkills:
+            return .skills
         case .pendingServerDeletions:
             // **Not memory — an obligation** (SONNY-333). This file holds the ids of tasks the user
             // has already deleted, kept only until the gateway confirms their retained copy is gone.

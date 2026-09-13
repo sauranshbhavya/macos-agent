@@ -375,7 +375,8 @@ struct LocalStorageSecurityTests {
         // journal was the store this test did not create, so the only place the wipe's behaviour is
         // actually exercised covered every store except the most sensitive one. Fourteen since
         // SONNY-333's queue of the deletions this Mac owes the gateway, which repeated the
-        // journal's history exactly and was found by SONNY-423 and closed by SONNY-432.
+        // journal's history exactly and was found by SONNY-423 and closed by SONNY-432. Fifteen since
+        // SONNY-452's list of the skills the user added, which arrived in this fixture with its store.
         //
         // **What the count assertion is for, corrected** (PR #83, F7). It is *not* drift protection
         // between the fixture's files and its returned URLs — the two deletion counts below already
@@ -396,14 +397,14 @@ struct LocalStorageSecurityTests {
         // population-relative, the comparison passes for a fixture and an app narrowed together,
         // which is the mutation `theEveryStoreWipeReachesExactlyTheClassifiedStores` records the
         // same way one screen up.
-        #expect(fileURLs.count == 14)
-        #expect(result == LocalDataDeletionResult(deletedFileCount: 14, missingFileCount: 0))
+        #expect(fileURLs.count == 15)
+        #expect(result == LocalDataDeletionResult(deletedFileCount: 15, missingFileCount: 0))
         for fileURL in fileURLs {
             #expect(!FileManager.default.fileExists(atPath: fileURL.path))
         }
 
         let secondResult = try service.deleteAllLocalData()
-        #expect(secondResult == LocalDataDeletionResult(deletedFileCount: 0, missingFileCount: 14))
+        #expect(secondResult == LocalDataDeletionResult(deletedFileCount: 0, missingFileCount: 15))
     }
 
     @Test(.requiresUnprivilegedProcess)
@@ -445,8 +446,8 @@ struct LocalStorageSecurityTests {
     /// The wipe's reach, pinned by count and by name. Relocated here from the deleted ledger
     /// suite (PR #49 N4): the ninth store's own `urls.count == 9` pin died with it, and without
     /// a successor a store added to the app but forgotten from this list would vanish from the
-    /// wipe silently. Fourteen stores is the current whole population, since SONNY-333's queue of
-    /// deletions this Mac owes the gateway.
+    /// wipe silently. Fifteen stores is the current whole population, since SONNY-452's list of
+    /// the skills the user added.
     ///
     /// **The count moved four times and no longer lives in this test's name** (SONNY-209). Row E's
     /// plan details landed first, at `ef0cf7c`, taking it to ten; row J's approved apps rebased on
@@ -456,7 +457,7 @@ struct LocalStorageSecurityTests {
     /// each rename left the doc comments elsewhere that name it pointing at a symbol that no longer
     /// existed. So the name is count-free now and the number lives only in the assertion below,
     /// where the suite is what complains — which is what let the fourth and fifth moves cost
-    /// nothing but two numerals apiece. A fifteenth store raises this number and the one in
+    /// nothing but two numerals apiece. A sixteenth store raises this number and the one in
     /// `everyLocalStoreFileIsClassifiedExactlyOnce`, and renames nothing.
     /// **What the shipping app's wipe actually reaches, as opposed to what the list contains**
     /// (PR #162 review N1a).
@@ -484,7 +485,7 @@ struct LocalStorageSecurityTests {
     @Test
     func theWipeReachesEveryLocalStore() {
         let urls = LocalDataDeletionService.defaultStoreFileURLs()
-        #expect(urls.count == 14)
+        #expect(urls.count == 15)
         let fileNames = Set(urls.map(\.lastPathComponent))
         // Nine since row I: `vision-sessions.json` is the action journal (SONNY-96). A wipe that
         // left a record of every click Sonny made inside the user's apps would be the loudest
@@ -525,7 +526,11 @@ struct LocalStorageSecurityTests {
             // record of *what somebody deleted* surviving a privacy wipe is the same failure in a
             // smaller coat. What that costs is on `PendingServerDeletionStore`: a wipe with
             // deliveries outstanding abandons them.
-            "pending-server-deletions.json"
+            "pending-server-deletions.json",
+            // Fifteen since SONNY-452: `added-skills.json` holds which sites' skills the user added —
+            // ids only, since a pack's content ships in the app. Which tools somebody works in is
+            // theirs, and a wipe that left it would leave the Skills page saying Remove on each one.
+            "added-skills.json"
         ])
     }
 
@@ -551,7 +556,7 @@ struct LocalStorageSecurityTests {
         let classifiedURLs = LocalStore.allCases.map { $0.fileURL() }
         #expect(Set(classifiedURLs) == Set(wipedURLs))
         #expect(Set(classifiedURLs).count == LocalStore.allCases.count)
-        #expect(LocalStore.allCases.count == 14)
+        #expect(LocalStore.allCases.count == 15)
     }
 
     /// **The words Settings uses to describe the wipe name every store the wipe reaches**
@@ -588,7 +593,7 @@ struct LocalStorageSecurityTests {
         // suite stayed green, while that exact phrase is the reason this branch rejected deriving
         // the sentence from Memory rows instead. Fifteen literals against fourteen stores, because
         // `resumable-tasks.json` names two collections (SONNY-236); it is otherwise the same
-        // shape `theWipeReachesEveryLocalStore` uses for the fourteen file names, for the same reason:
+        // shape `theWipeReachesEveryLocalStore` uses for the file names, for the same reason:
         // this is a destructive action's disclosure, and a copy pass over it should have to say so.
         #expect(items == [
             "records of what Sonny did on screen",
@@ -612,10 +617,14 @@ struct LocalStorageSecurityTests {
             // gave Sonny nothing that lands in it, because the wipe takes it and the consequence —
             // deletions already asked for never reaching the account — is the one thing about this
             // press a person could not guess.
-            "deletions Sonny hasn't finished"
+            "deletions Sonny hasn't finished",
+            // The sixteenth phrase and the fifteenth store (SONNY-452). The list of skills the user
+            // added, named for what a person would notice gone: the Skills page back to Add on every
+            // row. The wording is the founders' to confirm.
+            "added skills"
         ])
 
-        // Structure, over the population rather than over the literals above — so a fifteenth store
+        // Structure, over the population rather than over the literals above — so a new store
         // fails here as well as in the table, and says which rule it broke.
         //
         // **That makes the table one more stop for a session adding a store**, alongside the file
@@ -719,7 +728,7 @@ struct LocalStorageSecurityTests {
         // same ground and not on a weaker one (SONNY-140): a grant is the user's own answer to a
         // question Sonny asked them, so withholding it would discard a consent decision and leave
         // Sonny asking the identical question on the next run with no way to say why.
-        #expect(stores(.artifact) == [.routines, .workspaces, .snippets, .approvedApps])
+        #expect(stores(.artifact) == [.routines, .workspaces, .snippets, .approvedApps, .addedSkills])
         // No task writes these. `clipboardHistorySettings` is the one the founder's own
         // enumeration did not reach; `pendingServerDeletions` arrived later (SONNY-333) and is
         // written by a *user pressing Delete* and by the delivery pass, never by a run.
@@ -793,9 +802,14 @@ private func createAllLocalStoreFiles(root: URL, encryption: LocalStorageEncrypt
     // test that runs `deleteAllLocalData()` over real files ran it over thirteen of fourteen —
     // the journal's own history above, repeated on the store that came after it. Nothing was red,
     // because the three numerals in the calling test all agreed with the short fixture. What stops
-    // the fifteenth arriving the same way is the population assertion at the end of this helper.
+    // a new store arriving the same way is the population assertion at the end of this helper.
     let pendingServerDeletionStore = PendingServerDeletionStore(
         fileURL: root.appendingPathComponent("pending-server-deletions.json"),
+        encryption: encryption
+    )
+    // The fifteenth (SONNY-452): the skills the user added.
+    let skillSelectionStore = SkillSelectionStore(
+        fileURL: root.appendingPathComponent("added-skills.json"),
         encryption: encryption
     )
 
@@ -878,6 +892,7 @@ private func createAllLocalStoreFiles(root: URL, encryption: LocalStorageEncrypt
         accountID: nil,
         deletedAt: .fixture
     )
+    try skillSelectionStore.add(id: "notion", addedAt: .fixture)
 
     let fileURLs = [
         routineStore.fileURL,
@@ -893,7 +908,8 @@ private func createAllLocalStoreFiles(root: URL, encryption: LocalStorageEncrypt
         approvedAppStore.fileURL,
         outputLocationStore.fileURL,
         resumableTaskStore.fileURL,
-        pendingServerDeletionStore.fileURL
+        pendingServerDeletionStore.fileURL,
+        skillSelectionStore.fileURL
     ]
 
     // **This fixture's population is `LocalStore.allCases`, and it is pinned by name** (SONNY-432).

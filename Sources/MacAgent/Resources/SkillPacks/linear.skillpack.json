@@ -1,0 +1,47 @@
+{
+  "format": 1,
+  "id": "linear",
+  "name": "Linear",
+  "domain": "linear.app",
+  "category": "project_tracking",
+  "summary": "Issue tracking for product and engineering teams.",
+  "signInURL": "https://linear.app/login",
+  "triggers": ["linear"],
+  "sections": [],
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Create an issue",
+      "startURL": "https://linear.app/",
+      "steps": [
+        "Press C, or click the create issue icon, to open the new issue window. Opening https://linear.new in the browser does the same.",
+        "Give the issue a title and a status. Both are required; every other field is optional.",
+        "Create the issue."
+      ],
+      "source": "https://linear.app/docs/creating-issues",
+      "effect": "changes"
+    },
+    {
+      "title": "Find an issue",
+      "startURL": "https://linear.app/",
+      "steps": [
+        "Press / to open Search, and type to find issues, projects and documents.",
+        "To search issues only, by title or identifier, press O then I.",
+        "To search the titles in the view already open, press Cmd/Ctrl + F."
+      ],
+      "source": "https://linear.app/docs/search",
+      "effect": "reads"
+    },
+    {
+      "title": "Assign an issue",
+      "startURL": "https://linear.app/",
+      "steps": [
+        "Open the issue, or hover over it in a list or board.",
+        "Press A to open the assignment menu, or set the assignee in the issue's properties sidebar.",
+        "Pick the person. Press I instead to assign it to yourself, and pick No assignee to remove one."
+      ],
+      "source": "https://linear.app/docs/assigning-issues",
+      "effect": "changes"
+    }
+  ]
+}
