@@ -6,7 +6,7 @@
   "category": "project_tracking",
   "summary": "Issue tracking for product and engineering teams.",
   "signInURL": "https://linear.app/login",
-  "triggers": ["linear"],
+  "triggers": ["linear issue", "linear issues", "linear ticket", "linear project", "open linear", "linear.app"],
   "sections": [],
   "depth": "deep",
   "flows": [

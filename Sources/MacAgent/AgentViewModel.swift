@@ -717,7 +717,7 @@ final class AgentViewModel: ObservableObject {
     private let taskUsageRecorder: TaskUsageRecorder
     private let backendClient: SonnyBackendClient
     /// How this view model builds the planner for a run (SONNY-132). The shipping app passes
-    /// `OpenAIPlanner.throughSonnysBackend(client:)`; tests pass a stub. One seam, because there is
+    /// `OpenAIPlanner.throughSonnysBackend(client:skills:)`; tests pass a stub. One seam, because there is
     /// one planner — which provider actually serves a request is `MODEL_ROUTE_PLAN` on the server,
     /// and this side is not allowed to know.
     private let makePlanner: PlannerFactory

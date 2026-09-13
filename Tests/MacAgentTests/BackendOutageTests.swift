@@ -550,7 +550,7 @@ struct BackendOutageTests {
     /// **`makePlanner` is deliberately not passed**, unlike every other `AgentViewModel` fixture in
     /// this target. They inject a stub planner because they are about something else; this suite is
     /// about what happens when the *real* planner cannot reach the gateway, so it takes the default
-    /// — `OpenAIPlanner.throughSonnysBackend(client:)` over the dead client — and the control test
+    /// — `OpenAIPlanner.throughSonnysBackend(client:skills:)` over the dead client — and the control test
     /// above is the one that proves the difference is real.
     private func makeFixture(
         networkFailure: URLError,

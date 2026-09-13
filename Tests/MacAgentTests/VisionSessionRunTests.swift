@@ -3262,27 +3262,42 @@ struct VisionSessionRunTests {
     }
 
     /// **Every cleanup that ends a run either tears down the session or is the named exception**
-    /// (SONNY-472). The population is read off the source rather than listed: every `defer` in
-    /// `AgentViewModel.swift` that writes `isRunning = false`, which is exactly what ends a run. A
-    /// fourth door arriving without the teardown fails here even though no runtime test exercises it
-    /// yet, and the scheduled path stays the one exception because no session can be live there.
+    /// (SONNY-472). The population is read off the source rather than listed: every `defer` in **every
+    /// file of the `MacAgent` target** that writes `isRunning = false`, which is exactly what ends a
+    /// run. A fourth door arriving without the teardown fails here even though no runtime test
+    /// exercises it yet, and the scheduled path stays the one exception because no session can be
+    /// live there.
+    ///
+    /// **Every file, not `AgentViewModel.swift` alone** (PR #241's F5). `isRunning` is settable from
+    /// the whole module and the session code lives in `AgentViewModel+VisionSession.swift`; the
+    /// review appended a fourth run-ending `defer` there and this test passed, because it read one
+    /// file. The same probe now fails it — the round's changelog entry has the output.
     @Test
     func everyCleanupThatEndsARunTearsDownTheSessionOrIsTheScheduledException() throws {
-        let source = try MacAgentSource.read("AgentViewModel.swift")
+        let files = try MacAgentSource.appSourceFiles()
+        // The control: the walk reached the extension file the narrower scan could not see.
+        #expect(files.contains { $0.lastPathComponent == "AgentViewModel+VisionSession.swift" })
         var cleanups: [String: String] = [:]
-        var searchStart = source.startIndex
-        while let deferRange = source.range(of: "defer {", range: searchStart..<source.endIndex) {
-            searchStart = deferRange.upperBound
-            let block = Self.braceBlock(openingAt: source.index(before: deferRange.upperBound), in: source)
-            guard block.contains("isRunning = false") else { continue }
-            let before = source[source.startIndex..<deferRange.lowerBound]
-            let functionName = try #require(
-                before.ranges(of: /func ([A-Za-z]+)\(/).last.flatMap { range in
-                    before[range].firstMatch(of: /func ([A-Za-z]+)\(/).map { String($0.1) }
-                }
-            )
-            #expect(cleanups[functionName] == nil, "\(functionName) has two run-ending cleanups")
-            cleanups[functionName] = block
+        var teardownSource: String?
+        for file in files {
+            let source = try MacAgentSource.read(file)
+            if source.contains("private func endScreenControlSession() {") {
+                teardownSource = source
+            }
+            var searchStart = source.startIndex
+            while let deferRange = source.range(of: "defer {", range: searchStart..<source.endIndex) {
+                searchStart = deferRange.upperBound
+                let block = Self.braceBlock(openingAt: source.index(before: deferRange.upperBound), in: source)
+                guard block.contains("isRunning = false") else { continue }
+                let before = source[source.startIndex..<deferRange.lowerBound]
+                let functionName = try #require(
+                    before.ranges(of: /func ([A-Za-z]+)\(/).last.flatMap { range in
+                        before[range].firstMatch(of: /func ([A-Za-z]+)\(/).map { String($0.1) }
+                    }
+                )
+                #expect(cleanups[functionName] == nil, "\(functionName) has two run-ending cleanups")
+                cleanups[functionName] = block
+            }
         }
 
         #expect(Set(cleanups.keys) == ["performStart", "performApproval", "performScheduledRun"])
@@ -3293,7 +3308,10 @@ struct VisionSessionRunTests {
         #expect(cleanups["performScheduledRun"]?.contains("endScreenControlSession()") == false)
         // What the teardown gives back, by name: a door that called an emptied teardown would pass
         // the lines above.
-        let teardown = try MacAgentSource.braceBlock(of: source, openedBy: "private func endScreenControlSession() {")
+        let teardown = try MacAgentSource.braceBlock(
+            of: try #require(teardownSource, "no file declares the session teardown"),
+            openedBy: "private func endScreenControlSession() {"
+        )
         for item in [
             "visionSessionProgress = nil", "visionCapturePreview = nil", "visionDelegationRequest = nil",
             "visionSessionPause = nil", "releaseEmergencyStopHotKey()", "approvedAppsForThisVisionIteration = nil",

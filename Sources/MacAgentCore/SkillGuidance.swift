@@ -32,13 +32,23 @@ public struct SkillGuidance: Equatable, Sendable {
         self.addedPacks = addedPacks
     }
 
-    /// The added packs this command names — by site name, domain or trigger word, as whole words,
+    /// The added packs this command names — by one of the pack's own trigger words, as whole words,
     /// case and accents folded — in the order the command first names them, capped at
     /// `maximumPacksPerCommand`.
+    ///
+    /// **Triggers only, never the site's name or domain on their own** (founders, 2026-09-13, option A
+    /// on PR #241's F3). Matching on the name made every site called by an everyday word — Make,
+    /// Close, X, HEY, Front, Instantly, Segment — join commands it has nothing to do with and take
+    /// one of the three slots: "make a Linear issue from my Notion page and post it in Slack" joined
+    /// Make and pushed Slack out, "close Safari" joined Close, and "1280 x 800" joined X. A pack lists
+    /// its name as a trigger only when the name is not an ordinary word, and otherwise lists phrases
+    /// anchored to the site ("make scenario", "in notion", "make.com");
+    /// `everyShippedTriggerIsDistinctiveOrAnchoredToItsSite` is what refuses the rest before a pack
+    /// ships.
     public func matchingPacks(for command: String) -> [SkillPack] {
         let haystack = SearchText.normalized(command)
         let matches: [(position: String.Index, pack: SkillPack)] = addedPacks.compactMap { pack in
-            let needles = [pack.name, pack.domain] + pack.triggers
+            let needles = pack.triggers
             let positions = needles.compactMap { needle in
                 SkillPhraseMatch.firstIndex(of: SearchText.normalized(needle), in: haystack)
             }

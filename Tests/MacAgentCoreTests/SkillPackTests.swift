@@ -23,17 +23,20 @@ enum SkillPackFixtures {
             "triggers": [name.lowercased()],
             "sections": [],
             "depth": depth,
-            "flows": depth == "deep" ? [flow()] : []
+            "flows": depth == "deep" ? [flow(on: domain)] : []
         ]
     }
 
+    /// A flow starting on `domain`'s own site, which every flow has to (PR #241's F4). Its citation is
+    /// deliberately on another host, because the rule does not hold citations to the site.
     static func flow(
         title: String = "Create a page",
-        steps: [String] = ["Click the new page icon.", "Type a title."]
+        steps: [String] = ["Click the new page icon.", "Type a title."],
+        on domain: String = "notion.so"
     ) -> [String: Any] {
         [
             "title": title,
-            "startURL": "https://www.example.com/",
+            "startURL": "https://www.\(domain)/",
             "steps": steps,
             "source": "https://www.example.com/help/create"
         ]
@@ -97,6 +100,54 @@ struct SkillPackTests {
         #expect(rows.filter { $0["why_in_list"]!.hasPrefix("founder-named") }.count == 100)
         for row in rows {
             #expect(!row["domain"]!.isEmpty, "\(row["id"]!) has no domain")
+        }
+    }
+
+    /// **Every shipped trigger is distinctive or anchored to its own site** (founders, 2026-09-13,
+    /// option A on PR #241's F3: a pack matches only on its triggers, and the validating test refuses
+    /// a trigger that would match ordinary language).
+    ///
+    /// How "ordinary language" is decided, and it is decided here rather than at launch — the loader
+    /// runs on every launch and this runs before a pack ships (launch-time validation is SONNY-476):
+    /// - **One word** is refused when it is two characters or fewer, only digits, or a word in macOS's
+    ///   own word list (`/usr/share/dict/words`), so "make", "close", "x", "hey", "slack", "notion"
+    ///   and "linear" are refused and "docusign", "zapier" and "n8n" are not.
+    /// - **A phrase** is refused when every word in it is ordinary *and* none of them is the site's
+    ///   own name, so "new page" is refused while "in notion" and "make scenario" are not.
+    /// - **A dotted trigger** ("make.com") is allowed: ordinary language does not carry a dot inside a
+    ///   word.
+    @Test
+    func everyShippedTriggerIsDistinctiveOrAnchoredToItsSite() throws {
+        let ordinary = try Self.ordinaryWords()
+        let catalogue = SkillPackCatalog.load(fileURLs: SkillPackCatalog.packFileURLs(in: Self.shippedPacksDirectory))
+        #expect(catalogue.packs.count >= 3)
+        for pack in catalogue.packs {
+            #expect(!pack.triggers.isEmpty)
+            for trigger in pack.triggers {
+                #expect(Self.triggerProblem(trigger, siteName: pack.name, ordinary: ordinary) == nil, "\(pack.id): \(trigger)")
+            }
+        }
+    }
+
+    /// The check itself, held to the review's words in both directions, so a check that let
+    /// everything through could not pass the shipped packs vacuously.
+    @Test
+    func theTriggerCheckRefusesOrdinaryLanguageAndAllowsTheSitesOwnWords() throws {
+        let ordinary = try Self.ordinaryWords()
+        let refused: [(trigger: String, site: String)] = [
+            ("make", "Make"), ("close", "Close"), ("x", "X"), ("hey", "HEY"), ("front", "Front"),
+            ("instantly", "Instantly"), ("segment", "Segment"), ("notion", "Notion"), ("linear", "Linear"),
+            ("slack", "Slack"), ("1280", "Probe"), ("new page", "Notion"), ("post it", "Slack")
+        ]
+        for entry in refused {
+            #expect(Self.triggerProblem(entry.trigger, siteName: entry.site, ordinary: ordinary) != nil, "\(entry.trigger) was allowed")
+        }
+        let allowed: [(trigger: String, site: String)] = [
+            ("docusign", "Docusign"), ("zapier", "Zapier"), ("n8n", "n8n"), ("make.com", "Make"),
+            ("make scenario", "Make"), ("in notion", "Notion"), ("post on x", "X"), ("linear issue", "Linear")
+        ]
+        for entry in allowed {
+            #expect(Self.triggerProblem(entry.trigger, siteName: entry.site, ordinary: ordinary) == nil, "\(entry.trigger) was refused")
         }
     }
 
@@ -197,6 +248,11 @@ struct SkillPackTests {
     /// The founders' rule names no category, so neither does this test: every money-moving flow is
     /// refused in a finance pack, a store, a CRM and a knowledge base alike. As first built the rule
     /// held finance packs alone, and a store pack could have taught Sonny to issue a refund.
+    ///
+    /// **The second half of the table is PR #241's F1**, every row of which loaded at `12ebe84a`:
+    /// payouts, SEPA, ACH and bank transfers, a currency amount, a wire, adding a recipient or a
+    /// beneficiary, replacing a bank account, updating a card, running payroll, reimbursing, capturing
+    /// a payment, and "send money" spelled with two spaces, a tab and a no-break space.
     @Test(arguments: ["finance_billing", "websites_apps_commerce", "sales_crm", "knowledge_bases"])
     func aFlowThatMovesMoneyDoesNotLoadWhateverTheCategory(category: String) throws {
         let flows: [(title: String, steps: [String])] = [
@@ -209,35 +265,73 @@ struct SkillPackTests {
             ("Change how you are paid", ["Open Settings.", "Update the payment details."]),
             ("Charge a customer", ["Open Customers.", "Charge the card on file."]),
             ("Approve a bill", ["Open Bills.", "Approve the bill."]),
-            ("Take money out", ["Open the account.", "Withdraw the balance."])
+            ("Take money out", ["Open the account.", "Withdraw the balance."]),
+            ("Create a payout", ["Open Balances.", "Click Payout and confirm the amount."]),
+            ("Send a SEPA transfer", ["Go to Transfers and click New transfer.", "Choose a beneficiary, or add a new one with their IBAN.", "Enter the amount and a reference, then confirm."]),
+            ("Transfer $500 to savings", ["Open Accounts.", "Transfer 500 USD to the savings account."]),
+            ("Send a wire", ["Open Payments.", "Send a wire to the recipient."]),
+            ("Add a recipient", ["Open Recipients.", "Add a new recipient with their bank account."]),
+            ("Change the bank account", ["Open Settings.", "Replace the bank account used for payouts."]),
+            ("Update the card on file", ["Open Billing.", "Update the card."]),
+            ("Run payroll", ["Open Payroll.", "Review the payroll and submit it."]),
+            ("Reimburse an expense", ["Open Expenses.", "Reimburse the employee."]),
+            ("Capture a payment", ["Open the payment.", "Click Capture."]),
+            ("Initiate an ACH transfer", ["Open Transfers.", "Initiate an ACH transfer."]),
+            ("Settle up with a vendor", ["Open Vendors.", "Send  money to the vendor."]),
+            ("Move savings", ["Open Accounts.", "Transfer\tfunds to savings."]),
+            ("Settle a debt", ["Open Contacts.", "Send\u{00A0}money to them."])
         ]
         for testFlow in flows {
             var object = SkillPackFixtures.object(id: "store", name: "Store", domain: "store.example.com", category: category)
-            object["flows"] = [SkillPackFixtures.flow(title: testFlow.title, steps: testFlow.steps)]
-            guard case .movesMoney(flow: testFlow.title, phrase: _)? = Self.error(object) else {
-                Issue.record("\(testFlow.title) loaded in a \(category) pack")
+            object["flows"] = [SkillPackFixtures.flow(title: testFlow.title, steps: testFlow.steps, on: "store.example.com")]
+            guard case .movesMoney(field: "flows[0]", words: _)? = Self.error(object) else {
+                Issue.record("\(testFlow.title) did not refuse as moving money in a \(category) pack: \(String(describing: Self.error(object)))")
                 continue
             }
         }
     }
 
+    /// The summary and the sections reach the planner too, so they are read by the same rule — each
+    /// section on its own, so two harmless labels cannot pair into a refusal (PR #241's F1).
+    @Test
+    func aSummaryOrASectionThatMovesMoneyDoesNotLoad() throws {
+        var summary = SkillPackFixtures.object(domain: "wise.com")
+        summary["summary"] = "Send money and pay bills."
+        #expect(Self.error(summary) == .movesMoney(field: "summary", words: "pay"))
+
+        var sections = SkillPackFixtures.object(domain: "wise.com", depth: "shallow")
+        sections["sections"] = ["Home", "Pay bills", "Send money", "Refunds"]
+        #expect(Self.error(sections) == .movesMoney(field: "sections[1]", words: "pay"))
+
+        // The controls: a summary and sections that only name money load.
+        var reading = SkillPackFixtures.object(domain: "wise.com", depth: "shallow")
+        reading["summary"] = "Payouts, balances and statements for a business account."
+        reading["sections"] = ["Home", "Payments", "Payouts", "Refunds", "Create", "Settings"]
+        #expect(Self.error(reading) == nil)
+    }
+
     /// What a pack may still say: reading orders, invoices, statements and payouts — the founders'
-    /// named allowance — and the ordinary "send" and "transfer" that have nothing to do with money.
-    /// Whole words, so "refunded" is not "refund" and "payouts" is not "pay".
+    /// named allowance — and the ordinary "send", "transfer", "add a recipient" and "move a card" that
+    /// have nothing to do with money. Whole words, so "refunded" is not "refund" and "payouts" is not
+    /// "pay"; and a *recipient* or a *card* counts as money only beside a money word.
     @Test
     func readingMoneyAndAnOrdinarySendOrTransferStillLoad() throws {
         let flows: [(title: String, steps: [String])] = [
             ("Download a statement", ["Open Statements.", "Pick the month and download it."]),
             ("Review payouts", ["Open Payouts.", "Filter the payouts and payments by date."]),
+            ("Check a payout's status", ["Open Payouts.", "Find the payout and read its status."]),
             ("Find refunded orders", ["Open Orders.", "Filter to refunded orders."]),
             ("Read an invoice", ["Open Invoices.", "Open the invoice to see its lines."]),
+            ("Export payments", ["Open Payments.", "Export the list as a CSV file."]),
             ("Share a page", ["Open Share.", "Send the page to a teammate."]),
-            ("Transfer ownership of a page", ["Open the page's settings.", "Transfer ownership to a teammate."])
+            ("Transfer ownership of a page", ["Open the page's settings.", "Transfer ownership to a teammate."]),
+            ("Address an email", ["Open Compose.", "Add a recipient."]),
+            ("Move a card", ["Open the board.", "Move the card to Done."])
         ]
         for testFlow in flows {
             var object = SkillPackFixtures.object(id: "wise", name: "Wise", domain: "wise.com", category: "finance_billing")
-            object["flows"] = [SkillPackFixtures.flow(title: testFlow.title, steps: testFlow.steps)]
-            #expect(Self.error(object) == nil, "\(testFlow.title) was refused")
+            object["flows"] = [SkillPackFixtures.flow(title: testFlow.title, steps: testFlow.steps, on: "wise.com")]
+            #expect(Self.error(object) == nil, "\(testFlow.title) was refused: \(String(describing: Self.error(object)))")
         }
     }
 
@@ -265,6 +359,29 @@ struct SkillPackTests {
         #expect(Self.error(object) == .mentionsCredential(field: "summary", phrase: "api key"))
     }
 
+    /// **The usual words for a credential** (PR #241's F2), every one of which loaded at `12ebe84a`,
+    /// with an uppercase `PIN` refused and the lowercase "pin" of a chat tool left alone.
+    @Test(arguments: [
+        "Enter your credentials.", "Type your PIN.", "Paste the API token.", "Enter the OTP.",
+        "Enter the two-factor code.", "Use a backup code.", "Paste the client secret.",
+        "Enter the one-time password.", "Type the 2FA code from your phone."
+    ])
+    func aStepNamingAnyUsualCredentialDoesNotLoad(step: String) throws {
+        var object = SkillPackFixtures.object()
+        object["flows"] = [SkillPackFixtures.flow(steps: ["Open the sign-in page.", step])]
+        guard case .mentionsCredential(field: "flows.steps", phrase: _)? = Self.error(object) else {
+            Issue.record("\(step) loaded: \(String(describing: Self.error(object)))")
+            return
+        }
+    }
+
+    @Test
+    func aChatToolsLowercasePinStillLoads() throws {
+        var object = SkillPackFixtures.object()
+        object["flows"] = [SkillPackFixtures.flow(steps: ["Open the channel.", "Pin the message to the channel."])]
+        #expect(Self.error(object) == nil)
+    }
+
     @Test
     func aURLCarryingACredentialDoesNotLoad() throws {
         var object = SkillPackFixtures.object()
@@ -274,6 +391,49 @@ struct SkillPackTests {
         object = SkillPackFixtures.object()
         object["signInURL"] = "https://someone:secret@notion.so/login"
         #expect(Self.error(object) == .urlCarriesCredential(field: "signInURL"))
+
+        // The fragment too (PR #241's F2): an implicit-grant sign-in hands a token back there.
+        object = SkillPackFixtures.object()
+        var flow = SkillPackFixtures.flow()
+        flow["startURL"] = "https://www.notion.so/#access_token=abc123"
+        object["flows"] = [flow]
+        #expect(Self.error(object) == .urlCarriesCredential(field: "flows[0].startURL"))
+
+        // The control: a fragment that is only a page anchor loads.
+        object = SkillPackFixtures.object()
+        flow = SkillPackFixtures.flow()
+        flow["startURL"] = "https://www.notion.so/help#sharing"
+        object["flows"] = [flow]
+        #expect(Self.error(object) == nil)
+    }
+
+    // MARK: - A flow starts on the pack's own site (PR #241's F4)
+
+    @Test
+    func aFlowWhoseStartPageIsOnAnotherSiteDoesNotLoad() throws {
+        var object = SkillPackFixtures.object()
+        var flow = SkillPackFixtures.flow()
+        flow["startURL"] = "https://evil.example.org/"
+        object["flows"] = [flow]
+        #expect(Self.error(object) == .startPageOffSite(flow: "Create a page", host: "evil.example.org"))
+
+        // A look-alike that only ends in the domain's letters is another site.
+        object = SkillPackFixtures.object()
+        flow = SkillPackFixtures.flow()
+        flow["startURL"] = "https://notnotion.so/"
+        object["flows"] = [flow]
+        #expect(Self.error(object) == .startPageOffSite(flow: "Create a page", host: "notnotion.so"))
+
+        // The controls: the domain itself and a subdomain load, and a citation on another host
+        // loads, because a help centre often lives elsewhere.
+        for startURL in ["https://notion.so/", "https://www.notion.so/new"] {
+            object = SkillPackFixtures.object()
+            flow = SkillPackFixtures.flow()
+            flow["startURL"] = startURL
+            flow["source"] = "https://www.notion.com/help/create-your-first-page"
+            object["flows"] = [flow]
+            #expect(Self.error(object) == nil, "\(startURL) was refused")
+        }
     }
 
     // MARK: - Bounds and identity
@@ -332,6 +492,36 @@ struct SkillPackTests {
             Issue.record("unexpected error \(error)")
             return nil
         }
+    }
+
+    /// macOS's own word list, lowercased. Required rather than skipped when absent: a trigger check
+    /// that quietly stopped reading ordinary language would pass every pack.
+    static func ordinaryWords() throws -> Set<String> {
+        let text = try String(contentsOf: URL(fileURLWithPath: "/usr/share/dict/words"), encoding: .utf8)
+        let words = Set(text.split(separator: "\n").map { $0.lowercased() })
+        try #require(words.count > 100_000, "the system word list is missing or truncated")
+        return words
+    }
+
+    /// Why `trigger` would match ordinary language for a site called `siteName`, or `nil`.
+    static func triggerProblem(_ trigger: String, siteName: String, ordinary: Set<String>) -> String? {
+        let folded = SearchText.normalized(trigger)
+        if folded.contains(".") && !folded.contains(" ") {
+            return nil
+        }
+        let words = SkillWords.cut(folded)
+        guard !words.isEmpty else { return "has no words" }
+        if words.count == 1 {
+            let word = words[0]
+            if word.count <= 2 { return "\(word) is two characters or fewer" }
+            if word.allSatisfy(\.isNumber) { return "\(word) is only digits" }
+            if ordinary.contains(word) { return "\(word) is an ordinary word" }
+            return nil
+        }
+        let nameWords = Set(SkillWords.cut(SearchText.normalized(siteName)))
+        let anchored = words.contains { nameWords.contains($0) }
+        let allOrdinary = words.allSatisfy { ordinary.contains($0) || $0.count <= 2 }
+        return allOrdinary && !anchored ? "every word of \(trigger) is ordinary and none is the site's name" : nil
     }
 
     static var repositoryRoot: URL {

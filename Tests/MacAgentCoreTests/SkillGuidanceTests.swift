@@ -35,18 +35,55 @@ struct SkillGuidanceTests {
         #expect(block == [SkillGuidance.header, linear.guidance, notion.guidance].joined(separator: "\n\n"))
     }
 
-    /// Name, domain and trigger each name a pack; matching is folded and by whole word.
+    /// **Only a trigger names a pack** (founders, 2026-09-13, option A on PR #241's F3). The site's
+    /// name and domain join a command only when the pack lists them as triggers; matching stays
+    /// folded and by whole word.
     @Test
-    func aPackIsNamedByItsNameDomainOrTriggerAsAWholeWord() throws {
+    func onlyATriggerNamesAPackNotItsNameOrDomainAlone() throws {
         var object = SkillPackFixtures.object(id: "google_calendar", name: "Google Calendar", domain: "calendar.google.com")
-        object["triggers"] = ["gcal"]
+        object["triggers"] = ["gcal", "google calendar"]
         let calendar = try SkillPackDecoder.decode(SkillPackFixtures.data(object))
         let guidance = SkillGuidance(addedPacks: [calendar])
 
         #expect(guidance.matchingPacks(for: "add lunch to GOOGLE CALENDAR").map(\.id) == ["google_calendar"])
-        #expect(guidance.matchingPacks(for: "open https://calendar.google.com/r").map(\.id) == ["google_calendar"])
         #expect(guidance.matchingPacks(for: "what's on my gcal today").map(\.id) == ["google_calendar"])
         #expect(guidance.matchingPacks(for: "open my gcalendar export").isEmpty)
+        // The domain is not a trigger here, so naming it joins nothing.
+        #expect(guidance.matchingPacks(for: "open https://calendar.google.com/r").isEmpty)
+
+        var nameless = SkillPackFixtures.object(id: "notion", name: "Notion", domain: "notion.so")
+        nameless["triggers"] = ["notion page"]
+        let notion = try SkillPackDecoder.decode(SkillPackFixtures.data(nameless))
+        #expect(SkillGuidance(addedPacks: [notion]).matchingPacks(for: "open Notion").isEmpty)
+        #expect(SkillGuidance(addedPacks: [notion]).matchingPacks(for: "open my Notion page").map(\.id) == ["notion"])
+    }
+
+    /// **The review's cases** (PR #241's F3), each of which joined a pack by its everyday name at
+    /// `12ebe84a`: Make took a slot from Slack, "close Safari" joined Close, and "1280 x 800" joined X.
+    /// With triggers anchored to their sites, none joins, and a command naming a listed trigger still
+    /// joins its pack.
+    @Test
+    func aSiteCalledByAnEverydayWordJoinsOnlyOnItsOwnTriggers() throws {
+        func pack(_ id: String, _ name: String, _ domain: String, _ triggers: [String]) throws -> SkillPack {
+            var object = SkillPackFixtures.object(id: id, name: name, domain: domain)
+            object["triggers"] = triggers
+            return try SkillPackDecoder.decode(SkillPackFixtures.data(object))
+        }
+        let guidance = SkillGuidance(addedPacks: [
+            try pack("make", "Make", "make.com", ["make scenario", "make.com"]),
+            try pack("linear", "Linear", "linear.app", ["linear issue", "linear.app"]),
+            try pack("notion", "Notion", "notion.so", ["notion page", "in notion"]),
+            try pack("slack", "Slack", "slack.com", ["in slack", "slack channel"]),
+            try pack("close", "Close", "close.com", ["close crm", "close.com"]),
+            try pack("x", "X", "x.com", ["x.com", "post on x"])
+        ])
+
+        #expect(guidance.matchingPacks(for: "make a Linear issue from my Notion page and post it in Slack").map(\.id) == ["linear", "notion", "slack"])
+        #expect(guidance.matchingPacks(for: "close Safari").isEmpty)
+        #expect(guidance.matchingPacks(for: "close all my Finder windows").isEmpty)
+        #expect(guidance.matchingPacks(for: "resize the window to 1280 x 800").isEmpty)
+        #expect(guidance.matchingPacks(for: "build a Make scenario for new leads").map(\.id) == ["make"])
+        #expect(guidance.matchingPacks(for: "log the call in close.com").map(\.id) == ["close"])
     }
 
     @Test
@@ -76,7 +113,7 @@ struct SkillGuidanceTests {
     func theLargestPlanRequestSkillsCanProduceIsFarInsideThePlanRoutesBodyLimit() throws {
         let packs = try ["Asana", "Linear", "Notion"].map { name -> SkillPack in
             var object = SkillPackFixtures.object(id: name.lowercased(), name: name, domain: "\(name.lowercased()).com")
-            object["flows"] = [SkillPackFixtures.flow(steps: Array(repeating: String(repeating: "x", count: 190), count: 29))]
+            object["flows"] = [SkillPackFixtures.flow(steps: Array(repeating: String(repeating: "x", count: 190), count: 29), on: "\(name.lowercased()).com")]
             return try SkillPackDecoder.decode(SkillPackFixtures.data(object))
         }
         for pack in packs {

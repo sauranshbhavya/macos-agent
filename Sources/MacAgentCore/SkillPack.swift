@@ -22,11 +22,17 @@ import Foundation
 /// and payouts. **The rule names no category, deliberately**: it held finance packs alone as first
 /// built, and a store or billing pack could then have taught Sonny to issue a refund or change a
 /// payout account, which moves money exactly as a finance flow would. The rule exists because money
-/// moves, not because of a label. It is read off a flow's wording, as whole words — see
-/// `SkillPackDecoder.moneyMovementPhrases` for what that catches and what it deliberately lets pass.
+/// moves, not because of a label. It is read off a flow's title and steps, the summary and each
+/// section — `SkillPackMoneyRule` has what that catches and, in as many words, what it cannot.
 ///
 /// **No pack carries, asks for or types a credential.** Wording that asks for one is refused, and so
-/// is a URL carrying a user name, a password or a token-shaped query parameter.
+/// is a URL carrying a user name, a password, or a token-shaped name in its query or its fragment —
+/// `SkillPackCredentialRule`.
+///
+/// **A flow starts on the pack's own site** (PR #241's F4): its `startURL`'s host is the pack's domain
+/// or a subdomain of it, so a copy-paste slip between two pack files cannot send one site's task to
+/// another. Citations and the sign-in page are deliberately not held to it — a site's help centre and
+/// its sign-in host often live elsewhere (`notion.com` for `notion.so`, `accounts.google.com`).
 public struct SkillPack: Equatable, Sendable, Identifiable {
     /// The one format this build reads. A pack declaring another does not load rather than being
     /// read under rules it was not written for.
@@ -142,7 +148,10 @@ public enum SkillPackLoadError: Error, Equatable, Sendable {
     case shallowPackHasFlows
     case flowHasNoSteps(flow: String)
     case flowHasNoCitation(flow: String)
-    case movesMoney(flow: String, phrase: String)
+    case startPageOffSite(flow: String, host: String)
+    /// `field` is `summary`, `sections[n]` or `flows[n]`; `words` is what moved money — a money verb,
+    /// or an action verb and its money object ("create + payout").
+    case movesMoney(field: String, words: String)
     case mentionsCredential(field: String, phrase: String)
     case urlCarriesCredential(field: String)
     case guidanceTooLong(bytes: Int)
@@ -250,44 +259,6 @@ public enum SkillPackDecoder {
     ]
     static let flowFields: Set<String> = ["title", "startURL", "steps", "source"]
 
-    /// What a flow may not say, in any pack: sending, transferring, paying, refunding or paying out
-    /// money, charging or approving a payment, and changing payment details or payees. Whole words,
-    /// compared folded.
-    ///
-    /// **Verbs where the verb alone can only mean money, phrases where it cannot.** `pay`, `refund`
-    /// and `withdraw` are refused bare. `send` and `transfer` are not — "send the page to a teammate"
-    /// and "transfer ownership of a page" are ordinary flows — so those are refused only with a money
-    /// object. The nouns a reading flow needs stay allowed: "payouts", "payments", "invoices",
-    /// "refunded orders", "withdrawals", "deposits". **What that cannot see**: a money verb this list
-    /// does not name, and a phrase split by other words ("send the vendor their money"). It is the
-    /// founders' rule held as far as wording can hold it, and a pack's citation is what a reviewer
-    /// checks the rest against.
-    static let moneyMovementPhrases = [
-        "pay", "pays", "paying", "pay out", "refund", "refunds", "refunding", "issue a refund",
-        "withdraw", "withdrawing", "top up", "wire money", "wire funds", "wire transfer",
-        "send money", "send funds", "send a payment", "send payment", "send payments",
-        "transfer money", "transfer funds", "bank transfer", "make a transfer", "send a transfer",
-        "make a payment", "make payments", "schedule a payment", "approve a payment",
-        "approve payments", "approve a bill", "approve bills", "approve the bill",
-        "approve the payment", "charge a card", "charge the card", "charge a customer",
-        "charge the customer", "create a charge", "deposit money", "deposit funds", "make a deposit",
-        "payee", "payees", "payment details", "payment method", "payment methods", "bank details",
-        "bank account details", "card details", "billing details", "payout account", "payout method",
-        "payout details"
-    ]
-
-    /// Wording that asks for or handles a secret, refused in every text field of every pack.
-    static let credentialPhrases = [
-        "password", "passwords", "passcode", "passphrase", "api key", "api keys", "secret key",
-        "access token", "verification code", "one-time code", "2fa code", "recovery code",
-        "security code", "private key"
-    ]
-
-    /// Query parameter names that carry a credential in a URL.
-    static let credentialQueryNames: Set<String> = [
-        "token", "access_token", "api_key", "apikey", "key", "password", "pass", "secret", "code", "sig", "signature"
-    ]
-
     public static func decode(_ data: Data) throws -> SkillPack {
         guard let object = try? JSONSerialization.jsonObject(with: data),
               let root = object as? [String: Any] else {
@@ -324,7 +295,7 @@ public enum SkillPackDecoder {
             throw SkillPackLoadError.wrongType("flows")
         }
         let flows = try flowObjects.enumerated().map { index, flow in
-            try decodeFlow(flow, index: index)
+            try decodeFlow(flow, index: index, domain: domain)
         }
 
         switch depth {
@@ -336,10 +307,16 @@ public enum SkillPackDecoder {
             break
         }
 
-        for flow in flows {
-            let wording = ([flow.title] + flow.steps).joined(separator: "\n")
-            if let phrase = firstPhrase(of: moneyMovementPhrases, in: wording) {
-                throw SkillPackLoadError.movesMoney(flow: flow.title, phrase: phrase)
+        // The money rule reads everything that reaches the planner as description of the site: each
+        // flow as one unit (its money act is often split between title and steps), the summary, and
+        // each section on its own, so two section labels cannot pair into a refusal.
+        let moneyUnits: [(field: String, texts: [String])] =
+            flows.enumerated().map { index, flow in ("flows[\(index)]", [flow.title] + flow.steps) }
+            + [("summary", [summary])]
+            + sections.enumerated().map { index, section in ("sections[\(index)]", [section]) }
+        for unit in moneyUnits {
+            if let words = SkillPackMoneyRule.violation(in: unit.texts) {
+                throw SkillPackLoadError.movesMoney(field: unit.field, words: words)
             }
         }
 
@@ -349,7 +326,7 @@ public enum SkillPackDecoder {
             + sections.map { ("sections", $0) }
             + flows.flatMap { flow in [("flows.title", flow.title)] + flow.steps.map { ("flows.steps", $0) } }
         for entry in texts {
-            if let phrase = firstPhrase(of: credentialPhrases, in: entry.text) {
+            if let phrase = SkillPackCredentialRule.violation(in: entry.text) {
                 throw SkillPackLoadError.mentionsCredential(field: entry.field, phrase: phrase)
             }
         }
@@ -373,11 +350,16 @@ public enum SkillPackDecoder {
         return pack
     }
 
-    private static func decodeFlow(_ flow: [String: Any], index: Int) throws -> SkillPackFlow {
+    private static func decodeFlow(_ flow: [String: Any], index: Int, domain: String) throws -> SkillPackFlow {
         let prefix = "flows[\(index)]."
         try refuseUnknownKeys(in: flow, allowed: flowFields, prefix: prefix)
         let title: String = try requiredText(flow, "title", prefix: prefix)
         let startURL = try requiredHTTPSURL(flow, "startURL", prefix: prefix)
+        let startHost = (startURL.host ?? "").lowercased()
+        let siteDomain = domain.lowercased()
+        guard startHost == siteDomain || startHost.hasSuffix("." + siteDomain) else {
+            throw SkillPackLoadError.startPageOffSite(flow: title, host: startHost)
+        }
         guard let rawSource = flow["source"] as? String,
               !rawSource.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw SkillPackLoadError.flowHasNoCitation(flow: title)
@@ -462,19 +444,11 @@ public enum SkillPackDecoder {
               let url = components.url else {
             throw SkillPackLoadError.notHTTPS(field: field)
         }
-        let carriesSecretQuery = (components.queryItems ?? []).contains {
-            credentialQueryNames.contains($0.name.lowercased())
-        }
-        guard components.user == nil, components.password == nil, !carriesSecretQuery else {
+        guard components.user == nil, components.password == nil,
+              !SkillPackCredentialRule.urlCarriesCredential(components) else {
             throw SkillPackLoadError.urlCarriesCredential(field: field)
         }
         return url
-    }
-
-    /// The first of `phrases` that appears in `text` as whole words, compared folded.
-    static func firstPhrase(of phrases: [String], in text: String) -> String? {
-        let haystack = SearchText.normalized(text)
-        return phrases.first { SkillPhraseMatch.firstIndex(of: SearchText.normalized($0), in: haystack) != nil }
     }
 }
 
