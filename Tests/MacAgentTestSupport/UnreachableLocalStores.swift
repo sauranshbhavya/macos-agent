@@ -63,6 +63,10 @@ public enum UnreachableLocalStores {
     public static func pendingServerDeletions() -> PendingServerDeletionStore {
         PendingServerDeletionStore(fileURL: fileURL("pending-server-deletions.json"))
     }
+
+    public static func skillSelections() -> SkillSelectionStore {
+        SkillSelectionStore(fileURL: fileURL("added-skills.json"))
+    }
 }
 
 /// A standing-watcher observer that reaches no network, for the fixtures that have never heard of

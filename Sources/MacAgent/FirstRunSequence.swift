@@ -168,7 +168,7 @@ struct FirstRunStore {
 /// `CommandCenterView`, driven by `AppDelegate` at launch.
 ///
 /// **Its own object rather than a field on `AgentViewModel`**, for the reason `SonnyAccountModel`
-/// gives: the view model owns the run loop and fourteen local stores, and a launch-time sequence
+/// gives: the view model owns the run loop and every local store, and a launch-time sequence
 /// shares none of that.
 ///
 /// **`begin` is separate from `refresh`, and the separation is the ticket's headline property in

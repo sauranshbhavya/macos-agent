@@ -168,7 +168,7 @@ extension AgentViewModel: VisionSessionInteracting {
         }
     }
 
-    /// Give the combination back. Called from the one place a session can end.
+    /// Give the combination back. Called from `endScreenControlSession()`, which every cleanup that can end a run holding a session calls (SONNY-472).
     func releaseEmergencyStopHotKey() {
         visionEmergencyStopHotKey = nil
     }
