@@ -173,6 +173,10 @@ has documented consequences:
   which hits the same shared local stores despite lacking bundle identity — from a second
   worktree while any instance is running.
 - **Merge one branch at a time, and rebase once — at merge time, never after each merge.**
+  **When more than one PR is in flight, from parallel lanes or from one session, they are one
+  stack** — each branch cut from the one beneath, based on it, merged bottom-up — and
+  `## Stacked pull requests`, after step 7, is that rule in full; what follows is how a branch
+  waits and lands inside it.
   Never batch-merge parallel branches: they land one at a time, in an order the user sets,
   because two branches merged together is how a conflict resolution nobody read reaches
   `main`. **What a lane does while it waits is finish on its base, push, and hold.** It does
@@ -880,7 +884,93 @@ Then: the user runs the aggregated manual items — the unchecked rows in
 GitHub's control with "Create a merge commit", never the squash the page may offer first (§8).
 Delete the branch, remove the worktree if its session's sequence ends here (step 3's
 lifecycle rule — a session with tickets still ahead of it keeps the same one), confirm the
-tickets' final states.
+tickets' final states. **When more than one PR is in flight they are one stack**, and the merge
+order, the base each PR is diffed against and what deleting a merged branch does next are
+`## Stacked pull requests`, directly below.
+
+## Stacked pull requests
+
+**When more than one PR is in flight — from one session or from parallel lanes — the PRs form one
+stack.** Founder decision, 2026-09-11 (Sauransh), verbatim: *"from now on when running parallel
+sessions or even one session but if they contain multiple PRs then we will use the concept of
+stacked PRs, it is better and efficient way of handling the PRs sequentially."* Every clause below
+is written from wave 7's chain of 2026-09-11 (PRs #226 to #236; run log SONNY-438, coordinator
+record SONNY-412), which was stacked by accident and repaired by hand, so each one is something
+that went wrong once or was needed once. (SONNY-459.)
+
+**The shape.** The coordinator fixes the merge order at kickoff, from measured file overlap: the
+pairs that overlap most sit adjacent, and the branch that must land first sits lowest. That is the
+order step 3 says the user sets: the user launches the kickoffs that fix it and presses every
+merge, and a stack admits no other order, because clause 5 never merges a PR above an unmerged
+one. The lowest
+branch is cut from `origin/main`; every later branch is cut from the head of the branch directly
+beneath it. Each PR's base on GitHub is the branch beneath it — `main` for the lowest — and its
+body names the PR that must merge before it. So a kickoff command reads
+`git worktree add -b <branch> <path> origin/<branch beneath>`, and `origin/main` appears in exactly
+one of them.
+
+1. **A branch is cut only from a head that is final for its round.** Never cut above a branch whose
+   review or fix round is open. Wave 7 ran reviews in side worktrees and landed fix rounds after
+   the next branch had been cut; seven of eleven heads then failed `git merge-base --is-ancestor`
+   against their base, nineteen commits were missing from the top, and no tree holding all of them
+   had been tested. (Those three figures are that wave's own record on SONNY-438, carried here and
+   not re-measured.)
+2. **A fix round low in the stack is followed by one rebase pass upward, before anything merges.**
+   Record every cut point first — `git merge-base <branch> <old head of the branch beneath>`,
+   posted on the run log — because the old head is what the rebase has to name and the fix round
+   is what moves it. Then, for each branch in turn from the bottom up:
+   `git rebase --onto <new head of the branch beneath> <its recorded cut point> <branch>`, which
+   replays that branch's own commits and nothing else. A conflict in the changelog or the checklist
+   is resolved by keeping the newer entry above and taking the older entry as its own branch's
+   final text — the branch beneath owns that text, and the copy being replayed is the stale one.
+   Push with `--force-with-lease` (step 3's standing authorization: the session's own ticket
+   branch, never bare `--force`), and only then start the next branch up. Each PR's diff against
+   its base does not change, so a review already posted on it stands; its reviewer re-runs the
+   ancestry check.
+3. **After that rebase, every figure a branch's entry cites is re-measured at its new head or
+   dropped**, carried only with step 5's tree-identity proof — in the braced `${old}:Sources` form,
+   and never with a loop variable named `path` (`CLAUDE.md`, Claims and evidence, has both traps).
+   A pre-rebase SHA may stay only as labelled history. **The union is measured once, at the top
+   branch's head**: the flagged suite, `scripts/warnings`, the server's suites where `server/`
+   moved, `scripts/changelog-order`, `scripts/no-attribution tree` and `npm run check:secrets`.
+4. **A reviewer pins the base SHA it diffs against** — the head of the branch beneath at cut time —
+   and posts the review in full on the PR. A fix round gets a scoped delta pass in the same review
+   worktree, re-pointed at the new head.
+5. **Merging is bottom-up and mechanical.** Merge with a merge commit (§8), delete the branch at
+   once so GitHub retargets the next PR to `main`, pull `main`, repeat. The deletion is a separate
+   step by hand: the repository does not delete a head branch on merge
+   (`gh api repos/{owner}/{repo} --jq .delete_branch_on_merge` → `false`, read 2026-09-13). **Never
+   merge a PR whose predecessor is unmerged.**
+6. **`scripts/changelog-order` and the stop hook report one finding per unmerged entry beneath the
+   newest.** On the n-th branch from the bottom that is n − 1 findings and exit 2 — measured at
+   `ae74415c` by adding one, two and three entries naming unmerged branches under `## Entries` in a
+   scratch copy and running `scripts/changelog-order check <copy>` over each: exit 0, then 1
+   finding, then 2, each reading *only the newest may be unmerged*. That count is the stack's
+   expected cost. State it on the run log and answer the hook's block with it; never reorder or
+   remove an entry to satisfy it. It clears one merge at a time.
+7. **Parallel lanes in a stack cut from the branch beneath as it stands** — empty, if the lanes
+   start together — and expect the rebase pass at the end. The disjointness rule of step 3 still
+   holds between them for every file they edit, so the pass is conflict-free apart from the
+   changelog and the checklist, which every lane touches by design.
+8. **One session, many PRs, is sequential by construction.** The session finishes a branch's
+   review and fix round before it cuts the next, and never reviews branch n while building branch
+   n + 1.
+
+**Clauses 1 and 7 read as a contradiction and are not one.** Clause 1 is the default: a branch
+started after the one beneath already has work is cut only once that work is final for its round.
+Clause 7 is the case of lanes the coordinator starts together, which are cut above work that cannot
+be final yet because it does not exist yet — and that is allowed only because clause 2's pass is
+owed before anything merges. Both end in the same state, and it is the one wave 7 never reached:
+**before the first merge, `git merge-base --is-ancestor origin/<branch beneath> origin/<branch>`
+exits 0 for every adjacent pair in the stack.** A pair that exits 1 is a pass not yet made.
+
+**How this composes with step 3's merge-one-branch-at-a-time rule.** That rule holds a lane on its
+base and allows it one hop onto `main` at merge time, and says zero hops is better. A stack is the
+zero-hop case by construction: every branch already contains everything beneath it, so when the
+branch beneath merges with a merge commit and GitHub retargets, the PR's diff against `main` is its
+own commits and nothing needs replaying. The rebase in clause 2 is not a hop onto `main`; it is the
+one repair a moved branch beneath forces on the branches above it, and it happens before any merge,
+not between them.
 
 ## Weekly battery
 
