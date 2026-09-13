@@ -175,7 +175,10 @@ Next branch: feature/<name> (per roadmap above, or state the reordering and why)
 Status: complete
 Date: 2026-09-13
 Tickets: **SONNY-452** (the founders' "Skills": a Command Center page of instruction packs for the sites people use, added per user). Built as the wave 8 groundwork only, per the coordinator's comment of 2026-09-13 on the ticket (founders' option 2 on SONNY-463): the page, the store, the pack format with its loader and validating test, the committed catalogue, the planner seam, and three packs to prove the format end to end; writing packs at scale is the pack lanes', cut from this branch after its review. It carries the SONNY-461 decisions the description predates: the catalogue committed with four unresolved names and four password managers dropped and Zapier, Make and n8n added; every claimed flow cites its public page; finance packs read only, enforced by the loader — widened by the founders on 2026-09-13 to a money rule over every pack, whatever its category, and built in this branch's fix round; no credential in any pack. The branch also carries **SONNY-472** (a screen-control session that ended under the approval path kept the emergency stop and the controlling state; found while checking this branch's run doors, fixed here by founder decision A of 2026-09-13), and records **SONNY-471** (filed by this lane, then cancelled by the founders the same day, because the race it described cannot happen). PR #241's fresh review at `12ebe84a` then took a round: F1, F2, F4, F5 and F7, with F3 by the founders' option A of 2026-09-13; F6 is its own ticket, SONNY-476. Top of a four-branch stack, cut from `fix/key-hints-robots-groups-and-routine-refusals` at `ae74415c`.
-Reviewed by: the coordinator's verification at `b410e8ce` on SONNY-452 (2026-09-13) found the flagged suite red two runs of two, one test failing with three issues; fixed in one round at `6b6f7ffc` together with the founders' money-rule decision of the same day. A second round took SONNY-471, which could not be reproduced and was cancelled. A third took SONNY-472, fixed at `566b6612` with its mutants at `d586cd13` and manual rows at `2d33cabd`. PR #241's fresh deep review at `12ebe84a` requested changes on F1, F2 and F3, and found F4 to F7 low. Its round landed at `3db302ea` (code) and `61f86135` (the mutation plan), with F3 decided by the founders and F6 split out as SONNY-476.
+Reviewed by: the coordinator's verification at `b410e8ce` on SONNY-452 (2026-09-13) found the flagged suite red two runs of two, one test failing with three issues; fixed in one round at `6b6f7ffc` together with the founders' money-rule decision of the same day. A second round took SONNY-471, which could not be reproduced and was cancelled. A third took SONNY-472, fixed at `566b6612` with its mutants at `d586cd13` and manual rows at `2d33cabd`. PR #241's fresh deep review at `12ebe84a` requested changes on F1, F2 and F3, and found F4 to F7 low. Its round landed at `3db302ea` (code) and `61f86135` (the mutation plan), with F3 decided by the founders and F6 split out as SONNY-476. Its scoped delta pass at `25383891` held every named change and returned three gaps inside them, all taken in a delta round at `b9ba5d83` (code) and `4615d7f5` (the mutation plan):
+- money verbs the rule missed, and five phrases it had regressed;
+- three credential phrasings;
+- plurals and modern words passing the trigger check.
 
 Spec sections covered: the ticket's design note in full — the page, the store and its chores, the packs, the planner — with the packs as far as the groundwork needs. Two words were the founders' to confirm and were built rather than blocked on; both were kept as built on 2026-09-13 (option A): the Memory row's noun (`skill` / `skills`) and the wipe sentence's name for the store (`added skills`).
 Files changed:
@@ -197,16 +200,16 @@ Files changed:
 - Ordinal and count prose made stale by a fifteenth store, in the files that carried it
 - `mutation/plans/feature/skills.txt`, `docs/sonny-manual-test-checklist.md` (a section naming SONNY-452 and one naming SONNY-472), this entry
 
-Tests: **3375 in 245, exit 0, 8 known issues, at `61f86135`, twice** — the flagged command from `CLAUDE.md`, run two times in a row in one background script, each redirected to its own file with the exit written by `echo $? >` on the next line, so each exit read is the suite's own. Both count lines read `Test run with 3375 tests in 245 suites passed after … seconds with 8 known issues.`, at 86.390 s and 85.717 s, and `grep -cE 'recorded an issue'` over each log → 0. `aCommandNamingAnAddedSkillCarriesItsPackToThePlannerAndStopsOnceRemoved` passed after 69.764 s and 66.442 s, still starved of the main actor and waiting that out. `uptime` load averages were 4.33 before the first run, 6.48 between the two and 6.68 after. **Every earlier suite figure in this entry is dropped rather than carried.** The 3363 in 245 at `fc3f7cbc` was a true reading and not a repeatable one: the same tree was red three runs of three afterwards. The later readings at `6b6f7ffc` and `2d33cabd` are superseded by the head this entry describes. Against `main`'s 3323 in 241 (PR #238's entry at `1b3493d5`, an ancestor of this head; `git diff --stat 1b3493d5 ae74415c -- Sources Tests Package.swift` prints nothing, so it is `main`'s count at this branch's base), that is fifty-two tests and four suites:
-- `grep -cE '^    @Test'` answers 24, 8 and 7 over `SkillPackTests.swift`, `SkillGuidanceTests.swift` and `SkillSelectionStoreTests.swift`.
+Tests: **3376 in 245, exit 0, 8 known issues, at `4615d7f5`, twice** — the flagged command from `CLAUDE.md`, run two times in a row in one background script, each redirected to its own file with the exit written by `echo $? >` on the next line, so each exit read is the suite's own. Both count lines read `Test run with 3376 tests in 245 suites passed after … seconds with 8 known issues.`, at 87.918 s and 87.989 s, and `grep -cE 'recorded an issue'` over each log → 0. `aCommandNamingAnAddedSkillCarriesItsPackToThePlannerAndStopsOnceRemoved` passed after 69.367 s and 67.352 s, still starved of the main actor and waiting that out. `uptime` load averages were 4.08 before the first run, 5.42 between the two and 7.01 after. **Every earlier suite figure in this entry is dropped rather than carried.** The 3363 in 245 at `fc3f7cbc` was a true reading and not a repeatable one: the same tree was red three runs of three afterwards. The later readings at `6b6f7ffc`, `2d33cabd` and `61f86135` are superseded by the head this entry describes. Against `main`'s 3323 in 241 (PR #238's entry at `1b3493d5`, an ancestor of this head; `git diff --stat 1b3493d5 ae74415c -- Sources Tests Package.swift` prints nothing, so it is `main`'s count at this branch's base), that is fifty-three tests and four suites:
+- `grep -cE '^    @Test'` answers 25, 8 and 7 over `SkillPackTests.swift`, `SkillGuidanceTests.swift` and `SkillSelectionStoreTests.swift`.
 - It answers 6 over `SkillsCommandCenterTests` (`awk '/^struct SkillsCommandCenterTests/,0' Tests/MacAgentTests/MemoryCommandCenterTests.swift | grep -cE '^    @Test'`).
-- `git diff ae74415c 61f86135 -- Tests/MacAgentCoreTests/OpenAIPlannerTests.swift | grep -cE '^\+    func [a-zA-Z]+\(\) async throws \{'` → 2.
-- `git diff 53bb40af 61f86135 -- Tests/MacAgentTests/VisionSessionRunTests.swift | grep -cE '^\+    @Test'` → 5 (SONNY-472, in a suite that already existed).
+- `git diff ae74415c 4615d7f5 -- Tests/MacAgentCoreTests/OpenAIPlannerTests.swift | grep -cE '^\+    func [a-zA-Z]+\(\) async throws \{'` → 2.
+- `git diff 53bb40af 4615d7f5 -- Tests/MacAgentTests/VisionSessionRunTests.swift | grep -cE '^\+    @Test'` → 5 (SONNY-472, in a suite that already existed).
 
-All at `61f86135`.
+All at `4615d7f5`.
 
-**Warnings: 0 at `61f86135`** (`scripts/warnings`, exit 0, every file compiled, 114 s, its header reading `measured at : 61f86135 (clean)`). `scripts/mutate mutation/plans/feature/skills.txt --check` → exit 0, twenty-four mutants each `1 match`, at `61f86135`. `scripts/changelog-order` → exit 0, 211 entries, over this entry. `scripts/no-attribution tree` → exit 0, 0 of 750 tracked files. Both were run on the tree of the docs commit that carries this entry, whose `Sources`, `Tests` and `Package.swift` are `61f86135`'s (`git diff --stat 61f86135 HEAD -- Sources Tests Package.swift` prints nothing). View-model construction sites the compiler named: `git grep -l 'skillSelectionStore:' 61f86135 -- Tests/MacAgentTests | wc -l` → 25. The committed catalogue at `61f86135`: `awk -F'\t' 'NR>1' docs/sonny-skill-sites.tsv | wc -l` → 473. That is SONNY-461's 478, less the four unresolved names and the four password managers, plus the three automation tools — the coordinator's arithmetic, re-derived from the file. `awk -F'\t' 'NR>1{print $8}' docs/sonny-skill-sites.tsv | sort | uniq -c` → 411 deep and 62 shallow; `awk -F'\t' 'NR>1 && $6 ~ /^founder-named/' docs/sonny-skill-sites.tsv | wc -l` → 100; the password-manager grep from SONNY-461's correction → 0. `theCommittedCatalogueIsTheListTheFoundersDecided` holds all of it. The ranks in `it_accounts_security` were renumbered 1 to n over the rows kept, as SONNY-461 defines the column.
-Mutation plan: mutation/plans/feature/skills.txt (founder-triggered, not run on this branch) — twenty-four mutants:
+**Warnings: 0 at `4615d7f5`** (`scripts/warnings`, exit 0, every file compiled, 127 s, its header reading `measured at : 4615d7f5 (clean)`). `scripts/mutate mutation/plans/feature/skills.txt --check` → exit 0, twenty-seven mutants each `1 match`, at `4615d7f5`. `scripts/changelog-order` → exit 0, 211 entries, over this entry. `scripts/no-attribution tree` → exit 0, 0 of 750 tracked files. Both were run on the tree of the docs commit that carries this entry, whose `Sources`, `Tests` and `Package.swift` are `4615d7f5`'s (`git diff --stat 4615d7f5 HEAD -- Sources Tests Package.swift` prints nothing). View-model construction sites the compiler named: `git grep -l 'skillSelectionStore:' 4615d7f5 -- Tests/MacAgentTests | wc -l` → 25. The committed catalogue at `4615d7f5`: `awk -F'\t' 'NR>1' docs/sonny-skill-sites.tsv | wc -l` → 473. That is SONNY-461's 478, less the four unresolved names and the four password managers, plus the three automation tools — the coordinator's arithmetic, re-derived from the file. `awk -F'\t' 'NR>1{print $8}' docs/sonny-skill-sites.tsv | sort | uniq -c` → 411 deep and 62 shallow; `awk -F'\t' 'NR>1 && $6 ~ /^founder-named/' docs/sonny-skill-sites.tsv | wc -l` → 100; the password-manager grep from SONNY-461's correction → 0. `theCommittedCatalogueIsTheListTheFoundersDecided` holds all of it. The ranks in `it_accounts_security` were renumbered 1 to n over the rows kept, as SONNY-461 defines the column.
+Mutation plan: mutation/plans/feature/skills.txt (founder-triggered, not run on this branch) — twenty-seven mutants:
 - the planner handed the whole catalogue rather than the added packs
 - one of two mentioned packs dropped
 - the block never joining the prompt
@@ -231,6 +234,9 @@ Mutation plan: mutation/plans/feature/skills.txt (founder-triggered, not run on 
 - U5, matching on the site's name and domain restored (F3, the reading the founders declined)
 - U6, a flow's start page allowed off the pack's site (F4)
 - U7, the SONNY-472 scan narrowed back to `AgentViewModel.swift` (F5)
+- V1, the five restored money phrases dropped again (the delta pass)
+- V2, the trigger check's singular form removed, so "teams" and "docs" pass (the delta pass)
+- V3, the "login and pass" credential phrase removed (the delta pass)
 
 S5 and S6 were rewritten in the fix round, since the category rule and the `effect` field they mutated are gone. No mutant was added for the starved wait, for the reason given below. T1 to T3 were each proved by hand before this entry was written; their results are in the SONNY-472 paragraphs. U1 to U7, and the re-anchored S4, S5, S6 and S9, were each proved by hand at `61f86135`: applied over the committed tree, run under `--filter 'Skill|VisionSessionRunTests/everyCleanupThatEndsARun'`, and reverted with `git checkout --`. Every one exited 1 with no compile error. The killers were:
 - **U1:** `aSummaryOrASectionThatMovesMoneyDoesNotLoad`
@@ -242,6 +248,8 @@ S5 and S6 were rewritten in the fix round, since the category rule and the `effe
 - **U7:** the scan's own control
 - **S4, S5 and S6:** the money table and the summary-and-sections test
 - **S9:** both credential tests
+
+V1 to V3 were each proved by hand at `4615d7f5` the same way, under `--filter Skill`: every one exited 1 with no compile error. V1 was killed by the money table, V2 by `theTriggerCheckRefusesOrdinaryLanguageAndAllowsTheSitesOwnWords`, and V3 by the credential table.
 
 Behavior added: a Skills page in Command Center, sixth in the sidebar and ⌘6, listing every shipped pack in name order with its one line, an Added badge and one Add or Remove button, and a search over name, domain, one line and trigger words; added skills persist encrypted and are read at launch; a command that names one of an added skill's triggers carries that skill's guidance to the planner, at most three per command; a Skills row under Memory's "Saved by you" counts them, opens the Skills page and deletes them; Settings' wipe deletes them and names them; three packs ship — Notion and Linear with three cited flows each, Docusign shallow; and no pack in any category can carry a flow that moves money; and a screen-control session that Sonny asked about before it started gives back ⌃⌥⎋, leaves the controlling state and leaves no screen-record link for the next task once it ends (SONNY-472); and a pack now joins a command only on its own triggers, starts its flows on its own site, and is refused for money-moving or credential wording in the forms PR #241's review found.
 Behavior preserved (required, no blanket claims):
@@ -266,21 +274,33 @@ Architectural decisions / pitfalls discovered (required, write "none" if true):
 - **What it reads.** Each flow's title and steps as one unit, the summary, and each section on its own. All of these reach the planner.
 - **How it folds.** It folds case and diacritics, and cuts text into words at any run of separators, so a double space, a tab, a no-break space and a hyphen are all one boundary.
 - **It refuses on either of two tests:**
-  - a verb that can only mean money (`pay`, `refund`, `reimburse`, `withdraw`, `top up`);
+  - a verb or act that can only mean money (`pay`, `refund`, `reimburse`, `withdraw`, `top up`, and since the delta round `wire`, `remit`, `disburse`, `cash out`, `get paid`, `make a transfer`, `send a transfer`, `make a deposit`);
   - an action verb together with a money object (money, funds, a payment, a payout, payroll, a bill, a beneficiary, a payee, an IBAN, a wire, ACH, SEPA, a bank account, a card on file, payment details, or a currency amount).
 - **Four objects are ordinary words elsewhere** — a recipient in email, a card on a board, an account, a balance — so they count only beside a money word in the same unit.
 - **Reading verbs are not action verbs.** "Filter the payouts and payments by date", "Export payments", "Add a recipient" to an email and "Move the card to Done" all load, and `readingMoneyAndAnOrdinarySendOrTransferStillLoad` proves it.
+- **The delta round closed two gaps inside this rule** (PR #241's pass at `25383891`):
+  - "Wire money to the vendor", "Remit $200 to the supplier", "Disburse the funds", "Cash out the balance to your bank", "Click Request payout", "Tip the driver $5" and "Click Get paid now" loaded, because their only verb was in neither list. `request`, `settle`, `split`, `tip` and `forward` joined the action verbs.
+  - Five phrases the replaced list had refused loaded as single steps: wire money, wire funds, make a transfer, send a transfer, make a deposit. That was a regression this branch introduced, found by the pass, not by this lane. They are restored as money-only acts, and a probe over every phrase the old list held found no other verb phrase that loads.
+  - The old list's bare nouns — payee, payment details, bank details, refunds — still load on their own, deliberately, so a reading flow may name them.
 - **The third-person "-s" forms are left off the action list on purpose.** Most of them are also plural nouns a reading flow uses: changes, transfers, charges, deposits, links, funds.
 - **What this cannot guarantee.** It is a guard on first-party data that this repository writes and reviews. It is not a proof that a pack cannot lead Sonny to move money:
-  - wording can describe a money act in words neither list names;
-  - a flow can reach a money page through steps that name nothing about money;
-  - its false refusals — "Run a payments report", "View the charge" — surface in the shipped-pack test, where a pack author rewords them.
+  - **a listed money object whose only verb is unlisted:** "Push the funds to the vendor." and "Allocate the funds to the project." load, because nothing else in the flow is a listed action verb;
+  - **a contextual object with no money word beside it:** "Move the balance to savings." loads;
+  - **a money act in words neither list names**, and a flow that reaches a money page through steps that name nothing about money;
+  - **spellings outside first-party writing:** a zero-width space inside a word, or a Cyrillic letter standing in for a Latin one;
+  - its false refusals — "Run a payments report", "View the charge", "Find the wire" — surface in the shipped-pack test, where a pack author rewords them.
 - **What stands between Sonny and a payment is still the consequence rule**, which asks before an external or destructive action whatever a pack says, together with screen control's own per-action classification. A pack cannot make anything ask less.
 
 **The credential rule reads the usual words and the URL fragment** (F2). `SkillPackCredentialRule` adds:
 - credentials, API tokens, OTP, one-time passwords, two-factor and backup codes, client secrets, bare "secret", 2FA and MFA;
 - an uppercase `PIN`, matched case-sensitively, because the lowercase "pin" is a chat tool keeping a message at the top (`aChatToolsLowercasePinStillLoads`);
-- names in a URL's fragment as well as its query, since an implicit-grant sign-in hands a token back as `#access_token=…`.
+- names in a URL's fragment as well as its query, since an implicit-grant sign-in hands a token back as `#access_token=…`;
+- since the delta round: "login and pass", a token that is yours ("your token", "the token"), and the codes a sign-in sends ("the code we emailed you", "authenticator app", "6-digit code"). They are phrases, so "Use the design token for spacing" and "Pass the page to a teammate" still load (`anOrdinaryTokenOrPassStillLoads`).
+
+**Still not caught, as the pass recorded them:**
+- a lowercase "Enter your pin", the price of the case rule;
+- a hash-route fragment like `#/callback?token=abc`;
+- a query name such as `Session`.
 
 What it cannot guarantee is the money rule's gap: a step can lead to a sign-in page without naming a credential. What refuses to type one is the planner prompt's rule, restated in `SkillGuidance.header`.
 
@@ -290,13 +310,21 @@ What it cannot guarantee is the money rule's gap: a step can lead to a sign-in p
 - Docusign: `docusign`, which is not an ordinary word.
 
 **How the validating test decides "ordinary language"** (`everyShippedTriggerIsDistinctiveOrAnchoredToItsSite`, with its own control `theTriggerCheckRefusesOrdinaryLanguageAndAllowsTheSitesOwnWords`):
-- A one-word trigger is refused if it has two characters or fewer, is only digits, or appears in macOS's word list, `/usr/share/dict/words`. That list is required, not skipped, when absent. So `make`, `close`, `x`, `hey`, `slack`, `notion` and `linear` are refused, and `docusign`, `zapier` and `n8n` are not.
-- A phrase is refused when every word in it is ordinary and none is the site's own name.
-- A dotted trigger is allowed.
+- **A word is ordinary** when it, or its singular form (`-s`, `-es`, `-ies` → `-y`, every candidate tried), is in macOS's word list, `/usr/share/dict/words`, or in `SkillPackTests.modernWords`. That list holds 35 post-1934 words, each absent from the system list on macOS 26.6.2 (`grep -ixc <word> /usr/share/dict/words` → 0), such as email, inbox, app, website, download, spreadsheet and workspace. The system list is required, not skipped, when absent.
+- **A one-word trigger** is refused if it is ordinary, two characters or fewer, or only digits. So `make`, `close`, `x`, `slack`, `notion`, `teams`, `docs`, `sheets`, `forms`, `slides`, `tasks`, `notes`, `email`, `inbox` and `app` are refused, and `docusign`, `zapier`, `gmail` and `n8n` are not.
+- **A phrase** is refused when every word in it is ordinary and it does not carry the site's whole name. So `new page`, `my files` and `new docs` (for Google Docs) are refused, while `in notion`, `make scenario`, `google docs` and `microsoft teams` are not.
+- **A dotted trigger** is allowed.
+
+**Why the singular form and a short list, and not a vendored word list** (the delta pass's gap). The first version refused `team`, `doc` and `sheet` but passed `teams`, `docs` and `sheets`, because the 1934 list has almost no plurals. The catalogue holds Microsoft Teams, Google Docs, Sheets, Forms, Slides, Tasks and Gmail, so this had to close before the pack lanes start.
+- The singular form closes the systematic gap, plurals, with one rule.
+- The modern list is short enough to read in review.
+- A vendored inflected list would remove the dependency on the operating system's file, but it brings a third-party list to license, vet and keep current, megabytes to commit, and a list nobody reads.
+- The pass judged the system list not machine state. **The residual it named stands:** Apple can change that file in a macOS update, and what the test refuses would then move with nothing in this repository changing.
+- **A per-word anchor was also too loose.** `new docs` passed for Google Docs because `docs` is one word of its name, so a phrase is now anchored only by the whole name.
 
 **What that check cannot catch:**
 - an ordinary phrase that contains the site's name — `close deal` for Close, or `in linear` against "in linear order", which is why the Linear pack does not list it;
-- a modern ordinary word missing from a 1934 dictionary;
+- a modern ordinary word neither list holds, and an irregular plural (`people`);
 - the meaning of a command, since it reads words, not intent.
 
 This check runs before a pack ships, not at launch. Launch-time validation is SONNY-476.
@@ -315,7 +343,7 @@ This check runs before a pack ships, not at launch. Launch-time validation is SO
 PROBE471 A before second start: isRunning=true canSubmit=false
 PROBE471 A after second start: isRunning=true … plannerCalls=1
 ```
-The cancelled run keeps `isRunning` true until its own cleanup runs. `canSubmit` requires `!isRunning`. Every door that installs a run requires `isRunning == false`: `start()` through `canSubmit`, `approvePendingRun()` and `checkScheduledRoutines`. The only writers of `isRunning = false` are the three runs' own cleanups (`git grep -n 'isRunning = false' 61f86135 -- Sources/MacAgent | grep -vE ':[0-9]+: *//'` → `:2589`, `:7224`, `:8544`). So no newer run can exist for an older run's cleanup to touch, and it cannot release a newer session's emergency stop or clear its controlling state. This also corrects this entry's first fix round: that red run's second `start()` was simply refused while the first run wound down. The founders cancelled SONNY-471 on 2026-09-13.
+The cancelled run keeps `isRunning` true until its own cleanup runs. `canSubmit` requires `!isRunning`. Every door that installs a run requires `isRunning == false`: `start()` through `canSubmit`, `approvePendingRun()` and `checkScheduledRoutines`. The only writers of `isRunning = false` are the three runs' own cleanups (`git grep -n 'isRunning = false' 4615d7f5 -- Sources/MacAgent | grep -vE ':[0-9]+: *//'` → `:2589`, `:7224`, `:8544`). So no newer run can exist for an older run's cleanup to touch, and it cannot release a newer session's emergency stop or clear its controlling state. This also corrects this entry's first fix round: that red run's second `start()` was simply refused while the first run wound down. The founders cancelled SONNY-471 on 2026-09-13.
 
 **SONNY-472: a session that runs under `performApproval` did not give back what it held when it ended.** A session executes under `performApproval` whenever it waited at the plan gate first; Safe mode's session envelope is one such case. Only `performStart`'s cleanup ended a session, so every such session finished in this state:
 - ⌃⌥⎋ still registered.
@@ -337,13 +365,13 @@ The run was `Test run with 4 tests in 1 suite failed after 0.322 seconds with 13
 
 **The stale link hides in Safe mode, and the test shows why.** Its first version asked `2 + 2` in Safe mode and passed at `53bb40af`. The calculation paused at its own plan-gate question, and that pause runs `performStart`'s cleanup before the row is written. The test now switches to Normal mode first, which is the case that leaks.
 
-**The doors.** Enumerated by grep at `61f86135`, not described.
+**The doors.** Enumerated by grep at `4615d7f5`, not described.
 - **Where a session can execute.** A session is a plan step run by `runner.execute`. Those calls are in:
   - `executePreparedRun` (`:7145`), called from `performStart` (`:2849`) and `performApproval` (`:7255`)
   - `performScheduledRun` (`:8668`)
   - the delegation executor inside a live session (`AgentViewModel+VisionSession.swift:474`)
 
-  (`git grep -n 'runner.execute(\|executePreparedRun(' 61f86135 -- Sources/MacAgent`.)
+  (`git grep -n 'runner.execute(\|executePreparedRun(' 4615d7f5 -- Sources/MacAgent`.)
 - **The delegation executor cannot start a session.** It refuses a delegated plan carrying a `vision_session` step before preparing it, and it runs inside the live session's own run.
 - **The scheduled path cannot hold a session**, by three independent refusals:
   - `StoredRoutine.forbiddenStepOperations` lists `.visionSession`.
@@ -359,7 +387,7 @@ The run was `Test run with 4 tests in 1 suite failed after 0.322 seconds with 13
   - The local data wipe refuses while a run is in flight.
 - **Not established, and stated rather than implied.** Whether any plan carries a step after a `vision_session` step in the same run. If one does, the teardown runs when that run ends, not when the session inside it ends. That is how `performStart` always behaved, and this round did not change it.
 
-**One teardown, and what belongs in it.** `endScreenControlSession()` is called from `performStart`'s cleanup (`:2594`) and `performApproval`'s (`:7230`), and nowhere else (`git grep -n 'endScreenControlSession()' 61f86135 -- Sources | grep -vE ':[0-9]+: *//'`).
+**One teardown, and what belongs in it.** `endScreenControlSession()` is called from `performStart`'s cleanup (`:2594`) and `performApproval`'s (`:7230`), and nowhere else (`git grep -n 'endScreenControlSession()' 4615d7f5 -- Sources | grep -vE ':[0-9]+: *//'`).
 
 | Item | Where it goes | Why |
 |---|---|---|
@@ -385,7 +413,7 @@ Scope and binding, and the recording policy, stay where they are, and neither is
 
 **The Zapier, Make and n8n catalogue rows carry evidence of a different kind from the other 470.** SONNY-461 ranked by Zapier's catalogue, the Chrome UX report, Tranco and the Stack Overflow survey. Zapier's catalogue does not list Zapier, and the three rows were added by founder decision after that research, so their `why_in_list` quotes each vendor's own homepage figure, read on 2026-09-13 along with every domain, sign-in page and help article they cite, and says so in the row.
 
-**The worst plan request skills can produce is about a twentieth of the gateway's plan limit, so `server/` is untouched.** Measured at `61f86135` in `theLargestPlanRequestSkillsCanProduceIsFarInsideThePlanRoutesBodyLimit`, with a temporary `print` run under `--filter SkillGuidanceTests` (exit 0, 8 tests) and reverted with `git checkout --`, using `Data.count` — bytes — of `SonnyTextRouteBody.encoded()`, the body `OpenAIPlanner.plan` sends. Three packs of 5,899, 5,903 and 5,903 bytes of guidance, all named by one command, give a **53,477**-byte request, against **35,408** for the same command with no skills. The largest possible block is **18,222** bytes (`SkillGuidance.largestBlockBytes`). The plan route accepts **1,048,576** (`grep -n 'plan: 1_048_576' server/src/model/limits.ts` → `69:  plan: 1_048_576,`, at `61f86135`). The test holds the request under a quarter of that, and both full runs above ran it green. The three shipped packs are 309, 1,670 and 1,733 bytes of JSON (`wc -c`, the same head).
+**The worst plan request skills can produce is about a twentieth of the gateway's plan limit, so `server/` is untouched.** Measured at `4615d7f5` in `theLargestPlanRequestSkillsCanProduceIsFarInsideThePlanRoutesBodyLimit`, with a temporary `print` run under `--filter SkillGuidanceTests` (exit 0, 8 tests) and reverted with `git checkout --`, using `Data.count` — bytes — of `SonnyTextRouteBody.encoded()`, the body `OpenAIPlanner.plan` sends. Three packs of 5,899, 5,903 and 5,903 bytes of guidance, all named by one command, give a **53,477**-byte request, against **35,408** for the same command with no skills. The largest possible block is **18,222** bytes (`SkillGuidance.largestBlockBytes`). The plan route accepts **1,048,576** (`grep -n 'plan: 1_048_576' server/src/model/limits.ts` → `69:  plan: 1_048_576,`, at `4615d7f5`). The test holds the request under a quarter of that, and both full runs above ran it green. The three shipped packs are 309, 1,670 and 1,733 bytes of JSON (`wc -c`, the same head).
 
 Known limitations / deferred scope: the pack lanes write the remaining packs, including reading the eight blocked founder-named help centres in a browser (SONNY-461's decision 2); nothing here is deferred from this branch's own scope. Launch-time validation of a full catalogue (PR #241's F6: re-validating every pack on the main thread at launch, measured by the review at about 0.8 s for 470 packs) is **SONNY-476**, by the founders' option B, and merges before any pack lane's pull request. SONNY-471 is cancelled and SONNY-472 is fixed here; the one thing about sessions this branch leaves as it found it is written in the SONNY-472 door list: a step after a session in the same run, if a plan carries one, keeps the session's surfaces until that run ends.
 Open questions (required, write "none" if true): one, observed and not established. In the SONNY-471 construction, a cancelled run whose planner returned a plan instead of throwing went on to a clarification after Stop. The shipping planner throws on cancellation, so this can arise only when a plan lands at the moment Stop is pressed. Whether `performStart` should check for cancellation after planning is the coordinator's to route. The two words and the money rule's reach were decided by the founders on 2026-09-13.
