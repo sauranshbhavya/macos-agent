@@ -509,6 +509,24 @@ export async function clearScreenshotsForTask(
 }
 
 /**
+ * The step that clears one account's stored idempotency response bodies and says how many went.
+ *
+ * `deleteStoredResponsesForAccount` in `idempotency/store.ts` is the one implementation. The two
+ * account routes pass it here by name, and `content/expiry.ts` passes it by name to
+ * `sweepClosedAccountContent`, which forwards it. It is a parameter rather than an import because
+ * the sweep took it that way before this function did; one seam for all three callers reads better
+ * than an import here beside a parameter on the sweep that means the same thing.
+ * **The contract is that it issues its statements on the `client` it is handed**, which is the open
+ * transaction below — an implementation that took a connection of its own would commit on its own,
+ * and that is the two-unit shape SONNY-436 removed.
+ */
+export type ClearStoredResponses = (
+  client: pg.Client,
+  accountScope: string,
+  claimedAtOrBefore?: Date,
+) => Promise<number>;
+
+/**
  * Everything one account has: content, snapshot membership, and its stored idempotency responses.
  *
  * **Two acts share this function and the `reason` tells them apart** (SONNY-404). `account` is
@@ -536,11 +554,37 @@ export async function clearScreenshotsForTask(
  * The account row itself is not touched here — `routes/auth.ts` marks `deleted_at`, and this runs
  * after it, for the ordering that route's own comment sets out: the account row is the handle these
  * records are addressable by, so it is closed rather than removed.
+ *
+ * **The stored responses are cleared inside this transaction, and the audit row's
+ * `stored_responses` is the count that clear returned** (SONNY-436). This function used to take
+ * that count as a number, computed by its caller from a clear that had already committed on its own.
+ * A cancel between the two — which §12's statement deadline on `DELETE /v1/account/content` makes an
+ * ordinary event — left the bodies gone and no row saying so, and the retry the `504` invites then
+ * found nothing to clear and recorded `stored_responses: 0` beside bodies that had been removed. Now
+ * the clear, the snapshot members, the content and the record commit or roll back together, so a
+ * cancel at any point leaves either nothing done or all of it recorded, and a retry after a rollback
+ * clears and counts the bodies for real.
+ *
+ * **What the one transaction costs, stated rather than left to be found.** The clear takes row locks
+ * on the account's completed `sonny.idempotency_key` rows, and those are now held until this commits
+ * rather than for one statement. A replay of one of those keys (`claimKey`'s `FOR UPDATE`) or a
+ * metering claim on one waits behind the wipe and then sees the cleared row, which is what a request
+ * racing a deletion should see. The added locks open no deadlock cycle, because a cycle through them
+ * would need another transaction holding a lock on the snapshot, content or deletion tables while it
+ * waits for an `idempotency_key` row, and none does: `claimKey` touches that table alone, the
+ * metering claim pairs it only with an insert into `sonny.metering_event`, and `completeClaim`,
+ * `releaseClaim` and `pruneExpiredResponses` are single statements on it. Two wipes of one account
+ * take every lock in the same order, since they are this function twice.
  */
 export async function deleteContentForAccount(
   client: pg.Client,
   accountId: string,
-  storedResponses: number,
+  /**
+   * Run as the transaction's first statement, on this function's own `client` (see
+   * `ClearStoredResponses`). A parameter in the position the count used to take, so a caller still
+   * passing a number fails to compile rather than recording a figure from outside the transaction.
+   */
+  clearStoredResponses: ClearStoredResponses,
   // Required rather than defaulted, on this repository's own recorded ground that a defaulted
   // parameter is a decision nobody has to make and therefore one nobody reads (SONNY-350's store
   // locations). Both callers name their act.
@@ -554,13 +598,14 @@ export async function deleteContentForAccount(
    *
    * Each table is bounded on its own notion of when the content happened: `occurred_at` on the live
    * row, `source_occurred_at` on the snapshot copy of it, and — for the stored response bodies —
-   * `claimed_at`, which is when the key was taken. The caller clears those, so the bound is passed
-   * to `deleteStoredResponsesForAccount` rather than applied here.
+   * `claimed_at`, which is when the key was taken. That table's bound is the clear step's to apply,
+   * so the same instant is handed to it here, inside the transaction, rather than by the caller.
    */
   occurredAtOrBefore?: Date,
 ): Promise<DeletionOutcome> {
   await client.query("BEGIN");
   try {
+    const storedResponses = await clearStoredResponses(client, accountId, occurredAtOrBefore);
     const removed =
       occurredAtOrBefore === undefined
         ? await removeSnapshotMembers(client, "account_id = $1", [accountId])
@@ -636,7 +681,7 @@ export class ClosedAccountSweepFailed extends Error {
  */
 export async function sweepClosedAccountContent(
   client: pg.Client,
-  clearStoredResponses: (client: pg.Client, accountId: string) => Promise<number>,
+  clearStoredResponses: ClearStoredResponses,
   /**
    * Accounts to leave for a later pass, because an earlier one could not wipe them (SONNY-427).
    *
@@ -671,13 +716,17 @@ export async function sweepClosedAccountContent(
   const accountId = rows[0]?.account_id;
   if (accountId === undefined) return undefined;
   try {
-    const storedResponses = await clearStoredResponses(client, accountId);
-    const outcome = await deleteContentForAccount(client, accountId, storedResponses, "account");
+    const outcome = await deleteContentForAccount(client, accountId, clearStoredResponses, "account");
     return { ...outcome, accountId };
   } catch (error) {
     // **Named rather than propagated bare**, so the caller can defer this one account and keep
     // sweeping the rest. `deleteContentForAccount` has already rolled its own transaction back, and
-    // `clearStoredResponses` runs its own; nothing is left half-done by the time this is thrown.
+    // the stored-response clear ran inside that transaction, so nothing is left half-done by the
+    // time this is thrown. **This comment said the same before SONNY-436 and it was false**: the
+    // clear then committed on its own before the content transaction opened, so a pass that failed
+    // in the content half — which PR #223's review showed can happen pass after pass, on a statement
+    // bound shorter than the delete — left any bodies it had cleared gone, and the pass that finally
+    // took the account recorded `stored_responses: 0`.
     throw new ClosedAccountSweepFailed(accountId, error);
   }
 }

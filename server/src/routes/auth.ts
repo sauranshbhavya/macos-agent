@@ -638,10 +638,21 @@ export function registerAuth(app: FastifyInstance, config: Config, deps: AuthDep
     // account is **swept**: `sweepClosedAccountContent` runs on the same timer as the content clock
     // and takes anything a wipe like this one could not. That also covers the accounts closed before
     // this branch existed, which SONNY-127's own comment recorded as "retained and unreachable".
+    //
+    // **And what the sweep records is true because the wipe is one transaction** (SONNY-436). The
+    // stored-response clear used to commit here on its own before the content transaction opened, so
+    // a failure between the two left the bodies gone with no row naming them — and the sweep, finding
+    // the content still there, recorded `stored_responses: 0` beside bodies this request had removed.
+    // Handed to `deleteContentForAccount` instead, the clear rolls back with the rest, and whichever
+    // of this request or the sweep commits the wipe counts what it cleared.
     let wiped: DeletionOutcome | undefined;
     try {
-      const storedResponses = await deleteStoredResponsesForAccount(client, accountId);
-      wiped = await deleteContentForAccount(client, accountId, storedResponses, "account");
+      wiped = await deleteContentForAccount(
+        client,
+        accountId,
+        deleteStoredResponsesForAccount,
+        "account",
+      );
     } catch (error) {
       request.log.error(
         { err: error, requestId: request.id },

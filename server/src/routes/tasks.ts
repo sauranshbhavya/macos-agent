@@ -408,11 +408,15 @@ export function registerContentDeletionRoutes(app: FastifyInstance, deps?: TaskR
     return deps.withConnection(async (client) => {
       try {
         return await withDatabaseDeadline(CONTENT_DELETION_DEADLINE_MS, client, async (db) => {
-          const storedResponses = await deleteStoredResponsesForAccount(db, accountId, before);
+          // **One transaction for the stored responses, the content and the record of both**
+          // (SONNY-436). The clear used to run here as a statement of its own and commit before the
+          // content transaction opened, so a `504` between the two left the bodies gone with no row
+          // naming them, and the retry that `504` invites recorded `stored_responses: 0`. Passed in
+          // rather than run first, it rolls back with everything else, and the retry counts it.
           const outcome = await deleteContentForAccount(
             db,
             accountId,
-            storedResponses,
+            deleteStoredResponsesForAccount,
             // Not `account`: that value means the account was closed and its content went with it, and
             // nothing in the row would tell the two apart once the user does close it for real.
             "account_content",

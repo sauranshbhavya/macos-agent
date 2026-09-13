@@ -413,10 +413,19 @@ export async function pruneExpiredResponses(client: pg.Client, limit = 1000): Pr
  * Drop the stored responses belonging to one account, keeping its rows and their metering claims.
  *
  * `DELETE /v1/account` is a privacy wipe, and this table is the one place in the gateway that holds
- * response *content* outside the route that produced it. Nothing calls this yet: the deletion route
- * is `routes/auth.ts`'s and outside this ticket's region, so the call site is filed rather than
- * written. It is here so that the call is one line when that ticket comes to make it, and so that
- * the omission is visible in this file rather than only in a ticket.
+ * response *content* outside the route that produced it.
+ *
+ * **In the gateway it runs only as the first statement of `deleteContentForAccount`'s transaction**
+ * (SONNY-436); the database tests also call it directly. Both account wipes and the closed-account
+ * sweep hand it to that function, and that function calls it on the client inside its own `BEGIN`,
+ * so the count returned here is written
+ * to `sonny.content_deletion` by the transaction that cleared the bodies. It issues one statement and
+ * no `BEGIN` of its own, which is what lets it join the caller's transaction. Called on a connection
+ * with no transaction open, it commits by itself — the shape that lost the count: a cancel before the
+ * content transaction committed left the bodies gone with no row naming them, and the retry recorded
+ * zero. This comment said nothing called it, which stopped being true when SONNY-134 wired it into
+ * the account close and the sweep and SONNY-404 into `DELETE /v1/account/content` — three callers,
+ * each of which ran it as a unit of its own.
  */
 export async function deleteStoredResponsesForAccount(
   client: pg.Client,

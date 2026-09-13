@@ -922,8 +922,14 @@ describeDb("the content store, its clocks, and what reaches training", () => {
         );
       }
 
-      const storedResponses = await deleteStoredResponsesForAccount(client, CONSENTING);
-      const outcome = await deleteContentForAccount(client, CONSENTING, storedResponses, "account");
+      // The clear is handed in rather than run first, so the count below is the one the wipe's own
+      // transaction took and recorded (SONNY-436).
+      const outcome = await deleteContentForAccount(
+        client,
+        CONSENTING,
+        deleteStoredResponsesForAccount,
+        "account",
+      );
       expect(outcome.contentRows).toBe(2);
       expect(outcome.snapshotRows).toBe(2);
       expect(outcome.storedResponses).toBe(1);
@@ -970,7 +976,7 @@ describeDb("the content store, its clocks, and what reaches training", () => {
     itUnderHangBackstop("keeps the usage history, which requirement 8 separates from content", async () => {
       await insertMeteringEvent(client, meteringEvent({ accountId: CONSENTING }));
       await insertRetainedContent(client, content({ accountId: CONSENTING }));
-      await deleteContentForAccount(client, CONSENTING, 0, "account");
+      await deleteContentForAccount(client, CONSENTING, deleteStoredResponsesForAccount, "account");
       const { rows } = await client.query<{ count: string }>(
         "SELECT count(*)::text AS count FROM sonny.metering_event WHERE account_id = $1",
         [CONSENTING],
