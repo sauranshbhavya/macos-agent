@@ -3466,9 +3466,16 @@ final class AgentViewModel: ObservableObject {
         // gets the answer first, as the command it was missing an operand for, and the plain result
         // goes through the same door typed text does. `locallyCompletedCommand` says how it knows the
         // resolver asked and what makes a completion workable.
-        if let completed = locallyCompletedCommand(request: clarificationSubmittedCommand, answer: answer, question: question) {
+        switch locallyCompletedCommand(request: clarificationSubmittedCommand, answer: answer, question: question) {
+        case .command(let completed)?:
             command = completed
-        } else {
+        case .appNotInstalled(let name)?:
+            // **The question stays open, as it does for an empty answer** (PR #238's delta review,
+            // N6): the `[s]` door asked which app, and the answer names none on this Mac. Nothing is
+            // torn down and nothing is dispatched; the user is told why and answers again.
+            setError(VisionSessionError.targetAppNotInstalled(name).localizedDescription)
+            return
+        case nil:
             command = ClarifiedCommand.composed(
                 request: clarificationSubmittedCommand ?? "",
                 question: question,
@@ -3493,7 +3500,8 @@ final class AgentViewModel: ObservableObject {
     }
 
     /// The plain command a clarification answer completes, or `nil` when the answer is the
-    /// planner's to read (SONNY-281).
+    /// planner's to read (SONNY-281) — or, for the `[s]` door's "which app", the name of an app the
+    /// answer asked for that is not installed, which keeps the question open (PR #238's delta, N6).
     ///
     /// **Who asked decides which door the answer goes through, and the question is what says who
     /// asked.** The founder typed `=`, was asked what to calculate, answered `2 + 2`, and was told
@@ -3579,7 +3587,11 @@ final class AgentViewModel: ObservableObject {
     /// with `snippet save` — so the join wins the trade: the alternative is the Writer case above, a
     /// wrong action with nothing to delete. The snippet question now asks for the body alone, so the
     /// retype is a user overriding the format they were just given.
-    private func locallyCompletedCommand(request: String?, answer: String, question: String) -> String? {
+    private func locallyCompletedCommand(
+        request: String?,
+        answer: String,
+        question: String
+    ) -> InstantCommandResolver.ScreenUseCompletion? {
         guard let request else {
             return nil
         }
@@ -3595,6 +3607,7 @@ final class AgentViewModel: ObservableObject {
         if let screenUse = resolver.screenUseCompletion(request: request, answer: answer) {
             return screenUse
         }
+        // Every other door's answer is a plain command, chosen among the candidates below.
         let dryRun = makeExecutor(recordingPolicy: nil, visionSession: nil)
         var firstResolved: String?
         for candidate in ClarifiedCommand.completions(request: request, answer: answer) {
@@ -3607,9 +3620,9 @@ final class AgentViewModel: ObservableObject {
             guard let prepared = try? dryRun.prepare(plan: plan), prepared.clarificationQuestion == nil else {
                 continue
             }
-            return candidate
+            return .command(candidate)
         }
-        return firstResolved
+        return firstResolved.map { .command($0) }
     }
 
     /// - Parameter origin: Which surface's mic button this is.
@@ -6282,9 +6295,10 @@ final class AgentViewModel: ObservableObject {
     }
 
     /// The executor with its vision environment named by the caller. `nil` is the dry-run form for
-    /// a resolver-built plan (SONNY-281, `locallyCompletedCommand`): a resolver plan never carries a
-    /// vision step, and `makeLiveVisionEnvironment()` assigns `visionUserPauseMonitor` on the way —
-    /// a side effect a routing decision must not have. Every run takes the overload above.
+    /// a resolver-built plan (SONNY-281, `locallyCompletedCommand`): `makeLiveVisionEnvironment()`
+    /// assigns `visionUserPauseMonitor` on the way — a side effect a routing decision must not have —
+    /// and the one resolver plan that carries a vision step, the `[s]` door's, prepares without an
+    /// environment. Every run takes the overload above.
     private func makeExecutor(
         recordingPolicy: TaskRecordingPolicy?,
         visionSession: VisionSessionEnvironment?

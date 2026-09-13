@@ -1176,9 +1176,24 @@ public struct InstantCommandResolver: Sendable {
         return .plan(screenUsePlan(app: app, goal: remainder))
     }
 
+    /// What an answer to one of the door's questions does (PR #238's F4 and its delta review's N6).
+    public enum ScreenUseCompletion: Equatable, Sendable {
+        /// The prefixed command the answer completes, to dispatch.
+        case command(String)
+        /// The answer to "which app" names no installed app. The question stays open and the user is
+        /// told the app is not on this Mac, as an empty answer is told to enter one.
+        case appNotInstalled(String)
+    }
+
     /// The command a prefixed request becomes once the question the door asked about it is answered
     /// — always another prefixed command, so the answer stays on the route the user chose (PR #238's
     /// F4). `nil` when `request` is not a prefixed request this door asked about.
+    ///
+    /// **An app that is not installed is answered here rather than asked about again** (PR #238's
+    /// delta review, N6). Completed into a label, `Foo` read as nothing, and the door asked the same
+    /// question with no hint why. Here, and only here, the door knows the answer was meant as an app
+    /// — a typed `X: …` label might be anything, which is why the door itself still cannot say "not
+    /// found" — so it says so, in the sentence the planned route uses for the same miss.
     ///
     /// **The answer is placed where the door reads it, not appended.** Appended, `[s] Notes` answered
     /// `make a note` became `[s] Notes make a note`, where no rule reads the app, the door asked again,
@@ -1187,7 +1202,7 @@ public struct InstantCommandResolver: Sendable {
     /// goes after the app's label: `[s] Notes: make a note`. The bare prefix's question wants both,
     /// and its answer is the rest of the command; an answer carrying only one of them is asked about
     /// again by this door, still on the prefixed route.
-    public func screenUseCompletion(request rawRequest: String, answer rawAnswer: String) -> String? {
+    public func screenUseCompletion(request rawRequest: String, answer rawAnswer: String) -> ScreenUseCompletion? {
         let request = rawRequest.trimmingCharacters(in: .whitespacesAndNewlines)
         let answer = rawAnswer.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !answer.isEmpty,
@@ -1199,12 +1214,16 @@ public struct InstantCommandResolver: Sendable {
             .trimmingCharacters(in: .whitespacesAndNewlines)
         switch askedID {
         case Self.askWhatAndWhere:
-            return "\(Self.screenUsePrefix) \(answer)"
+            return .command("\(Self.screenUsePrefix) \(answer)")
         case Self.askWhichApp:
-            return "\(Self.screenUsePrefix) \(Self.appLabel(fromAnswer: answer)): \(remainder)"
+            let label = Self.appLabel(fromAnswer: answer)
+            guard installedAppResolver.resolve(label) != nil else {
+                return .appNotInstalled(label)
+            }
+            return .command("\(Self.screenUsePrefix) \(label): \(remainder)")
         case Self.askWhat:
             let app = remainder.trimmingCharacters(in: .punctuationCharacters.union(.whitespaces))
-            return "\(Self.screenUsePrefix) \(app): \(answer)"
+            return .command("\(Self.screenUsePrefix) \(app): \(answer)")
         default:
             return nil
         }

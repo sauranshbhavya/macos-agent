@@ -820,6 +820,122 @@ struct VisionSessionRunTests {
         #expect(opened < lastClick)
     }
 
+    /// **A session refused at the door after its open still gives the user's app back** (PR #238's
+    /// delta review, N1). The open hands the user's app to the session that follows it, and the
+    /// session takes it only once it is built — so a billing refusal at the door left Notes, which
+    /// the open had just started, in front for good. The chain now gives back whatever its carry
+    /// still holds when it ends. Here: `[s]` at closed Notes, with the allowance used up.
+    @Test
+    func aPrefixedSessionRefusedAtTheDoorAfterItsOpenGivesTheUsersAppBack() async throws {
+        let fixture = try makeFixture(
+            replies: [#"{"action":"done","rationale":"never reached."}"#],
+            bundleIdentifier: "com.apple.Notes",
+            frontmost: "com.other.App",
+            screenControlGate: ScriptedScreenControlGate(answers: [], thereafter: .refused(.allowanceExhausted)),
+            restore: SessionRestoreScript(),
+            hermeticAppOpener: true,
+            notRunning: ["com.apple.Notes"]
+        )
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.command = "[s] open Notes and make a note called wave 7"
+        fixture.viewModel.start()
+        try await waitForIdle(fixture.viewModel)
+
+        let told = fixture.viewModel.finalSummary + (fixture.viewModel.errorMessage ?? "")
+        #expect(told.contains("You've used your screen-control allowance — top up or wait."), "told: \(told)")
+        #expect(fixture.synthesizer.events == [.opened("com.apple.Notes"), .restored("com.other.App")])
+        #expect(fixture.synthesizer.frontmost == "com.other.App")
+        #expect(fixture.model.prompts.isEmpty)
+    }
+
+    /// The same, on the unprefixed planned route — whose open gave the user's app back before the
+    /// hand-over existed, so this is the case where the hand-over was a regression — and with the
+    /// other kind of refusal the door gives, an allowance it could not check.
+    @Test
+    func aPlannedSessionRefusedAtTheDoorAfterItsOpenGivesTheUsersAppBack() async throws {
+        let fixture = try makeFixture(
+            replies: [#"{"action":"done","rationale":"never reached."}"#],
+            bundleIdentifier: "com.apple.Notes",
+            frontmost: "com.other.App",
+            delegationPlanner: OpenThenControlPlanner(appName: "Notes", goal: "make a note called wave 7"),
+            screenControlGate: ScriptedScreenControlGate(answers: [], thereafter: .refused(.allowanceUnknown)),
+            restore: SessionRestoreScript(),
+            hermeticAppOpener: true,
+            notRunning: ["com.apple.Notes"]
+        )
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.command = "open Notes and make a note called wave 7"
+        fixture.viewModel.start()
+        try await waitForIdle(fixture.viewModel)
+
+        #expect(fixture.viewModel.errorMessage != nil, "the door did not refuse: \(fixture.viewModel.finalSummary)")
+        #expect(fixture.synthesizer.events == [.opened("com.apple.Notes"), .restored("com.other.App")])
+        #expect(fixture.synthesizer.frontmost == "com.other.App")
+        #expect(fixture.model.prompts.isEmpty)
+    }
+
+    /// And a stop pressed while the door waits: the run ends as "Canceled.", and the user's app the
+    /// open handed on comes back rather than leaving Notes in front.
+    @Test
+    func aStopWhileTheDoorWaitsAfterAnOpenGivesTheUsersAppBack() async throws {
+        let gate = ScriptedScreenControlGate.holdingUntilStopped()
+        let fixture = try makeFixture(
+            replies: [#"{"action":"done","rationale":"never reached."}"#],
+            bundleIdentifier: "com.apple.Notes",
+            frontmost: "com.other.App",
+            screenControlGate: gate,
+            restore: SessionRestoreScript(),
+            hermeticAppOpener: true,
+            notRunning: ["com.apple.Notes"]
+        )
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.command = "[s] open Notes and make a note called wave 7"
+        fixture.viewModel.start()
+        try await waitUntil("the door being asked") { gate.consults.contains(.sessionStart) }
+        fixture.viewModel.cancelCurrentRun()
+        try await waitForIdle(fixture.viewModel)
+
+        #expect(fixture.viewModel.finalSummary == "Canceled.")
+        #expect(fixture.synthesizer.events == [.opened("com.apple.Notes"), .restored("com.other.App")])
+        #expect(fixture.synthesizer.frontmost == "com.other.App")
+    }
+
+    /// **An answer naming an app this Mac does not have keeps the question open and says why** (PR
+    /// #238's delta review, N6). It used to become a label that read as nothing, and the door asked
+    /// "Which app…" again with no hint. Now the user is told the app is not on this Mac, as the
+    /// planned route tells them, nothing runs, and the next answer is read against the same question.
+    @Test
+    func answeringWhichAppWithAnAppThatIsNotInstalledSaysSoAndKeepsTheQuestion() async throws {
+        let fixture = try makeFixture(
+            replies: [#"{"action":"done","rationale":"The note is made."}"#],
+            bundleIdentifier: "com.apple.Notes"
+        )
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.command = "[s] make a note called wave 7"
+        fixture.viewModel.start()
+        try await waitUntil("the question") { fixture.viewModel.clarificationQuestion != nil }
+        let question = try #require(fixture.viewModel.clarificationQuestion)
+
+        fixture.viewModel.clarificationAnswer = "Foo"
+        fixture.viewModel.submitClarification()
+
+        #expect(fixture.viewModel.errorMessage == "Sonny could not find an app called Foo on this Mac.")
+        #expect(fixture.viewModel.clarificationQuestion == question, "the question did not stay open")
+        #expect(fixture.model.prompts.isEmpty)
+
+        fixture.viewModel.clarificationAnswer = "Notes"
+        fixture.viewModel.submitClarification()
+        try await waitForIdle(fixture.viewModel)
+
+        #expect(fixture.viewModel.errorMessage == nil, "error: \(fixture.viewModel.errorMessage ?? "")")
+        #expect(fixture.model.prompts.count == 1, "the session did not start")
+        #expect(fixture.viewModel.finalSummary == "The note is made.")
+    }
+
     /// **Answering the door's question keeps the command on the prefixed route** (PR #238's F4).
     /// `[s] Notes` asks what to do; its answer used to reach the planner, which this fixture's
     /// planner refuses by throwing, so the run failed. Answered now, it is the prefixed command the

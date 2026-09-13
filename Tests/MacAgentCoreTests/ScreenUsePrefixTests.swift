@@ -42,6 +42,15 @@ struct ScreenUsePrefixTests {
         return plan
     }
 
+    /// The prefixed command an answer to the door's question completes.
+    private func completed(_ request: String, answer: String) throws -> String {
+        guard case .command(let command)? = makeResolver().screenUseCompletion(request: request, answer: answer) else {
+            Issue.record("\(request) answered \(answer) did not complete to a command")
+            throw CancellationError()
+        }
+        return command
+    }
+
     private func clarification(_ command: String) throws -> String {
         guard case .clarify(let plan) = makeResolver().resolve(command: command),
               let question = plan.steps.first?.question else {
@@ -130,29 +139,32 @@ struct ScreenUsePrefixTests {
         // Which app, answered with the app.
         let noApp = "[s] make a note called wave 7"
         #expect(try clarification(noApp) == "Which app should Sonny control for that?")
-        let withApp = try plan(try #require(resolver.screenUseCompletion(request: noApp, answer: "Notes")))
+        let withApp = try plan(try completed(noApp, answer: "Notes"))
         #expect(withApp.steps.map(\.appName) == ["Notes"])
         #expect(withApp.steps[0].visionGoal?.contains("make a note called wave 7") == true)
-        // …or with a preposition and a full stop, the way it is often typed.
-        let typed = try plan(try #require(resolver.screenUseCompletion(request: noApp, answer: "in Notes.")))
+        // …or with a full stop, the way it is often typed.
+        let typed = try plan(try completed(noApp, answer: "Notes."))
         #expect(typed.steps.map(\.appName) == ["Notes"])
 
         // What to do, answered with the goal.
         #expect(try clarification("[s] Notes") == "What should Sonny do in Notes?")
-        let withGoal = try plan(try #require(resolver.screenUseCompletion(request: "[s] Notes", answer: "make a note")))
+        let withGoal = try plan(try completed("[s] Notes", answer: "make a note"))
         #expect(withGoal.steps.map(\.appName) == ["Notes"])
         #expect(withGoal.steps[0].visionGoal?.contains("make a note") == true)
 
         // Both, answered with both.
         #expect(try clarification("[s]") == "What should Sonny do on screen, and in which app?")
-        let withBoth = try plan(try #require(resolver.screenUseCompletion(request: "[s]", answer: "make a note in Notes")))
+        let withBoth = try plan(try completed("[s]", answer: "make a note in Notes"))
         #expect(withBoth.steps.map(\.appName) == ["Notes"])
 
         // Both, answered with only one: the door asks for the other, still on the prefixed route.
-        let onlyApp = try #require(resolver.screenUseCompletion(request: "[s]", answer: "Notes"))
-        #expect(try clarification(onlyApp) == "What should Sonny do in Notes?")
-        let onlyGoal = try #require(resolver.screenUseCompletion(request: "[s]", answer: "make a note"))
-        #expect(try clarification(onlyGoal) == "Which app should Sonny control for that?")
+        #expect(try clarification(try completed("[s]", answer: "Notes")) == "What should Sonny do in Notes?")
+        #expect(try clarification(try completed("[s]", answer: "make a note")) == "Which app should Sonny control for that?")
+
+        // Which app, answered with an app this Mac does not have: the door says so rather than
+        // asking the same question again with no hint why (PR #238's delta review, N6).
+        #expect(resolver.screenUseCompletion(request: noApp, answer: "Foo") == .appNotInstalled("Foo"))
+        #expect(resolver.screenUseCompletion(request: "[s] do the thing in Foo", answer: "in Foo.") == .appNotInstalled("Foo"))
 
         // Not the door's question, so not the door's to complete.
         #expect(resolver.screenUseCompletion(request: "= ", answer: "2 + 2") == nil)
@@ -187,8 +199,14 @@ struct ScreenUsePrefixTests {
         let question = try clarification(twoApps)
         #expect(question == "Which app should Sonny control for that: \(try displayName("Music")) or \(try displayName("Slack"))?")
 
-        let answered = try plan(try #require(makeResolver().screenUseCompletion(request: twoApps, answer: "Slack")))
+        let answered = try plan(try completed(twoApps, answer: "Slack"))
         #expect(answered.steps.map(\.appName) == [try displayName("Slack")])
+        // Answered the way people type it, `in Slack`: the preposition is dropped from the label. Kept,
+        // the label `in Slack` names no app, the sentence's own two apps are read again, and the door
+        // asks the same question — the one case where the drop decides anything, since a sentence
+        // naming a single app reads it again anyway (PR #238's delta review, N5).
+        let typed = try plan(try completed(twoApps, answer: "in Slack"))
+        #expect(typed.steps.map(\.appName) == [try displayName("Slack")])
 
         #expect(try plan("[s] Slack: tell the team I am listening to Music").steps.map(\.appName) == [try displayName("Slack")])
         #expect(try plan("[s] find the wave 7 tab in Google Chrome").steps.count == 1)
