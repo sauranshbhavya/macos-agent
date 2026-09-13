@@ -358,18 +358,27 @@ public struct RobotsTXTPolicy: Equatable, Sendable {
 
         // **Split on line breaks, not on newline characters** (SONNY-437). `components(separatedBy:
         // .newlines)` splits on CR and LF separately, so a CRLF file yields an empty element between
-        // every two lines — and an empty line is what ends a user-agent group below. So a CRLF
-        // robots.txt closed its group before the first rule, every Allow and Disallow arrived
-        // outside any group and was dropped, and the file read as one with no rules at all, in the
-        // permissive direction; accounts.google.com's is CRLF and its `Disallow: /ClientLogin` was
-        // ignored. A `Character` holds CRLF as one grapheme and `isNewline` is true for it, so this
-        // yields one element per line whatever the file's line endings.
+        // every two lines — and an empty line was what ended a user-agent group below, until
+        // SONNY-454. So a CRLF robots.txt closed its group before the first rule, every Allow and
+        // Disallow arrived outside any group and was dropped, and the file read as one with no rules
+        // at all, in the permissive direction; accounts.google.com's is CRLF and its
+        // `Disallow: /ClientLogin` was ignored. A `Character` holds CRLF as one grapheme and
+        // `isNewline` is true for it, so this yields one element per line whatever the file's line
+        // endings — which still matters for a CR-only file, and no longer decides anything for CRLF,
+        // because the empty elements a character split made are now ignored like any empty line.
         for rawLine in text.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline) {
             let withoutComment = rawLine.split(separator: "#", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init) ?? ""
             let line = withoutComment.trimmingCharacters(in: .whitespacesAndNewlines)
+            // **An empty line means nothing, and it ends no group** (SONNY-454). RFC 9309 §2.1 says a
+            // group "is terminated by a user-agent line or end of file", and §2.2's grammar is
+            // `group = startgroupline *(startgroupline / emptyline) *(rule / emptyline)`, with
+            // `emptyline = EOL` and `EOL = *WS [comment] NL`: a blank line, a line of only whitespace
+            // and a line of only a comment are all the same emptyline, allowed anywhere inside a
+            // group. So a group ends at the next user-agent line after a rule — the
+            // `sawRuleInCurrentGroup` branch below — or at the end of the file, and nowhere else.
+            // Closing a group here dropped every rule after a blank or commented line inside one
+            // agent's block, in the permissive direction: the paths a site disallows were fetched.
             if line.isEmpty {
-                currentApplies = false
-                sawRuleInCurrentGroup = false
                 continue
             }
 

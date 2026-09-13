@@ -13,11 +13,13 @@ import Foundation
 /// bare literal a test has to sleep past) is long enough that an ordinary chord never trips it and a
 /// genuine pause does.
 ///
-/// **Never awaited as a task's own `.value` from a test.** Phase 12's receipt rework hit exactly
-/// this: two tests awaited a cancelled task's value, a mutant that dropped the cancellation left the
-/// old sleep still running, and the battery stalled rather than reporting a kill. This model's hold
-/// task is read only through the published flag, on a bounded real wait, for the same reason —
-/// dropping the cancel here must read as "hints came on late or stayed on", never as a hang.
+/// **Tests wait on the hold task itself, and that is safe only while the holds they arm are short**
+/// (SONNY-458). The hold's last line is the one that sets the flag, so a test that runs it to its end
+/// reads the model's decision rather than racing a clock for it — the 90-second poll this replaced
+/// went red under load with a correct model. Phase 12's receipt rework is why the tests once
+/// forbade it: two tests awaited a cancelled task whose sleep was a day, and the battery stalled on
+/// the mutant that dropped the cancellation. `CommandKeyHintsTests` arms holds of 20 ms and half a
+/// second, so the same mutant here costs that long and then reads as the hints coming on.
 @MainActor
 final class CommandKeyHintModel: ObservableObject {
     static let defaultHoldDelay: TimeInterval = 0.35
@@ -27,9 +29,9 @@ final class CommandKeyHintModel: ObservableObject {
 
     private let holdDelay: TimeInterval
 
-    /// The most recently armed hold, exposed so a test can cancel it in its own teardown rather than
-    /// let it outlive the test that started it — the same reason `MicHoverHintModel.dismissCountdown`
-    /// is `private(set)` rather than private.
+    /// The most recently armed hold, exposed so a test can run it to its last line and read what it
+    /// decided, and cancel it in its own teardown rather than let it outlive the test that started
+    /// it — the same reason `MicHoverHintModel.dismissCountdown` is `private(set)` rather than private.
     private(set) var holdTask: Task<Void, Never>?
 
     init(holdDelay: TimeInterval = CommandKeyHintModel.defaultHoldDelay) {

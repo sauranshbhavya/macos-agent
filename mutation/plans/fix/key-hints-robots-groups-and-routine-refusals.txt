@@ -1,0 +1,127 @@
+# fix/key-hints-robots-groups-and-routine-refusals — SONNY-458, SONNY-454, SONNY-464.
+# Founder-triggered (WORKFLOW.md, Weekly battery); nothing here was run on the branch beyond --check.
+# Every killer named below is hand-traced, not measured.
+
+# SONNY-458 — the key-hint tests read what the model decided by running its hold task to its last
+# line, with no clock, so load can make them slower and never wrong. K1 is the kill a busy machine
+# could withhold from the two-second read this replaced; K4 survived every test before, because the
+# focus-loss test read the flag only at the instant of the focus loss.
+
+>>> mutant K1 the hold's cancellation guard dropped: a cancelled hold still shows the hints
+>>> file Sources/MacAgent/CommandKeyHints.swift
+>>> from
+            try? await Task.sleep(for: .seconds(holdDelay))
+            guard !Task.isCancelled else { return }
+            self?.isShowingHints = true
+>>> to
+            try? await Task.sleep(for: .seconds(holdDelay))
+            self?.isShowingHints = true
+>>> end
+
+>>> mutant K2 a release no longer cancels the hold it drops: it fires half a second later anyway
+>>> file Sources/MacAgent/CommandKeyHints.swift
+>>> from
+    func flagsChanged(commandHeldAlone: Bool) {
+        holdTask?.cancel()
+        holdTask = nil
+>>> to
+    func flagsChanged(commandHeldAlone: Bool) {
+        holdTask = nil
+>>> end
+
+>>> mutant K3 the hold never sets the flag: holding ⌘ alone shows nothing
+>>> file Sources/MacAgent/CommandKeyHints.swift
+>>> from
+            guard !Task.isCancelled else { return }
+            self?.isShowingHints = true
+>>> to
+            guard !Task.isCancelled else { return }
+            _ = self
+>>> end
+
+>>> mutant K4 focus loss and another key drop the hold without cancelling it
+>>> file Sources/MacAgent/CommandKeyHints.swift
+>>> from
+    private func cancelHoldAndHide() {
+        holdTask?.cancel()
+        holdTask = nil
+>>> to
+    private func cancelHoldAndHide() {
+        holdTask = nil
+>>> end
+
+# SONNY-454 — a robots.txt group ends at the next user-agent line after a rule or at the end of the
+# file, and nowhere else: an empty line, a whitespace-only line and a comment-only line mean nothing
+# (RFC 9309 §2.1, §2.2). G1 replaces SONNY-437's retired R2 as the mutant of the closing rule.
+# Killers, hand-traced: G1 by aBlankLineInsideAGroupKeepsTheRuleAfterItWhateverTheEndings,
+# aBlankLineBetweenTwoRulesKeepsTheSecondInTheGroup and aBlankLineBetweenTwoUserAgentLinesLeavesThemOneGroup
+# (all three measured failing against this exact block, 16 issues, before the fix was committed);
+# G2 by theNextUserAgentLineAfterARuleStillEndsTheGroupWithOrWithoutABlankLine (its first two files)
+# and robotsPolicyReadsMixedLineEndings; G3 by that test's second file and by
+# robotsPolicyReadsMixedLineEndings, whose `\n\r\n` is a line break and a blank line before OtherBot.
+
+>>> mutant G1 an empty line closes the group again: every rule after a blank or commented line is dropped
+>>> file Sources/MacAgentCore/WebResearchService.swift
+>>> from
+            if line.isEmpty {
+                continue
+            }
+>>> to
+            if line.isEmpty {
+                currentApplies = false
+                sawRuleInCurrentGroup = false
+                continue
+            }
+>>> end
+
+>>> mutant G2 a user-agent line after a rule no longer ends the group: the next agent's rules become ours
+>>> file Sources/MacAgentCore/WebResearchService.swift
+>>> from
+                if sawRuleInCurrentGroup {
+                    currentApplies = false
+                    sawRuleInCurrentGroup = false
+                }
+>>> to
+>>> end
+
+>>> mutant G3 an empty line forgets the group had rules: the next agent after a blank line joins our group
+>>> file Sources/MacAgentCore/WebResearchService.swift
+>>> from
+            if line.isEmpty {
+                continue
+            }
+>>> to
+            if line.isEmpty {
+                sawRuleInCurrentGroup = false
+                continue
+            }
+>>> end
+
+# SONNY-464 — no user-facing refusal of a routine step names an operation id. Killer, hand-traced
+# for all three and measured for W1's shape (the template put back failed the test with 29 issues
+# before this was committed): everyRefusedRoutineStepReadsInWordsWithNoOperationId alone.
+
+>>> mutant W1 the refusal is the old template again: "Routines cannot contain start_watching steps."
+>>> file Sources/MacAgentCore/AutomationStores.swift
+>>> from
+            return Self.unsafeRoutineStepSentence(refused)
+>>> to
+            return "Routines cannot contain \(refused) steps."
+>>> end
+
+>>> mutant W2 nested steps fall through to the fallback sentence
+>>> file Sources/MacAgentCore/AutomationStores.swift
+>>> from
+        if refused == nestedRoutineStepsRefusal {
+            return "A routine can't hold the steps of another routine."
+        }
+>>> to
+>>> end
+
+>>> mutant W3 one forbidden operation loses its own sentence and reads the fallback
+>>> file Sources/MacAgentCore/AutomationStores.swift
+>>> from
+        case .startWatching:
+            return "A routine can't watch a page for changes."
+>>> to
+>>> end

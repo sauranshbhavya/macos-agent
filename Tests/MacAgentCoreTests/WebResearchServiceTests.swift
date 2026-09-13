@@ -198,9 +198,12 @@ struct WebResearchServiceTests {
     }
 
     /// SONNY-437. `components(separatedBy: .newlines)` split CR and LF separately, so a CRLF file
-    /// yielded an empty element between every two lines, and an empty line is what closes a
+    /// yielded an empty element between every two lines, and an empty line was what closed a
     /// user-agent group — every rule after `User-agent: *` arrived outside any group and was
     /// dropped. This is accounts.google.com's shape; its `Disallow: /ClientLogin` was ignored.
+    /// **Since SONNY-454 an empty line closes nothing**, so the CRLF and LF assertions below would
+    /// pass over that character split too; they stay as the file's own shape, and the CR-only twin
+    /// is the half that still tells a right split from a wrong one.
     ///
     /// **The CR-only twin is the third of RFC 9309 §2.2's line endings, and it is here because two
     /// plausible fixes pass without it** (PR #234's fresh review, F2): a split on `"\n"` alone, and
@@ -239,16 +242,78 @@ struct WebResearchServiceTests {
         #expect(policy.allows(URL(string: "https://example.com/public")!) == true, "the other agent's Disallow leaked into ours")
     }
 
-    /// The parser's own group rule, unchanged by SONNY-437 and pinned so the fix cannot be a split
-    /// that drops empty lines: a genuinely empty line closes the group, so a rule after it belongs
-    /// to no group, whatever the endings.
+    /// SONNY-454, which moved this test deliberately. It was
+    /// `aGenuinelyEmptyLineStillClosesAGroupWhateverTheEndings` and asserted the opposite: SONNY-437
+    /// kept a blank line closing a group as the parser's own rule, so that its split fix could be
+    /// told apart from a split that dropped empty lines. RFC 9309 gives a blank line no meaning — a
+    /// group "is terminated by a user-agent line or end of file" (§2.1), and §2.2's grammar allows an
+    /// `emptyline` anywhere inside one, which is a blank line, a line of only whitespace, or a line
+    /// of only a comment. Read the old way, every rule after such a line in one agent's block was
+    /// dropped, and the paths the site disallows were fetched.
+    ///
+    /// **The two doubled endings are PR #234's review's** (carried on SONNY-454): a CRLF file
+    /// converted twice puts `\r\r\n` between lines, `\n\r` is its mirror, and by §2.2's `NL` each is a
+    /// line break followed by a blank line, so both read as files with no rules until this rule
+    /// changed. They assert that the rule survives, not that the parser reproduces a reading.
     @Test
-    func aGenuinelyEmptyLineStillClosesAGroupWhateverTheEndings() {
-        let crlf = RobotsTXTPolicy(text: "User-agent: *\r\n\r\nDisallow: /private\r\n")
-        let lf = RobotsTXTPolicy(text: "User-agent: *\n\nDisallow: /private\n")
+    func aBlankLineInsideAGroupKeepsTheRuleAfterItWhateverTheEndings() {
+        let reference = RobotsTXTPolicy(text: "User-agent: *\nDisallow: /private\n")
+        let privatePage = URL(string: "https://example.com/private/x")!
+        let files: [(shape: String, text: String)] = [
+            ("LF", "User-agent: *\n\nDisallow: /private\n"),
+            ("CRLF", "User-agent: *\r\n\r\nDisallow: /private\r\n"),
+            ("CR", "User-agent: *\r\rDisallow: /private\r"),
+            ("a CRLF file converted twice", "User-agent: *\r\r\nDisallow: /private\r\r\n"),
+            ("LF then CR", "User-agent: *\n\rDisallow: /private\n\r"),
+            ("a line of only whitespace", "User-agent: *\n \t \nDisallow: /private\n"),
+            ("a line of only a comment", "User-agent: *\n# the private area\nDisallow: /private\n"),
+        ]
 
-        #expect(crlf.allows(URL(string: "https://example.com/private/x")!) == true)
-        #expect(lf.allows(URL(string: "https://example.com/private/x")!) == true)
+        #expect(reference.allows(privatePage) == false, "setup: the file with no blank line disallows the page")
+        for file in files {
+            let policy = RobotsTXTPolicy(text: file.text)
+            #expect(policy.allows(privatePage) == false, "\(file.shape): the rule after the blank line was dropped")
+            #expect(policy == reference, "\(file.shape): the file holds the one rule it holds with no blank line")
+        }
+    }
+
+    /// The ticket's own case: a blank line between two rules of one agent's block, where a human
+    /// formatting the file most often puts one. The rule before it and the rule after it both apply.
+    @Test
+    func aBlankLineBetweenTwoRulesKeepsTheSecondInTheGroup() {
+        let policy = RobotsTXTPolicy(text: "User-agent: *\nDisallow: /drafts\n\nDisallow: /private\n")
+
+        #expect(policy.allows(URL(string: "https://example.com/drafts/x")!) == false)
+        #expect(policy.allows(URL(string: "https://example.com/private/x")!) == false, "the rule after the blank line was dropped")
+        #expect(policy.allows(URL(string: "https://example.com/blog")!) == true)
+    }
+
+    /// §2.2's `*(startgroupline / emptyline)`: a blank line between two user-agent lines leaves them
+    /// one group, so the rule beneath the second agent is the first agent's too.
+    @Test
+    func aBlankLineBetweenTwoUserAgentLinesLeavesThemOneGroup() {
+        let policy = RobotsTXTPolicy(text: "User-agent: *\n\nUser-agent: OtherBot\nDisallow: /private\n")
+
+        #expect(policy.allows(URL(string: "https://example.com/private/x")!) == false, "the blank line split one group of two agents into two")
+        #expect(policy.allows(URL(string: "https://example.com/blog")!) == true)
+    }
+
+    /// What still ends a group, so the rule above cannot be met by never ending one: the next
+    /// user-agent line after a rule, with a blank line before it or without one. The other agent's
+    /// `Disallow: /` must not reach this one's pages in either file.
+    @Test
+    func theNextUserAgentLineAfterARuleStillEndsTheGroupWithOrWithoutABlankLine() {
+        let files = [
+            "User-agent: *\nDisallow: /private\nUser-agent: OtherBot\nDisallow: /\n",
+            "User-agent: *\nDisallow: /private\n\nUser-agent: OtherBot\nDisallow: /\n",
+            "User-agent: OtherBot\nDisallow: /\n\nUser-agent: *\nDisallow: /private\n",
+        ]
+
+        for text in files {
+            let policy = RobotsTXTPolicy(text: text)
+            #expect(policy.allows(URL(string: "https://example.com/private/x")!) == false, "our group's rule was lost: \(text.debugDescription)")
+            #expect(policy.allows(URL(string: "https://example.com/blog")!) == true, "the other agent's Disallow leaked into ours: \(text.debugDescription)")
+        }
     }
 }
 
