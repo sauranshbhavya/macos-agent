@@ -17,6 +17,15 @@ public struct InstantCommandResolver: Sendable {
     /// the moment SONNY-82 made Figma openable, because the collision the check exists to catch had
     /// become invisible to it.
     private let installedAppResolver: any InstalledAppResolving
+    /// The bundle identifiers of the apps running when this resolver was made, lowercased, read by
+    /// the `[s]` door alone (PR #238's F1): a prefixed command naming an app that is not running
+    /// opens it first, because a screen-control session never starts its own target.
+    ///
+    /// `nil` takes every app as running, which builds the one-step plan the door built before the
+    /// running list was consulted. `AgentViewModel.makeInstantCommandResolver()` passes the switcher's
+    /// list, and `VisionSessionRunTests` drives a prefixed command at an app that is not running
+    /// through the view model, so a construction that stopped passing it fails there.
+    private let runningAppBundleIdentifiers: Set<String>?
 
     public init(
         snippetStore: SnippetStore,
@@ -24,7 +33,8 @@ public struct InstantCommandResolver: Sendable {
         routineStore: RoutineStore,
         workspaceStore: WorkspaceStore,
         shortcutCatalog: any ShortcutCatalogProviding = ProcessShortcutCatalog(),
-        installedAppResolver: any InstalledAppResolving = InstalledAppResolver.shared
+        installedAppResolver: any InstalledAppResolving = InstalledAppResolver.shared,
+        runningAppBundleIdentifiers: Set<String>? = nil
     ) {
         self.snippetStore = snippetStore
         self.recentArtifactStore = recentArtifactStore
@@ -32,12 +42,18 @@ public struct InstantCommandResolver: Sendable {
         self.workspaceStore = workspaceStore
         self.shortcutCatalog = shortcutCatalog
         self.installedAppResolver = installedAppResolver
+        self.runningAppBundleIdentifiers = runningAppBundleIdentifiers.map { Set($0.map { $0.lowercased() }) }
     }
 
     public func resolve(command rawCommand: String) -> InstantCommandResolution? {
         let command = rawCommand.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !command.isEmpty else {
             return nil
+        }
+
+        // First, before every other door: the prefix is the user choosing the route (SONNY-451).
+        if let screenUse = screenUseResolution(in: command) {
+            return screenUse
         }
 
         if let expression = prefixedCalculatorExpression(in: command) {
@@ -1087,4 +1103,300 @@ public struct InstantCommandResolver: Sendable {
         }
         return result
     }
+    // MARK: - Screen use by prefix (SONNY-451)
+
+    /// `[s]` at the start of a command routes it to screen use, whatever its wording (SONNY-451).
+    /// Exact spelling, case-insensitive, trimmed; the rest is the goal.
+    public static let screenUsePrefix = "[s]"
+
+    /// The words that introduce the app a screen-use request means: "archive every newsletter
+    /// **in** Mail", "make a note **on** Notes". The app after one is validated against what is
+    /// installed, so "in the morning" names no app and asks.
+    private static let screenUseAppPrepositions: Set<String> = ["in", "on", "to", "inside", "within", "using"]
+
+    /// The three questions the door asks, by what is missing. Their ids are what
+    /// `screenUseCompletion(request:answer:)` reads to know where an answer goes.
+    private static let askWhatAndWhere = "clarify-screen-use"
+    private static let askWhichApp = "clarify-screen-use-app"
+    private static let askWhat = "clarify-screen-use-goal"
+
+    /// The one door a prefixed command takes, first in `resolve`, and the reason it is first: the
+    /// prefix is the user saying which route to take, so `[s] 2 + 2` is a screen-use request about
+    /// a calculator app and not a sum for the calculator.
+    ///
+    /// The plan it builds is the plan the planner emits for the same request, entering
+    /// `VisionSessionCapabilityAdapter` by the same door: per-app consent in Normal mode, Safe mode
+    /// asking for everything, the billing gate, redaction, the tier-3 advisory and Ctrl-Opt-Esc all
+    /// stand in front of it, because nothing here is a gate — it is a route. No planner round trip,
+    /// so the route cannot be decided elsewhere.
+    ///
+    /// **An app that is not running is opened first, by an `open_app` step** (PR #238's F1). A
+    /// session never starts its target — its first activation fails with "Is it running?" when the
+    /// app is not — and the command people type for an app that is closed is exactly `[s] open X
+    /// and …`. The open is the ordinary open step, with its own gates; the planner's own split of
+    /// the same request is these two steps, and the executor hands the user's app from the open to
+    /// the session so it comes back once, at the end.
+    private func screenUseResolution(in command: String) -> InstantCommandResolution? {
+        guard command.lowercased().hasPrefix(Self.screenUsePrefix) else {
+            return nil
+        }
+        let remainder = String(command.dropFirst(Self.screenUsePrefix.count))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !remainder.isEmpty else {
+            return .clarify(screenUseClarificationPlan(
+                id: Self.askWhatAndWhere,
+                question: "What should Sonny do on screen, and in which app?"
+            ))
+        }
+        let app: InstalledApp
+        switch screenUseApp(in: remainder) {
+        case .none:
+            return .clarify(screenUseClarificationPlan(
+                id: Self.askWhichApp,
+                question: "Which app should Sonny control for that?"
+            ))
+        case .several(let apps):
+            return .clarify(screenUseClarificationPlan(
+                id: Self.askWhichApp,
+                question: "Which app should Sonny control for that: \(Self.naturalList(apps.map(\.displayName)))?"
+            ))
+        case .one(let named):
+            app = named
+        }
+        // A remainder that is only the app's name carries no goal: `[s] Notes` asks what to do, and
+        // so does an alias of it — `[s] Google Chrome` names Chrome as surely as `[s] Chrome` does,
+        // and a session whose goal is an app's name spends an allowance run on nothing (PR #238's F8).
+        let bareName = remainder.trimmingCharacters(in: .punctuationCharacters)
+        guard installedAppResolver.resolve(bareName)?.bundleIdentifier != app.bundleIdentifier else {
+            return .clarify(screenUseClarificationPlan(
+                id: Self.askWhat,
+                question: "What should Sonny do in \(app.displayName)?"
+            ))
+        }
+        return .plan(screenUsePlan(app: app, goal: remainder))
+    }
+
+    /// What an answer to one of the door's questions does (PR #238's F4 and its delta review's N6).
+    public enum ScreenUseCompletion: Equatable, Sendable {
+        /// The prefixed command the answer completes, to dispatch.
+        case command(String)
+        /// The answer to "which app" names no installed app. The question stays open and the user is
+        /// told the app is not on this Mac, as an empty answer is told to enter one.
+        case appNotInstalled(String)
+    }
+
+    /// The command a prefixed request becomes once the question the door asked about it is answered
+    /// — always another prefixed command, so the answer stays on the route the user chose (PR #238's
+    /// F4). `nil` when `request` is not a prefixed request this door asked about.
+    ///
+    /// **An app that is not installed is answered here rather than asked about again** (PR #238's
+    /// delta review, N6). Completed into a label, `Foo` read as nothing, and the door asked the same
+    /// question with no hint why. Here, and only here, the door knows the answer was meant as an app
+    /// — a typed `X: …` label might be anything, which is why the door itself still cannot say "not
+    /// found" — so it says so, in the sentence the planned route uses for the same miss.
+    ///
+    /// **The answer is placed where the door reads it, not appended.** Appended, `[s] Notes` answered
+    /// `make a note` became `[s] Notes make a note`, where no rule reads the app, the door asked again,
+    /// and the view model handed the exchange to the planner — the one thing the prefix exists to
+    /// prevent. So an app goes into the leading `X: …` label, which names the app outright, and a goal
+    /// goes after the app's label: `[s] Notes: make a note`. The bare prefix's question wants both,
+    /// and its answer is the rest of the command; an answer carrying only one of them is asked about
+    /// again by this door, still on the prefixed route.
+    public func screenUseCompletion(request rawRequest: String, answer rawAnswer: String) -> ScreenUseCompletion? {
+        let request = rawRequest.trimmingCharacters(in: .whitespacesAndNewlines)
+        let answer = rawAnswer.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !answer.isEmpty,
+              case .clarify(let asked)? = screenUseResolution(in: request),
+              let askedID = asked.steps.first?.id else {
+            return nil
+        }
+        let remainder = String(request.dropFirst(Self.screenUsePrefix.count))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        switch askedID {
+        case Self.askWhatAndWhere:
+            return .command("\(Self.screenUsePrefix) \(answer)")
+        case Self.askWhichApp:
+            let label = Self.appLabel(fromAnswer: answer)
+            guard installedAppResolver.resolve(label) != nil else {
+                return .appNotInstalled(label)
+            }
+            return .command("\(Self.screenUsePrefix) \(label): \(remainder)")
+        case Self.askWhat:
+            let app = remainder.trimmingCharacters(in: .punctuationCharacters.union(.whitespaces))
+            return .command("\(Self.screenUsePrefix) \(app): \(answer)")
+        default:
+            return nil
+        }
+    }
+
+    /// An answer to "which app" as a label: trailing punctuation and a leading preposition dropped,
+    /// so `in Notes.` labels as `Notes`.
+    private static func appLabel(fromAnswer answer: String) -> String {
+        var words = answer.split(whereSeparator: \.isWhitespace).map(String.init)
+        if words.count > 1, screenUseAppPrepositions.contains(words[0].lowercased()) {
+            words.removeFirst()
+        }
+        return screenUseName(from: words[...])
+    }
+
+    private static func naturalList(_ names: [String]) -> String {
+        guard names.count > 1, let last = names.last else {
+            return names.first ?? ""
+        }
+        return names.dropLast().joined(separator: ", ") + " or " + last
+    }
+
+    private enum ScreenUseApp {
+        case none
+        case one(InstalledApp)
+        case several([InstalledApp])
+    }
+
+    /// The installed app a screen-use request names, read from its own words.
+    ///
+    /// **Two kinds of rule, and only the second can be ambiguous** (PR #238's F9). The explicit ones
+    /// name the app by the sentence's structure — the app an `open X and …` opens, a leading
+    /// `X: …` label — and the first of those that resolves is the app. The implicit ones read the
+    /// words after a preposition that introduces an app ("in Mail") and the request's last words on
+    /// their own; each is checked against what is installed, longest first, and **when they name
+    /// more than one installed app the door asks which**, rather than taking the last preposition's:
+    /// `[s] tell the team in Slack that I am listening to Music` names Slack and Music, and choosing
+    /// Music there — which Normal mode would then control without asking, since it is on the starter
+    /// list — was a guess this door's own rule forbids. None resolving is a clarification too.
+    private func screenUseApp(in remainder: String) -> ScreenUseApp {
+        for candidate in explicitAppCandidates(in: remainder) {
+            if let app = installedAppResolver.resolve(candidate) {
+                return .one(app)
+            }
+        }
+        var named: [InstalledApp] = []
+        for candidate in implicitAppCandidates(in: remainder) {
+            guard let app = installedAppResolver.resolve(candidate),
+                  !named.contains(where: { $0.bundleIdentifier == app.bundleIdentifier }) else {
+                continue
+            }
+            named.append(app)
+        }
+        switch named.count {
+        case 0:
+            return .none
+        case 1:
+            return .one(named[0])
+        default:
+            return .several(named)
+        }
+    }
+
+    private func explicitAppCandidates(in remainder: String) -> [String] {
+        let words = remainder.split(whereSeparator: \.isWhitespace).map(String.init)
+        var candidates: [String] = []
+
+        // `open X and …`, `open X, …`, `open X then …`
+        if words.count > 1, words[0].lowercased() == "open" {
+            var name: [String] = []
+            for word in words.dropFirst() {
+                let lowered = word.lowercased()
+                if lowered == "and" || lowered == "then" {
+                    break
+                }
+                let stripped = word.trimmingCharacters(in: CharacterSet(charactersIn: ",;"))
+                name.append(stripped)
+                if stripped != word {
+                    break
+                }
+            }
+            if !name.isEmpty {
+                candidates.append(name.joined(separator: " "))
+            }
+        }
+
+        // `X: …`
+        if let colon = remainder.firstIndex(of: ":") {
+            let head = remainder[..<colon].trimmingCharacters(in: .whitespaces)
+            if !head.isEmpty, head.split(whereSeparator: \.isWhitespace).count <= 3 {
+                candidates.append(head)
+            }
+        }
+
+        return candidates.filter { !$0.isEmpty }
+    }
+
+    private func implicitAppCandidates(in remainder: String) -> [String] {
+        let words = remainder.split(whereSeparator: \.isWhitespace).map(String.init)
+        var candidates: [String] = []
+
+        // `… in X`, `… on X, …`: the one to three words after each preposition, longest first,
+        // the last preposition first — "in Mail" at the end of a sentence is the ordinary case.
+        for index in words.indices.reversed() where Self.screenUseAppPrepositions.contains(words[index].lowercased()) {
+            for length in stride(from: 3, through: 1, by: -1) {
+                // The words after the preposition, if there are this many of them.
+                let end = index + 1 + length
+                guard end <= words.count else {
+                    continue
+                }
+                candidates.append(Self.screenUseName(from: words[(index + 1)..<end]))
+            }
+        }
+
+        // The request's own last words: a sentence that simply ends with the app.
+        for length in stride(from: 3, through: 1, by: -1) where words.count >= length {
+            candidates.append(Self.screenUseName(from: words.suffix(length)))
+        }
+
+        return candidates.filter { !$0.isEmpty }
+    }
+
+    private static func screenUseName(from words: ArraySlice<String>) -> String {
+        words
+            .map { $0.trimmingCharacters(in: CharacterSet(charactersIn: ",.;:!?")) }
+            .joined(separator: " ")
+            .trimmingCharacters(in: .whitespaces)
+    }
+
+    private func screenUsePlan(app: InstalledApp, goal: String) -> AgentPlan {
+        var session = AgentStep(
+            id: "screen-use",
+            operation: .visionSession,
+            description: "Control \(app.displayName) on screen to \(goal).",
+            appName: app.displayName
+        )
+        session.visionGoal = goal
+        guard let running = runningAppBundleIdentifiers,
+              !running.contains(app.bundleIdentifier.lowercased()) else {
+            return AgentPlan(
+                summary: "Control \(app.displayName) on screen: \(goal)",
+                requiresConfirmation: false,
+                steps: [session]
+            )
+        }
+        return AgentPlan(
+            summary: "Open \(app.displayName) and control it on screen: \(goal)",
+            requiresConfirmation: false,
+            steps: [
+                AgentStep(
+                    id: "screen-use-open",
+                    operation: .openApp,
+                    description: "Open \(app.displayName).",
+                    appName: app.displayName
+                ),
+                session
+            ]
+        )
+    }
+
+    private func screenUseClarificationPlan(id: String, question: String) -> AgentPlan {
+        AgentPlan(
+            summary: "Clarification needed.",
+            requiresConfirmation: false,
+            steps: [
+                AgentStep(
+                    id: id,
+                    operation: .clarify,
+                    description: "Ask what to do on screen.",
+                    question: question
+                )
+            ]
+        )
+    }
+
 }

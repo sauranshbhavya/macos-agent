@@ -1,0 +1,309 @@
+# SONNY-451 — [s] at the start of a command routes it to screen use through the resolver, with the
+# app read from the command's words and checked against what is installed or asked for; and an
+# open_app, open_workspace or open_url step, and a screen-control session, bring the app the user
+# was in back in front when they are done. Property: the prefix is the first and only new door,
+# exact and case-insensitive, and every gate a planned session meets stands in front of it; no app
+# named is a clarification and its answer completes the command; an open that moved the front
+# restores it, on a throw too, and one that moved nothing restores nothing; only a switch is a
+# restore, and an app that has quit is never asked to come back; a session restores the user's app
+# through the same restorer on every exit and at a pause, never over the app under control while
+# Sonny acts; and a delegated [s] cannot start a second session. After PR #238's review: a prefixed
+# command at an app that is not running opens it first; every answer to the door's question stays on
+# the prefixed route; an alias alone asks what to do; two apps in one sentence ask which; an open
+# whose app the next session controls hands the user's app to that session; a session gives the
+# user's app back when it ends by Stop or by an error; a restore is live only at the noted bundle; the
+# shipping composition reads the running instances once; and the prefixed Safe-mode and advisory
+# tests drive the gates they are named for.
+#
+# X13 to X23 are PR #238's findings, each applied by hand on this branch and killed by the tests
+# named for it; X3's killer changed in that round, because an answer is no longer appended, and it
+# was re-applied by hand and killed. X24 to X26 are its delta review's: the chain gives back what its
+# focus carry still holds when a session after an open never starts, an answer's leading preposition
+# is dropped, and an answer to "which app" naming no installed app keeps the question and says so.
+#
+# X4 and X5 were rewritten on SONNY-451's rebase over SONNY-440: their `from` blocks named code the
+# break fix changed (`onRestore(before)` became `onRestore(before.app)`, and the session stopped
+# restoring through the synthesizer), so they matched nothing and a battery would have refused them
+# at pre-flight. X7 to X12 are the founders' decision of 2026-09-12 and the defects that decision's
+# rebase found.
+#
+# Killers expected (hand-traced, and X4, X5, X7, X8, X9 and X10 hand-applied on this branch; the
+# founders' weekly battery measures): X1 by every ScreenUsePrefixTests plan test and every
+# VisionSessionRunTests aPrefixedCommandMeets… test; X2 by ScreenUsePrefixTests
+# (thePrefixIsExactSpellingAndCaseInsensitive); X3 (before PR #238's round) by ScreenUsePrefixTests
+# (noAppNamedAsksWhichAppAndTheAnswerCompletesTheCommand, since replaced); X4 by FocusRestorerTests
+# (anOpenThatMovedTheFrontmostAppBringsItBack) and OpenStepsRestoreFocusTests
+# (anAppOpenBringsThePreviousAppBack); X5 by VisionSessionRunTests
+# (theSessionBringsThePreviousAppBackWhenItEnds); X6 by OpenStepsRestoreFocusTests
+# (anAppOpenBringsThePreviousAppBack); X7 by FocusRestorerTests (aLaunchIsNotReportedAsARestore,
+# throughTheShippingShapeALaunchIsNotARestore) and OpenStepsRestoreFocusTests
+# (anOpenWhoseRestoreWasALaunchDoesNotSayTheAppCameBack); X8 by FocusRestorerTests
+# (anAppThatHasQuitIsNeverAskedToComeBack) and VisionSessionRunTests
+# (anAppTheUserQuitDuringTheSessionIsNotStartedWhenItEnds); X9 by VisionSessionRunTests
+# (theSessionBringsThePreviousAppBackWhenItEnds, anAppTheUserQuitDuringTheSessionIsNotStartedWhenItEnds);
+# X10 by VisionSessionRunTests (aPauseGivesTheUsersAppBackAndNothingIsClickedUntilTheTargetIsInFrontAgain);
+# X11 by FocusRestorerTests (anOpenThatMovedNothingRestoresNothing) and OpenStepsRestoreFocusTests
+# (aURLOpenInTheBrowserAlreadyInFrontRestoresNothing, anOpenOfTheAppAlreadyInFrontRestoresNothing);
+# X12 by VisionSessionRunTests (aDelegatedPrefixedInstructionIsRefusedAsASecondSession); X13 by
+# ScreenUsePrefixTests (anAppThatIsNotRunningIsOpenedBeforeItsSession) and VisionSessionRunTests
+# (aPrefixedCommandAtAnAppThatIsNotRunningOpensItAndThenControlsIt); X14 by VisionSessionRunTests
+# (aPrefixedCommandMeetsSafeModesAskBeforeEveryAction, safeModeShowsTheCaptureAndThenAsksAboutTheAction);
+# X15 by VisionSessionRunTests (aPrefixedCommandMeetsTheTierThreeAdvisory); X16 by
+# VisionSessionRunTests (aSessionStoppedByTheUserGivesTheUsersAppBack,
+# aSessionEndedByAnErrorGivesTheUsersAppBack); X17 by VisionSessionRunTests
+# (answeringThePrefixsQuestionStartsTheSessionWithoutThePlanner); X18 by VisionSessionRunTests
+# (anOpenFollowedByASessionOnTheSameAppGivesTheUsersAppBackOnlyAtTheEnd,
+# aPrefixedCommandAtAnAppThatIsNotRunningOpensItAndThenControlsIt); X19 by the same two and
+# FocusRestorerTests (anOpenHandingOnBringsNothingBackAndHoldsTheAppThatWasInFront); X20 by
+# FocusRestorerTests (theLivenessReadCountsOnlyInstancesStillRunningFromTheNotedBundle); X21 by
+# ScreenUsePrefixTests (anAliasOfAnAppAloneAsksWhatToDoInIt); X22 by ScreenUsePrefixTests
+# (twoAppsInOneSentenceAskWhichRatherThanPickingOne); X23 by FocusRestorerTests
+# (theShippingCompositionHandsTheActivationTheInstancesItNotedAndReadsThemOnce). X3, after the
+# round, by ScreenUsePrefixTests (anEmptyPrefixAndABareAppNameEachAskForWhatIsMissing,
+# eachQuestionsNaturalAnswerStaysOnThePrefixedRoute, anAliasOfAnAppAloneAsksWhatToDoInIt) and
+# VisionSessionRunTests (answeringThePrefixsQuestionStartsTheSessionWithoutThePlanner). X24 by
+# VisionSessionRunTests (aPrefixedSessionRefusedAtTheDoorAfterItsOpenGivesTheUsersAppBack,
+# aPlannedSessionRefusedAtTheDoorAfterItsOpenGivesTheUsersAppBack,
+# aStopWhileTheDoorWaitsAfterAnOpenGivesTheUsersAppBack); X25 by ScreenUsePrefixTests
+# (twoAppsInOneSentenceAskWhichRatherThanPickingOne, eachQuestionsNaturalAnswerStaysOnThePrefixedRoute);
+# X26 by ScreenUsePrefixTests (eachQuestionsNaturalAnswerStaysOnThePrefixedRoute) and
+# VisionSessionRunTests (answeringWhichAppWithAnAppThatIsNotInstalledSaysSoAndKeepsTheQuestion).
+
+>>> mutant X1 the prefix door removed: [s] falls through to the other doors and the planner
+>>> file Sources/MacAgentCore/InstantCommandResolver.swift
+>>> from
+        if let screenUse = screenUseResolution(in: command) {
+            return screenUse
+        }
+>>> to
+        if false, let screenUse = screenUseResolution(in: command) {
+            return screenUse
+        }
+>>> end
+
+>>> mutant X2 the prefix case-sensitive: [S] takes no door
+>>> file Sources/MacAgentCore/InstantCommandResolver.swift
+>>> from
+        guard command.lowercased().hasPrefix(Self.screenUsePrefix) else {
+>>> to
+        guard command.hasPrefix(Self.screenUsePrefix) else {
+>>> end
+
+>>> mutant X3 a request's last words are no longer read as the app: `[s] Notes` asks which app
+>>> file Sources/MacAgentCore/InstantCommandResolver.swift
+>>> from
+        for length in stride(from: 3, through: 1, by: -1) where words.count >= length {
+            candidates.append(Self.screenUseName(from: words.suffix(length)))
+        }
+>>> to
+        for length in stride(from: 3, through: 1, by: -1) where false && words.count >= length {
+            candidates.append(Self.screenUseName(from: words.suffix(length)))
+        }
+>>> end
+
+>>> mutant X4 the restore after a completed open dropped
+>>> file Sources/MacAgentCore/FocusRestorer.swift
+>>> from
+        if let before, await restored(before) {
+            onRestore(before.app)
+        }
+        return result
+>>> to
+        return result
+>>> end
+
+>>> mutant X5 the session gives back the controlled app instead of the app the user was in
+>>> file Sources/MacAgentCore/VisionSessionRunner.swift
+>>> from
+        guard let previous = previousFrontmost, previous.app.bundleIdentifier != target.bundleIdentifier else {
+>>> to
+        guard let previous = focusRestorer.frontmost(), previous.app.bundleIdentifier != target.bundleIdentifier else {
+>>> end
+
+>>> mutant X6 an app open no longer restores focus
+>>> file Sources/MacAgentCore/OpenAppCapabilityAdapter.swift
+>>> from
+        try await context.restoringFocus(afterOpening: [spec.app.bundleIdentifier], log: log) {
+            try await context.appOpener.open(bundleIdentifier: spec.app.bundleIdentifier)
+        }
+>>> to
+        try await context.appOpener.open(bundleIdentifier: spec.app.bundleIdentifier)
+>>> end
+
+>>> mutant X7 a launch is counted as a restore
+>>> file Sources/MacAgentCore/FocusRestorer.swift
+>>> from
+        return await bringToFront(before) == .switched
+>>> to
+        return await bringToFront(before) != .refused
+>>> end
+
+>>> mutant X8 the liveness check removed: an app that has quit is asked to come back, which starts it
+>>> file Sources/MacAgentCore/FocusRestorer.swift
+>>> from
+        guard stillRunning(noted) else {
+            return .refused
+        }
+        return await activation(noted)
+>>> to
+        return await activation(noted)
+>>> end
+
+>>> mutant X9 the session gives the user's app back through the synthesizer again, outside the restorer's rule
+>>> file Sources/MacAgentCore/VisionSessionRunner.swift
+>>> from
+        _ = await focusRestorer.bringToFront(previous)
+>>> to
+        _ = await environment.synthesizer.activateApp(bundleIdentifier: previous.app.bundleIdentifier)
+>>> end
+
+>>> mutant X10 a session resumed from a pause acts without bringing the controlled app forward again
+>>> file Sources/MacAgentCore/VisionSessionRunner.swift
+>>> from
+                    _ = await environment.synthesizer.activateApp(bundleIdentifier: target.bundleIdentifier)
+>>> to
+                    _ = ()
+>>> end
+
+>>> mutant X11 an open that moved nothing still asks for a restore
+>>> file Sources/MacAgentCore/FocusRestorer.swift
+>>> from
+        if let now = frontmost(), now.app.bundleIdentifier == before.app.bundleIdentifier {
+            return false
+        }
+>>> to
+        if false, let now = frontmost(), now.app.bundleIdentifier == before.app.bundleIdentifier {
+            return false
+        }
+>>> end
+
+>>> mutant X12 a delegated [s] is no longer refused as a second session
+>>> file Sources/MacAgent/AgentViewModel+VisionSession.swift
+>>> from
+            if prepared.plan.steps.contains(where: { $0.operation == AgentOperation.visionSession }) {
+>>> to
+            if prepared.plan.steps.contains(where: { _ in false }) {
+>>> end
+
+>>> mutant X13 a prefixed command at an app that is not running builds no open step, so its session fails
+>>> file Sources/MacAgentCore/InstantCommandResolver.swift
+>>> from
+        guard let running = runningAppBundleIdentifiers,
+              !running.contains(app.bundleIdentifier.lowercased()) else {
+>>> to
+        guard let running = runningAppBundleIdentifiers, running.isEmpty,
+              !running.contains(app.bundleIdentifier.lowercased()) else {
+>>> end
+
+>>> mutant X14 Safe mode's capture review and action approval inside the loop switched off
+>>> file Sources/MacAgentCore/VisionSessionRunner.swift
+>>> from
+            if context.mode.asksBeforeEveryAction {
+>>> to
+            if false, context.mode.asksBeforeEveryAction {
+>>> end
+
+>>> mutant X15 the session's tier-3 advisory escalation removed
+>>> file Sources/MacAgentCore/VisionSessionCapabilityAdapter.swift
+>>> from
+                CapabilityRiskEscalation(
+                    fromTier: .tier2,
+                    toTier: .tier3,
+                    reason: "Sonny will control \(appName) directly, clicking and typing in its window, and will send redacted screenshots of that window to its vision model.",
+                    consequence: .advisory
+                )
+>>> to
+>>> end
+
+>>> mutant X16 a session that ends by Stop or an error no longer gives the user's app back
+>>> file Sources/MacAgentCore/VisionSessionRunner.swift
+>>> from
+        } catch {
+            await restorePreviousFrontmost()
+>>> to
+        } catch {
+>>> end
+
+>>> mutant X17 an answer to the prefix's question leaves the prefixed route for the planner
+>>> file Sources/MacAgent/AgentViewModel.swift
+>>> from
+        if let screenUse = resolver.screenUseCompletion(request: request, answer: answer) {
+>>> to
+        if false, let screenUse = resolver.screenUseCompletion(request: request, answer: answer) {
+>>> end
+
+>>> mutant X18 the chain never names the app the next unit controls, so an open restores between itself and the session
+>>> file Sources/MacAgentCore/AgentActionExecutor.swift
+>>> from
+                nextUnitControls: nextSegment?.steps.first { $0.operation == .visionSession }?.resolvedBundleIdentifier,
+>>> to
+                nextUnitControls: nextSegment == nil ? nil : String?.none,
+>>> end
+
+>>> mutant X19 an open handed a carry restores anyway instead of handing the user's app on
+>>> file Sources/MacAgentCore/FocusRestorer.swift
+>>> from
+        if let carry {
+            if let before {
+>>> to
+        if false, let carry {
+            if let before {
+>>> end
+
+>>> mutant X20 the liveness check counts an instance running from another bundle with the same identifier
+>>> file Sources/MacAgentCore/FocusRestorer.swift
+>>> from
+        return instances.contains { !$0.isTerminated && $0.bundleURL?.standardizedFileURL == bundleURL.standardizedFileURL }
+>>> to
+        return instances.contains { !$0.isTerminated }
+>>> end
+
+>>> mutant X21 an app's alias alone starts a session whose goal is the alias
+>>> file Sources/MacAgentCore/InstantCommandResolver.swift
+>>> from
+        guard installedAppResolver.resolve(bareName)?.bundleIdentifier != app.bundleIdentifier else {
+>>> to
+        guard bareName.lowercased() != app.displayName.lowercased() else {
+>>> end
+
+>>> mutant X22 two apps in one sentence: the first read wins instead of a question
+>>> file Sources/MacAgentCore/InstantCommandResolver.swift
+>>> from
+        default:
+            return .several(named)
+>>> to
+        default:
+            return .one(named[0])
+>>> end
+
+>>> mutant X23 the shipping composition re-reads the running instances when it activates
+>>> file Sources/MacAgentCore/FocusRestorer.swift
+>>> from
+                return await activation(bundleURL, noted.heldInstances)
+>>> to
+                return await activation(bundleURL, runningApplications(noted.app.bundleIdentifier))
+>>> end
+
+>>> mutant X24 a chain that throws no longer gives back what its focus carry holds, so a session refused or stopped after its open leaves the opened app in front
+>>> file Sources/MacAgentCore/AgentActionExecutor.swift
+>>> from
+        if let held = focusCarry.take() {
+>>> to
+        if case .success = outcome, let held = focusCarry.take() {
+>>> end
+
+>>> mutant X25 an answer's leading preposition is kept, so `in Slack` labels as nothing
+>>> file Sources/MacAgentCore/InstantCommandResolver.swift
+>>> from
+        if words.count > 1, screenUseAppPrepositions.contains(words[0].lowercased()) {
+>>> to
+        if false, words.count > 1, screenUseAppPrepositions.contains(words[0].lowercased()) {
+>>> end
+
+>>> mutant X26 an answer to "which app" naming no installed app is dispatched and asked about again with no hint
+>>> file Sources/MacAgentCore/InstantCommandResolver.swift
+>>> from
+            guard installedAppResolver.resolve(label) != nil else {
+>>> to
+            guard true || installedAppResolver.resolve(label) != nil else {
+>>> end

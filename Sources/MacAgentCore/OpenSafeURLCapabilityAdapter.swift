@@ -48,7 +48,12 @@ public struct OpenSafeURLCapabilityAdapter: CapabilityAdapter {
         let previews = try preview(plan: plan, context: context)
         let spec = try spec(in: plan)
         log(.act, "Opening \(spec.url.absoluteString)")
-        try await context.browserOpener.open(spec.url, using: context.browser(for: .openURL, in: plan))
+        // The app the user was in comes back in front once the browser has the page (SONNY-451),
+        // a browser that was already in front included: the open moved nothing, so nothing moves.
+        let browser = context.browser(for: .openURL, in: plan)
+        try await context.restoringFocus(afterOpening: browser.map { [$0.bundleIdentifier] } ?? [], log: log) {
+            try await context.browserOpener.open(spec.url, using: browser)
+        }
         log(.summarize, "Opened URL")
         return AgentRunResult(plan: plan, previews: previews, summary: "Opened \(spec.url.absoluteString).")
     }

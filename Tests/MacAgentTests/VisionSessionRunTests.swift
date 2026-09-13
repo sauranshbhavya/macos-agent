@@ -74,6 +74,12 @@ struct VisionSessionRunTests {
             case typed(String)
             case pressed(VisionActionKey)
             case scrolled(VisionScrollDirection)
+            /// The run's `FocusRestorer` brought the user's app back (SONNY-451) — a different event
+            /// from `activated`, which is the session bringing its *target* forward, so a test can
+            /// tell the two apart in one ordered list.
+            case restored(String)
+            /// An `open_app` step opened an app, through `HermeticAppOpener` (SONNY-451).
+            case opened(String)
         }
 
         private(set) var events: [Event] = []
@@ -86,11 +92,23 @@ struct VisionSessionRunTests {
         /// loop rather than racing it from outside.
         var afterClick: (@Sendable (Int) -> Void)?
 
-        init(frontmost: String?) {
+        /// The apps on this screen that are not running. **An activation of one fails, as the real
+        /// synthesizer's does** — `SystemScreenActionSynthesizer.activateApp` answers `false` when the
+        /// running list holds nothing for the bundle identifier — and activates nothing. This double
+        /// used to answer `true` for every app, which is why no test could see a prefixed command at a
+        /// closed app end in "Is it running?" (PR #238's F1). Empty unless a test closes an app, and
+        /// an `open_app` step through `HermeticAppOpener` starts it.
+        var notRunning: Set<String>
+
+        init(frontmost: String?, notRunning: Set<String> = []) {
             self.frontmost = frontmost
+            self.notRunning = notRunning
         }
 
         func activateApp(bundleIdentifier: String) async -> Bool {
+            guard !notRunning.contains(bundleIdentifier) else {
+                return false
+            }
             events.append(.activated(bundleIdentifier))
             frontmost = bundleIdentifier
             return true
@@ -139,6 +157,19 @@ struct VisionSessionRunTests {
         var throwsAfterDeliveringClick: Error?
 
         var clickCount: Int { events.filter { if case .clicked = $0 { return true } else { return false } }.count }
+
+        /// What the run's focus restorer did to this screen: the user's app is in front again.
+        func recordRestore(_ bundleIdentifier: String) {
+            events.append(.restored(bundleIdentifier))
+            frontmost = bundleIdentifier
+        }
+
+        /// What an `open_app` step did to this screen: the opened app came forward.
+        func recordOpen(_ bundleIdentifier: String) {
+            events.append(.opened(bundleIdentifier))
+            notRunning.remove(bundleIdentifier)
+            frontmost = bundleIdentifier
+        }
     }
 
     private struct FakeCaptureBackend: ScreenCaptureBackend {
@@ -313,12 +344,756 @@ struct VisionSessionRunTests {
         }
     }
 
+    /// Opens an app on the synthesizer's own screen and nowhere else, so a delegated `open_app` step
+    /// inside a session lands in the same ordered event list and cannot open a real app.
+    private struct HermeticAppOpener: AppOpening {
+        let synthesizer: RecordingSynthesizer
+        func open(bundleIdentifier: String) async throws {
+            synthesizer.recordOpen(bundleIdentifier)
+        }
+    }
+
+    /// The running apps the view model's resolver reads (PR #238's F1): every app in the catalog the
+    /// test process resolves against, except the ones the synthesizer's screen has closed. Hermetic,
+    /// where the view model's default switcher would read this Mac's own process list — and a
+    /// prefixed command at an app the developer happens not to have open would then plan an open.
+    @MainActor
+    private final class ScreenRunningApps: RunningAppSwitching {
+        let synthesizer: RecordingSynthesizer
+        init(synthesizer: RecordingSynthesizer) {
+            self.synthesizer = synthesizer
+        }
+        func runningApps() -> [RunningApp] {
+            MacAppCatalog.default.apps
+                .filter { !synthesizer.notRunning.contains($0.bundleIdentifier) }
+                .enumerated()
+                .map { RunningApp(displayName: $1.displayName, bundleIdentifier: $1.bundleIdentifier, processIdentifier: pid_t(100 + $0)) }
+        }
+        func activate(bundleIdentifier: String) async throws {
+            Issue.record("no session test switches apps: \(bundleIdentifier)")
+        }
+    }
+
+    /// A planner that splits "open X and …" the way the tool description asks: an `open_app` step
+    /// and a session on the same app (PR #238's F5).
+    private struct OpenThenControlPlanner: Planning {
+        let appName: String
+        let goal: String
+        func plan(command: String, priorTaskContext: PriorTaskContext?) async throws -> AgentPlan {
+            AgentPlan(
+                summary: "Open \(appName) and \(goal).",
+                requiresConfirmation: false,
+                steps: [
+                    AgentStep(id: "open", operation: .openApp, description: "Open \(appName).", appName: appName),
+                    AgentStep(id: "vision", operation: .visionSession, description: "Control \(appName)", appName: appName, visionGoal: goal)
+                ]
+            )
+        }
+    }
+
+    /// A delegated instruction's planner that answers with one `open_app` step for `appName`.
+    private struct OpenAppPlanner: Planning {
+        let appName: String
+        func plan(command: String, priorTaskContext: PriorTaskContext?) async throws -> AgentPlan {
+            AgentPlan(
+                summary: "Open \(appName).",
+                requiresConfirmation: false,
+                steps: [AgentStep(id: "open", operation: .openApp, description: "Open \(appName).", appName: appName)]
+            )
+        }
+    }
+
+    /// How the run's focus restorer behaves in a session test (SONNY-451).
+    ///
+    /// It builds the shipping `FocusRestorer` over closures that read and move the synthesizer's own
+    /// screen, so a restore lands in the same ordered event list as the session's clicks and its
+    /// activations of the target. `appStillRunning` is the liveness read: `false` is the user's app
+    /// having quit during the session, which the restorer must answer by asking for nothing.
+    private struct SessionRestoreScript {
+        var appStillRunning = true
+
+        func restorer(over synthesizer: RecordingSynthesizer) -> FocusRestorer {
+            let stillRunning = appStillRunning
+            return FocusRestorer(
+                frontmost: {
+                    synthesizer.frontmost.map { bundleIdentifier in
+                        NotedFrontmost(
+                            app: RunningApp(displayName: bundleIdentifier, bundleIdentifier: bundleIdentifier, processIdentifier: 7),
+                            heldInstances: []
+                        )
+                    }
+                },
+                stillRunning: { _ in stillRunning },
+                activation: { noted in
+                    synthesizer.recordRestore(noted.app.bundleIdentifier)
+                    return .switched
+                }
+            )
+        }
+    }
+
     /// An attention monitor a test can flip mid-session.
     private final class SwitchableAttentionMonitor: SessionAttentionMonitoring, @unchecked Sendable {
         var state: SessionAttentionState = .attended
         var presentable = true
         func attentionState() async -> SessionAttentionState { state }
         func canPresentApproval() async -> Bool { presentable }
+    }
+
+    // MARK: - Screen use by the [s] prefix: every gate a planned session meets (SONNY-451)
+
+    // **A prefixed command is a route, not a gate, and each test below proves it meets one gate.**
+    // The founders' decision of 2026-09-12: `[s]` routes a command into a screen-control session
+    // "through every gate a planner-routed one meets", with a test that drives a prefixed command
+    // through the gates and asserts each fires. Each test types the command into the view model the
+    // way the widget does — `command`, then `start()` — so the resolver builds the plan and the real
+    // dispatch runs it, and each asserts what that gate's own test asserts on the planned or direct
+    // route, so a gate the prefix skipped would read differently here than there. This fixture's
+    // planner throws if reached, so a plan that came from anywhere but the resolver ends the test.
+    //
+    // What makes this structural rather than lucky is recorded where it lives:
+    // `PreparedPlanSource`'s own doc says nothing may read a plan's source to weaken a consent, and
+    // `requiresConfirmation`, which the prefix's plan sets `false`, is read by nothing that gates
+    // (`git grep -nE '\.requiresConfirmation' -- Sources` finds two copies into a new plan, the
+    // initializer's assignment and the decoder's).
+
+    /// **Normal mode's per-app consent**, on an app outside `AppControlStarterList` (Safari is on it
+    /// and would not ask; VS Code is not): the question is raised before anything is clicked.
+    @Test
+    func aPrefixedCommandMeetsNormalModesPerAppConsent() async throws {
+        let fixture = try makeFixture(
+            replies: [#"{"action":"click","x":10,"y":10,"target":"Extensions","consequence":"ordinary","rationale":"r"}"#],
+            bundleIdentifier: "com.microsoft.VSCode",
+            appControlAlreadyGranted: false
+        )
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.command = "[s] open the extensions panel in VS Code"
+        fixture.viewModel.start()
+        try await waitUntil("the consent approval") { fixture.viewModel.approvalRequest != nil }
+
+        let request = try #require(fixture.viewModel.approvalRequest)
+        let reasons = request.assessment.escalations.map(\.reason).joined(separator: " ")
+        #expect(reasons.contains("has not been allowed to control VS Code"))
+        #expect(fixture.synthesizer.clickCount == 0)
+        fixture.viewModel.cancelCurrentRun()
+        try await waitForIdle(fixture.viewModel)
+    }
+
+    /// **Safe mode asking for everything**, at each of its three moments, as
+    /// `safeModeShowsTheCaptureAndThenAsksAboutTheAction` asserts them on the direct route: the
+    /// session envelope before anything is captured, the capture before anything is sent, and the
+    /// action before it is taken.
+    ///
+    /// The version this replaces waited for a capture review *or* an approval, and Safe mode's
+    /// envelope approval satisfied that before the loop ran at all — so turning the loop's own
+    /// review off left it green while the direct-route test failed (PR #238's F2, its R2).
+    @Test
+    func aPrefixedCommandMeetsSafeModesAskBeforeEveryAction() async throws {
+        let fixture = try makeFixture(
+            replies: [
+                #"{"action":"click","x":10,"y":10,"target":"Reading List","consequence":"ordinary","rationale":"r"}"#,
+                #"{"action":"done","rationale":"Done."}"#
+            ],
+            mode: .safe
+        )
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.command = "[s] tidy the reading list in Safari"
+        fixture.viewModel.start()
+
+        try await waitUntil("the session-envelope approval") { fixture.viewModel.approvalRequest != nil }
+        let envelope = try #require(fixture.viewModel.approvalRequest)
+        #expect(envelope.approvalCopy.actionDescription.contains("Control Safari"))
+        #expect(fixture.model.prompts.isEmpty)
+        fixture.viewModel.start()
+
+        try await waitUntil("the capture preview") { fixture.viewModel.visionCapturePreview != nil }
+        let preview = try #require(fixture.viewModel.visionCapturePreview)
+        #expect(preview.appDisplayName == "Safari")
+        #expect(preview.iteration == 1)
+        #expect(fixture.model.prompts.isEmpty, "nothing may be sent before the user has seen it")
+        fixture.viewModel.resolveVisionCapturePreview(allowing: true)
+
+        try await waitUntil("the action approval") { fixture.viewModel.approvalRequest != nil }
+        #expect(fixture.viewModel.approvalRequest?.requirement == .explicitApproval)
+        #expect(fixture.model.prompts.count == 1)
+        #expect(fixture.synthesizer.clickCount == 0)
+
+        fixture.viewModel.start()
+        try await waitUntil("the second capture preview") { fixture.viewModel.visionCapturePreview != nil }
+        fixture.viewModel.resolveVisionCapturePreview(allowing: true)
+        try await waitForIdle(fixture.viewModel)
+
+        #expect(fixture.synthesizer.clickCount == 1)
+    }
+
+    /// **The billing gate at the door**, with the assertions `aSessionWithNoAllowanceIsRefusedAtTheDoorAndTouchesNothing`
+    /// makes on the direct route: the allowance sentence, nothing clicked, nothing sent, no journal
+    /// row, and exactly one consult, the door's. (The version this replaces accepted any error or any
+    /// summary at all, which a session refused for a different reason would also have passed.)
+    @Test
+    func aPrefixedCommandMeetsTheBillingGateAtTheDoor() async throws {
+        let gate = ScriptedScreenControlGate(answers: [], thereafter: .refused(.allowanceExhausted))
+        let fixture = try makeFixture(
+            replies: [#"{"action":"click","x":10,"y":10,"target":"Reading List","consequence":"ordinary","rationale":"r"}"#],
+            screenControlGate: gate
+        )
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.command = "[s] tidy the reading list in Safari"
+        fixture.viewModel.start()
+        try await waitForIdle(fixture.viewModel)
+
+        let told = fixture.viewModel.finalSummary + (fixture.viewModel.errorMessage ?? "")
+        #expect(told.contains("You've used your screen-control allowance — top up or wait."))
+        #expect(fixture.synthesizer.clickCount == 0)
+        #expect(fixture.model.prompts.isEmpty)
+        #expect(try fixture.journal.loadAll().isEmpty)
+        #expect(gate.consults == [.sessionStart])
+    }
+
+    /// **Redaction**: a password on screen is found and painted out of the capture before the model
+    /// sees it, and every capture the prefixed session sent went through the redaction service.
+    @Test
+    func aPrefixedCommandMeetsRedaction() async throws {
+        let fixture = try makeFixture(
+            replies: [#"{"action":"done","rationale":"Read it."}"#],
+            recognizer: ScriptedRecognizer(["password: hunter2"])
+        )
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.command = "[s] read the login page in Safari"
+        fixture.viewModel.start()
+        try await waitForIdle(fixture.viewModel)
+
+        let payload = try #require(fixture.model.payloads.first, "the prefixed session sent no capture")
+        #expect(payload.redactedImageData != nil)
+        #expect(payload.report.contains { $0.detectionClass == .passwordField }, "the password on screen was not redacted: \(payload.report)")
+    }
+
+    /// **The tier-3 advisory**, the session's own escalation: the plan is assessed at tier 3 with the
+    /// advisory reason, which is what keeps the unattended path's tier-2 ceiling from ever covering
+    /// a session. Normal mode runs an advisory without asking and the reason reaches the
+    /// ran-without-asking trace, so the trace carries it only when the assessment did; without the
+    /// escalation the plan is tier 2 and the trace says nothing is destructive.
+    ///
+    /// The test that held this name checked the destructive-control approval below instead, a
+    /// different escalation, and deleting the advisory changed none of its assertions (PR #238's F2).
+    @Test
+    func aPrefixedCommandMeetsTheTierThreeAdvisory() async throws {
+        let fixture = try makeFixture(replies: [#"{"action":"done","rationale":"Done."}"#])
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.command = "[s] tidy the reading list in Safari"
+        fixture.viewModel.start()
+        try await waitForIdle(fixture.viewModel)
+
+        let trace = try #require(fixture.viewModel.ranWithoutAskingTrace, "the prefixed session left no ran-without-asking trace")
+        #expect(trace.contains("Sonny will control Safari directly, clicking and typing in its window, and will send redacted screenshots of that window to its vision model."), "trace: \(trace)")
+        #expect(fixture.model.prompts.count == 1, "the session ran")
+    }
+
+    /// **A destructive action asks, whatever the model called it**: an action on a control labelled
+    /// Delete asks for explicit approval at tier 3 even though the model called it ordinary, and
+    /// nothing is clicked while it is open.
+    @Test
+    func aPrefixedCommandMeetsTheDestructiveActionApproval() async throws {
+        let fixture = try makeFixture(replies: [
+            #"{"action":"click","x":10,"y":10,"target":"Delete","consequence":"ordinary","rationale":"remove it"}"#,
+            #"{"action":"done","rationale":"Deleted."}"#
+        ])
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.command = "[s] delete the draft in Safari"
+        fixture.viewModel.start()
+        try await waitUntil("the mid-loop approval") { fixture.viewModel.approvalRequest != nil }
+
+        let request = try #require(fixture.viewModel.approvalRequest)
+        #expect(request.requirement == .explicitApproval)
+        #expect(request.assessment.effectiveTier == .tier3)
+        #expect(request.assessment.escalations.first?.consequence == .destructive)
+        #expect(fixture.synthesizer.clickCount == 0)
+        fixture.viewModel.cancelCurrentRun()
+        try await waitForIdle(fixture.viewModel)
+    }
+
+    /// **Ctrl-Opt-Esc**: the prefixed session takes the emergency stop while it is live, releases it
+    /// on exit, and pressing it ends the session.
+    @Test
+    func aPrefixedCommandMeetsTheEmergencyStop() async throws {
+        let keepClicking = #"{"action":"click","x":10,"y":10,"target":"A","consequence":"ordinary","rationale":"r"}"#
+        let fixture = try makeFixture(
+            replies: Array(repeating: keepClicking, count: 8),
+            limits: VisionSessionLimits(maximumIterations: 8, settleNanoseconds: 40_000_000)
+        )
+        defer { fixture.tearDown() }
+        fixture.viewModel.visionEmergencyStopHotKeyFactory = { try FakeStopHotKey(onStop: $0) }
+        #expect(fixture.viewModel.visionEmergencyStopHotKey == nil)
+
+        fixture.viewModel.command = "[s] click through the list in Safari"
+        fixture.viewModel.start()
+        try await waitUntil("the first click") { fixture.synthesizer.clickCount == 1 }
+
+        let hotKey = try #require(fixture.viewModel.visionEmergencyStopHotKey as? FakeStopHotKey, "the prefixed session did not take the emergency stop")
+        hotKey.press()
+        try await waitForIdle(fixture.viewModel)
+
+        #expect(fixture.synthesizer.clickCount <= 2, "actual: \(fixture.synthesizer.clickCount)")
+        #expect(fixture.viewModel.visionSessionProgress == nil)
+        #expect(fixture.viewModel.visionEmergencyStopHotKey == nil, "the emergency stop was not released")
+    }
+
+    /// **The terminal ban**, the structural deny: a prefixed command naming a terminal is refused
+    /// with no question and no capture, as `askingSonnyToControlATerminalIsRefusedWithNoApprovalAndNoCapture`
+    /// is on the planned route.
+    @Test
+    func aPrefixedCommandMeetsTheTerminalBan() async throws {
+        let fixture = try makeFixture(
+            replies: [#"{"action":"done","rationale":"never reached."}"#],
+            bundleIdentifier: "com.apple.Terminal"
+        )
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.command = "[s] run the build in Terminal"
+        fixture.viewModel.start()
+        try await waitForIdle(fixture.viewModel)
+
+        #expect(fixture.viewModel.approvalRequest == nil, "a terminal is never a question")
+        #expect(fixture.model.prompts.isEmpty)
+        #expect(fixture.synthesizer.clickCount == 0)
+        let told = fixture.viewModel.finalSummary + (fixture.viewModel.errorMessage ?? "")
+        #expect(told.contains("Sonny never controls a terminal"), "told: \(told)")
+    }
+
+    /// **The session gives the user's app back when it ends, and only then.** The screen starts on
+    /// another app, the session brings Safari forward and clicks, and the restore comes after the
+    /// last click — never before one, which would put the user's app under a synthesized action.
+    /// Through the run's `FocusRestorer`, so the restore is its own event and not an activation.
+    @Test
+    func theSessionBringsThePreviousAppBackWhenItEnds() async throws {
+        let fixture = try makeFixture(
+            replies: [
+                #"{"action":"click","x":10,"y":10,"target":"Reading List","consequence":"ordinary","rationale":"r"}"#,
+                #"{"action":"done","rationale":"The reading list is tidy."}"#
+            ],
+            frontmost: "com.other.App",
+            restore: SessionRestoreScript()
+        )
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.command = "[s] tidy the reading list in Safari"
+        fixture.viewModel.start()
+        try await waitForIdle(fixture.viewModel)
+
+        let events = fixture.synthesizer.events
+        #expect(events.first == .activated("com.apple.Safari"))
+        #expect(events.last == .restored("com.other.App"))
+        let lastClick = try #require(events.lastIndex { if case .clicked = $0 { return true } else { return false } })
+        let restore = try #require(events.firstIndex(of: .restored("com.other.App")))
+        #expect(restore > lastClick, "the user's app came back before Sonny had finished acting")
+        #expect(events.filter { $0 == .restored("com.other.App") }.count == 1)
+    }
+
+    /// **A session stopped by the user gives the user's app back too** (PR #238's F3). `run()`
+    /// restores on a throw as well as on a return, and every test of the restore ended in `done`, so
+    /// deleting the restore on the throw left the whole suite green. Stop is the ending that matters
+    /// most, because the user pressed it to get their screen back.
+    @Test
+    func aSessionStoppedByTheUserGivesTheUsersAppBack() async throws {
+        let keepClicking = #"{"action":"click","x":10,"y":10,"target":"A","consequence":"ordinary","rationale":"r"}"#
+        let fixture = try makeFixture(
+            replies: Array(repeating: keepClicking, count: 8),
+            frontmost: "com.other.App",
+            limits: VisionSessionLimits(maximumIterations: 8, settleNanoseconds: 40_000_000),
+            restore: SessionRestoreScript()
+        )
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.command = "[s] click through the list in Safari"
+        fixture.viewModel.start()
+        try await waitUntil("the first click") { fixture.synthesizer.clickCount == 1 }
+        fixture.viewModel.cancelCurrentRun()
+        try await waitForIdle(fixture.viewModel)
+
+        let events = fixture.synthesizer.events
+        let lastClick = try #require(events.lastIndex { if case .clicked = $0 { return true } else { return false } })
+        let restore = try #require(events.firstIndex(of: .restored("com.other.App")), "a stopped session did not give the user's app back: \(events)")
+        #expect(restore > lastClick)
+        #expect(events.filter { $0 == .restored("com.other.App") }.count == 1)
+    }
+
+    /// **A session that ends on an error gives the user's app back too** (PR #238's F3): a send that
+    /// fails after the first action stops the session where it is, and the user's app comes back.
+    @Test
+    func aSessionEndedByAnErrorGivesTheUsersAppBack() async throws {
+        let fixture = try makeFixture(
+            replies: [
+                #"{"action":"click","x":10,"y":10,"target":"A","consequence":"ordinary","rationale":"r"}"#,
+                #"{"action":"click","x":10,"y":10,"target":"B","consequence":"ordinary","rationale":"r"}"#
+            ],
+            frontmost: "com.other.App",
+            modelFailure: (iteration: 2, error: VisionModelClientError.backend(.offline)),
+            restore: SessionRestoreScript()
+        )
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.command = "[s] click through the list in Safari"
+        fixture.viewModel.start()
+        try await waitForIdle(fixture.viewModel)
+
+        #expect(fixture.viewModel.errorMessage != nil, "the session did not end on the failed send")
+        let events = fixture.synthesizer.events
+        let lastClick = try #require(events.lastIndex { if case .clicked = $0 { return true } else { return false } })
+        let restore = try #require(events.firstIndex(of: .restored("com.other.App")), "a failed session did not give the user's app back: \(events)")
+        #expect(restore > lastClick)
+        #expect(events.last == .restored("com.other.App"))
+    }
+
+    /// **A prefixed command at an app that is not running opens it, then controls it** (PR #238's F1).
+    /// The headline command used to build one session step, and a session never starts its target,
+    /// so with Notes closed the user read "Is it running?". The synthesizer here fails an activation
+    /// of a closed app the way the real one does; the open step starts Notes on its screen, and the
+    /// user's app comes back once, after the last action — not between the open and the session.
+    @Test
+    func aPrefixedCommandAtAnAppThatIsNotRunningOpensItAndThenControlsIt() async throws {
+        let fixture = try makeFixture(
+            replies: [
+                #"{"action":"click","x":10,"y":10,"target":"New Note","consequence":"ordinary","rationale":"r"}"#,
+                #"{"action":"done","rationale":"The note is made."}"#
+            ],
+            bundleIdentifier: "com.apple.Notes",
+            frontmost: "com.other.App",
+            restore: SessionRestoreScript(),
+            hermeticAppOpener: true,
+            notRunning: ["com.apple.Notes"]
+        )
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.command = "[s] open Notes and make a note called wave 7"
+        fixture.viewModel.start()
+        try await waitForIdle(fixture.viewModel)
+
+        let told = fixture.viewModel.finalSummary + (fixture.viewModel.errorMessage ?? "")
+        #expect(!told.contains("Is it running?"), "told: \(told)")
+        #expect(fixture.synthesizer.clickCount == 1, "the session did not run: \(told)")
+        let events = fixture.synthesizer.events
+        let opened = try #require(events.firstIndex(of: .opened("com.apple.Notes")), "Notes was not opened: \(events)")
+        let firstClick = try #require(events.firstIndex { if case .clicked = $0 { return true } else { return false } })
+        #expect(opened < firstClick)
+        #expect(events.filter { $0 == .restored("com.other.App") }.count == 1, "the user's app came back more than once: \(events)")
+        #expect(events.last == .restored("com.other.App"))
+    }
+
+    /// **An open followed by a session on the same app does not give the user's app back in between**
+    /// (PR #238's F5). Unprefixed, `open Notes and make a note` is planned as an `open_app` step and
+    /// a session on Notes. Once open steps restored focus, the user saw Notes, then their own app,
+    /// then Notes again. The executor now hands the user's app from the open to the session, which
+    /// gives it back when it ends.
+    @Test
+    func anOpenFollowedByASessionOnTheSameAppGivesTheUsersAppBackOnlyAtTheEnd() async throws {
+        let fixture = try makeFixture(
+            replies: [
+                #"{"action":"click","x":10,"y":10,"target":"New Note","consequence":"ordinary","rationale":"r"}"#,
+                #"{"action":"done","rationale":"The note is made."}"#
+            ],
+            bundleIdentifier: "com.apple.Notes",
+            frontmost: "com.other.App",
+            delegationPlanner: OpenThenControlPlanner(appName: "Notes", goal: "make a note called wave 7"),
+            restore: SessionRestoreScript(),
+            hermeticAppOpener: true,
+            notRunning: ["com.apple.Notes"]
+        )
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.command = "open Notes and make a note called wave 7"
+        fixture.viewModel.start()
+        try await waitForIdle(fixture.viewModel)
+
+        #expect(fixture.synthesizer.clickCount == 1, "the session did not run: \(fixture.viewModel.finalSummary) \(fixture.viewModel.errorMessage ?? "")")
+        let events = fixture.synthesizer.events
+        let opened = try #require(events.firstIndex(of: .opened("com.apple.Notes")), "Notes was not opened: \(events)")
+        let restores = events.indices.filter { events[$0] == .restored("com.other.App") }
+        let lastClick = try #require(events.lastIndex { if case .clicked = $0 { return true } else { return false } })
+        #expect(restores.count == 1, "the user's app was brought back \(restores.count) times: \(events)")
+        #expect(restores.allSatisfy { $0 > lastClick }, "the user's app came back between the open and the session: \(events)")
+        #expect(opened < lastClick)
+    }
+
+    /// **A session refused at the door after its open still gives the user's app back** (PR #238's
+    /// delta review, N1). The open hands the user's app to the session that follows it, and the
+    /// session takes it only once it is built — so a billing refusal at the door left Notes, which
+    /// the open had just started, in front for good. The chain now gives back whatever its carry
+    /// still holds when it ends. Here: `[s]` at closed Notes, with the allowance used up.
+    @Test
+    func aPrefixedSessionRefusedAtTheDoorAfterItsOpenGivesTheUsersAppBack() async throws {
+        let fixture = try makeFixture(
+            replies: [#"{"action":"done","rationale":"never reached."}"#],
+            bundleIdentifier: "com.apple.Notes",
+            frontmost: "com.other.App",
+            screenControlGate: ScriptedScreenControlGate(answers: [], thereafter: .refused(.allowanceExhausted)),
+            restore: SessionRestoreScript(),
+            hermeticAppOpener: true,
+            notRunning: ["com.apple.Notes"]
+        )
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.command = "[s] open Notes and make a note called wave 7"
+        fixture.viewModel.start()
+        try await waitForIdle(fixture.viewModel)
+
+        let told = fixture.viewModel.finalSummary + (fixture.viewModel.errorMessage ?? "")
+        #expect(told.contains("You've used your screen-control allowance — top up or wait."), "told: \(told)")
+        #expect(fixture.synthesizer.events == [.opened("com.apple.Notes"), .restored("com.other.App")])
+        #expect(fixture.synthesizer.frontmost == "com.other.App")
+        #expect(fixture.model.prompts.isEmpty)
+    }
+
+    /// The same, on the unprefixed planned route — whose open gave the user's app back before the
+    /// hand-over existed, so this is the case where the hand-over was a regression — and with the
+    /// other kind of refusal the door gives, an allowance it could not check.
+    @Test
+    func aPlannedSessionRefusedAtTheDoorAfterItsOpenGivesTheUsersAppBack() async throws {
+        let fixture = try makeFixture(
+            replies: [#"{"action":"done","rationale":"never reached."}"#],
+            bundleIdentifier: "com.apple.Notes",
+            frontmost: "com.other.App",
+            delegationPlanner: OpenThenControlPlanner(appName: "Notes", goal: "make a note called wave 7"),
+            screenControlGate: ScriptedScreenControlGate(answers: [], thereafter: .refused(.allowanceUnknown)),
+            restore: SessionRestoreScript(),
+            hermeticAppOpener: true,
+            notRunning: ["com.apple.Notes"]
+        )
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.command = "open Notes and make a note called wave 7"
+        fixture.viewModel.start()
+        try await waitForIdle(fixture.viewModel)
+
+        #expect(fixture.viewModel.errorMessage != nil, "the door did not refuse: \(fixture.viewModel.finalSummary)")
+        #expect(fixture.synthesizer.events == [.opened("com.apple.Notes"), .restored("com.other.App")])
+        #expect(fixture.synthesizer.frontmost == "com.other.App")
+        #expect(fixture.model.prompts.isEmpty)
+    }
+
+    /// And a stop pressed while the door waits: the run ends as "Canceled.", and the user's app the
+    /// open handed on comes back rather than leaving Notes in front.
+    @Test
+    func aStopWhileTheDoorWaitsAfterAnOpenGivesTheUsersAppBack() async throws {
+        let gate = ScriptedScreenControlGate.holdingUntilStopped()
+        let fixture = try makeFixture(
+            replies: [#"{"action":"done","rationale":"never reached."}"#],
+            bundleIdentifier: "com.apple.Notes",
+            frontmost: "com.other.App",
+            screenControlGate: gate,
+            restore: SessionRestoreScript(),
+            hermeticAppOpener: true,
+            notRunning: ["com.apple.Notes"]
+        )
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.command = "[s] open Notes and make a note called wave 7"
+        fixture.viewModel.start()
+        try await waitUntil("the door being asked") { gate.consults.contains(.sessionStart) }
+        fixture.viewModel.cancelCurrentRun()
+        try await waitForIdle(fixture.viewModel)
+
+        #expect(fixture.viewModel.finalSummary == "Canceled.")
+        #expect(fixture.synthesizer.events == [.opened("com.apple.Notes"), .restored("com.other.App")])
+        #expect(fixture.synthesizer.frontmost == "com.other.App")
+    }
+
+    /// **An answer naming an app this Mac does not have keeps the question open and says why** (PR
+    /// #238's delta review, N6). It used to become a label that read as nothing, and the door asked
+    /// "Which app…" again with no hint. Now the user is told the app is not on this Mac, as the
+    /// planned route tells them, nothing runs, and the next answer is read against the same question.
+    @Test
+    func answeringWhichAppWithAnAppThatIsNotInstalledSaysSoAndKeepsTheQuestion() async throws {
+        let fixture = try makeFixture(
+            replies: [#"{"action":"done","rationale":"The note is made."}"#],
+            bundleIdentifier: "com.apple.Notes"
+        )
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.command = "[s] make a note called wave 7"
+        fixture.viewModel.start()
+        try await waitUntil("the question") { fixture.viewModel.clarificationQuestion != nil }
+        let question = try #require(fixture.viewModel.clarificationQuestion)
+
+        fixture.viewModel.clarificationAnswer = "Foo"
+        fixture.viewModel.submitClarification()
+
+        #expect(fixture.viewModel.errorMessage == "Sonny could not find an app called Foo on this Mac.")
+        #expect(fixture.viewModel.clarificationQuestion == question, "the question did not stay open")
+        #expect(fixture.model.prompts.isEmpty)
+
+        fixture.viewModel.clarificationAnswer = "Notes"
+        fixture.viewModel.submitClarification()
+        try await waitForIdle(fixture.viewModel)
+
+        #expect(fixture.viewModel.errorMessage == nil, "error: \(fixture.viewModel.errorMessage ?? "")")
+        #expect(fixture.model.prompts.count == 1, "the session did not start")
+        #expect(fixture.viewModel.finalSummary == "The note is made.")
+    }
+
+    /// **Answering the door's question keeps the command on the prefixed route** (PR #238's F4).
+    /// `[s] Notes` asks what to do; its answer used to reach the planner, which this fixture's
+    /// planner refuses by throwing, so the run failed. Answered now, it is the prefixed command the
+    /// door places the answer in, and the session starts in Notes.
+    @Test
+    func answeringThePrefixsQuestionStartsTheSessionWithoutThePlanner() async throws {
+        let fixture = try makeFixture(
+            replies: [#"{"action":"done","rationale":"The note is made."}"#],
+            bundleIdentifier: "com.apple.Notes"
+        )
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.command = "[s] Notes"
+        fixture.viewModel.start()
+        try await waitUntil("the question") { fixture.viewModel.clarificationQuestion != nil }
+        #expect(fixture.viewModel.clarificationQuestion == "What should Sonny do in Notes?")
+
+        fixture.viewModel.clarificationAnswer = "make a note"
+        fixture.viewModel.submitClarification()
+        try await waitForIdle(fixture.viewModel)
+
+        #expect(fixture.viewModel.errorMessage == nil, "error: \(fixture.viewModel.errorMessage ?? "")")
+        #expect(fixture.model.prompts.count == 1, "the session did not start")
+        #expect(fixture.viewModel.finalSummary == "The note is made.")
+    }
+
+    /// **An app the user quit during the session is not asked back when the session ends** (founder
+    /// decision, 2026-09-12: restoring focus must never start an app that has quit). The restore is
+    /// the shipping `FocusRestorer`, whose liveness read here answers that the app is gone, so it asks
+    /// Launch Services for nothing.
+    @Test
+    func anAppTheUserQuitDuringTheSessionIsNotStartedWhenItEnds() async throws {
+        let fixture = try makeFixture(
+            replies: [
+                #"{"action":"click","x":10,"y":10,"target":"Reading List","consequence":"ordinary","rationale":"r"}"#,
+                #"{"action":"done","rationale":"Done."}"#
+            ],
+            frontmost: "com.other.App",
+            restore: SessionRestoreScript(appStillRunning: false)
+        )
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.command = "[s] tidy the reading list in Safari"
+        fixture.viewModel.start()
+        try await waitForIdle(fixture.viewModel)
+
+        #expect(fixture.synthesizer.clickCount == 1, "the session ran")
+        // **By either route.** The session gave the user's app back through the synthesizer until
+        // SONNY-451's rebase, and the synthesizer records an activation rather than a restore, so
+        // looking for the restore alone passed over that route — a hand-applied mutant putting it
+        // back (the plan's X9) survived this test until it looked for both.
+        #expect(!fixture.synthesizer.events.contains(.restored("com.other.App")), "a quit app was brought back by the restorer")
+        #expect(!fixture.synthesizer.events.contains(.activated("com.other.App")), "a quit app was brought back through the synthesizer")
+    }
+
+    /// **A pause gives the user's app back, and no action ever lands while it is in front.** The
+    /// session pauses after its first click, the user's app is restored while it waits, and on resume
+    /// the session brings the target forward again before it clicks a second time. Every click in
+    /// the list is preceded — since the most recent restore — by the target's own activation, which
+    /// is "never restores over the app under control while Sonny is acting", held over the order.
+    @Test
+    func aPauseGivesTheUsersAppBackAndNothingIsClickedUntilTheTargetIsInFrontAgain() async throws {
+        let attention = UserPausableAttentionMonitor(base: AlwaysAttendedMonitor())
+        let fixture = try makeFixture(
+            replies: [
+                #"{"action":"click","x":10,"y":10,"target":"A","consequence":"ordinary","rationale":"r"}"#,
+                #"{"action":"click","x":20,"y":20,"target":"B","consequence":"ordinary","rationale":"r"}"#,
+                #"{"action":"done","rationale":"Done."}"#
+            ],
+            frontmost: "com.other.App",
+            attention: attention,
+            restore: SessionRestoreScript()
+        )
+        defer { fixture.tearDown() }
+        fixture.viewModel.visionUserPauseMonitor = attention
+        fixture.synthesizer.afterClick = { count in
+            if count == 1 { attention.pause() }
+        }
+
+        fixture.viewModel.startVisionSession(goal: "click two things", appName: "Safari")
+        try await waitUntil("the pause") { fixture.viewModel.visionSessionPause != nil }
+        #expect(fixture.synthesizer.events.contains(.restored("com.other.App")), "the user's app did not come back while the session waited")
+        #expect(fixture.synthesizer.frontmost == "com.other.App")
+
+        fixture.viewModel.resolveVisionPause(resuming: true)
+        try await waitForIdle(fixture.viewModel)
+
+        let events = fixture.synthesizer.events
+        #expect(fixture.synthesizer.clickCount == 2)
+        var targetInFront = false
+        for event in events {
+            switch event {
+            case .activated("com.apple.Safari"):
+                targetInFront = true
+            case .restored:
+                targetInFront = false
+            case .clicked:
+                #expect(targetInFront, "a click landed while the user's app was in front: \(events)")
+            default:
+                break
+            }
+        }
+        #expect(events.last == .restored("com.other.App"))
+    }
+
+    /// **A delegated open inside a session gives the controlled app back, never the user's.** The one
+    /// path where an open step's restore runs while a session is live: the model delegates "open
+    /// Notes", the delegated plan opens Notes, and the open step's own restore brings back what was in
+    /// front when it began — the app under control — so the session's next click lands on it. The
+    /// user's app comes back only when the session ends.
+    @Test
+    func aDelegatedOpenInsideASessionGivesTheControlledAppBackBeforeTheNextAction() async throws {
+        let fixture = try makeFixture(
+            replies: [
+                #"{"action":"delegate","instruction":"open Notes","rationale":"a note is needed"}"#,
+                #"{"action":"click","x":10,"y":10,"target":"Reading List","consequence":"ordinary","rationale":"r"}"#,
+                #"{"action":"done","rationale":"Done."}"#
+            ],
+            frontmost: "com.other.App",
+            delegationPlanner: OpenAppPlanner(appName: "Notes"),
+            restore: SessionRestoreScript(),
+            hermeticAppOpener: true
+        )
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.startVisionSession(goal: "tidy the reading list", appName: "Safari")
+        try await waitForIdle(fixture.viewModel)
+
+        let events = fixture.synthesizer.events
+        let opened = try #require(events.firstIndex(of: .opened("com.apple.Notes")), "the delegated open did not run: \(events)")
+        let backToTarget = try #require(events.firstIndex(of: .restored("com.apple.Safari")), "the controlled app was not given back: \(events)")
+        let click = try #require(events.firstIndex { if case .clicked = $0 { return true } else { return false } })
+        #expect(opened < backToTarget)
+        #expect(backToTarget < click, "the next action ran before the controlled app was back in front")
+        #expect(events.last == .restored("com.other.App"), "the user's app did not come back at the end")
+        #expect(events.filter { $0 == .restored("com.other.App") }.count == 1, "the user's app came back mid-session")
+    }
+
+    /// **A model cannot start a second session by delegating `[s]`.** The prefix is new, and the
+    /// instruction a vision model delegates is written by a model that has been reading untrusted
+    /// screen content — so a delegated `[s] …` must meet the no-recursion rule that already refuses
+    /// a planner-made vision step. It does, because the check reads the prepared plan and the
+    /// resolver runs before it; this holds that ordering.
+    @Test
+    func aDelegatedPrefixedInstructionIsRefusedAsASecondSession() async throws {
+        let fixture = try makeFixture(replies: [
+            #"{"action":"delegate","instruction":"[s] archive every newsletter in Mail","rationale":"r"}"#,
+            #"{"action":"done","rationale":"Done."}"#
+        ])
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.startVisionSession(goal: "tidy the reading list", appName: "Safari")
+        try await waitForIdle(fixture.viewModel)
+
+        #expect(fixture.model.prompts.count == 2)
+        let afterDelegation = try #require(fixture.model.prompts.dropFirst().first)
+        #expect(afterDelegation.contains("Sonny does not start a second screen-control session from inside one."))
+        #expect(fixture.synthesizer.events.filter { $0 == .activated("com.apple.mail") }.isEmpty, "a second session reached Mail")
     }
 
     private func makeFixture(
@@ -376,7 +1151,19 @@ struct VisionSessionRunTests {
         /// one. There is no permissive default anywhere in `Sources/` —
         /// `VisionSessionEnvironment.init` and `makeVisionEnvironment` both require it, so a
         /// shipping call site cannot acquire one by saying nothing.
-        screenControlGate: ScriptedScreenControlGate? = nil
+        screenControlGate: ScriptedScreenControlGate? = nil,
+        /// The run's focus restorer (SONNY-451). `nil` is the inert one, which is what every test
+        /// that is not about giving the user's app back wants. A script builds the **real**
+        /// `FocusRestorer` shape over the synthesizer's own screen, so the never-start-a-quit-app
+        /// check is exercised through the session rather than asserted beside it.
+        restore: SessionRestoreScript? = nil,
+        /// Whether an `open_app` step opens on the synthesizer's screen rather than on this Mac.
+        /// `false` keeps the view model's default opener, which no test that does not open an app
+        /// ever reaches.
+        hermeticAppOpener: Bool = false,
+        /// Apps that are not running when the run starts (PR #238's F1): their activation fails, the
+        /// resolver's running list leaves them out, and an `open_app` step starts them.
+        notRunning: Set<String> = []
     ) throws -> Fixture {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("VisionSessionRunTests-\(UUID().uuidString)", isDirectory: true)
@@ -401,13 +1188,18 @@ struct VisionSessionRunTests {
                 approvedAt: Date(timeIntervalSince1970: 1_700_000_000)
             )
         }
+        let synthesizer = RecordingSynthesizer(frontmost: frontmost, notRunning: notRunning)
+        let focusRestorer: any FocusRestoring = restore.map { $0.restorer(over: synthesizer) } ?? FocusRestorer.inert()
         let viewModel = AgentViewModel(
             routineStore: routineStore,
             workspaceStore: WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json")),
             snippetStore: SnippetStore(fileURL: root.appendingPathComponent("snippets.json")),
             recentArtifactStore: RecentArtifactStore(fileURL: root.appendingPathComponent("artifacts.json")),
             shortcutCatalog: NoShortcuts(),
+            appOpener: hermeticAppOpener ? HermeticAppOpener(synthesizer: synthesizer) : WorkspaceAppOpener(),
             finderRevealer: hermeticFinderRevealer,
+            runningAppSwitcher: ScreenRunningApps(synthesizer: synthesizer),
+            focusRestorer: focusRestorer,
             shortcutRunHistoryStore: ShortcutRunHistoryStore(fileURL: root.appendingPathComponent("shortcut-history.json")),
             taskHistoryStore: taskHistoryStore,
             taskPlanDetailStore: taskPlanDetailStore,
@@ -448,7 +1240,6 @@ struct VisionSessionRunTests {
         viewModel.interactionMode = mode
 
         let model = ScriptedVisionModel(replies, failingAt: modelFailure)
-        let synthesizer = RecordingSynthesizer(frontmost: frontmost)
         let journal = VisionSessionJournalStore(fileURL: root.appendingPathComponent("vision-sessions.json"))
         let gate = screenControlGate ?? .permissive()
         viewModel.visionSessionEnvironment = VisionSessionEnvironment(

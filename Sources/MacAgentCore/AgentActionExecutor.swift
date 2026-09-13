@@ -138,6 +138,7 @@ public final class AgentActionExecutor {
     private let clipboardHistoryStore: ClipboardHistoryStore
     private let snippetStore: SnippetStore
     private let runningAppSwitcher: any RunningAppSwitching
+    private let focusRestorer: any FocusRestoring
     private let recentArtifactStore: RecentArtifactStore
     private let shortcutCatalog: any ShortcutCatalogProviding
     private let shortcutInvoker: any ShortcutInvoking
@@ -188,6 +189,9 @@ public final class AgentActionExecutor {
         clipboardHistoryStore: ClipboardHistoryStore,
         snippetStore: SnippetStore,
         runningAppSwitcher: any RunningAppSwitching = WorkspaceRunningAppSwitcher.forThisMac(),
+        // Inert by default (SONNY-451): a fixture that never heard of focus restore neither reads
+        // the developer's frontmost app nor activates one; `AgentViewModel` passes the real one.
+        focusRestorer: any FocusRestoring = FocusRestorer.inert(),
         recentArtifactStore: RecentArtifactStore,
         shortcutCatalog: any ShortcutCatalogProviding = ProcessShortcutCatalog(),
         shortcutInvoker: any ShortcutInvoking = ProcessShortcutInvoker(),
@@ -237,6 +241,7 @@ public final class AgentActionExecutor {
         self.clipboardHistoryStore = clipboardHistoryStore
         self.snippetStore = snippetStore
         self.runningAppSwitcher = runningAppSwitcher
+        self.focusRestorer = focusRestorer
         self.recentArtifactStore = recentArtifactStore
         self.shortcutCatalog = shortcutCatalog
         self.shortcutInvoker = shortcutInvoker
@@ -994,6 +999,9 @@ public final class AgentActionExecutor {
             preferredBrowser: preferredBrowser,
             claimedEarlierInThisRun: claimedEarlierInThisRun,
             namedByEnclosingPlan: .none,
+            // A top-level run is not a unit of anything, so nothing comes after it to hand the
+            // user's app to; `executeChain` gives each of its own units one (PR #238's F5).
+            focusHandoff: nil,
             onUnitCompleted: onUnitCompleted,
             onItemFailed: onItemFailed,
             log: log
@@ -1016,6 +1024,7 @@ public final class AgentActionExecutor {
         preferredBrowser: MacApp?,
         claimedEarlierInThisRun: RunClaims,
         namedByEnclosingPlan: PlannedDestinations,
+        focusHandoff: FocusHandoff?,
         onUnitCompleted: ((CompletedRunUnit) -> Void)?,
         onItemFailed: ((ItemJobFailure) -> Void)?,
         log: @escaping (AgentPhase, String) -> Void
@@ -1031,61 +1040,61 @@ public final class AgentActionExecutor {
         case .clarify:
             throw AgentExecutionError.missingClarificationQuestion
         case .largestFiles:
-            return try await executeCapability(for: .scanSelectLargestFiles, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, log: log)
+            return try await executeCapability(for: .scanSelectLargestFiles, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, focusHandoff: focusHandoff, log: log)
         case .docx:
-            return try await executeCapability(for: .scanDocx, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, log: log)
+            return try await executeCapability(for: .scanDocx, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, focusHandoff: focusHandoff, log: log)
         case .hackerNews:
-            return try await executeCapability(for: .openHackerNews, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, log: log)
+            return try await executeCapability(for: .openHackerNews, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, focusHandoff: focusHandoff, log: log)
         case .webResearch:
-            return try await executeCapability(for: .webToMarkdown, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, log: log)
+            return try await executeCapability(for: .webToMarkdown, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, focusHandoff: focusHandoff, log: log)
         case .openApp:
-            return try await executeCapability(for: .openApp, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, log: log)
+            return try await executeCapability(for: .openApp, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, focusHandoff: focusHandoff, log: log)
         case .openAppSearchURL:
-            return try await executeCapability(for: .openAppSearchURL, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, log: log)
+            return try await executeCapability(for: .openAppSearchURL, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, focusHandoff: focusHandoff, log: log)
         case .openURL:
-            return try await executeCapability(for: .openURL, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, log: log)
+            return try await executeCapability(for: .openURL, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, focusHandoff: focusHandoff, log: log)
         case .openGeneratedArtifact:
-            return try await executeCapability(for: .openGeneratedArtifact, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, log: log)
+            return try await executeCapability(for: .openGeneratedArtifact, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, focusHandoff: focusHandoff, log: log)
         case .createLocalDraft:
-            return try await executeCapability(for: .createLocalDraft, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, log: log)
+            return try await executeCapability(for: .createLocalDraft, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, focusHandoff: focusHandoff, log: log)
         case .calculator:
-            return try await executeCapability(for: .calculateUtility, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, log: log)
+            return try await executeCapability(for: .calculateUtility, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, focusHandoff: focusHandoff, log: log)
         case .clipboardHistory:
-            return try await executeCapability(for: .lookupClipboardHistory, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, log: log)
+            return try await executeCapability(for: .lookupClipboardHistory, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, focusHandoff: focusHandoff, log: log)
         case .snippetSave:
-            return try await executeCapability(for: .saveSnippet, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, log: log)
+            return try await executeCapability(for: .saveSnippet, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, focusHandoff: focusHandoff, log: log)
         case .snippetExpansion:
-            return try await executeCapability(for: .expandSnippet, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, log: log)
+            return try await executeCapability(for: .expandSnippet, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, focusHandoff: focusHandoff, log: log)
         case .runningAppSwitch:
-            return try await executeCapability(for: .switchRunningApp, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, log: log)
+            return try await executeCapability(for: .switchRunningApp, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, focusHandoff: focusHandoff, log: log)
         case .recentArtifacts:
-            return try await executeCapability(for: .lookupRecentArtifacts, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, log: log)
+            return try await executeCapability(for: .lookupRecentArtifacts, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, focusHandoff: focusHandoff, log: log)
         case .mediaOpen:
-            return try await executeCapability(for: .playMedia, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, log: log)
+            return try await executeCapability(for: .playMedia, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, focusHandoff: focusHandoff, log: log)
         case .finderSelection:
-            return try await executeCapability(for: .getFinderSelection, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, log: log)
+            return try await executeCapability(for: .getFinderSelection, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, focusHandoff: focusHandoff, log: log)
         case .revealInFinder:
-            return try await executeCapability(for: .revealInFinder, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, log: log)
+            return try await executeCapability(for: .revealInFinder, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, focusHandoff: focusHandoff, log: log)
         case .permissionReadiness:
-            return try await executeCapability(for: .showPermissionReadiness, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, log: log)
+            return try await executeCapability(for: .showPermissionReadiness, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, focusHandoff: focusHandoff, log: log)
         case .saveRoutine:
-            return try await executeCapability(for: .saveRoutine, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, log: log)
+            return try await executeCapability(for: .saveRoutine, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, focusHandoff: focusHandoff, log: log)
         case .runRoutine:
-            return try await executeCapability(for: .runRoutine, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, log: log)
+            return try await executeCapability(for: .runRoutine, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, focusHandoff: focusHandoff, log: log)
         case .createWorkspace:
-            return try await executeCapability(for: .createWorkspace, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, log: log)
+            return try await executeCapability(for: .createWorkspace, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, focusHandoff: focusHandoff, log: log)
         case .editWorkspace:
-            return try await executeCapability(for: .editWorkspace, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, log: log)
+            return try await executeCapability(for: .editWorkspace, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, focusHandoff: focusHandoff, log: log)
         case .openWorkspace:
-            return try await executeCapability(for: .openWorkspace, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, log: log)
+            return try await executeCapability(for: .openWorkspace, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, focusHandoff: focusHandoff, log: log)
         case .invokeShortcut:
-            return try await executeCapability(for: .invokeShortcut, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, log: log)
+            return try await executeCapability(for: .invokeShortcut, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, focusHandoff: focusHandoff, log: log)
         case .visionSession:
-            return try await executeCapability(for: .visionSession, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, log: log)
+            return try await executeCapability(for: .visionSession, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, focusHandoff: focusHandoff, log: log)
         case .startWatching:
-            return try await executeCapability(for: .startWatching, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, log: log)
+            return try await executeCapability(for: .startWatching, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, focusHandoff: focusHandoff, log: log)
         case .rename:
-            return try await executeCapability(for: .rename, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, log: log)
+            return try await executeCapability(for: .rename, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, focusHandoff: focusHandoff, log: log)
         case .chain:
             return try await executeChain(resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, onUnitCompleted: onUnitCompleted, onItemFailed: onItemFailed, log: log)
         }
@@ -1633,6 +1642,7 @@ public final class AgentActionExecutor {
         preferredBrowser: MacApp?,
         claimedEarlierInThisRun: RunClaims = .none,
         namedByEnclosingPlan: PlannedDestinations,
+        focusHandoff: FocusHandoff?,
         log: @escaping (AgentPhase, String) -> Void
     ) async throws -> AgentRunResult {
         try await capabilityRegistry
@@ -1643,6 +1653,7 @@ public final class AgentActionExecutor {
                     preferredBrowser: preferredBrowser,
                     claimedEarlierInThisRun: claimedEarlierInThisRun,
                     namedByEnclosingPlan: namedByEnclosingPlan,
+                    focusHandoff: focusHandoff,
                     scope: .unscoped
                 ),
                 log: log
@@ -1979,6 +1990,7 @@ public final class AgentActionExecutor {
         preferredBrowser: MacApp? = nil,
         claimedEarlierInThisRun: RunClaims = .none,
         namedByEnclosingPlan: PlannedDestinations = .none,
+        focusHandoff: FocusHandoff? = nil,
         scope: TaskWorkspaceScope
     ) -> CapabilityExecutionContext {
         CapabilityExecutionContext(
@@ -1992,6 +2004,8 @@ public final class AgentActionExecutor {
             installedAppResolver: installedAppResolver,
             appSearchURLCatalog: appSearchURLCatalog,
             appOpener: appOpener,
+            focusRestorer: focusRestorer,
+            focusHandoff: focusHandoff,
             fileOpener: fileOpener,
             mediaOpener: mediaOpener,
             spotifyPlaybackProvider: spotifyPlaybackProvider,
@@ -2116,6 +2130,10 @@ public final class AgentActionExecutor {
                     preferredBrowser: nestedBrowser,
                     claimedEarlierInThisRun: claimedEarlierInThisRun,
                     namedByEnclosingPlan: namedByEnclosingPlan,
+                    // A nested plan is the inside of one unit, and a routine cannot carry a
+                    // screen-control step (`StoredRoutine.forbiddenStepOperations`), so nothing in it
+                    // takes the user's app over from an open (PR #238's F5).
+                    focusHandoff: nil,
                     // **`nil`, and it is an answer.** A nested plan is the inside of one unit of the
                     // plan around it. Its steps have ids the outer plan does not contain, so a
                     // resume rebuilt from them would subtract nothing and claim progress that the
@@ -2233,11 +2251,60 @@ public final class AgentActionExecutor {
         return previews
     }
 
+    /// The chain walk, and the one place the run's focus carry begins and ends.
+    ///
+    /// **One carry for the whole chain** (PR #238's F5). An open whose app the next unit takes control
+    /// of hands the user's app to that session instead of bringing it back in between — the planned
+    /// `open Notes and make a note` flickered Notes, the user's app, Notes — and the session gives it
+    /// back when it ends.
+    ///
+    /// **And whatever the carry still holds when the chain ends is given back here, however it ended**
+    /// (PR #238's delta review, N1). The session takes the carry only once it is built, and a good
+    /// deal can end the run before that: the billing gate refusing at the door, a stop pressed while
+    /// the door waits, the chain's own cancellation check between the two units. Each of those left
+    /// the app the open had just brought forward in front, with nothing to give the user's app back —
+    /// a regression for the unprefixed planned route, whose open restored before the hand-over
+    /// existed. The give-back is the same rule an open's own restore uses: nothing if the user's app
+    /// is already in front, nothing asked of Launch Services for an app that has quit, and the trace
+    /// line only for a real switch. A session that ran has already taken the carry, so on that path
+    /// this finds nothing and the user's app comes back once, from the session.
     private func executeChain(
         _ plan: AgentPlan,
         preferredBrowser: MacApp?,
         claimedEarlierInThisRun: RunClaims = .none,
         namedByEnclosingPlan: PlannedDestinations,
+        onUnitCompleted: ((CompletedRunUnit) -> Void)?,
+        onItemFailed: ((ItemJobFailure) -> Void)?,
+        log: @escaping (AgentPhase, String) -> Void
+    ) async throws -> AgentRunResult {
+        let focusCarry = FocusCarry()
+        let outcome: Result<AgentRunResult, any Error>
+        do {
+            outcome = .success(try await executeChainUnits(
+                plan,
+                preferredBrowser: preferredBrowser,
+                claimedEarlierInThisRun: claimedEarlierInThisRun,
+                namedByEnclosingPlan: namedByEnclosingPlan,
+                focusCarry: focusCarry,
+                onUnitCompleted: onUnitCompleted,
+                onItemFailed: onItemFailed,
+                log: log
+            ))
+        } catch {
+            outcome = .failure(error)
+        }
+        if let held = focusCarry.take() {
+            await focusRestorer.giveBack(held, onRestore: { log(.act, "Brought \($0.displayName) back in front") })
+        }
+        return try outcome.get()
+    }
+
+    private func executeChainUnits(
+        _ plan: AgentPlan,
+        preferredBrowser: MacApp?,
+        claimedEarlierInThisRun: RunClaims,
+        namedByEnclosingPlan: PlannedDestinations,
+        focusCarry: FocusCarry,
         onUnitCompleted: ((CompletedRunUnit) -> Void)?,
         onItemFailed: ((ItemJobFailure) -> Void)?,
         log: @escaping (AgentPhase, String) -> Void
@@ -2301,6 +2368,8 @@ public final class AgentActionExecutor {
         var sawFirstSegment = false
 
         let segments = try chainSegments(in: plan)
+        // Each unit is told what the next one controls (PR #238's F5). `plan` is resolved, so a
+        // session unit's target is already pinned to a bundle identifier here.
         for (index, segment) in segments.enumerated() {
             // **The stop control, observed by the loop itself.** Cancellation already unwinds
             // through whatever an adapter awaits, which is enough for an ordinary chain; it is not
@@ -2346,6 +2415,11 @@ public final class AgentActionExecutor {
             }
 
             let resolved = resolvePreviousArtifactPathIfNeeded(in: segment, previousArtifactPath: previousArtifactPath)
+            let nextSegment = index + 1 < segments.count ? segments[index + 1] : nil
+            let focusHandoff = FocusHandoff(
+                nextUnitControls: nextSegment?.steps.first { $0.operation == .visionSession }?.resolvedBundleIdentifier,
+                carry: focusCarry
+            )
             let result: AgentRunResult
             do {
                 result = try await execute(
@@ -2353,6 +2427,7 @@ public final class AgentActionExecutor {
                     preferredBrowser: preferredBrowser,
                     claimedEarlierInThisRun: claimed,
                     namedByEnclosingPlan: namedByThisRun,
+                    focusHandoff: focusHandoff,
                     // `nil`: this is the *inside* of one unit, and the loop below is what reports that
                     // unit. A segment that is itself a chain cannot occur — `chainSegments` cuts by
                     // workflow — but a nested routine re-enters this function through
