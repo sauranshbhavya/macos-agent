@@ -231,6 +231,33 @@ public struct AgentStep: Codable, Equatable, Identifiable, Sendable {
     /// given one is a move.
     public var newName: String?
 
+    /// The day a `read_calendar_events` step reads, or the day a `create_reminder` step is due, in
+    /// the closed vocabulary `CalendarDay.startOfDay(named:now:calendar:)` accepts (SONNY-453).
+    ///
+    /// **Planner-visible, and rewritten once by the resolve phase.** The model writes what the user
+    /// said — `friday`, `tomorrow` — because its prompt carries no clock; both adapters' resolvers
+    /// write the real date back as `YYYY-MM-DD` before anything previews the step, so every gate after
+    /// that reads one day. That is a resolved default `outputPath`'s shape rather than a decode-excluded
+    /// pin's: the rewritten value is one a model could legitimately have written itself.
+    ///
+    /// Shared by the two operations rather than paired, for `workspaceApps`' reason: the field carries
+    /// a day, the operation carries the verb.
+    public var calendarDay: String?
+
+    /// What a `create_reminder` step reminds the user about, in their own words (SONNY-453).
+    public var reminderTitle: String?
+
+    /// How many minutes from now a `create_reminder` step is due — "in 5 minutes" is 5 (SONNY-453).
+    ///
+    /// **Cleared by the resolve phase**, which replaces it with the `calendarDay` and `reminderTime`
+    /// it works out to. So the approval names a clock time, and the time approved is the time set
+    /// however long the approval sat open: resolving "in 5 minutes" again at execution would move the
+    /// reminder by exactly that delay.
+    public var reminderMinutesFromNow: Int?
+
+    /// The clock time a `create_reminder` step is due, `HH:mm` on a 24-hour clock (SONNY-453).
+    public var reminderTime: String?
+
 
     public init(
         id: String,
@@ -268,7 +295,11 @@ public struct AgentStep: Codable, Equatable, Identifiable, Sendable {
         itemIndex: Int? = nil,
         visionGoal: String? = nil,
         watchSubject: String? = nil,
-        newName: String? = nil
+        newName: String? = nil,
+        calendarDay: String? = nil,
+        reminderTitle: String? = nil,
+        reminderMinutesFromNow: Int? = nil,
+        reminderTime: String? = nil
     ) {
         self.id = id
         self.operation = operation
@@ -306,6 +337,10 @@ public struct AgentStep: Codable, Equatable, Identifiable, Sendable {
         self.visionGoal = visionGoal
         self.watchSubject = watchSubject
         self.newName = newName
+        self.calendarDay = calendarDay
+        self.reminderTitle = reminderTitle
+        self.reminderMinutesFromNow = reminderMinutesFromNow
+        self.reminderTime = reminderTime
     }
 }
 
@@ -381,6 +416,26 @@ public enum AgentOperation: String, Codable, CaseIterable, Sendable {
     /// rather than merely refusing. Substitution is the named first candidate if the question turns
     /// out to annoy people; a sequence is not to be built until somebody asks for one.
     case rename
+    /// Sonny reads one day of the user's calendars and answers with a short list (SONNY-453).
+    ///
+    /// **Tier 0, and it asks nothing** (founders' decision 2026-09-12): a read of the user's own data
+    /// that changes nothing. The one prompt it can raise is macOS's own, the first time, which is the
+    /// Calendars permission rather than an approval.
+    ///
+    /// **Refused inside a routine** (`StoredRoutine.forbiddenStepOperations`). A routine can run on a
+    /// schedule with nobody at the Mac, and a first read asks macOS for access — a prompt nobody is
+    /// there to answer, with the run waiting on it.
+    case readCalendarEvents = "read_calendar_events"
+    /// Sonny adds one reminder, with an alert, to the user's default Reminders list (SONNY-453).
+    ///
+    /// **Tier 2, and it asks first** (founders' decision 2026-09-12). Under the consequence rule a
+    /// tier alone never asks, so `CreateReminderCapabilityAdapter.assessRisk` carries an escalation
+    /// that does; its doc comment has the classification and why.
+    ///
+    /// **Refused inside a routine**, and that refusal is what keeps "asks first" true: a scheduled
+    /// routine runs under a standing tier-2 grant, which a tier-2 reminder would pass without anyone
+    /// being asked, once per occurrence.
+    case createReminder = "create_reminder"
     case clarify
     case unsupported
 
@@ -533,7 +588,14 @@ public enum AgentPlanDecoder {
         // user's own sentence, and nothing but the model reads that sentence.
         "watchSubject",
         // SONNY-385. Same reason again: the new name is a word out of the user's own sentence.
-        "newName"
+        "newName",
+        // SONNY-453. Words and numbers out of the user's own sentence, all four — including
+        // `calendarDay`, which the resolve phase later rewrites as a date the model could have
+        // written itself.
+        "calendarDay",
+        "reminderTitle",
+        "reminderMinutesFromNow",
+        "reminderTime"
     ]
 
     public static func decodeStrict(from data: Data) throws -> AgentPlan {
@@ -650,7 +712,11 @@ public enum AgentPlanSchema {
         "visionGoal",
         "browserName",
         "watchSubject",
-        "newName"
+        "newName",
+        "calendarDay",
+        "reminderTitle",
+        "reminderMinutesFromNow",
+        "reminderTime"
     ]
 
     /// The schema's own name, as `docs/sonny-backend-api-contract.md` §4.2's
@@ -905,6 +971,22 @@ public enum AgentPlanSchema {
             "newName": [
                 "type": ["string", "null"],
                 "description": "For rename: what the user wants the file or folder called instead, as a bare name with no slashes — \"invoice-march\", \"Notes.md\". The item keeps its folder. Null for every other operation."
+            ],
+            "calendarDay": [
+                "type": ["string", "null"],
+                "description": "For read_calendar_events, the day to read; for create_reminder, the day it is due when the user named one. One of today, tomorrow, yesterday, a weekday name such as friday, YYYY-MM-DD when the user said the year, or MM-DD when they did not. Null means today. Null for every other operation."
+            ],
+            "reminderTitle": [
+                "type": ["string", "null"],
+                "description": "For create_reminder: what to remind the user about, in their own words — \"call the bank\". Null for every other operation."
+            ],
+            "reminderMinutesFromNow": [
+                "type": ["integer", "null"],
+                "description": "For create_reminder when the user said how long from now — \"in 5 minutes\" is 5, \"in 2 hours\" is 120. Null when they named a clock time instead, and for every other operation."
+            ],
+            "reminderTime": [
+                "type": ["string", "null"],
+                "description": "For create_reminder when the user named a clock time: HH:mm on a 24-hour clock — \"at 5:30pm\" is 17:30. Null when they said how long from now instead, and for every other operation."
             ]
         ]
     }

@@ -307,6 +307,9 @@ public extension AgentOperation {
              // copy regardless, so the step is repeated verbatim once per item. What stops that is
              // `jobTemplateRefusal` below, which is a door rather than an inference.
              .startWatching,
+             // SONNY-453. Neither reads a `PlanItemField`: a read takes a day and a reminder takes a
+             // title and a time, none of which is an item.
+             .readCalendarEvents, .createReminder,
              .unsupported:
             return []
         }
@@ -370,13 +373,23 @@ public extension AgentOperation {
             // is the only entry whose delivery is `.asks`: there is something the user can answer,
             // and answering it produces the single renames Sonny can actually do.
             return .asks("What should each one be called? Sonny renames one file or folder at a time, so tell it the new names and it will do them.")
+        case .createReminder:
+            // The second bar (SONNY-453): a reminder's title is a value that differs for every item
+            // and cannot be derived from one, so a `[create_reminder]` job repeats one reminder into
+            // the user's Reminders once per item. Refused rather than asked, because there is no
+            // single answer that turns it into something Sonny can do: the user asks for the
+            // reminders they want.
+            return .refused("Sonny will not add a reminder for each item — that would fill Reminders with copies of one reminder. Ask for the reminder on its own.")
         case .scanSelectLargestFiles, .createZip, .scanDocx, .convertDocxToPDF, .revealInFinder,
              .openGeneratedArtifact, .invokeShortcut, .openHackerNews, .fetchHNHeadlines,
              .writeMarkdown, .webToMarkdown, .openApp, .openAppSearchURL, .openURL, .playMedia,
              .getFinderSelection, .showPermissionReadiness, .saveRoutine, .runRoutine,
              .createWorkspace, .editWorkspace, .openWorkspace, .createLocalDraft, .calculateUtility,
              .lookupClipboardHistory, .expandSnippet, .saveSnippet, .switchRunningApp,
-             .lookupRecentArtifacts, .visionSession, .clarify, .unsupported:
+             .lookupRecentArtifacts, .visionSession, .clarify, .unsupported,
+             // A read repeated per item reads the same day again and writes nothing, which is
+             // pointless and harmless — neither bar.
+             .readCalendarEvents:
             return nil
         }
     }

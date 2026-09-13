@@ -1,4 +1,5 @@
 import AVFoundation
+import EventKit
 import Foundation
 import MacAgentCore
 
@@ -88,6 +89,27 @@ public struct DeterministicMicrophonePermission: MicrophonePermissionChecking {
     public func microphoneAuthorizationStatus() -> AVAuthorizationStatus { status }
 }
 
+/// The Calendars and Reminders half (SONNY-453). Full access to both by default, for the reason
+/// the screen stub above grants everything: a test about a refusal says so at its call site.
+public struct DeterministicEventKitPermission: EventKitPermissionChecking {
+    public var calendars: EKAuthorizationStatus
+    public var reminders: EKAuthorizationStatus
+
+    public init(calendars: EKAuthorizationStatus = .fullAccess, reminders: EKAuthorizationStatus = .fullAccess) {
+        self.calendars = calendars
+        self.reminders = reminders
+    }
+
+    public func authorizationStatus(for kind: EventKitDataKind) -> EKAuthorizationStatus {
+        switch kind {
+        case .calendars:
+            return calendars
+        case .reminders:
+            return reminders
+        }
+    }
+}
+
 extension PermissionReadinessService {
     /// A readiness service whose every answer comes from its arguments rather than from this Mac.
     ///
@@ -98,14 +120,20 @@ extension PermissionReadinessService {
     public static func deterministic(
         accessibilityTrusted: Bool = true,
         screenRecordingGranted: Bool = true,
-        microphoneStatus: AVAuthorizationStatus = .authorized
+        microphoneStatus: AVAuthorizationStatus = .authorized,
+        calendarsStatus: EKAuthorizationStatus = .fullAccess,
+        remindersStatus: EKAuthorizationStatus = .fullAccess
     ) -> PermissionReadinessService {
         PermissionReadinessService(
             screenPermissionChecker: DeterministicScreenPermissions(
                 accessibilityTrusted: accessibilityTrusted,
                 screenRecordingGranted: screenRecordingGranted
             ),
-            microphonePermissionChecker: DeterministicMicrophonePermission(status: microphoneStatus)
+            microphonePermissionChecker: DeterministicMicrophonePermission(status: microphoneStatus),
+            eventKitPermissionChecker: DeterministicEventKitPermission(
+                calendars: calendarsStatus,
+                reminders: remindersStatus
+            )
         )
     }
 }

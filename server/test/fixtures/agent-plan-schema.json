@@ -90,6 +90,13 @@
               "null"
             ]
           },
+          "calendarDay" : {
+            "description" : "For read_calendar_events, the day to read; for create_reminder, the day it is due when the user named one. One of today, tomorrow, yesterday, a weekday name such as friday, YYYY-MM-DD when the user said the year, or MM-DD when they did not. Null means today. Null for every other operation.",
+            "type" : [
+              "string",
+              "null"
+            ]
+          },
           "contextSource" : {
             "description" : "Use finder_selection when the user refers to selected Finder items, or null.",
             "enum" : [
@@ -198,6 +205,8 @@
               "vision_session",
               "start_watching",
               "rename",
+              "read_calendar_events",
+              "create_reminder",
               "clarify",
               "unsupported"
             ],
@@ -212,6 +221,27 @@
           },
           "question" : {
             "description" : "Clarifying question for clarify actions, or null.",
+            "type" : [
+              "string",
+              "null"
+            ]
+          },
+          "reminderMinutesFromNow" : {
+            "description" : "For create_reminder when the user said how long from now — \"in 5 minutes\" is 5, \"in 2 hours\" is 120. Null when they named a clock time instead, and for every other operation.",
+            "type" : [
+              "integer",
+              "null"
+            ]
+          },
+          "reminderTime" : {
+            "description" : "For create_reminder when the user named a clock time: HH:mm on a 24-hour clock — \"at 5:30pm\" is 17:30. Null when they said how long from now instead, and for every other operation.",
+            "type" : [
+              "string",
+              "null"
+            ]
+          },
+          "reminderTitle" : {
+            "description" : "For create_reminder: what to remind the user about, in their own words — \"call the bank\". Null for every other operation.",
             "type" : [
               "string",
               "null"
@@ -238,6 +268,13 @@
                 },
                 "browserName" : {
                   "description" : "The browser the user named for a URL-opening step, exactly as they said it (for example \"Chrome\", \"Safari\"), or null when they named none.",
+                  "type" : [
+                    "string",
+                    "null"
+                  ]
+                },
+                "calendarDay" : {
+                  "description" : "For read_calendar_events, the day to read; for create_reminder, the day it is due when the user named one. One of today, tomorrow, yesterday, a weekday name such as friday, YYYY-MM-DD when the user said the year, or MM-DD when they did not. Null means today. Null for every other operation.",
                   "type" : [
                     "string",
                     "null"
@@ -351,6 +388,8 @@
                     "vision_session",
                     "start_watching",
                     "rename",
+                    "read_calendar_events",
+                    "create_reminder",
                     "clarify",
                     "unsupported"
                   ],
@@ -365,6 +404,27 @@
                 },
                 "question" : {
                   "description" : "Clarifying question for clarify actions, or null.",
+                  "type" : [
+                    "string",
+                    "null"
+                  ]
+                },
+                "reminderMinutesFromNow" : {
+                  "description" : "For create_reminder when the user said how long from now — \"in 5 minutes\" is 5, \"in 2 hours\" is 120. Null when they named a clock time instead, and for every other operation.",
+                  "type" : [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "reminderTime" : {
+                  "description" : "For create_reminder when the user named a clock time: HH:mm on a 24-hour clock — \"at 5:30pm\" is 17:30. Null when they said how long from now instead, and for every other operation.",
+                  "type" : [
+                    "string",
+                    "null"
+                  ]
+                },
+                "reminderTitle" : {
+                  "description" : "For create_reminder: what to remind the user about, in their own words — \"call the bank\". Null for every other operation.",
                   "type" : [
                     "string",
                     "null"
@@ -533,7 +593,11 @@
                 "visionGoal",
                 "browserName",
                 "watchSubject",
-                "newName"
+                "newName",
+                "calendarDay",
+                "reminderTitle",
+                "reminderMinutesFromNow",
+                "reminderTime"
               ],
               "type" : "object"
             },
@@ -694,7 +758,11 @@
           "visionGoal",
           "browserName",
           "watchSubject",
-          "newName"
+          "newName",
+          "calendarDay",
+          "reminderTitle",
+          "reminderMinutesFromNow",
+          "reminderTime"
         ],
         "type" : "object"
       },

@@ -134,6 +134,13 @@ public struct StoredRoutine: Codable, Equatable, Sendable, Identifiable {
         // is already standing work, so wrapping one in a schedule buys nothing a second watcher
         // would not.
         .startWatching,
+        // **A routine may not read a calendar or add a reminder** (SONNY-453). A reminder asks first,
+        // and a scheduled routine runs under a standing tier-2 grant that a tier-2 reminder passes —
+        // so a routine carrying one would add a reminder once per occurrence with nobody asked. A
+        // calendar read asks macOS for access the first time, and a routine can run with nobody at
+        // the Mac to answer, leaving the run waiting on a prompt.
+        .readCalendarEvents,
+        .createReminder,
         .clarify,
         .unsupported
     ]
@@ -371,6 +378,10 @@ public enum AutomationStoreError: Error, LocalizedError, Equatable {
             return "A routine can't control an app on your screen."
         case .startWatching:
             return "A routine can't watch a page for changes."
+        case .readCalendarEvents:
+            return "A routine can't read your calendar."
+        case .createReminder:
+            return "A routine can't add a reminder."
         case .clarify:
             return "A routine can't stop to ask you a question."
         case .unsupported:

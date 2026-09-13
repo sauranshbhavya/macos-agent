@@ -596,6 +596,7 @@ final class AgentViewModel: ObservableObject {
     private let mediaOpener: any MediaOpening
     private let runningAppSwitcher: any RunningAppSwitching
     private let focusRestorer: any FocusRestoring
+    private let eventKit: any EventKitAccessing
     private let shortcutInvoker: any ShortcutInvoking
     private let finderContextReader: any FinderContextReading
     private let documentConverter: any DocumentConverting
@@ -1202,6 +1203,9 @@ final class AgentViewModel: ObservableObject {
             // Launch Services brings the user's app back after an open (SONNY-451); the parameter's
             // default is inert so a fixture never reads this Mac's frontmost app by saying nothing.
             focusRestorer: FocusRestorer.forThisMac(),
+            // The user's own calendars and reminders (SONNY-453); the parameter's default refuses and
+            // touches nothing, so a fixture never reaches this Mac's calendar by saying nothing.
+            eventKit: EventKitStore.forThisMac(),
             shortcutRunHistoryStore: ShortcutRunHistoryStore(fileURL: ShortcutRunHistoryStore.realFileURL()),
             taskHistoryStore: TaskHistoryStore(fileURL: TaskHistoryStore.realFileURL()),
             taskPlanDetailStore: TaskPlanDetailStore(fileURL: TaskPlanDetailStore.realFileURL()),
@@ -1319,6 +1323,11 @@ final class AgentViewModel: ObservableObject {
         // `FocusRestorer.forThisMac()` in `atItsRealStoreLocations()`, and `FocusRestoreWiringTests`
         // pins that it does.
         focusRestorer: any FocusRestoring = FocusRestorer.inert(),
+        // Refuses by default, for the focus restorer's reason one line up (SONNY-453): a calendar
+        // step in a fixture must not read the developer's calendar or raise macOS's Calendars prompt.
+        // `atItsRealStoreLocations()` passes `EventKitStore.forThisMac()`, and `EventKitWiringTests`
+        // pins that it does.
+        eventKit: any EventKitAccessing = UnavailableEventKitStore(),
         shortcutInvoker: any ShortcutInvoking = ProcessShortcutInvoker(),
         finderContextReader: any FinderContextReading = AppleScriptFinderContextReader(),
         documentConverter: any DocumentConverting = AutoDocumentConverter(),
@@ -1421,6 +1430,7 @@ final class AgentViewModel: ObservableObject {
         self.mediaOpener = mediaOpener
         self.runningAppSwitcher = runningAppSwitcher
         self.focusRestorer = focusRestorer
+        self.eventKit = eventKit
         self.shortcutInvoker = shortcutInvoker
         self.finderContextReader = finderContextReader
         self.documentConverter = documentConverter
@@ -6484,6 +6494,7 @@ final class AgentViewModel: ObservableObject {
             shortcutInvoker: shortcutInvoker,
             shortcutRunHistoryStore: shortcutRunHistoryStore,
             resumableTaskStore: resumableTaskStore,
+            eventKit: eventKit,
             // **The `reveal_in_finder` capability reveals through this view model's own
             // `finderRevealer`, not through one of its own** (SONNY-395). The control the user
             // presses and the capability a plan runs are the same act, so they get one seam: the
