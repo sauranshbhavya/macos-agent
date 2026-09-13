@@ -34,9 +34,10 @@ struct SkillWords {
     /// `-ss`). Every candidate is kept, since English does not say which is right, so a wrong one
     /// ("codes" → "cod") can only add a match, never lose one.
     ///
-    /// **The one copy of this rule** (PR #241's second scoped round). The money rule reads a money
-    /// object's plural through it, and `SkillPackTests.isOrdinary` reads a trigger word's through it,
-    /// so the two cannot drift apart.
+    /// **The one copy of this rule** (PR #241's second scoped round). The money rule reads the plural
+    /// of every word on its three noun lists through it — money objects, contextual objects and money
+    /// context words (SONNY-479) — and `SkillPackTests.isOrdinary` reads a trigger word's through it,
+    /// so the readings cannot drift apart.
     static func singularCandidates(of word: String) -> [String] {
         var candidates = [word]
         if word.hasSuffix("ies"), word.count > 4 { candidates.append(String(word.dropLast(3)) + "y") }
@@ -93,13 +94,20 @@ struct SkillPhraseList {
 ///    transfer, remove, connect, request, settle, split, tip and the rest of `actionVerbs`. Money objects are things money moves
 ///    through or to: money, funds, a payment, a payout, payroll, a bill, a beneficiary, a payee, an
 ///    IBAN, a wire, ACH, SEPA, a bank account, a card on file, payment details, a currency amount.
-///    **A money object is read in the plural too** (PR #241's second scoped round): each word of the
-///    text is tried with its singular forms, through `SkillWords.singularCandidates(of:)`, so "Add
-///    the IBANs", "Update the account numbers", "Set up direct deposits" and "Update the cards on
-///    file" are refused exactly as their singulars are. A few objects are ordinary words elsewhere —
-///    a *recipient* in an email tool, a *card* on a Trello board, an *account*, a *balance* — and
-///    count only when the same unit also names money (bank, billing, payment, payout, transfer, IBAN,
-///    money, funds, an amount); those two lists spell their plurals out and read no others.
+///    A few objects are ordinary words elsewhere — a *recipient* in an email tool, a *card* on a
+///    Trello board, an *account*, a *balance*, an *amount* — and count only when the same unit also
+///    names money: a bank, billing, an IBAN, a transfer, a wire, a payment, a payout, money, funds, a
+///    currency, an invoice, or a currency amount.
+///
+/// **Every word on those three lists — money objects, contextual objects, money context words — is
+/// read in the plural too, and the lists hold singulars.** Each word of the text is tried with its
+/// singular forms, through `SkillWords.singularCandidates(of:)`, so "Add the IBANs", "Update the
+/// cards on file", "Update the account at the banks." and "Update the balance in two currencies." are
+/// refused exactly as their singulars are. Money objects have read plurals since PR #241's second
+/// scoped round. The other two lists have since SONNY-479: they spelled their plurals out, and the
+/// context list missed four of them — banks, IBANs, wires and currencies — while this comment said
+/// both lists spelled theirs out. A word listed in the plural has no singular on its list (`funds`,
+/// `refunds`, `payment details`) and is matched only as written.
 ///
 /// **An object is refused only beside a listed action verb.** The verb and the object need not be
 /// joined: any listed action verb anywhere in the unit is enough, so a money act whose own verb is
@@ -107,7 +115,9 @@ struct SkillPhraseList {
 /// funds to the vendor and confirm"). Reading verbs — open, view, find, filter, download, review,
 /// export — are not action verbs, so "Filter the payouts and payments by date" and "Download a
 /// statement" load. The cost is false refusals ("Run the payments report", "View the charge", "Find
-/// the wire"), which surface in
+/// the wire"), and a wrong singular adds a few more, since it can only add a match: "Add aches to the
+/// log." is refused as `add + ach` (accepted rather than guarded, SONNY-479: no catalogue category
+/// writes about aches, and the refusal is loud). Every false refusal surfaces in
 /// `everyShippedPackLoadsAndEveryOneIsARowOfTheCommittedCatalogue` before a pack ships.
 ///
 /// **Nouns alone are allowed on purpose.** The phrase list this replaced refused "payee", "payment
@@ -157,26 +167,28 @@ enum SkillPackMoneyRule {
         "forwarding"
     ])
 
+    /// Singulars, each read in the plural too (`violation(in:)`). A plural here is a word with no
+    /// singular on the list.
     static let moneyObjects = SkillPhraseList([
-        "money", "funds", "payment", "payments", "payout", "payouts", "payroll", "bill", "bills",
-        "refunds", "reimbursement", "reimbursements", "beneficiary", "beneficiaries", "payee", "payees",
-        "iban", "swift code", "bic", "wire", "wires", "wire transfer", "ach", "sepa", "bank transfer",
-        "bank transfers", "bank account", "bank accounts", "bank details", "account number",
-        "routing number", "sort code", "direct deposit", "card on file", "credit card", "credit cards",
-        "debit card", "debit cards", "payment card", "card number", "card details", "billing details",
-        "billing information", "payment method", "payment methods", "payment details",
-        "payout account", "payout method", "payout details", "charge", "charges"
+        "money", "funds", "payment", "payout", "payroll", "bill", "refunds", "reimbursement",
+        "beneficiary", "payee", "iban", "swift code", "bic", "wire", "wire transfer", "ach", "sepa",
+        "bank transfer", "bank account", "bank details", "account number", "routing number",
+        "sort code", "direct deposit", "card on file", "credit card", "debit card", "payment card",
+        "card number", "card details", "billing details", "billing information", "payment method",
+        "payment details", "payout account", "payout method", "payout details", "charge"
     ])
 
-    /// Ordinary words elsewhere, money objects only beside a money word in the same unit.
+    /// Ordinary words elsewhere, money objects only beside a money word in the same unit. Singulars,
+    /// read in the plural too.
     static let contextualObjects = SkillPhraseList([
-        "recipient", "recipients", "card", "cards", "account", "accounts", "balance", "balances",
-        "amount", "amounts"
+        "recipient", "card", "account", "balance", "amount"
     ])
 
+    /// Singulars, read in the plural too — the four this list once left out were banks, IBANs, wires
+    /// and currencies (SONNY-479).
     static let moneyContext = SkillPhraseList([
-        "bank", "billing", "iban", "transfer", "transfers", "wire", "payment", "payments", "payout",
-        "payouts", "money", "funds", "currency", "invoice", "invoices"
+        "bank", "billing", "iban", "transfer", "wire", "payment", "payout", "money", "funds", "currency",
+        "invoice"
     ])
 
     /// A currency amount — "$500", "€ 20", "500 USD", "20 euros" — which is a money object on its own.
@@ -199,8 +211,8 @@ enum SkillPackMoneyRule {
         if units.contains(where: hasCurrencyAmount) {
             return "\(action) + an amount"
         }
-        if let object = contextualObjects.first(in: units),
-           moneyContext.first(in: units) != nil || units.contains(where: hasCurrencyAmount) {
+        if let object = contextualObjects.first(in: units, readingPlurals: true),
+           moneyContext.first(in: units, readingPlurals: true) != nil || units.contains(where: hasCurrencyAmount) {
             return "\(action) + \(object)"
         }
         return nil

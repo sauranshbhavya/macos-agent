@@ -367,6 +367,37 @@ struct SkillPackTests {
         #expect(error("Find the account numbers and the cards on file.") == nil)
     }
 
+    /// A money context word or a contextual object in the plural counts exactly as its singular does
+    /// (SONNY-479: "at the banks" and "in two currencies" loaded at `65a50865` while "at the bank" was
+    /// refused). Each pair has to fail with the same words. The context list's other two missing
+    /// plurals, IBANs and wires, are not here because both words are money objects as well, so a unit
+    /// naming either is refused before its context is read.
+    @Test
+    func aContextWordOrAContextualObjectInThePluralCountsAsItsSingularDoes() throws {
+        func error(_ step: String) -> SkillPackLoadError? {
+            var object = SkillPackFixtures.object(id: "store", name: "Store", domain: "store.example.com")
+            object["flows"] = [SkillPackFixtures.flow(title: "Do a thing", steps: ["Open it.", step], on: "store.example.com")]
+            return Self.error(object)
+        }
+        let pairs: [(singular: String, plural: String)] = [
+            ("Update the account at the bank.", "Update the account at the banks."),
+            ("Update the balance in one currency.", "Update the balance in two currencies."),
+            ("Update the account on the invoice.", "Update the account on the invoices."),
+            ("Update the recipient of the transfer.", "Update the recipient of the transfers."),
+            ("Update the card at the bank.", "Update the cards at the bank."),
+            ("Update the amount in one currency.", "Update the amounts in one currency.")
+        ]
+        for pair in pairs {
+            let singular = error(pair.singular)
+            #expect(singular != nil, "\(pair.singular) loaded")
+            #expect(error(pair.plural) == singular, "\(pair.plural) → \(String(describing: error(pair.plural)))")
+        }
+        // The controls: a plural context word with no contextual object loads, and so does a plural
+        // contextual object with no money word beside it.
+        #expect(error("Update the list of banks and currencies.") == nil)
+        #expect(error("Move the cards to Done.") == nil)
+    }
+
     /// The summary and the sections reach the planner too, so they are read by the same rule — each
     /// section on its own, so two harmless labels cannot pair into a refusal (PR #241's F1).
     @Test
