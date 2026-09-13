@@ -4953,6 +4953,38 @@ used to show an id such as `start_watching` (SONNY-464). Signed in, gateway up.
       in the planner's own words. **The last is the one to report**, with its words, if it names an
       id. That door is not this branch's to change, and SONNY-464's closing comment says why.
 
+### Skills: a Command Center page of packs for the sites you use (new 2026-09-13, SONNY-452)
+
+A sixth Command Center page lists the skill packs Sonny ships, each with Add or Remove. An added
+pack teaches the planner a site's flows when a command names that site. This branch ships three
+packs — Notion and Linear, which carry task flows, and Docusign, which carries only the facts about
+the site — and the pack lanes add the rest. Signed in, gateway up, for the two planning rows.
+
+- [ ] **Skills is in the sidebar**, last, below Memory, with a puzzle-piece glyph. Hold ⌘: its hint
+      reads ⌘6, and ⌘6 opens it. The keyboard shortcuts sheet (⌘/) and the ⌘K jump-to palette both
+      list it.
+- [ ] The page lists **Docusign, Linear and Notion**, in that order, each with its one line under the
+      name and an **Add** button. Type `lin` in the search field: only Linear is left. Type `zzz`:
+      "No skills match" is shown. Clear the search.
+- [ ] **Add Notion and Linear.** Each row gains an **Added** badge and its button reads **Remove**.
+      Quit Sonny (⌘Q) and relaunch **without opening Command Center**, then open it: both are still
+      added.
+- [ ] After that relaunch, before opening Command Center, ask the widget: `create a page in Notion
+      called wave 7 notes`. The plan uses the Notion pack — the Tasks page's plan for that task names
+      the Notion URL (`https://www.notion.so/`) as where it starts. **What would be a finding:** a
+      plan that searches the web for Notion or names no Notion URL at all.
+- [ ] **Remove Notion**, then ask the same command again: Sonny plans it the ordinary way, with
+      nothing from the pack (compare the two plans on the Tasks page).
+- [ ] Memory: a **Skills** row under "Saved by you" reads `1 skill` (Linear). Its More actions →
+      View opens the Skills page; Delete asks, then removes every added skill, and the Skills page
+      shows Add on every row.
+- [ ] Add Linear again, then Settings → Data → Delete Sonny local data. The confirmation's list
+      ends with "added skills" (**founders to confirm the wording**). After the wipe the Skills page
+      shows Add on every row and the Memory row reads `0 skills`.
+- [ ] Memory: switch the **Skills** row off, then press Add on any skill: Sonny says "Skills memory
+      is off, so nothing was saved. Turn it on in Memory." and the row still reads Add. Switch it
+      back on.
+
 ## 8. How to report back
 
 For each real finding, give me:
