@@ -215,3 +215,28 @@
 >>> to
         let files = try MacAgentSource.appSourceFiles().filter { $0.lastPathComponent == "AgentViewModel.swift" }
 >>> end
+
+# PR #241's delta round.
+
+>>> mutant V1 the phrases the replaced list refused and the first version let load are dropped again
+>>> file Sources/MacAgentCore/SkillPackContentRules.swift
+>>> from
+        "wire money", "wire funds", "make a transfer", "send a transfer", "make a deposit"
+>>> to
+>>> end
+
+>>> mutant V2 the trigger check stops reading a word's singular form, so teams and docs pass
+>>> file Tests/MacAgentCoreTests/SkillPackTests.swift
+>>> from
+        if word.hasSuffix("ies"), word.count > 4 { candidates.append(String(word.dropLast(3)) + "y") }
+        if word.hasSuffix("es"), word.count > 3 { candidates.append(String(word.dropLast(2))) }
+        if word.hasSuffix("s"), !word.hasSuffix("ss"), word.count > 2 { candidates.append(String(word.dropLast())) }
+>>> to
+>>> end
+
+>>> mutant V3 "enter your login and pass" loads
+>>> file Sources/MacAgentCore/SkillPackContentRules.swift
+>>> from
+        "login and pass", "username and pass", "user name and pass", "email and pass",
+>>> to
+>>> end
