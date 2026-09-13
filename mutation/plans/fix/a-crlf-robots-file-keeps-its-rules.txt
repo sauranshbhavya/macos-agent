@@ -1,29 +1,22 @@
 # SONNY-437 — a CRLF robots.txt keeps its rules. Property: the parser yields one element per line
-# whatever the line endings, so a group is closed only by a genuinely empty line.
-# Killers, each measured by applying the mutant by hand at the fix round's tree (PR #234, 2026-09-11;
-# the first two were hand-traced by PR #234's second review before that): R1 by
-# robotsPolicyReadsACRLFFileAsItReadsAnLFOne and robotsPolicyReadsMixedLineEndings; R2 by
-# aGenuinelyEmptyLineStillClosesAGroupWhateverTheEndings alone, and only while a blank line closes a
-# group. SONNY-454 (the RFC 9309 reading, where only the next user-agent line or the end of the file
-# closes one) makes R2 an equivalent mutant nothing can kill; that branch retires or replaces it.
+# whatever the line endings.
+# Killers, each measured by applying the mutant by hand at the fix round's tree (PR #234, 2026-09-11):
 # R3 by robotsPolicyReadsACRLFFileAsItReadsAnLFOne alone, on its CR-only assertions (PR #234's fresh
 # review, F2: this split passed every parser test before the CR-only twin existed).
-
->>> mutant R1 the character split put back: CRLF yields an empty element between every two lines
->>> file Sources/MacAgentCore/WebResearchService.swift
->>> from
-        for rawLine in text.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline) {
->>> to
-        for rawLine in text.components(separatedBy: .newlines) {
->>> end
-
->>> mutant R2 empty lines dropped instead of closing a group: a second group's rules leak into the first
->>> file Sources/MacAgentCore/WebResearchService.swift
->>> from
-        for rawLine in text.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline) {
->>> to
-        for rawLine in text.split(omittingEmptySubsequences: true, whereSeparator: \.isNewline) {
->>> end
+#
+# R1 and R2 are retired, by SONNY-454 (branch fix/key-hints-robots-groups-and-routine-refusals).
+# Both were killed only because an empty line closed a user-agent group: R1, the character split put
+# back, made an empty element between every two lines of a CRLF file, and R2 dropped empty elements
+# instead of keeping them. RFC 9309 gives an empty line no meaning and SONNY-454 made the parser ignore
+# one, so neither can change a parsed rule any more — equivalent mutants nothing can kill, which a
+# weekly battery would report as survivors meaning nothing. Measured rather than argued, with a
+# scratch probe that parsed 200,000 random files built from rule, agent, comment and blank fragments
+# joined by every separator either split can see (LF, CR, CRLF, the doubled endings, VT, FF, NEL,
+# U+2028, U+2029): under the new rule R1's and R2's rules differed from the grapheme split's on 0 files
+# each, and the same probe under the old rule differed on 4361 and 23001, which is the control that it
+# can find a difference. PR #234's second review had already shown R2's equivalence by simulation;
+# R1's is SONNY-454's finding. What stands in their place is that branch's plan, mutants G1 to G3,
+# on the new group rule itself.
 
 >>> mutant R3 a split that knows LF and CRLF but not CR: RFC 9309's third line ending reads as one line (PR #234's fresh review, F2)
 >>> file Sources/MacAgentCore/WebResearchService.swift
