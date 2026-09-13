@@ -688,7 +688,9 @@ to do.
 - The full cycle-3 re-check stays reserved for fix rounds that could themselves introduce
   defects: production-code changes, test-integrity rebuilds (vacuous-test rewrites),
   rebases carrying conflict resolutions. In a stack, the rebase pass decides this per branch, and
-  a branch that needs it gets the scoped delta pass `## Stacked pull requests` clause 2 describes.
+  a branch that needs it gets the scoped delta pass `## Stacked pull requests` clause 2 describes;
+  a conflict confined to changelog or checklist entries and resolved by keeping each entry whole
+  does not by itself count as a conflict resolution for this bullet.
 
 The ceiling itself does not move, and the fix-in-branch rule is untouched either way — nor
 does the scoped verification round below move it, because what that bounds is verification
@@ -943,11 +945,15 @@ one of them.
    it rebased across, `git diff --name-only <its recorded cut point> <new head of the branch
    beneath>`, not the conflict list — and whether the branch uses any of it, by enumerating the
    branch's uses across the tree rather than reading its own diff. **The review stands only when
-   nothing the branch uses changed in that range and the rebase resolved no conflict**; its
-   reviewer then re-runs the ancestry check and nothing more. **A conflict resolution, or a change
-   to anything the branch uses — a type, a signature, a fixture, a helper — gets a scoped delta
-   pass on that branch**, in its review worktree re-pointed at the new head, reading the resolution
-   and the moved code the branch uses and searching for nothing else. That is the re-check step 7
+   nothing the branch uses changed in that range and the rebase resolved no conflict except one
+   confined to changelog or checklist entries and resolved by keeping each entry whole**, the way
+   this clause resolves it above — the conflict clause 7 expects in every stack, whose resolution
+   edits no code and no entry's content, so it does not by itself cost a delta pass (founders'
+   decision on the delta pass's note to F1, 2026-09-13); its reviewer then re-runs the ancestry
+   check and nothing more. **A conflict anywhere else, or a change in that range to anything the
+   branch uses — a type, a signature, a fixture, a helper — gets a scoped delta pass on that
+   branch**, in its review worktree re-pointed at the new head, reading the resolution and the
+   moved code the branch uses and searching for nothing else. That is the re-check step 7
    reserves for a rebase carrying a conflict resolution — a reviewing session's pass, not the
    coordinator's direct verification — and like every re-check it is scoped to what the round it
    follows moved, which here is the range the rebase crossed.
@@ -978,8 +984,8 @@ one of them.
    shared type — not files alone (founders' decision on PR #239's review, F3, 2026-09-13), because
    two lanes can build on one assumption and break each other without touching a common file. So
    the pass is expected to be conflict-free apart from the changelog and the checklist, which every
-   lane touches by design, and clause 2 still decides, branch by branch, whether a posted review
-   stands.
+   lane touches by design and which clause 2 does not count against a posted review while each
+   entry is kept whole, and clause 2 still decides, branch by branch, whether that review stands.
 8. **One session, many PRs, is sequential by construction.** The session finishes a branch's
    review and fix round before it cuts the next, and never reviews branch n while building branch
    n + 1.
