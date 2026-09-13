@@ -28,31 +28,29 @@
         }
 >>> end
 
->>> mutant S4 the money rule removed: a flow that moves money loads in any pack
+>>> mutant S4 the money rule removed: a flow, summary or section that moves money loads
 >>> file Sources/MacAgentCore/SkillPack.swift
 >>> from
-            if let phrase = firstPhrase(of: moneyMovementPhrases, in: wording) {
-                throw SkillPackLoadError.movesMoney(flow: flow.title, phrase: phrase)
+            if let words = SkillPackMoneyRule.violation(in: unit.texts) {
+                throw SkillPackLoadError.movesMoney(field: unit.field, words: words)
             }
 >>> to
 >>> end
 
->>> mutant S5 paying and paying out load: the bare verbs leave the money list
->>> file Sources/MacAgentCore/SkillPack.swift
+>>> mutant S5 paying leaves the money verbs: "pay a vendor" and "pay out the balance" load
+>>> file Sources/MacAgentCore/SkillPackContentRules.swift
 >>> from
-        "pay", "pays", "paying", "pay out", "refund", "refunds", "refunding", "issue a refund",
+        "pay", "pays", "paying", "refund", "refunding", "reimburse", "reimburses", "reimbursing",
 >>> to
-        "refund", "refunds", "refunding", "issue a refund",
+        "refund", "refunding", "reimburse", "reimburses", "reimbursing",
 >>> end
 
->>> mutant S6 the money rule held finance packs alone again, the reading the founders declined on 2026-09-13
+>>> mutant S6 the money rule held to finance packs alone again, the reading the founders declined on 2026-09-13
 >>> file Sources/MacAgentCore/SkillPack.swift
 >>> from
-        for flow in flows {
-            let wording = ([flow.title] + flow.steps).joined(separator: "\n")
+        for unit in moneyUnits {
 >>> to
-        for flow in flows where category == "finance_billing" {
-            let wording = ([flow.title] + flow.steps).joined(separator: "\n")
+        for unit in moneyUnits where category == "finance_billing" {
 >>> end
 
 >>> mutant S7 a flow with a blank citation loads
@@ -77,7 +75,7 @@
 >>> mutant S9 wording that asks for a credential loads
 >>> file Sources/MacAgentCore/SkillPack.swift
 >>> from
-            if let phrase = firstPhrase(of: credentialPhrases, in: entry.text) {
+            if let phrase = SkillPackCredentialRule.violation(in: entry.text) {
                 throw SkillPackLoadError.mentionsCredential(field: entry.field, phrase: phrase)
             }
 >>> to
@@ -158,4 +156,62 @@
 >>> to
         visionUserPauseMonitor?.clearPause()
     }
+>>> end
+
+# PR #241's review round — F1's widened read, F2's fragment, F3's triggers, F4's start page, F5's reach.
+
+>>> mutant U1 the money rule stops reading the summary and the sections
+>>> file Sources/MacAgentCore/SkillPack.swift
+>>> from
+            + [("summary", [summary])]
+            + sections.enumerated().map { index, section in ("sections[\(index)]", [section]) }
+>>> to
+>>> end
+
+>>> mutant U2 the separator fold narrowed to plain spaces, so a tab or a no-break space hides "transfer funds"
+>>> file Sources/MacAgentCore/SkillPackContentRules.swift
+>>> from
+        text.split { !($0.isLetter || $0.isNumber) }.map(String.init)
+>>> to
+        text.split(separator: " ").map { String($0).trimmingCharacters(in: .punctuationCharacters) }
+>>> end
+
+>>> mutant U3 an action verb beside a money object no longer refuses: only the money-only verbs do
+>>> file Sources/MacAgentCore/SkillPackContentRules.swift
+>>> from
+        guard let action = actionVerbs.first(in: units) else {
+>>> to
+        guard let action = actionVerbs.first(in: units), units.isEmpty else {
+>>> end
+
+>>> mutant U4 a credential in the URL fragment loads
+>>> file Sources/MacAgentCore/SkillPackContentRules.swift
+>>> from
+        let fragmentNames = (components.fragment ?? "")
+>>> to
+        let fragmentNames = ""
+>>> end
+
+>>> mutant U5 matching on the site's name and domain restored, the reading the founders declined on 2026-09-13
+>>> file Sources/MacAgentCore/SkillGuidance.swift
+>>> from
+            let needles = pack.triggers
+>>> to
+            let needles = [pack.name, pack.domain] + pack.triggers
+>>> end
+
+>>> mutant U6 a flow may start on another site
+>>> file Sources/MacAgentCore/SkillPack.swift
+>>> from
+        guard startHost == siteDomain || startHost.hasSuffix("." + siteDomain) else {
+>>> to
+        guard startHost == siteDomain || startHost.hasSuffix("." + siteDomain) || !startHost.isEmpty else {
+>>> end
+
+>>> mutant U7 the SONNY-472 scan narrowed back to AgentViewModel.swift alone
+>>> file Tests/MacAgentTests/VisionSessionRunTests.swift
+>>> from
+        let files = try MacAgentSource.appSourceFiles()
+>>> to
+        let files = try MacAgentSource.appSourceFiles().filter { $0.lastPathComponent == "AgentViewModel.swift" }
 >>> end
