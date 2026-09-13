@@ -456,6 +456,80 @@ struct AutomationStoresTests {
         #expect(try store.routine(named: "Evening").steps.count == 1)
     }
 
+    /// SONNY-464. What a user reads when a routine is refused a step: one sentence in words for each
+    /// operation on the forbidden list and for nested steps, pinned by value, with no operation id.
+    /// The sentence used to be "Routines cannot contain \(operation) steps.", which is the wording
+    /// class SONNY-447 took off the planner's refusal door.
+    ///
+    /// **The table's keys must be the list**, so an operation added to
+    /// `StoredRoutine.forbiddenStepOperations` fails here until it has a sentence of its own rather
+    /// than falling through to the fallback. Each sentence is read off the error the store really
+    /// throws, through `localizedDescription`, which is what the run's failure shows.
+    ///
+    /// **The id check is shown able to fire before it is believed**: it finds `start_watching` and
+    /// `routineSteps` in the two sentences this replaced, which is the control that a clean answer
+    /// below is a measurement rather than a detector that finds nothing.
+    @Test
+    func everyRefusedRoutineStepReadsInWordsWithNoOperationId() throws {
+        let sentences: [AgentOperation: String] = [
+            .saveRoutine: "A routine can't save another routine.",
+            .runRoutine: "A routine can't run another routine.",
+            .createWorkspace: "A routine can't create a workspace.",
+            .editWorkspace: "A routine can't change a workspace.",
+            .switchRunningApp: "A routine can't bring an open app to the front.",
+            .visionSession: "A routine can't control an app on your screen.",
+            .startWatching: "A routine can't watch a page for changes.",
+            .clarify: "A routine can't stop to ask you a question.",
+            .unsupported: "A routine can't include something Sonny can't do yet."
+        ]
+        #expect(Set(sentences.keys) == StoredRoutine.forbiddenStepOperations, "every forbidden operation needs its own sentence, and nothing else has one")
+
+        #expect(Self.idShapedTokens(in: "Routines cannot contain start_watching steps.") == ["start_watching"], "control: the check finds the id the old sentence carried")
+        #expect(Self.idShapedTokens(in: "Routines cannot contain nested routineSteps steps.") == ["routineSteps"], "control: the check finds the nested case's id")
+
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
+
+        for operation in StoredRoutine.forbiddenStepOperations {
+            let step = AgentStep(id: "bad", operation: operation, description: "Nope.")
+            let thrown = #expect(throws: AutomationStoreError.self) {
+                try store.save(StoredRoutine(name: "Morning", steps: [step]))
+            }
+            let sentence = try #require(thrown).localizedDescription
+            #expect(sentence == sentences[operation], "\(operation.rawValue)")
+            #expect(Self.idShapedTokens(in: sentence) == [], "\(operation.rawValue): \(sentence)")
+            #expect(sentence.contains(operation.rawValue) == false, "\(operation.rawValue): \(sentence)")
+        }
+
+        let nested = #expect(throws: AutomationStoreError.self) {
+            try store.save(
+                StoredRoutine(
+                    name: "Morning",
+                    steps: [AgentStep(id: "wrap", operation: .openApp, description: "Wrap.", routineSteps: [.fixture])]
+                )
+            )
+        }
+        let nestedSentence = try #require(nested).localizedDescription
+        #expect(nestedSentence == "A routine can't hold the steps of another routine.")
+        #expect(Self.idShapedTokens(in: nestedSentence) == [])
+
+        // Reachable by no caller today; it still names no id.
+        let fallback = AutomationStoreError.unsafeRoutineStep(AgentOperation.openApp.rawValue).localizedDescription
+        #expect(fallback == "A routine can't include that step.")
+        #expect(Self.idShapedTokens(in: fallback) == [])
+    }
+
+    /// Tokens shaped like an identifier rather than a word: one carrying an underscore
+    /// (`start_watching`) or a lowercase letter followed directly by a capital (`routineSteps`).
+    private static func idShapedTokens(in text: String) -> [String] {
+        text.split(whereSeparator: { !($0.isLetter || $0.isNumber || $0 == "_") })
+            .map(String.init)
+            .filter { token in
+                token.contains("_") || zip(token, token.dropFirst()).contains { $0.isLowercase && $1.isUppercase }
+            }
+    }
+
     /// Steps are checked before the schedule, so a routine that is wrong in both ways is told
     /// about the problem that makes it unsafe to *run* rather than the one that makes it unsafe to
     /// *fire*. Pinned because the ordering is a decision, not an accident of line order.

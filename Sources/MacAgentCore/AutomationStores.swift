@@ -223,8 +223,11 @@ public struct StoredRoutine: Codable, Equatable, Sendable, Identifiable {
 
     /// The step-safety rule, in the one place both write doors call it.
     ///
-    /// Rejects on the first offending step rather than collecting every problem: the caller shows
-    /// one clarification, and the operation named in it is the one the user has to change first.
+    /// Rejects on the first offending step rather than collecting every problem: the user is shown
+    /// one refusal, and the step it describes is the one they have to change first. It is shown as
+    /// the run's failure, not as a clarification — `AgentActionExecutor.prepare` converts only a
+    /// not-found target into a question and rethrows this case (traced by SONNY-464; this said
+    /// "one clarification" until then).
     /// Nested `routineSteps` are refused for the same reason `.runRoutine` is — a routine holding
     /// routines is recursion the executor never agreed to walk.
     static func validateStepSafety(_ steps: [AgentStep]) throws {
@@ -234,7 +237,7 @@ public struct StoredRoutine: Codable, Equatable, Sendable, Identifiable {
             }
 
             if let nested = step.routineSteps, !nested.isEmpty {
-                throw AutomationStoreError.unsafeRoutineStep("nested routineSteps")
+                throw AutomationStoreError.unsafeRoutineStep(AutomationStoreError.nestedRoutineStepsRefusal)
             }
         }
     }
@@ -322,8 +325,60 @@ public enum AutomationStoreError: Error, LocalizedError, Equatable {
     case missingWorkspaceInRoutine(routine: String, workspace: String)
     case emptyRoutine
     case emptyWorkspace
+    /// A routine refused a step. The payload is what was refused, for code and logs: an operation's
+    /// raw value, or ``nestedRoutineStepsRefusal``. It is never what a user reads — see
+    /// ``unsafeRoutineStepSentence(_:)``.
     case unsafeRoutineStep(String)
     case invalidSchedule(String)
+
+    /// The payload `StoredRoutine.validateStepSafety` refuses a step's nested `routineSteps` with.
+    public static let nestedRoutineStepsRefusal = "nested routineSteps"
+
+    /// What a user reads when a routine is refused a step, in words, with no operation id
+    /// (SONNY-464).
+    ///
+    /// **This used to read "Routines cannot contain \(operation) steps."**, which put
+    /// `start_watching`, `create_workspace` and `nested routineSteps` in front of a user — the
+    /// wording class SONNY-447 took off the planner's refusal door, left behind on this one. The
+    /// founders' test 34 read a sibling of it ("Routines cannot include start_watching steps. …"),
+    /// which was the planner's own sentence arriving through that other door before SONNY-447
+    /// closed it, and not this one; this sentence had the same defect whichever door they met.
+    ///
+    /// One sentence per refused operation rather than a template over a display name, because
+    /// what a step does is the part a user recognises ("watch a page for changes") and no
+    /// operation's name says it. A `switch` with no `default` would be the compiler's guard for
+    /// a new forbidden operation, but `AgentOperation` has every other case too, so the guard is
+    /// `AutomationStoresTests`' table instead: its keys must equal
+    /// `StoredRoutine.forbiddenStepOperations`, so an operation added to the list fails that test
+    /// until it has a sentence here. The fallback is reachable by no caller today and still names
+    /// no id.
+    public static func unsafeRoutineStepSentence(_ refused: String) -> String {
+        if refused == nestedRoutineStepsRefusal {
+            return "A routine can't hold the steps of another routine."
+        }
+        switch AgentOperation(rawValue: refused) {
+        case .saveRoutine:
+            return "A routine can't save another routine."
+        case .runRoutine:
+            return "A routine can't run another routine."
+        case .createWorkspace:
+            return "A routine can't create a workspace."
+        case .editWorkspace:
+            return "A routine can't change a workspace."
+        case .switchRunningApp:
+            return "A routine can't bring an open app to the front."
+        case .visionSession:
+            return "A routine can't control an app on your screen."
+        case .startWatching:
+            return "A routine can't watch a page for changes."
+        case .clarify:
+            return "A routine can't stop to ask you a question."
+        case .unsupported:
+            return "A routine can't include something Sonny can't do yet."
+        default:
+            return "A routine can't include that step."
+        }
+    }
 
     public var errorDescription: String? {
         switch self {
@@ -339,8 +394,8 @@ public enum AutomationStoreError: Error, LocalizedError, Equatable {
             return "A routine needs at least one saved step."
         case .emptyWorkspace:
             return "A workspace needs at least one app or URL."
-        case .unsafeRoutineStep(let operation):
-            return "Routines cannot contain \(operation) steps."
+        case .unsafeRoutineStep(let refused):
+            return Self.unsafeRoutineStepSentence(refused)
         case .invalidSchedule(let reason):
             return reason
         }
