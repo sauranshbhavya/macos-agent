@@ -1,0 +1,226 @@
+# SONNY-453 — reading a calendar and adding a reminder. Properties: a read is tier 0 and asks
+# nothing; a reminder is tier 2 and asks first through an escalation the consequence rule already
+# answers; each asks macOS at first use and refuses in plain words without access; nothing but the
+# injected seam reaches a calendar, and the shipping app is the one place the live store is named;
+# a routine may carry neither and a job may not repeat a reminder; the time approved is the time set.
+# Killers are named per mutant from the tests written against that property; none of these has been
+# run — this is the committed plan the founders' weekly battery measures (WORKFLOW step 5).
+
+>>> mutant K1 the reminder's escalation advisory: a tier-2 reminder runs without asking
+>>> file Sources/MacAgentCore/CreateReminderCapabilityAdapter.swift
+>>> from
+                    reason: Self.escalationReason(title: spec.title),
+                    consequence: .affectsOthers
+>>> to
+                    reason: Self.escalationReason(title: spec.title),
+                    consequence: .advisory
+>>> end
+# Killer: CalendarAndReminderCapabilityTests.aReminderIsTierTwoAndAsksFirstThroughAnEscalationThatAffectsOthers.
+
+>>> mutant K2 the reminder's escalation removed: the bare tier runs without asking
+>>> file Sources/MacAgentCore/CreateReminderCapabilityAdapter.swift
+>>> from
+            escalations: [
+                CapabilityRiskEscalation(
+                    fromTier: .tier2,
+                    toTier: .tier2,
+                    reason: Self.escalationReason(title: spec.title),
+                    consequence: .affectsOthers
+                )
+            ]
+>>> to
+            escalations: []
+>>> end
+# Killer: aReminderIsTierTwoAndAsksFirstThroughAnEscalationThatAffectsOthers.
+
+>>> mutant K3 a calendar read raised to tier 2
+>>> file Sources/MacAgentCore/ReadCalendarEventsCapabilityAdapter.swift
+>>> from
+        defaultRiskTier: .tier0
+>>> to
+        defaultRiskTier: .tier2
+>>> end
+# Killer: aCalendarReadIsTierZeroAndRunsWithoutAsking.
+
+>>> mutant K4 a read without access reads anyway
+>>> file Sources/MacAgentCore/ReadCalendarEventsCapabilityAdapter.swift
+>>> from
+        guard access == .granted else {
+            log(.summarize, "No access to calendars")
+>>> to
+        guard access == .granted || access == .denied else {
+            log(.summarize, "No access to calendars")
+>>> end
+# Killer: aReadWithoutAccessRefusesInPlainWordsAndReadsNothing.
+
+>>> mutant K5 a first read never asks macOS
+>>> file Sources/MacAgentCore/ReadCalendarEventsCapabilityAdapter.swift
+>>> from
+        if access == .notDetermined {
+            log(.act, "Asking macOS for access to your calendars")
+>>> to
+        if access == .granted && access == .notDetermined {
+            log(.act, "Asking macOS for access to your calendars")
+>>> end
+# Killer: theFirstReadAsksMacOSOnceAndThenReadsTheDay.
+
+>>> mutant K6 a reminder without access is added anyway
+>>> file Sources/MacAgentCore/CreateReminderCapabilityAdapter.swift
+>>> from
+        guard access == .granted else {
+            log(.summarize, "No access to reminders")
+>>> to
+        guard access == .granted || access == .denied else {
+            log(.summarize, "No access to reminders")
+>>> end
+# Killer: theFirstReminderAsksMacOSOnceAndARefusalAddsNothing.
+
+>>> mutant K7 a routine may add a reminder
+>>> file Sources/MacAgentCore/AutomationStores.swift
+>>> from
+        .readCalendarEvents,
+        .createReminder,
+        .clarify,
+>>> to
+        .readCalendarEvents,
+        .clarify,
+>>> end
+# Killers: AutomationStoresTests' forbidden list and sentence table, PlannerBoundaryTests' golden and
+# routine-sentence correspondence, aStandingTierTwoGrantWouldPassAReminderSoRoutinesRefuseIt.
+
+>>> mutant K8 a routine may read a calendar
+>>> file Sources/MacAgentCore/AutomationStores.swift
+>>> from
+        .readCalendarEvents,
+        .createReminder,
+        .clarify,
+>>> to
+        .createReminder,
+        .clarify,
+>>> end
+# Killers: as K7.
+
+>>> mutant K9 the reminder's time is not pinned: execution re-resolves "in 5 minutes" at a later clock
+>>> file Sources/MacAgentCore/CreateReminderCapabilityAdapter.swift
+>>> from
+            resolved.steps[index].reminderMinutesFromNow = nil
+>>> to
+            resolved.steps[index] = step
+>>> end
+# Killer: inFiveMinutesIsPinnedAtPrepareAndTheApprovedTimeIsTheTimeSet.
+
+>>> mutant K10 minutes from now are not rounded up, so a reminder can arrive inside the minute before
+>>> file Sources/MacAgentCore/CalendarDay.swift
+>>> from
+        return floor == date ? date : floor.addingTimeInterval(60)
+>>> to
+        return floor
+>>> end
+# Killers: CalendarDayTests.minutesFromNowRoundUpToTheMinuteAndNeverArriveEarly, inFiveMinutesIsPinned….
+
+>>> mutant K11 a dated time that has passed is not refused
+>>> file Sources/MacAgentCore/CreateReminderCapabilityAdapter.swift
+>>> from
+        guard spec.due > context.now() else {
+>>> to
+        guard spec.due > context.now() || true else {
+>>> end
+# Killer: aClockTimeWithNoDayRollsToTomorrowOnceItHasPassedButOneTheUserDatedIsRefused.
+
+>>> mutant K12 an undated clock time that has passed is not rolled to tomorrow
+>>> file Sources/MacAgentCore/CalendarDay.swift
+>>> from
+        if namedDay == nil, due <= now {
+>>> to
+        if namedDay == nil, due <= now, false {
+>>> end
+# Killers: CalendarDayTests.aClockTimeRollsForwardOnlyWhenNoDayWasNamed, and the rolled half of the
+# capability test above (whose preview then refuses at prepare).
+
+>>> mutant K13 the executor stops handing its calendar to the capabilities
+>>> file Sources/MacAgentCore/AgentActionExecutor.swift
+>>> from
+            resumableTaskStore: resumableTaskStore,
+            eventKit: eventKit,
+            fileManager: fileManager,
+>>> to
+            resumableTaskStore: resumableTaskStore,
+            fileManager: fileManager,
+>>> end
+# Killers: every capability test that grants access, which then meets the refusing default.
+
+>>> mutant K14 the shipping app stops naming the live store
+>>> file Sources/MacAgent/AgentViewModel.swift
+>>> from
+            eventKit: EventKitStore.forThisMac(),
+>>> to
+>>> end
+# Killer: EventKitWiringTests.theShippingViewModelReadsTheRealCalendarAndItsExecutorIsHandedIt.
+
+>>> mutant K15 write-only and denied access read as granted
+>>> file Sources/MacAgentCore/EventKitAccess.swift
+>>> from
+        default:
+            self = .denied
+>>> to
+        default:
+            self = .granted
+>>> end
+# Killers: PermissionReadinessEventKitTests.aSystemStatusHasOneMeaning and both row tests.
+
+>>> mutant K16 the Calendars row reads the Reminders grant
+>>> file Sources/MacAgentCore/PermissionReadinessService.swift
+>>> from
+            eventKitStatus(.calendars),
+>>> to
+            eventKitStatus(.reminders),
+>>> end
+# Killers: PermissionReadinessEventKitTests.eachRowReadsItsOwnGrant and theCalendarsRowReadsEachStatusInPlainWords.
+
+>>> mutant K17 a job's reminder refusal answers nothing
+>>> file Sources/MacAgentCore/PlanItemJob.swift
+>>> from
+            return .refused("Sonny will not add a reminder for each item — that would fill Reminders with copies of one reminder. Ask for the reminder on its own.")
+>>> to
+            return nil
+>>> end
+# Killer: ItemJobTests.theOperationsAJobMayNotRepeatAreNamedAndEverythingElseMay.
+
+>>> mutant K18 a resume repeats a reminder without asking
+>>> file Sources/MacAgentCore/ResumeRepeatSafety.swift
+>>> from
+            // that consequence. A resume re-prepares, so the repeat would ask anyway; this withholds
+            // the offer to continue as well, which is the one-directional thing this property does.
+            return .mustNotRepeatSilently
+>>> to
+            // that consequence. A resume re-prepares, so the repeat would ask anyway; this withholds
+            // the offer to continue as well, which is the one-directional thing this property does.
+            return .safeToRepeat
+>>> end
+# Killer: RunUnitProgressTests.theOperationsSonnyWillNotRepeatOnItsOwnAreNamedInBothDirections.
+
+>>> mutant K19 the deterministic readiness helper leaves the calendar checker live
+>>> file Tests/MacAgentTestSupport/DeterministicPermissions.swift
+>>> from
+            microphonePermissionChecker: DeterministicMicrophonePermission(status: microphoneStatus),
+            eventKitPermissionChecker: DeterministicEventKitPermission(
+                calendars: calendarsStatus,
+                reminders: remindersStatus
+            )
+>>> to
+            microphonePermissionChecker: DeterministicMicrophonePermission(status: microphoneStatus)
+>>> end
+# Killers: LivePermissionCheckerScanTests.theExemptFileConstructsExactlyOneReadinessServiceAndOnlyInsideTheHelper,
+# and the EventKit row tests, which then read this Mac's grants.
+
+>>> mutant K20 a dry run reaches the calendar
+>>> file Sources/MacAgentCore/ReadCalendarEventsCapabilityAdapter.swift
+>>> from
+    public func preview(plan: AgentPlan, context: CapabilityExecutionContext) throws -> [ActionPreview] {
+        let day = try day(in: plan, context: context)
+>>> to
+    public func preview(plan: AgentPlan, context: CapabilityExecutionContext) throws -> [ActionPreview] {
+        _ = context.eventKit.accessState(for: .calendars)
+        let day = try day(in: plan, context: context)
+>>> end
+# Killer: preparingAndAssessingEitherOperationTouchesNoCalendar.
