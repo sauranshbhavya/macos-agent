@@ -3135,6 +3135,231 @@ struct VisionSessionRunTests {
         #expect(fixture.viewModel.visionSessionProgress == nil)
     }
 
+    // MARK: - Every door that ends a session tears it down (SONNY-472)
+
+    /// **A session that runs under `performApproval` gives back the emergency stop and the
+    /// controlling state when it ends** (SONNY-472).
+    ///
+    /// Safe mode asks before the session starts, so Allow reaches `approvePendingRun()` and the
+    /// session executes inside `performApproval` — whose cleanup, until this ticket, released
+    /// neither. Reproduced at `53bb40af`: after the run was idle, `⌃⌥⎋` was still registered,
+    /// `visionSessionProgress` still named Safari at iteration 2, `isVisionSessionLive` was `true`,
+    /// and the widget read `.controlling` over the result, so its Stop and the hotkey reached
+    /// `cancelCurrentRun()` with nothing to cancel. Ordered by the run's own signals — each question
+    /// is answered only once it is parked — so nothing here races a clock.
+    @Test
+    func aSessionEndingUnderTheApprovalPathReleasesTheEmergencyStopAndTheControllingState() async throws {
+        let fixture = try makeFixture(
+            replies: [
+                #"{"action":"click","x":10,"y":10,"target":"Reading List","consequence":"ordinary","rationale":"r"}"#,
+                #"{"action":"done","rationale":"Done."}"#
+            ],
+            mode: .safe
+        )
+        defer { fixture.tearDown() }
+        fixture.viewModel.visionEmergencyStopHotKeyFactory = { try FakeStopHotKey(onStop: $0) }
+
+        try await runSafeModeSessionThroughItsQuestions(fixture)
+
+        #expect(fixture.synthesizer.clickCount == 1, "the session really ran")
+        #expect(fixture.viewModel.finalSummary == "Done.")
+        expectNoSessionIsHeld(by: fixture.viewModel)
+    }
+
+    /// **The control: the same session ending under `performStart`**, which always tore down. Held
+    /// beside the approval path's test so the two doors are asserted by one list of properties.
+    @Test
+    func aSessionEndingUnderTheStartPathReleasesTheEmergencyStopAndTheControllingState() async throws {
+        let fixture = try makeFixture(replies: [
+            #"{"action":"click","x":10,"y":10,"target":"Reading List","consequence":"ordinary","rationale":"r"}"#,
+            #"{"action":"done","rationale":"Done."}"#
+        ])
+        defer { fixture.tearDown() }
+        fixture.viewModel.visionEmergencyStopHotKeyFactory = { try FakeStopHotKey(onStop: $0) }
+
+        fixture.viewModel.startVisionSession(goal: "tidy the reading list", appName: "Safari")
+        try await waitUntil("the hotkey to be registered") { fixture.viewModel.visionEmergencyStopHotKey != nil }
+        try await waitForIdle(fixture.viewModel)
+
+        #expect(fixture.synthesizer.clickCount == 1, "the session really ran")
+        #expect(fixture.viewModel.finalSummary == "Done.")
+        expectNoSessionIsHeld(by: fixture.viewModel)
+    }
+
+    /// **The next task does not inherit an approved session's screen record** (SONNY-472).
+    ///
+    /// `activeVisionSessionID` is what a task-history row links its screen record by, and it was
+    /// cleared only in `performStart`'s cleanup. After a session under `performApproval`, the next
+    /// ordinary task's row carried the old session's id — so its row would offer another task's
+    /// screen record, and deleting that row would delete it.
+    @Test
+    func theTaskAfterAnApprovedSessionDoesNotLinkToThatSessionsScreenRecord() async throws {
+        let fixture = try makeFixture(
+            replies: [
+                #"{"action":"click","x":10,"y":10,"target":"Reading List","consequence":"ordinary","rationale":"r"}"#,
+                #"{"action":"done","rationale":"Done."}"#
+            ],
+            mode: .safe
+        )
+        defer { fixture.tearDown() }
+
+        try await runSafeModeSessionThroughItsQuestions(fixture)
+        let sessionRow = try #require(fixture.viewModel.taskHistoryRecords.first { $0.command.contains("Control Safari") })
+        #expect(sessionRow.visionSessionID != nil, "the session's own row links its record")
+
+        // **Back to Normal mode first, and that is the case that matters.** Left in Safe mode, the
+        // calculation pauses at its own plan-gate question, and that pause runs `performStart`'s
+        // cleanup before the row is written, which hides the stale id. In Normal mode the next task
+        // runs start to finish inside `performStart` and writes its row before any cleanup — a
+        // person who used Safe mode for one screen task and switched back.
+        fixture.viewModel.interactionMode = .normal
+        fixture.viewModel.command = "2 + 2"
+        fixture.viewModel.start()
+        try await waitForIdle(fixture.viewModel)
+        #expect(fixture.viewModel.approvalRequest == nil, "Normal mode ran the calculation without asking")
+
+        let ordinaryRow = try #require(fixture.viewModel.taskHistoryRecords.first { $0.command == "2 + 2" })
+        #expect(ordinaryRow.visionSessionID == nil)
+    }
+
+    /// **A session paused on an approval question is not torn down while it waits.** The action
+    /// approval parks inside the loop, under `performApproval`, and the run has not ended: the
+    /// emergency stop stays registered and the session stays live until the question is answered
+    /// and the session finishes.
+    @Test
+    func aSessionWaitingOnAnActionApprovalKeepsItsEmergencyStopAndState() async throws {
+        let fixture = try makeFixture(
+            replies: [
+                #"{"action":"click","x":10,"y":10,"target":"Reading List","consequence":"ordinary","rationale":"r"}"#,
+                #"{"action":"done","rationale":"Done."}"#
+            ],
+            mode: .safe
+        )
+        defer { fixture.tearDown() }
+        let viewModel = fixture.viewModel
+        viewModel.visionEmergencyStopHotKeyFactory = { try FakeStopHotKey(onStop: $0) }
+
+        viewModel.startVisionSession(goal: "tidy the reading list", appName: "Safari")
+        try await waitUntil("the session-envelope approval") { viewModel.approvalRequest != nil }
+        viewModel.start()
+        try await waitUntil("the capture preview") { viewModel.visionCapturePreview != nil }
+        viewModel.resolveVisionCapturePreview(allowing: true)
+        try await waitUntil("the action approval") { viewModel.approvalRequest != nil }
+
+        #expect(viewModel.isRunning, "the run is waiting, not over")
+        #expect(viewModel.visionEmergencyStopHotKey != nil, "the emergency stop was released while the session waited")
+        #expect(viewModel.visionSessionProgress?.appDisplayName == "Safari")
+        #expect(viewModel.isVisionSessionLive)
+        #expect(viewModel.activeVisionSessionID != nil)
+
+        viewModel.start()
+        try await waitUntil("the second capture preview") { viewModel.visionCapturePreview != nil }
+        #expect(viewModel.visionEmergencyStopHotKey != nil, "the emergency stop was released between the approval and the next capture")
+        viewModel.resolveVisionCapturePreview(allowing: true)
+        try await waitForIdle(viewModel)
+
+        expectNoSessionIsHeld(by: viewModel)
+    }
+
+    /// **Every cleanup that ends a run either tears down the session or is the named exception**
+    /// (SONNY-472). The population is read off the source rather than listed: every `defer` in
+    /// `AgentViewModel.swift` that writes `isRunning = false`, which is exactly what ends a run. A
+    /// fourth door arriving without the teardown fails here even though no runtime test exercises it
+    /// yet, and the scheduled path stays the one exception because no session can be live there.
+    @Test
+    func everyCleanupThatEndsARunTearsDownTheSessionOrIsTheScheduledException() throws {
+        let source = try MacAgentSource.read("AgentViewModel.swift")
+        var cleanups: [String: String] = [:]
+        var searchStart = source.startIndex
+        while let deferRange = source.range(of: "defer {", range: searchStart..<source.endIndex) {
+            searchStart = deferRange.upperBound
+            let block = Self.braceBlock(openingAt: source.index(before: deferRange.upperBound), in: source)
+            guard block.contains("isRunning = false") else { continue }
+            let before = source[source.startIndex..<deferRange.lowerBound]
+            let functionName = try #require(
+                before.ranges(of: /func ([A-Za-z]+)\(/).last.flatMap { range in
+                    before[range].firstMatch(of: /func ([A-Za-z]+)\(/).map { String($0.1) }
+                }
+            )
+            #expect(cleanups[functionName] == nil, "\(functionName) has two run-ending cleanups")
+            cleanups[functionName] = block
+        }
+
+        #expect(Set(cleanups.keys) == ["performStart", "performApproval", "performScheduledRun"])
+        for door in ["performStart", "performApproval"] {
+            let block = try #require(cleanups[door])
+            #expect(block.components(separatedBy: "endScreenControlSession()").count - 1 == 1, "\(door) does not end the session exactly once")
+        }
+        #expect(cleanups["performScheduledRun"]?.contains("endScreenControlSession()") == false)
+        // What the teardown gives back, by name: a door that called an emptied teardown would pass
+        // the lines above.
+        let teardown = try MacAgentSource.braceBlock(of: source, openedBy: "private func endScreenControlSession() {")
+        for item in [
+            "visionSessionProgress = nil", "visionCapturePreview = nil", "visionDelegationRequest = nil",
+            "visionSessionPause = nil", "releaseEmergencyStopHotKey()", "approvedAppsForThisVisionIteration = nil",
+            "visionUserPauseMonitor?.clearPause()", "activeVisionSessionID = nil"
+        ] {
+            #expect(teardown.contains(item), "the session teardown no longer does \(item)")
+        }
+    }
+
+    /// The `{ … }` block whose opening brace is at `open`, balanced by depth.
+    private static func braceBlock(openingAt open: String.Index, in source: String) -> String {
+        var depth = 0
+        var index = open
+        while index < source.endIndex {
+            let character = source[index]
+            if character == "{" { depth += 1 }
+            if character == "}" {
+                depth -= 1
+                if depth == 0 { return String(source[open...index]) }
+            }
+            index = source.index(after: index)
+        }
+        return String(source[open...])
+    }
+
+    /// Safe mode's three moments, answered each once it is parked: the session envelope (which is
+    /// what routes the session through `performApproval`), both capture previews and the action
+    /// approval between them. Ends with the run idle.
+    private func runSafeModeSessionThroughItsQuestions(_ fixture: Fixture) async throws {
+        let viewModel = fixture.viewModel
+        viewModel.startVisionSession(goal: "tidy the reading list", appName: "Safari")
+        try await waitUntil("the session-envelope approval") { viewModel.approvalRequest != nil }
+        viewModel.start()
+        try await waitUntil("the capture preview") { viewModel.visionCapturePreview != nil }
+        viewModel.resolveVisionCapturePreview(allowing: true)
+        try await waitUntil("the action approval") { viewModel.approvalRequest != nil }
+        viewModel.start()
+        try await waitUntil("the second capture preview") { viewModel.visionCapturePreview != nil }
+        viewModel.resolveVisionCapturePreview(allowing: true)
+        try await waitForIdle(viewModel)
+    }
+
+    /// Everything a session holds on the view model, asserted gone, and the widget reading the
+    /// result rather than a session that has ended.
+    private func expectNoSessionIsHeld(
+        by viewModel: AgentViewModel,
+        sourceLocation: SourceLocation = #_sourceLocation
+    ) {
+        #expect(!viewModel.isRunning, sourceLocation: sourceLocation)
+        #expect(viewModel.visionEmergencyStopHotKey == nil, "the emergency stop is still registered", sourceLocation: sourceLocation)
+        #expect(viewModel.visionSessionProgress == nil, "the controlling state still names a session", sourceLocation: sourceLocation)
+        #expect(viewModel.visionCapturePreview == nil, sourceLocation: sourceLocation)
+        #expect(viewModel.visionDelegationRequest == nil, sourceLocation: sourceLocation)
+        #expect(viewModel.visionSessionPause == nil, sourceLocation: sourceLocation)
+        #expect(!viewModel.isVisionSessionLive, sourceLocation: sourceLocation)
+        #expect(viewModel.activeVisionSessionID == nil, sourceLocation: sourceLocation)
+        if case .controlling = viewModel.widgetState {
+            Issue.record("the widget still reads as controlling after the session ended", sourceLocation: sourceLocation)
+        }
+        if case .result(let summary, _) = viewModel.widgetState {
+            #expect(summary == "Done.", sourceLocation: sourceLocation)
+        } else {
+            Issue.record("the widget reads \(viewModel.widgetState) rather than the result", sourceLocation: sourceLocation)
+        }
+    }
+
     /// A refused session never reaches the loop, so it must never take the shortcut either.
     @Test
     func aRefusedSessionNeverRegistersTheHotKey() async throws {

@@ -2437,6 +2437,53 @@ final class AgentViewModel: ObservableObject {
         }
     }
 
+    /// Gives back everything a screen-control session holds on this view model, once the run that
+    /// held it has ended (SONNY-472).
+    ///
+    /// **One teardown, called by every cleanup that can end a run holding a session**, which is
+    /// `performStart`'s and `performApproval`'s. It lived inline in `performStart`'s cleanup alone,
+    /// and a session executes under `performApproval` whenever it waited at the plan gate first —
+    /// Safe mode's session envelope is one such door. Every such session ended with `⌃⌥⎋` still
+    /// registered, `visionSessionProgress` still naming the app, the widget reading `.controlling`
+    /// over the result with a Stop that had nothing to cancel, and `activeVisionSessionID` still set,
+    /// so the next task run straight through `performStart` wrote its history row linked to that
+    /// session's screen record. `performScheduledRun` is the third cleanup that ends a run and does
+    /// not call this, because no session can be live there: unattended screen control is refused
+    /// three independent ways, and its cleanup's own comment names them.
+    ///
+    /// **What belongs here is what the session holds, and nothing the run holds.**
+    /// - The four session surfaces — `visionSessionProgress`, `visionCapturePreview`,
+    ///   `visionDelegationRequest`, `visionSessionPause` — are the HUD and the three parked session
+    ///   questions, and describe a session, not a run.
+    /// - `releaseEmergencyStopHotKey()` gives the combination back to the user's other apps; it is
+    ///   registered on a session's first progress report, so it is the session's.
+    /// - `approvedAppsForThisVisionIteration` is scoped to an iteration of the loop, and outside a
+    ///   session there is no iteration for it to belong to (SONNY-202).
+    /// - `visionUserPauseMonitor?.clearPause()` is the session's own Pause.
+    /// - `activeVisionSessionID` is the session's journal id, which the run's history row links to;
+    ///   it goes here because leaving it set is what made the next task's row claim this session's
+    ///   screen record. Both callers call this from their cleanup, after the history row has been
+    ///   written in the body, so the row still carries the link and the next task starts with none.
+    ///
+    /// **What stays in each run's cleanup**: `isRunning`, `currentTask`, the usage summary, the
+    /// scope and binding, and the recording policy. Those describe the run, and a run that pauses at
+    /// an approval or a clarification keeps its scope and policy for the resume, which each cleanup
+    /// already guards on its own terms.
+    ///
+    /// **Never called while a session waits.** A session parked on an approval, a capture review, a
+    /// delegation or a pause is suspended inside `execute`, so neither cleanup has run; the loop's own
+    /// questions are continuations inside the run, not returns from it.
+    private func endScreenControlSession() {
+        visionSessionProgress = nil
+        visionCapturePreview = nil
+        visionDelegationRequest = nil
+        visionSessionPause = nil
+        releaseEmergencyStopHotKey()
+        approvedAppsForThisVisionIteration = nil
+        visionUserPauseMonitor?.clearPause()
+        activeVisionSessionID = nil
+    }
+
     /// `currentTask?.cancel()` doesn't guarantee the in-flight work throws Swift's own
     /// `CancellationError` — a cancelled `URLSession` request (the planner/transcriber's network
     /// calls) can surface as `URLError(.cancelled)` instead, depending on exactly where the
@@ -2541,25 +2588,10 @@ final class AgentViewModel: ObservableObject {
             publishTaskUsageSummary()
             isRunning = false
             currentTask = nil
-            // Cleared on *every* exit of this function, unlike the scope below — a paused vision
-            // session does not reach here at all (the loop is still suspended inside `execute`), so
-            // reaching this line always means the session is over, however it ended.
-            visionSessionProgress = nil
-            visionCapturePreview = nil
-            visionDelegationRequest = nil
-            visionSessionPause = nil
-            // The one place a session ends, whatever ended it — so the combination goes back to the
-            // user's own apps on every exit, including the ones nobody planned for.
-            releaseEmergencyStopHotKey()
-            // And the iteration's cached grants go with it, on the same "whatever ended it"
-            // reasoning: the cache is scoped to an iteration, and outside a session there is no
-            // iteration for it to belong to (SONNY-202).
-            approvedAppsForThisVisionIteration = nil
-            visionUserPauseMonitor?.clearPause()
-            // Cleared *after* the history row is written by `recordTaskHistoryIfTerminal`, which
-            // runs earlier in this same exit path — so the row carries the link and the next task
-            // starts with none.
-            activeVisionSessionID = nil
+            // On *every* exit of this function, unlike the scope below — a paused vision session
+            // does not reach here at all (the loop is still suspended inside `execute`), so reaching
+            // this line always means any session this run held is over, however it ended.
+            endScreenControlSession()
             // Per-task, cleared at every terminal exit — and deliberately *not* when the task is
             // merely paused. An approval or a clarification is the same task waiting on the user,
             // and it has to resume under the scope it was assessed with; clearing here would let
@@ -7191,6 +7223,11 @@ final class AgentViewModel: ObservableObject {
             publishTaskUsageSummary()
             isRunning = false
             currentTask = nil
+            // A session that waited at the plan gate executes here, so this exit ends it exactly as
+            // `performStart`'s does (SONNY-472). Unconditional for the reason given there: a session
+            // parked on one of the loop's own questions is suspended inside `execute` and has not
+            // reached this line, and the stale-approval re-arm below throws before any step runs.
+            endScreenControlSession()
             // Guarded exactly as `performStart`'s is, and for the same reason: reaching this point
             // does *not* mean the task ended. `AgentRunner.execute` re-assesses on every call and
             // throws `.approvalRequired` whenever the re-assessed tier exceeds the tier the user
@@ -8506,6 +8543,12 @@ final class AgentViewModel: ObservableObject {
             scheduledRunDisplayCommand = nil
             isRunning = false
             currentTask = nil
+            // **No `endScreenControlSession()`, and that is a decision rather than an omission**
+            // (SONNY-472). No session can be live on this path: a stored routine cannot carry a
+            // `vision_session` step (`StoredRoutine.forbiddenStepOperations`), this method refuses one
+            // it carries anyway before executing it, and its fixed `.approved(.tier2)` ceiling cannot
+            // cover a session's tier-3 assessment. `VisionSessionRunTests` pins this cleanup as the
+            // named exception, so a fourth run door arriving without the teardown fails there.
             // A scheduled routine writes to the same stores a typed command does — output
             // locations, recent artifacts, a saved snippet, a *routine or a workspace* — and Command
             // Center can be open the whole time it runs (SONNY-246). The foreground twin of this
