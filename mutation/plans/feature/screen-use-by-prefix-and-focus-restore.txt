@@ -17,7 +17,9 @@
 #
 # X13 to X23 are PR #238's findings, each applied by hand on this branch and killed by the tests
 # named for it; X3's killer changed in that round, because an answer is no longer appended, and it
-# was re-applied by hand and killed.
+# was re-applied by hand and killed. X24 to X26 are its delta review's: the chain gives back what its
+# focus carry still holds when a session after an open never starts, an answer's leading preposition
+# is dropped, and an answer to "which app" naming no installed app keeps the question and says so.
 #
 # X4 and X5 were rewritten on SONNY-451's rebase over SONNY-440: their `from` blocks named code the
 # break fix changed (`onRestore(before)` became `onRestore(before.app)`, and the session stopped
@@ -59,7 +61,13 @@
 # (theShippingCompositionHandsTheActivationTheInstancesItNotedAndReadsThemOnce). X3, after the
 # round, by ScreenUsePrefixTests (anEmptyPrefixAndABareAppNameEachAskForWhatIsMissing,
 # eachQuestionsNaturalAnswerStaysOnThePrefixedRoute, anAliasOfAnAppAloneAsksWhatToDoInIt) and
-# VisionSessionRunTests (answeringThePrefixsQuestionStartsTheSessionWithoutThePlanner).
+# VisionSessionRunTests (answeringThePrefixsQuestionStartsTheSessionWithoutThePlanner). X24 by
+# VisionSessionRunTests (aPrefixedSessionRefusedAtTheDoorAfterItsOpenGivesTheUsersAppBack,
+# aPlannedSessionRefusedAtTheDoorAfterItsOpenGivesTheUsersAppBack,
+# aStopWhileTheDoorWaitsAfterAnOpenGivesTheUsersAppBack); X25 by ScreenUsePrefixTests
+# (twoAppsInOneSentenceAskWhichRatherThanPickingOne, eachQuestionsNaturalAnswerStaysOnThePrefixedRoute);
+# X26 by ScreenUsePrefixTests (eachQuestionsNaturalAnswerStaysOnThePrefixedRoute) and
+# VisionSessionRunTests (answeringWhichAppWithAnAppThatIsNotInstalledSaysSoAndKeepsTheQuestion).
 
 >>> mutant X1 the prefix door removed: [s] falls through to the other doors and the planner
 >>> file Sources/MacAgentCore/InstantCommandResolver.swift
@@ -274,4 +282,28 @@
                 return await activation(bundleURL, noted.heldInstances)
 >>> to
                 return await activation(bundleURL, runningApplications(noted.app.bundleIdentifier))
+>>> end
+
+>>> mutant X24 a chain that throws no longer gives back what its focus carry holds, so a session refused or stopped after its open leaves the opened app in front
+>>> file Sources/MacAgentCore/AgentActionExecutor.swift
+>>> from
+        if let held = focusCarry.take() {
+>>> to
+        if case .success = outcome, let held = focusCarry.take() {
+>>> end
+
+>>> mutant X25 an answer's leading preposition is kept, so `in Slack` labels as nothing
+>>> file Sources/MacAgentCore/InstantCommandResolver.swift
+>>> from
+        if words.count > 1, screenUseAppPrepositions.contains(words[0].lowercased()) {
+>>> to
+        if false, words.count > 1, screenUseAppPrepositions.contains(words[0].lowercased()) {
+>>> end
+
+>>> mutant X26 an answer to "which app" naming no installed app is dispatched and asked about again with no hint
+>>> file Sources/MacAgentCore/InstantCommandResolver.swift
+>>> from
+            guard installedAppResolver.resolve(label) != nil else {
+>>> to
+            guard true || installedAppResolver.resolve(label) != nil else {
 >>> end
