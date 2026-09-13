@@ -1,0 +1,96 @@
+# SONNY-436 — an account wipe clears the stored response bodies inside the transaction that deletes
+# the content and writes the sonny.content_deletion row, so a cancel at any point leaves either
+# nothing done or all of it recorded, and the row's stored_responses is the count that transaction
+# cleared.
+#
+# SERVER HALF, DATABASE SUITE. Every path below is under server/, so scripts/mutate-all runs this
+# plan against `cd server && npx vitest run`, and only with DATABASE_URL set (WORKFLOW.md's weekly
+# battery starts the database). The cancel tests live in test/content-deletion-audit.db.test.ts and
+# skip without a database, so without one M1 to M5 would read as survivors nobody tested.
+#
+# Not run on this branch (founder-triggered batteries, 2026-09-10). The killers below are the tests
+# each mutant was written against, not a measurement. What WAS measured on the branch is the pre-fix
+# tree as a whole: the four tests of content-deletion-audit.db.test.ts run against `git archive` of
+# main at 95325331 fail the three cancel tests on `storedBodies: 0` after the cancel and pass the
+# cutoff test — the changelog entry carries the run.
+#
+# Intended killers:
+#   M1 — all three cancel tests in content-deletion-audit.db.test.ts (the shape as it was, moved into
+#        the shared function, so every caller loses the count).
+#   M2 — "DELETE /v1/account/content?before bounds the stored bodies it clears and records by
+#        claimed_at", which is the only test in the suite asserting which bodies a bounded wipe takes.
+#   M3 — "DELETE /v1/account/content cancelled between the units …" alone.
+#   M4 — "DELETE /v1/account cancelled between the units …" alone.
+#   M5 — "the closed-account sweep cancelled between the units …" alone.
+#   M6 — the retry and next-pass count assertions in the three cancel tests, the cutoff test, and in
+#        content.db.test.ts "takes content, snapshot membership and the stored idempotency
+#        responses", "takes an account whose only residue is a stored response body" and "closes an
+#        account and takes its content, its lineage and its stored responses with it".
+
+>>> mutant M1 the clear committed before BEGIN, inside the shared function: the two-unit shape back for every caller
+>>> file server/src/content/store.ts
+>>> from
+  await client.query("BEGIN");
+  try {
+    const storedResponses = await clearStoredResponses(client, accountId, occurredAtOrBefore);
+>>> to
+  const storedResponses = await clearStoredResponses(client, accountId, occurredAtOrBefore);
+  await client.query("BEGIN");
+  try {
+>>> end
+
+>>> mutant M2 the cutoff not handed to the clear: a delayed ?before delivery takes and records bodies the press never covered
+>>> file server/src/content/store.ts
+>>> from
+    const storedResponses = await clearStoredResponses(client, accountId, occurredAtOrBefore);
+>>> to
+    const storedResponses = await clearStoredResponses(client, accountId);
+>>> end
+
+>>> mutant M3 DELETE /v1/account/content clears as a unit of its own again and hands in the count
+>>> file server/src/routes/tasks.ts
+>>> from
+          const outcome = await deleteContentForAccount(
+            db,
+            accountId,
+            deleteStoredResponsesForAccount,
+>>> to
+          const cleared = await deleteStoredResponsesForAccount(db, accountId, before);
+          const outcome = await deleteContentForAccount(
+            db,
+            accountId,
+            async () => cleared,
+>>> end
+
+>>> mutant M4 DELETE /v1/account clears as a unit of its own again and hands in the count
+>>> file server/src/routes/auth.ts
+>>> from
+      wiped = await deleteContentForAccount(
+        client,
+        accountId,
+        deleteStoredResponsesForAccount,
+        "account",
+      );
+>>> to
+      const cleared = await deleteStoredResponsesForAccount(client, accountId);
+      wiped = await deleteContentForAccount(client, accountId, async () => cleared, "account");
+>>> end
+
+>>> mutant M5 the closed-account sweep clears as a unit of its own again and hands in the count
+>>> file server/src/content/store.ts
+>>> from
+    const outcome = await deleteContentForAccount(client, accountId, clearStoredResponses, "account");
+>>> to
+    const cleared = await clearStoredResponses(client, accountId);
+    const outcome = await deleteContentForAccount(client, accountId, async () => cleared, "account");
+>>> end
+
+>>> mutant M6 the deletion row's stored_responses is not the count the clear returned
+>>> file server/src/content/store.ts
+>>> from
+      snapshotsTouched: removed.snapshots,
+      storedResponses,
+>>> to
+      snapshotsTouched: removed.snapshots,
+      storedResponses: 0,
+>>> end
