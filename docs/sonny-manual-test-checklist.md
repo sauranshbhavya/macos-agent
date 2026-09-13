@@ -4811,9 +4811,15 @@ Signed in, gateway up, screen control allowed for the account.
 - [ ] **Quit Notes first.** `[s] open Notes and make a note called wave 7`: Sonny opens Notes and
       then starts a screen-control session in it, with no planner round trip (the Tasks page's plan
       shows an `open_app` step and then a `vision_session` step, both naming Notes). **What would be
-      a finding:** "Sonny could not bring Notes to the front. Is it running?" In Normal mode with
-      Notes not yet allowed, Sonny asks to control Notes first, exactly as a planned session does;
-      in Safe mode it asks before every action.
+      a finding:** "Sonny could not bring Notes to the front. Is it running?" Notes is on Sonny's
+      starter list, so Normal mode controls it without asking; in Safe mode Sonny asks before every
+      action.
+- [ ] **An app Sonny has not been allowed to control, quit first** — VS Code, which is not on the
+      starter list. In Normal mode, type in TextEdit, then `[s] open the extensions panel in VS Code`:
+      Sonny opens VS Code, then asks whether it may control VS Code before doing anything in it.
+      Decline: nothing is clicked, VS Code stays open, and TextEdit comes back in front. (Worth
+      knowing rather than a finding: Normal mode has never asked before opening an app, so the app
+      starts before the question, as it does when the planner splits the same request.)
 - [ ] The same command with Notes already open: the plan shows the one `vision_session` step, and
       the session starts in Notes.
 - [ ] The same command without `[s]`, with TextEdit in front: the planner decides the route. When it
@@ -4821,6 +4827,7 @@ Signed in, gateway up, screen control allowed for the account.
       and TextEdit comes back once, at the end. **What would be a finding:** TextEdit flashing to the
       front between Notes opening and the session starting.
 - [ ] `[s] make a note called wave 7`: Sonny asks "Which app should Sonny control for that?"; answer
+      `Foo`: Sonny says it could not find an app called Foo on this Mac and the question stays; answer
       `Notes`; the session starts in Notes.
 - [ ] `[s] Notes`: Sonny asks "What should Sonny do in Notes?"; answer `make a note`; the session
       starts in Notes. `[s]` alone asks what to do and in which app; answer `Notes` and Sonny asks
@@ -4830,10 +4837,13 @@ Signed in, gateway up, screen control allowed for the account.
 - [ ] `[s] Google Chrome` and `[s] Chrome` each ask "What should Sonny do in Chrome?" rather than
       starting a session.
 - [ ] `[s] tell the team in Slack that I am listening to Music` asks which app, naming Slack and the
-      Music app; answer `Slack`; the session starts in Slack. `[s] archive every newsletter in Mail`
+      Music app; answer `in Slack`; the session starts in Slack. `[s] archive every newsletter in Mail`
       and `[S] Notes: make a note` both start a session in the named app.
-- [ ] With screen control's allowance exhausted (or the account signed out), `[s] …` is refused
-      by the same billing gate a planned session meets, before anything is clicked.
+- [ ] With screen control's allowance exhausted (or the account signed out), quit Notes, type in
+      TextEdit, then `[s] open Notes and make a note`: Sonny opens Notes, the same billing gate a
+      planned session meets refuses before anything is clicked, and **TextEdit is back in front**
+      afterwards. **What would be a finding:** Notes left in front after the refusal. The same with
+      the command typed without `[s]`, when the planner opens Notes and then controls it.
 - [ ] Press Ctrl-Opt-Esc during a `[s]` session: it stops exactly as any session does.
 - [ ] Type in TextEdit (a document open), start a `[s]` session on Safari, and press **Stop** in the
       pill while it runs: the session stops and TextEdit comes back in front.
