@@ -2251,11 +2251,60 @@ public final class AgentActionExecutor {
         return previews
     }
 
+    /// The chain walk, and the one place the run's focus carry begins and ends.
+    ///
+    /// **One carry for the whole chain** (PR #238's F5). An open whose app the next unit takes control
+    /// of hands the user's app to that session instead of bringing it back in between — the planned
+    /// `open Notes and make a note` flickered Notes, the user's app, Notes — and the session gives it
+    /// back when it ends.
+    ///
+    /// **And whatever the carry still holds when the chain ends is given back here, however it ended**
+    /// (PR #238's delta review, N1). The session takes the carry only once it is built, and a good
+    /// deal can end the run before that: the billing gate refusing at the door, a stop pressed while
+    /// the door waits, the chain's own cancellation check between the two units. Each of those left
+    /// the app the open had just brought forward in front, with nothing to give the user's app back —
+    /// a regression for the unprefixed planned route, whose open restored before the hand-over
+    /// existed. The give-back is the same rule an open's own restore uses: nothing if the user's app
+    /// is already in front, nothing asked of Launch Services for an app that has quit, and the trace
+    /// line only for a real switch. A session that ran has already taken the carry, so on that path
+    /// this finds nothing and the user's app comes back once, from the session.
     private func executeChain(
         _ plan: AgentPlan,
         preferredBrowser: MacApp?,
         claimedEarlierInThisRun: RunClaims = .none,
         namedByEnclosingPlan: PlannedDestinations,
+        onUnitCompleted: ((CompletedRunUnit) -> Void)?,
+        onItemFailed: ((ItemJobFailure) -> Void)?,
+        log: @escaping (AgentPhase, String) -> Void
+    ) async throws -> AgentRunResult {
+        let focusCarry = FocusCarry()
+        let outcome: Result<AgentRunResult, any Error>
+        do {
+            outcome = .success(try await executeChainUnits(
+                plan,
+                preferredBrowser: preferredBrowser,
+                claimedEarlierInThisRun: claimedEarlierInThisRun,
+                namedByEnclosingPlan: namedByEnclosingPlan,
+                focusCarry: focusCarry,
+                onUnitCompleted: onUnitCompleted,
+                onItemFailed: onItemFailed,
+                log: log
+            ))
+        } catch {
+            outcome = .failure(error)
+        }
+        if let held = focusCarry.take() {
+            await focusRestorer.giveBack(held, onRestore: { log(.act, "Brought \($0.displayName) back in front") })
+        }
+        return try outcome.get()
+    }
+
+    private func executeChainUnits(
+        _ plan: AgentPlan,
+        preferredBrowser: MacApp?,
+        claimedEarlierInThisRun: RunClaims,
+        namedByEnclosingPlan: PlannedDestinations,
+        focusCarry: FocusCarry,
         onUnitCompleted: ((CompletedRunUnit) -> Void)?,
         onItemFailed: ((ItemJobFailure) -> Void)?,
         log: @escaping (AgentPhase, String) -> Void
@@ -2319,12 +2368,8 @@ public final class AgentActionExecutor {
         var sawFirstSegment = false
 
         let segments = try chainSegments(in: plan)
-        // **One carry for the whole chain** (PR #238's F5). An open whose app the next unit takes
-        // control of hands the user's app to that session instead of bringing it back in between —
-        // the planned `open Notes and make a note` flickered Notes, the user's app, Notes — and the
-        // session gives it back when it ends. `plan` is resolved, so a session unit's target is
-        // already pinned to a bundle identifier here.
-        let focusCarry = FocusCarry()
+        // Each unit is told what the next one controls (PR #238's F5). `plan` is resolved, so a
+        // session unit's target is already pinned to a bundle identifier here.
         for (index, segment) in segments.enumerated() {
             // **The stop control, observed by the loop itself.** Cancellation already unwinds
             // through whatever an adapter awaits, which is enough for an ordinary chain; it is not
