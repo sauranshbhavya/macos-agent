@@ -255,9 +255,10 @@ struct BackendOutageTests {
         fixture.viewModel.entitlementConfirmation = { .entitled }
         fixture.viewModel.refreshPermissions()
 
-        // Synchronously, before the actor has answered: eight rows, and the account one honestly
-        // says it has not been asked yet rather than guessing in either direction.
-        #expect(fixture.viewModel.permissionItems.count == 8)
+        // Synchronously, before the actor has answered: every row, and the account one honestly
+        // says it has not been asked yet rather than guessing in either direction. Ten since
+        // SONNY-453 added Calendars and Reminders.
+        #expect(fixture.viewModel.permissionItems.count == 10)
         let firstPass = try #require(fixture.viewModel.permissionItems.first { $0.id == "sonny-account" })
         #expect(firstPass.state == .unknown)
 
