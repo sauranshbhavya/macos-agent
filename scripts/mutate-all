@@ -1287,15 +1287,6 @@ PLAN
   if (tier === "free") return 11;
 >>> end
 PLAN
-  cat >mutation/plans/db-stale-server.txt <<'PLAN'
->>> mutant V9 a server mutant whose text is not in the file
->>> file server/src/sample.ts
->>> from
-  if (tier === "gold") return 999;
->>> to
-  if (tier === "gold") return 998;
->>> end
-PLAN
   cat >mutation/plans/db-swift.txt <<'PLAN'
 >>> mutant S1 the morning boundary widened by an hour
 >>> file sample.swift
@@ -1305,17 +1296,39 @@ PLAN
         if hour < 13 { return "Morning" }
 >>> end
 PLAN
-  git add mutation/plans/db-server.txt mutation/plans/db-stale-server.txt mutation/plans/db-swift.txt
-  git commit -q -m "a server plan, a stale server plan and a Swift plan, run with no database"
+  git add mutation/plans/db-server.txt mutation/plans/db-swift.txt
+  git commit -q -m "a server plan and a killed Swift plan, run with no database"
+  # First with nothing else unrun, so the exit code has only the skip to answer to.
   : >"$ST_SUITES_LOG"
   st_run "$swift_half_suite" "$server_half_suite"
   suites="$(cat "$ST_SUITES_LOG")"
+  st_eq "a run whose only unrun plan is the skipped one exits 3, never 0" "$ST_RC" "3"
+  st_contains "the server plan's block says DATABASE_URL is unset" "$ST_OUT" "DATABASE_URL is unset"
+  st_contains "and that it was skipped for want of a database" "$ST_OUT" "SKIPPED — no database"
+  st_contains "the counts name the skip" "$ST_OUT" \
+    "2 plan(s) found, 1 ran, 0 skipped (stale), 1 skipped (no database), 0 refused (mixed halves)"
+  st_contains "the exit line names it" "$ST_OUT" "0 skipped as stale, 1 skipped"
+  st_absent "no clean verdict" "$ST_OUT" "Every plan ran and every mutant was killed"
+  st_eq "vitest never ran" "$(st_count "$suites" '^server saw:')" "0"
+  st_contains "the Swift plan beside it ran" "$ST_OUT" "swift   mutation/plans/db-swift.txt ->"
+
+  # Then beside a stale server plan, which must stay on the stale list: its check needs no database.
+  cat >mutation/plans/db-stale-server.txt <<'PLAN'
+>>> mutant V9 a server mutant whose text is not in the file
+>>> file server/src/sample.ts
+>>> from
+  if (tier === "gold") return 999;
+>>> to
+  if (tier === "gold") return 998;
+>>> end
+PLAN
+  git add mutation/plans/db-stale-server.txt
+  git commit -q -m "a stale server plan beside the skipped one"
+  st_run "$swift_half_suite" "$server_half_suite"
   local no_database_list stale_list
   no_database_list="$(printf '%s\n' "$ST_OUT" | awk '/^    SKIPPED \(no database\)/{f=1;next} /^$/{f=0} f')"
   stale_list="$(printf '%s\n' "$ST_OUT" | awk '/^    SKIPPED \(stale\)/{f=1;next} /^$/{f=0} f')"
-  st_eq "a run whose only unrun plans are skipped exits 3, never 0" "$ST_RC" "3"
-  st_contains "the server plan's block says DATABASE_URL is unset" "$ST_OUT" "DATABASE_URL is unset"
-  st_contains "and that it was skipped for want of a database" "$ST_OUT" "SKIPPED — no database"
+  st_eq "a stale plan beside it still exits 3" "$ST_RC" "3"
   st_contains "the no-database list names the plan, marked server" "$no_database_list" "server  mutation/plans/db-server.txt"
   st_absent "the no-database list does not carry the stale plan" "$no_database_list" "db-stale-server.txt"
   st_contains "the stale plan is still listed as stale, its check having run" "$stale_list" "server  mutation/plans/db-stale-server.txt"
@@ -1323,9 +1336,6 @@ PLAN
   st_contains "the counts separate the two skips" "$ST_OUT" \
     "3 plan(s) found, 1 ran, 1 skipped (stale), 1 skipped (no database), 0 refused (mixed halves)"
   st_contains "the exit line names both" "$ST_OUT" "1 skipped as stale, 1 skipped"
-  st_absent "no clean verdict" "$ST_OUT" "Every plan ran and every mutant was killed"
-  st_eq "vitest never ran" "$(st_count "$suites" '^server saw:')" "0"
-  st_contains "the Swift plan beside it ran" "$ST_OUT" "swift   mutation/plans/db-swift.txt ->"
 
   printf '\n==> With a survivor beside it the run exits 2, and the exit line still names the skipped plans\n'
   cat >mutation/plans/db-swift-survivor.txt <<'PLAN'
