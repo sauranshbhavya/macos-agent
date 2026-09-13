@@ -109,13 +109,34 @@ struct SkillPackTests {
     ///
     /// How "ordinary language" is decided, and it is decided here rather than at launch — the loader
     /// runs on every launch and this runs before a pack ships (launch-time validation is SONNY-476):
-    /// - **One word** is refused when it is two characters or fewer, only digits, or a word in macOS's
-    ///   own word list (`/usr/share/dict/words`), so "make", "close", "x", "hey", "slack", "notion"
-    ///   and "linear" are refused and "docusign", "zapier" and "n8n" are not.
-    /// - **A phrase** is refused when every word in it is ordinary *and* none of them is the site's
-    ///   own name, so "new page" is refused while "in notion" and "make scenario" are not.
+    /// - **A word is ordinary** when it, or its singular form (`-s`, `-es`, `-ies` → `-y`), is in
+    ///   macOS's own word list (`/usr/share/dict/words`) or in `modernWords` below. So "make",
+    ///   "close", "x", "slack", "notion", "teams", "docs", "sheets" and "email" are ordinary, and
+    ///   "docusign", "zapier", "gmail" and "n8n" are not.
+    /// - **One word** is refused when it is ordinary, two characters or fewer, or only digits.
+    /// - **A phrase** is refused when every word in it is ordinary *and* it does not carry the site's
+    ///   whole name, so "new page" and "new docs" (for Google Docs) are refused while "in notion",
+    ///   "make scenario" and "google docs" are not.
     /// - **A dotted trigger** ("make.com") is allowed: ordinary language does not carry a dot inside a
     ///   word.
+    ///
+    /// **Why the singular form and a short list, and not a vendored word list** (PR #241's delta pass).
+    /// The system list is a 1934 list of headwords with almost no plurals and few modern words, so
+    /// "teams", "docs", "sheets", "forms", "slides", "tasks", "email" and "inbox" passed while "team",
+    /// "doc" and "sheet" were refused — and the catalogue holds Microsoft Teams, Google Docs, Sheets,
+    /// Forms, Slides, Tasks and Gmail. The singular form closes the systematic gap, plurals, with one
+    /// rule; `modernWords` names the post-1934 words a work tool's trigger is likeliest to be, and it
+    /// is short enough to read in review. Vendoring an inflected list was the other road: it would
+    /// remove the dependency on the operating system's file, but it brings a third-party list to
+    /// license, vet and keep current, several megabytes to commit, and a list nobody reviews. The delta
+    /// pass judged the system list not machine state (it is on the sealed system volume, and the test
+    /// fails loudly when it is missing); **the residual it named stands**: Apple can change that file
+    /// in a macOS update, and what this test refuses would then move with nothing in this repository
+    /// changing.
+    ///
+    /// **What this check still cannot catch:** an ordinary phrase that contains the site's name
+    /// ("close deal"); a modern word neither list holds, and an irregular plural ("people"); and what
+    /// a command means.
     @Test
     func everyShippedTriggerIsDistinctiveOrAnchoredToItsSite() throws {
         let ordinary = try Self.ordinaryWords()
@@ -137,14 +158,22 @@ struct SkillPackTests {
         let refused: [(trigger: String, site: String)] = [
             ("make", "Make"), ("close", "Close"), ("x", "X"), ("hey", "HEY"), ("front", "Front"),
             ("instantly", "Instantly"), ("segment", "Segment"), ("notion", "Notion"), ("linear", "Linear"),
-            ("slack", "Slack"), ("1280", "Probe"), ("new page", "Notion"), ("post it", "Slack")
+            ("slack", "Slack"), ("1280", "Probe"), ("new page", "Notion"), ("post it", "Slack"),
+            // PR #241's delta pass: plurals and modern words that passed the first version.
+            ("teams", "Microsoft Teams"), ("team", "Microsoft Teams"), ("docs", "Google Docs"),
+            ("doc", "Google Docs"), ("sheets", "Google Sheets"), ("sheet", "Google Sheets"),
+            ("forms", "Google Forms"), ("slides", "Google Slides"), ("tasks", "Google Tasks"),
+            ("notes", "Apple Notes"), ("issues", "Linear"), ("tickets", "Zendesk"), ("email", "Gmail"),
+            ("inbox", "Gmail"), ("app", "Probe"), ("website", "Probe"), ("download", "Probe"),
+            ("new docs", "Google Docs"), ("my files", "Dropbox")
         ]
         for entry in refused {
             #expect(Self.triggerProblem(entry.trigger, siteName: entry.site, ordinary: ordinary) != nil, "\(entry.trigger) was allowed")
         }
         let allowed: [(trigger: String, site: String)] = [
             ("docusign", "Docusign"), ("zapier", "Zapier"), ("n8n", "n8n"), ("make.com", "Make"),
-            ("make scenario", "Make"), ("in notion", "Notion"), ("post on x", "X"), ("linear issue", "Linear")
+            ("make scenario", "Make"), ("in notion", "Notion"), ("post on x", "X"), ("linear issue", "Linear"),
+            ("gmail", "Gmail"), ("google docs", "Google Docs"), ("microsoft teams", "Microsoft Teams")
         ]
         for entry in allowed {
             #expect(Self.triggerProblem(entry.trigger, siteName: entry.site, ordinary: ordinary) == nil, "\(entry.trigger) was refused")
@@ -279,7 +308,20 @@ struct SkillPackTests {
             ("Initiate an ACH transfer", ["Open Transfers.", "Initiate an ACH transfer."]),
             ("Settle up with a vendor", ["Open Vendors.", "Send  money to the vendor."]),
             ("Move savings", ["Open Accounts.", "Transfer\tfunds to savings."]),
-            ("Settle a debt", ["Open Contacts.", "Send\u{00A0}money to them."])
+            ("Settle a debt", ["Open Contacts.", "Send\u{00A0}money to them."]),
+            // PR #241's delta pass: a money verb neither list held, and five phrases the replaced
+            // list refused that the first version of this rule let load as single steps.
+            ("Pay a vendor by wire", ["Open it.", "Wire money to the vendor."]),
+            ("Wire the vendor", ["Open it.", "Wire funds to the vendor."]),
+            ("Remit to a supplier", ["Open it.", "Remit $200 to the supplier."]),
+            ("Disburse", ["Open it.", "Disburse the funds."]),
+            ("Cash out", ["Open it.", "Cash out the balance to your bank."]),
+            ("Request a payout", ["Open Payouts.", "Click Request payout."]),
+            ("Tip", ["Open it.", "Tip the driver $5."]),
+            ("Get paid", ["Open it.", "Click Get paid now."]),
+            ("Move money", ["Open it.", "Make a transfer."]),
+            ("Transfer out", ["Open it.", "Send a transfer."]),
+            ("Put money in", ["Open it.", "Make a deposit."])
         ]
         for testFlow in flows {
             var object = SkillPackFixtures.object(id: "store", name: "Store", domain: "store.example.com", category: category)
@@ -326,7 +368,14 @@ struct SkillPackTests {
             ("Share a page", ["Open Share.", "Send the page to a teammate."]),
             ("Transfer ownership of a page", ["Open the page's settings.", "Transfer ownership to a teammate."]),
             ("Address an email", ["Open Compose.", "Add a recipient."]),
-            ("Move a card", ["Open the board.", "Move the card to Done."])
+            ("Move a card", ["Open the board.", "Move the card to Done."]),
+            // PR #241's delta pass's reading flows.
+            ("Draft an invoice", ["Open Invoices.", "Create an invoice for the client."]),
+            ("Share an invoice", ["Open Invoices.", "Send the invoice to the client."]),
+            ("Plan the week", ["Open the board.", "Add a card to the To do list."]),
+            ("Trim the draft", ["Open the draft.", "Remove a recipient."]),
+            ("See wires", ["Open Payments.", "Filter the list to wires."]),
+            ("Get started", ["Open Help.", "Read the tips for your first week."])
         ]
         for testFlow in flows {
             var object = SkillPackFixtures.object(id: "wise", name: "Wise", domain: "wise.com", category: "finance_billing")
@@ -364,7 +413,10 @@ struct SkillPackTests {
     @Test(arguments: [
         "Enter your credentials.", "Type your PIN.", "Paste the API token.", "Enter the OTP.",
         "Enter the two-factor code.", "Use a backup code.", "Paste the client secret.",
-        "Enter the one-time password.", "Type the 2FA code from your phone."
+        "Enter the one-time password.", "Type the 2FA code from your phone.",
+        // PR #241's delta pass.
+        "Enter your login and pass.", "Paste your token.", "Enter the code we emailed you.",
+        "Enter the 6-digit code from the authenticator app."
     ])
     func aStepNamingAnyUsualCredentialDoesNotLoad(step: String) throws {
         var object = SkillPackFixtures.object()
@@ -379,6 +431,15 @@ struct SkillPackTests {
     func aChatToolsLowercasePinStillLoads() throws {
         var object = SkillPackFixtures.object()
         object["flows"] = [SkillPackFixtures.flow(steps: ["Open the channel.", "Pin the message to the channel."])]
+        #expect(Self.error(object) == nil)
+    }
+
+    /// The credential phrases the delta round added are phrases, so the ordinary words inside them
+    /// still load: a design token, and passing something to a teammate.
+    @Test
+    func anOrdinaryTokenOrPassStillLoads() throws {
+        var object = SkillPackFixtures.object()
+        object["flows"] = [SkillPackFixtures.flow(steps: ["Open the styles.", "Use the design token for spacing.", "Pass the page to a teammate."])]
         #expect(Self.error(object) == nil)
     }
 
@@ -503,6 +564,27 @@ struct SkillPackTests {
         return words
     }
 
+    /// Post-1934 words a work tool's trigger is likeliest to be, each one absent from the system list
+    /// (`grep -ixc <word> /usr/share/dict/words` → 0 for every entry, on macOS 26.6.2). Singular forms
+    /// only: `isOrdinary` reads each word's singular too. A duplicate here would trap the test process,
+    /// since a `Set` literal refuses one.
+    static let modernWords: Set<String> = [
+        "email", "inbox", "app", "website", "online", "offline", "download", "logout", "signup", "dm",
+        "sms", "blog", "podcast", "webinar", "emoji", "hashtag", "username", "wifi", "laptop",
+        "smartphone", "spreadsheet", "workspace", "homepage", "chatbot", "url", "pdf", "csv",
+        "screenshot", "selfie", "meme", "livestream", "ebook", "todo", "checklist", "whiteboard"
+    ]
+
+    /// Whether `word` or its singular form is ordinary. The singular is `-ies` → `-y`, `-es` dropped,
+    /// or `-s` dropped (not `-ss`), and every candidate is tried, since English does not say which.
+    static func isOrdinary(_ word: String, ordinary: Set<String>) -> Bool {
+        var candidates = [word]
+        if word.hasSuffix("ies"), word.count > 4 { candidates.append(String(word.dropLast(3)) + "y") }
+        if word.hasSuffix("es"), word.count > 3 { candidates.append(String(word.dropLast(2))) }
+        if word.hasSuffix("s"), !word.hasSuffix("ss"), word.count > 2 { candidates.append(String(word.dropLast())) }
+        return candidates.contains { ordinary.contains($0) || modernWords.contains($0) }
+    }
+
     /// Why `trigger` would match ordinary language for a site called `siteName`, or `nil`.
     static func triggerProblem(_ trigger: String, siteName: String, ordinary: Set<String>) -> String? {
         let folded = SearchText.normalized(trigger)
@@ -515,12 +597,15 @@ struct SkillPackTests {
             let word = words[0]
             if word.count <= 2 { return "\(word) is two characters or fewer" }
             if word.allSatisfy(\.isNumber) { return "\(word) is only digits" }
-            if ordinary.contains(word) { return "\(word) is an ordinary word" }
+            if isOrdinary(word, ordinary: ordinary) { return "\(word) is an ordinary word" }
             return nil
         }
-        let nameWords = Set(SkillWords.cut(SearchText.normalized(siteName)))
-        let anchored = words.contains { nameWords.contains($0) }
-        let allOrdinary = words.allSatisfy { ordinary.contains($0) || $0.count <= 2 }
+        // Anchored means the phrase carries the site's **whole** name. One word of a longer name is not
+        // enough: "docs" is Google Docs' own word and an ordinary one, so "new docs" would join
+        // "tidy my new docs" — the delta pass's case, which a per-word anchor let through.
+        let nameWords = SkillWords.cut(SearchText.normalized(siteName))
+        let anchored = SkillWords(folded).contains(nameWords)
+        let allOrdinary = words.allSatisfy { isOrdinary($0, ordinary: ordinary) || $0.count <= 2 }
         return allOrdinary && !anchored ? "every word of \(trigger) is ordinary and none is the site's name" : nil
     }
 

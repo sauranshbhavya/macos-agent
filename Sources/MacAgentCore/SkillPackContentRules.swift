@@ -56,32 +56,51 @@ struct SkillPhraseList {
 /// is often split between a title ("Create a payout") and a step ("Click Confirm").
 ///
 /// **How it decides — two tests, either of which refuses:**
-/// 1. **A verb that can only mean money**, alone: `pay`, `refund`, `reimburse`, `withdraw`, `top up`.
+/// 1. **A verb or act that can only mean money**, alone: `pay`, `refund`, `reimburse`, `withdraw`,
+///    `top up`, `wire`, `remit`, `disburse`, `cash out`, `get paid`, and the old list's
+///    `make a transfer`, `send a transfer` and `make a deposit` (restored in PR #241's delta round,
+///    after the first version of this rule let them load as single steps).
 /// 2. **An action verb with a money object.** Action verbs change something: add, change, update,
 ///    replace, send, create, submit, confirm, initiate, run, approve, capture, charge, move,
-///    transfer, remove, connect and the rest of `actionVerbs`. Money objects are things money moves
+///    transfer, remove, connect, request, settle, split, tip and the rest of `actionVerbs`. Money objects are things money moves
 ///    through or to: money, funds, a payment, a payout, payroll, a bill, a beneficiary, a payee, an
 ///    IBAN, a wire, ACH, SEPA, a bank account, a card on file, payment details, a currency amount.
 ///    A few objects are ordinary words elsewhere — a *recipient* in an email tool, a *card* on a
 ///    Trello board, an *account*, a *balance* — and count only when the same unit also names money
 ///    (bank, billing, payment, payout, transfer, IBAN, money, funds, an amount).
 ///
-/// **It fails closed on the object.** A money verb nobody listed is still refused once its object
-/// appears beside any action verb, and reading verbs — open, view, find, filter, download, review,
-/// export — are not action verbs, so "Filter the payouts and payments by date" and "Download a
-/// statement" load. The cost is false refusals, which surface in
+/// **It fails closed on the object only beside a listed action verb.** A money verb nobody listed is
+/// refused once its object sits in the same unit as any listed action verb, and reading verbs — open,
+/// view, find, filter, download, review, export — are not action verbs, so "Filter the payouts and
+/// payments by date" and "Download a statement" load. The cost is false refusals ("Run the payments
+/// report", "View the charge", "Find the wire"), which surface in
 /// `everyShippedPackLoadsAndEveryOneIsARowOfTheCommittedCatalogue` before a pack ships.
 ///
+/// **Nouns alone are allowed on purpose.** The phrase list this replaced refused "payee", "payment
+/// details" or "refunds" anywhere; this rule refuses them only beside an action verb, so that a flow
+/// may read them, which the founders allow.
+///
 /// **What this cannot guarantee, said plainly.** It is a guard on first-party data that this
-/// repository writes and reviews, not a proof that a pack cannot lead Sonny to move money. Wording
-/// can describe a money act in words neither list names, and a flow can reach a money page through
-/// steps that name nothing about money. **What stands between Sonny and a payment is still the
+/// repository writes and reviews, not a proof that a pack cannot lead Sonny to move money. It does
+/// not catch:
+/// - **a listed money object whose only verb is unlisted** — "Push the funds to the vendor." and
+///   "Allocate the funds to the project." load, because neither verb is listed and nothing else in
+///   the flow is;
+/// - **a contextual object with no money word beside it** — "Move the balance to savings." loads,
+///   because *balance* counts as money only beside one;
+/// - **a money act in words neither list names at all**;
+/// - **a flow that reaches a money page through steps that name nothing about money**;
+/// - **spellings outside first-party writing** — a zero-width space inside a word, or a Cyrillic
+///   letter standing in for a Latin one. **What stands between Sonny and a payment is still the
 /// consequence rule**, which asks before an external or destructive action whatever a pack says,
 /// and screen control's own per-action classification; a pack can make nothing ask less.
 enum SkillPackMoneyRule {
     static let moneyVerbs = SkillPhraseList([
         "pay", "pays", "paying", "refund", "refunding", "reimburse", "reimburses", "reimbursing",
-        "withdraw", "withdraws", "withdrawing", "top up", "tops up", "topping up"
+        "withdraw", "withdraws", "withdrawing", "top up", "tops up", "topping up",
+        "wire", "wiring", "remit", "remits", "remitting", "disburse", "disburses", "disbursing",
+        "cash out", "cashing out", "get paid", "getting paid",
+        "wire money", "wire funds", "make a transfer", "send a transfer", "make a deposit"
     ])
 
     /// Base and "-ing" forms only. The third-person "-s" forms are left out on purpose: most of them
@@ -95,7 +114,9 @@ enum SkillPackMoneyRule {
         "making", "issue", "issuing", "process", "processing", "execute", "executing", "authorize",
         "authorise", "authorizing", "authorising", "release", "releasing", "fund", "funding", "move",
         "moving", "transfer", "transferring", "remove", "removing", "delete", "deleting", "connect",
-        "connecting", "link", "linking", "save", "saving", "deposit", "depositing"
+        "connecting", "link", "linking", "save", "saving", "deposit", "depositing", "request",
+        "requesting", "settle", "settling", "split", "splitting", "tip", "tipping", "forward",
+        "forwarding"
     ])
 
     static let moneyObjects = SkillPhraseList([
@@ -169,7 +190,13 @@ enum SkillPackCredentialRule {
         "one time codes", "one time password", "one time passwords", "otp", "otps", "two factor code",
         "two factor codes", "2fa", "mfa", "authentication code", "authentication codes",
         "security code", "security codes", "recovery code", "recovery codes", "backup code",
-        "backup codes"
+        "backup codes",
+        // PR #241's delta round: a password by another name, a bare token that is yours, and the
+        // code a sign-in sends you.
+        "login and pass", "username and pass", "user name and pass", "email and pass",
+        "your token", "the token", "a token", "code we emailed", "code we sent", "code we texted",
+        "code sent to your", "code from your email", "code from the email", "code from your phone",
+        "authenticator app", "authenticator code", "6 digit code", "six digit code", "4 digit code"
     ])
 
     static let casedWords: Set<String> = ["PIN", "PINs"]
