@@ -250,10 +250,23 @@ readonly SWIFT_DEFAULT_LABEL="scripts/mutate's default, the flagged swift test"
 # does not answer with exactly one tracked file — an untracked path, a directory, a path outside
 # the repository — keeps its written spelling less any leading `./`, and `scripts/mutate --check`
 # refuses it whichever half that puts it in.
+#
+# The name is read with `-z`, one NUL-terminated entry at a time, and never from git's line output
+# (PR #239's delta pass, D1). Line output quotes any name git thinks needs it: a byte above 0x7F
+# under the default `core.quotepath`, so `server/src/café.ts` came back as
+# `"server/src/caf\303\251.ts"`, failed the `server/*` test and ran its server mutant against the
+# Swift suite — this script's own phantom survivor, introduced by the F2 fix that first read git's
+# name. `-c core.quotepath=false` would have closed that one name and not the class: git still
+# quotes a name holding a double quote, a backslash, a tab or a newline with the setting off. With
+# `-z` git prints every name as its bytes, and NUL is the one byte a path cannot contain, so there
+# is nothing left to unquote and nothing a name can do to its own reading.
 canonical_path() {
-  local listed
-  listed="$(git --literal-pathspecs ls-files --full-name -- "$1" 2>/dev/null)" || listed=""
-  if [[ -n "$listed" && "$listed" != *$'\n'* ]]; then
+  local entry listed="" count=0
+  while IFS= read -r -d '' entry; do
+    count=$((count + 1))
+    listed="$entry"
+  done < <(git --literal-pathspecs ls-files -z --full-name -- "$1" 2>/dev/null)
+  if [[ $count -eq 1 ]]; then
     printf '%s\n' "$listed"
     return 0
   fi
@@ -488,7 +501,9 @@ run_all_plans() {
       printf '                 suite compiles the other'"'"'s files, so either would report those\n'
       printf '                 mutants SURVIVED with no test having seen them. Split it into one\n'
       printf '                 plan per half. Its mutants, each with the half its path puts it in:\n'
-      plan_mutant_halves "$p" | awk -F '\t' '{ printf "      %-6s  %-6s %s\n", $1, $2, $3 }'
+      # The path is everything after the second tab, not awk's third field: a tab inside the name
+      # would otherwise cut the listing short at it.
+      plan_mutant_halves "$p" | awk -F '\t' '{ rest = $0; sub(/^[^\t]*\t[^\t]*\t/, "", rest); printf "      %-6s  %-6s %s\n", $1, $2, rest }'
       refused_plans+=("$p")
       printf '\n'
       continue
@@ -706,6 +721,17 @@ st_run() {
 # st_count <text> <extended regex> — how many lines of the text match.
 st_count() {
   printf '%s\n' "$1" | grep -cE -- "$2" || true
+}
+
+# st_plan_suite <text> <plan> — the `suite :` line printed in that plan's own block, so a
+# scenario holding several plans can assert each one's half separately. Matched by the plan path
+# ending the `==> [i/n]` line, compared as bytes, so a name with a quote or a byte above 0x7F in it
+# needs no escaping.
+st_plan_suite() {
+  printf '%s\n' "$1" | awk -v plan="$2" '
+    /^==> \[/ { f = (substr($0, length($0) - length(plan) + 1) == plan); next }
+    f && /^    suite      : / { print; exit }
+  '
 }
 
 st_require_command() {
@@ -1132,6 +1158,8 @@ grep -q "return 11;" server/src/sample.ts && seen="$seen server-mutant"
 grep -q "return 999;" server/src/sample.ts && seen="$seen server-survivor"
 grep -q "hour < 14" sample.swift && seen="$seen mixed-plan-mutant"
 grep -q "return 12;" server/src/sample.ts && seen="$seen mixed-plan-mutant"
+grep -rqF "quoted-name-server-mutant" server/src && seen="$seen server-mutant"
+grep -rqF "quoted-name-mixed-mutant" server/src && seen="$seen mixed-plan-mutant"
 '
   local swift_half_suite="# swift test --scratch-path \"\$MUTATE_SCRATCH\"
 $st_seen"'printf "swift saw:%s\n" "${seen:- nothing}" >>"$ST_SUITES_LOG"
@@ -1147,7 +1175,7 @@ printf "✔  Test run with 2 tests in 1 suite passed after 0.001 seconds.\n"'
   local server_half_suite="$st_seen"'printf "server saw:%s\n" "${seen:- nothing}" >>"$ST_SUITES_LOG"
 cd server || exit 1
 printf " RUN  v4.1.11 /repo/server\n"
-if grep -q "return 11;" src/sample.ts; then
+if grep -q "return 11;" src/sample.ts || grep -rqF "quoted-name-server-mutant" src; then
   printf " ❯ test/sample.test.ts (2 tests | 1 failed) 3ms\n"
   printf "     × gives the free tier ten 1ms\n"
   printf "⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯\n"
@@ -1549,6 +1577,107 @@ PLAN
   st_eq "its server mutant is listed as the server half, in the spelling the plan wrote" \
     "$(st_count "$ST_OUT" '^      server +X2 +scripts/\.\./server/src/sample\.ts$')" "1"
   st_eq "no suite ever ran with its mutants applied" "$(st_count "$suites" 'mixed-plan-mutant')" "0"
+  git rm -q mutation/plans/spelled-mixed.txt
+  git commit -q -m "clear plans for the next scenario"
+
+  # --- Scenario 21: a server file whose name git's line output would quote is still the server
+  # half (PR #239's delta pass, D1). One name has a byte above 0x7F, which git quotes under the
+  # default core.quotepath; the other has a double quote, which git quotes even with that setting
+  # off. Each is its own plan, so each name's routing is asserted on its own block. ---
+  printf '\n==> Server files named samplé.ts and say"hi".ts, which git would quote, still run vitest\n'
+  printf 'export const quotedNameTier = "free";\n' >'server/src/samplé.ts'
+  printf 'export const quotedNameTier = "free";\n' >'server/src/say"hi".ts'
+  git add 'server/src/samplé.ts' 'server/src/say"hi".ts'
+  git commit -q -m "two server files with names git quotes"
+  cat >mutation/plans/quoted-non-ascii.txt <<'PLAN'
+>>> mutant N1 a server mutant in a file whose name has a byte above 0x7F
+>>> file server/src/samplé.ts
+>>> from
+export const quotedNameTier = "free";
+>>> to
+export const quotedNameTier = "quoted-name-server-mutant";
+>>> end
+PLAN
+  cat >mutation/plans/quoted-double-quote.txt <<'PLAN'
+>>> mutant N2 a server mutant in a file whose name has a double quote
+>>> file server/src/say"hi".ts
+>>> from
+export const quotedNameTier = "free";
+>>> to
+export const quotedNameTier = "quoted-name-server-mutant";
+>>> end
+PLAN
+  git add mutation/plans/quoted-non-ascii.txt mutation/plans/quoted-double-quote.txt
+  git commit -q -m "one server plan per quoted name"
+  export DATABASE_URL='postgres://selftest:not-a-real-password-8c1f@localhost:1/none'
+  : >"$ST_SUITES_LOG"
+  st_run "$swift_half_suite" "$server_half_suite"
+  unset DATABASE_URL
+  suites="$(cat "$ST_SUITES_LOG")"
+  st_eq "both quoted names' mutants are killed" "$ST_RC" "0"
+  st_contains "the non-ASCII name's plan is the server half" \
+    "$(st_plan_suite "$ST_OUT" mutation/plans/quoted-non-ascii.txt)" "suite      : server "
+  st_contains "the double-quote name's plan is the server half" \
+    "$(st_plan_suite "$ST_OUT" mutation/plans/quoted-double-quote.txt)" "suite      : server "
+  st_eq "each killed its one mutant" "$(st_count "$ST_OUT" '^    RAN — 1 killed, 0 survived, 0 unattributed ')" "2"
+  st_eq "the Swift suite never ran with either mutant applied" "$(st_count "$suites" '^swift saw:.*server-mutant')" "0"
+  st_eq "vitest ran with them" \
+    "$([[ $(st_count "$suites" '^server saw:.*server-mutant') -ge 2 ]] && echo yes || echo no)" "yes"
+  git rm -q mutation/plans/quoted-non-ascii.txt mutation/plans/quoted-double-quote.txt
+  git commit -q -m "clear plans for the next scenario"
+
+  # --- Scenario 22: the same two names inside mixed plans are still refused, each on its own ---
+  printf '\n==> A mixed plan whose server path is a name git would quote is still refused\n'
+  cat >mutation/plans/quoted-mixed-non-ascii.txt <<'PLAN'
+>>> mutant X1 a Swift mutant
+>>> file sample.swift
+>>> from
+        if hour < 12 { return "Morning" }
+>>> to
+        if hour < 14 { return "Morning" }
+>>> end
+
+>>> mutant X3 a server mutant in the non-ASCII name
+>>> file server/src/samplé.ts
+>>> from
+export const quotedNameTier = "free";
+>>> to
+export const quotedNameTier = "quoted-name-mixed-mutant";
+>>> end
+PLAN
+  cat >mutation/plans/quoted-mixed-double-quote.txt <<'PLAN'
+>>> mutant X1 a Swift mutant
+>>> file sample.swift
+>>> from
+        if hour < 12 { return "Morning" }
+>>> to
+        if hour < 14 { return "Morning" }
+>>> end
+
+>>> mutant X4 a server mutant in the double-quote name
+>>> file server/src/say"hi".ts
+>>> from
+export const quotedNameTier = "free";
+>>> to
+export const quotedNameTier = "quoted-name-mixed-mutant";
+>>> end
+PLAN
+  git add mutation/plans/quoted-mixed-non-ascii.txt mutation/plans/quoted-mixed-double-quote.txt
+  git commit -q -m "one mixed plan per quoted name"
+  : >"$ST_SUITES_LOG"
+  st_run "$swift_half_suite" "$server_half_suite"
+  suites="$(cat "$ST_SUITES_LOG")"
+  st_eq "two refused plans exit 3" "$ST_RC" "3"
+  st_contains "the non-ASCII mixed plan is refused" \
+    "$(st_plan_suite "$ST_OUT" mutation/plans/quoted-mixed-non-ascii.txt)" "suite      : none — REFUSED"
+  st_contains "the double-quote mixed plan is refused" \
+    "$(st_plan_suite "$ST_OUT" mutation/plans/quoted-mixed-double-quote.txt)" "suite      : none — REFUSED"
+  st_contains "the non-ASCII server mutant is listed whole, as the server half" "$ST_OUT" \
+    "      server  X3     server/src/samplé.ts"
+  st_contains "the double-quote server mutant is listed whole, as the server half" "$ST_OUT" \
+    '      server  X4     server/src/say"hi".ts'
+  st_contains "the counts say both were refused" "$ST_OUT" "2 plan(s) found, 0 ran"
+  st_eq "no suite ever ran with their mutants applied" "$(st_count "$suites" 'mixed-plan-mutant')" "0"
 
   printf '\n'
   if [[ $SELFTEST_FAILURES -eq 0 ]]; then
