@@ -1,55 +1,7 @@
 import Foundation
+import MacAgentTestSupport
 import Testing
 @testable import MacAgentCore
-
-/// A pack that passes every rule, built as the JSON a pack author writes and decoded through the
-/// real loader — so a fixture pack cannot be something the loader would refuse.
-enum SkillPackFixtures {
-    static func object(
-        id: String = "notion",
-        name: String = "Notion",
-        domain: String = "notion.so",
-        category: String = "knowledge_bases",
-        depth: String = "deep"
-    ) -> [String: Any] {
-        [
-            "format": 1,
-            "id": id,
-            "name": name,
-            "domain": domain,
-            "category": category,
-            "summary": "A site used in tests.",
-            "signInURL": "https://\(domain)/login",
-            "triggers": [name.lowercased()],
-            "sections": [],
-            "depth": depth,
-            "flows": depth == "deep" ? [flow(on: domain)] : []
-        ]
-    }
-
-    /// A flow starting on `domain`'s own site, which every flow has to (PR #241's F4). Its citation is
-    /// deliberately on another host, because the rule does not hold citations to the site.
-    static func flow(
-        title: String = "Create a page",
-        steps: [String] = ["Click the new page icon.", "Type a title."],
-        on domain: String = "notion.so"
-    ) -> [String: Any] {
-        [
-            "title": title,
-            "startURL": "https://www.\(domain)/",
-            "steps": steps,
-            "source": "https://www.example.com/help/create"
-        ]
-    }
-
-    static func data(_ object: [String: Any]) throws -> Data {
-        try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
-    }
-
-    static func pack(id: String, name: String, domain: String) throws -> SkillPack {
-        try SkillPackDecoder.decode(data(object(id: id, name: name, domain: domain)))
-    }
-}
 
 @Suite
 struct SkillPackTests {
