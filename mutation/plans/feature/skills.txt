@@ -126,3 +126,36 @@
 >>> to
         guard memorySettings.allowsRecording(to: .addedSkills) || true else {
 >>> end
+
+# SONNY-472 — every door that ends a run holding a session tears it down.
+
+>>> mutant T1 the approval path no longer ends the session it ran
+>>> file Sources/MacAgent/AgentViewModel.swift
+>>> from
+            // reached this line, and the stale-approval re-arm below throws before any step runs.
+            endScreenControlSession()
+>>> to
+            // reached this line, and the stale-approval re-arm below throws before any step runs.
+>>> end
+
+>>> mutant T2 the session teardown keeps the emergency-stop hotkey registered
+>>> file Sources/MacAgent/AgentViewModel.swift
+>>> from
+        visionSessionPause = nil
+        releaseEmergencyStopHotKey()
+        approvedAppsForThisVisionIteration = nil
+>>> to
+        visionSessionPause = nil
+        approvedAppsForThisVisionIteration = nil
+>>> end
+
+>>> mutant T3 the session teardown keeps the session's journal id, so the next task's row links to its screen record
+>>> file Sources/MacAgent/AgentViewModel.swift
+>>> from
+        visionUserPauseMonitor?.clearPause()
+        activeVisionSessionID = nil
+    }
+>>> to
+        visionUserPauseMonitor?.clearPause()
+    }
+>>> end
