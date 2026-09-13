@@ -173,6 +173,10 @@ has documented consequences:
   which hits the same shared local stores despite lacking bundle identity — from a second
   worktree while any instance is running.
 - **Merge one branch at a time, and rebase once — at merge time, never after each merge.**
+  **When more than one PR is in flight, from parallel lanes or from one session, they are one
+  stack** — each branch cut from the one beneath, based on it, merged bottom-up — and
+  `## Stacked pull requests`, after step 7, is that rule in full; what follows is how a branch
+  waits and lands inside it.
   Never batch-merge parallel branches: they land one at a time, in an order the user sets,
   because two branches merged together is how a conflict resolution nobody read reaches
   `main`. **What a lane does while it waits is finish on its base, push, and hold.** It does
@@ -328,7 +332,11 @@ something up.)
   mutant plan into `mutation/plans/<branch-name>.txt` (`scripts/mutate --help` has the format;
   a slash in the branch name is a folder, so `fix/some-name`'s plan is
   `mutation/plans/fix/some-name.txt`, and `scripts/mutate-all` reads the folder recursively),
-  commits it, and names that path in its changelog entry's `Mutation plan:` line. `scripts/mutate
+  commits it, and names that path in its changelog entry's `Mutation plan:` line. A plan's
+  mutants sit in one half — all under `server/`, or none — because `scripts/mutate-all` runs each
+  plan against one suite and refuses a plan mixing the two (`## Weekly battery`, below); a branch
+  whose mutants sit in both writes one plan file per half beside each other and names both.
+  `scripts/mutate
   --help` still says to keep a plan outside the working tree; that describes the retired
   per-branch run, where a plan was a scratch file, and does not apply here — a branch's plan is
   committed, which is exactly what keeps the tree clean for the run. Nothing runs at PR time,
@@ -679,7 +687,8 @@ to do.
   no third-cycle reviewer session.
 - The full cycle-3 re-check stays reserved for fix rounds that could themselves introduce
   defects: production-code changes, test-integrity rebuilds (vacuous-test rewrites),
-  rebases carrying conflict resolutions.
+  rebases carrying conflict resolutions. In a stack, the rebase pass decides this per branch, and
+  a branch that needs it gets the scoped delta pass `## Stacked pull requests` clause 2 describes.
 
 The ceiling itself does not move, and the fix-in-branch rule is untouched either way — nor
 does the scoped verification round below move it, because what that bounds is verification
@@ -880,7 +889,116 @@ Then: the user runs the aggregated manual items — the unchecked rows in
 GitHub's control with "Create a merge commit", never the squash the page may offer first (§8).
 Delete the branch, remove the worktree if its session's sequence ends here (step 3's
 lifecycle rule — a session with tickets still ahead of it keeps the same one), confirm the
-tickets' final states.
+tickets' final states. **When more than one PR is in flight they are one stack**, and the merge
+order, the base each PR is diffed against and what deleting a merged branch does next are
+`## Stacked pull requests`, directly below.
+
+## Stacked pull requests
+
+**When more than one PR is in flight — from one session or from parallel lanes — the PRs form one
+stack.** Founder decision, 2026-09-11 (Sauransh), verbatim: *"from now on when running parallel
+sessions or even one session but if they contain multiple PRs then we will use the concept of
+stacked PRs, it is better and efficient way of handling the PRs sequentially."* Every clause below
+is written from wave 7's chain of 2026-09-11 (PRs #226 to #236; run log SONNY-438, coordinator
+record SONNY-412), which was stacked by accident and repaired by hand, so each one is something
+that went wrong once or was needed once. (SONNY-459.)
+
+**The shape.** The coordinator fixes the merge order at kickoff, from measured file overlap: the
+pairs that overlap most sit adjacent, and the branch that must land first sits lowest. That is the
+order step 3 says the user sets: the user launches the kickoffs that fix it and presses every
+merge, and a stack admits no other order, because clause 5 never merges a PR above an unmerged
+one. The lowest
+branch is cut from `origin/main`; every later branch is cut from the head of the branch directly
+beneath it. Each PR's base on GitHub is the branch beneath it — `main` for the lowest — and its
+body names the PR that must merge before it. So a kickoff command reads
+`git worktree add -b <branch> <path> origin/<branch beneath>`, and `origin/main` appears in exactly
+one of them.
+
+1. **A branch is cut only from a head that is final for its round.** Never cut above a branch whose
+   review or fix round is open. Wave 7 ran reviews in side worktrees and landed fix rounds after
+   the next branch had been cut; seven of eleven heads then failed `git merge-base --is-ancestor`
+   against their base, nineteen commits were missing from the top, and no tree holding all of them
+   had been tested. (Those three figures are that wave's own record on SONNY-438, carried here and
+   not re-measured.)
+2. **A fix round low in the stack is followed by one rebase pass upward, before anything merges.**
+   The coordinator records every cut point first — `git merge-base <branch> <old head of the branch
+   beneath>`, posted on the run log — because the old head is what the rebase has to name and the
+   fix round is what moves it. **Each branch is then rebased by its own session, or by the session
+   the founder routes to that ticket, one branch at a time from the bottom up** (founders' decision
+   on PR #239's review, F4, 2026-09-13), with
+   `git rebase --onto <new head of the branch beneath> <its recorded cut point> <branch>`, which
+   replays that branch's own commits and nothing else. A conflict in the changelog or the checklist
+   is resolved by keeping the newer entry above and taking the older entry as its own branch's
+   final text — the branch beneath owns that text, and the copy being replayed is the stale one.
+   That session pushes with `--force-with-lease` — step 3's standing authorization, which covers a
+   session's own ticket branch and nothing else, never bare `--force` — and only then does the
+   next branch up start. No one session rebases the whole stack, because no authorization lets a
+   session force-push a branch it does not own.
+
+   **Whether a review already posted on the rebased branch still stands is decided by what moved,
+   not by the PR's diff** (founders' decision on PR #239's review, F1, 2026-09-13). The diff can
+   be the same while the code under it has stopped agreeing with its new base: `CLAUDE.md`'s rebase
+   gotcha is exactly that shape, a type changed beneath and a user of it added above with no
+   conflict anywhere. So the session doing the rebase states what moved — every file in the range
+   it rebased across, `git diff --name-only <its recorded cut point> <new head of the branch
+   beneath>`, not the conflict list — and whether the branch uses any of it, by enumerating the
+   branch's uses across the tree rather than reading its own diff. **The review stands only when
+   nothing the branch uses changed in that range and the rebase resolved no conflict**; its
+   reviewer then re-runs the ancestry check and nothing more. **A conflict resolution, or a change
+   to anything the branch uses — a type, a signature, a fixture, a helper — gets a scoped delta
+   pass on that branch**, in its review worktree re-pointed at the new head, reading the resolution
+   and the moved code the branch uses and searching for nothing else. That is the re-check step 7
+   reserves for a rebase carrying a conflict resolution — a reviewing session's pass, not the
+   coordinator's direct verification — and like every re-check it is scoped to what the round it
+   follows moved, which here is the range the rebase crossed.
+3. **After that rebase, every figure a branch's entry cites is re-measured at its new head or
+   dropped**, carried only with step 5's tree-identity proof — in the braced `${old}:Sources` form,
+   and never with a loop variable named `path` (`CLAUDE.md`, Claims and evidence, has both traps).
+   A pre-rebase SHA may stay only as labelled history. **The union is measured once, at the top
+   branch's head**: the flagged suite, `scripts/warnings`, the server's suites where `server/`
+   moved, `scripts/changelog-order`, `scripts/no-attribution tree` and `npm run check:secrets`.
+4. **A reviewer pins the base SHA it diffs against** — the head of the branch beneath at cut time —
+   and posts the review in full on the PR. A fix round gets a scoped delta pass in the same review
+   worktree, re-pointed at the new head.
+5. **Merging is bottom-up and mechanical.** Merge with a merge commit (§8), delete the branch at
+   once so GitHub retargets the next PR to `main`, pull `main`, repeat. The deletion is a separate
+   step by hand: the repository does not delete a head branch on merge
+   (`gh api repos/{owner}/{repo} --jq .delete_branch_on_merge` → `false`, read 2026-09-13). **Never
+   merge a PR whose predecessor is unmerged.**
+6. **`scripts/changelog-order` and the stop hook report one finding per unmerged entry beneath the
+   newest.** On the n-th branch from the bottom that is n − 1 findings and exit 2 — measured at
+   `ae74415c` by adding one, two and three entries naming unmerged branches under `## Entries` in a
+   scratch copy and running `scripts/changelog-order check <copy>` over each: exit 0, then 1
+   finding, then 2, each reading *only the newest may be unmerged*. That count is the stack's
+   expected cost. State it on the run log and answer the hook's block with it; never reorder or
+   remove an entry to satisfy it. It clears one merge at a time.
+7. **Parallel lanes in a stack cut from the branch beneath as it stands** — empty, if the lanes
+   start together — and expect the rebase pass at the end. **Step 3's disjointness rule holds
+   between them in full**: no overlapping files *and* no shared assumptions — a store contract, a
+   shared type — not files alone (founders' decision on PR #239's review, F3, 2026-09-13), because
+   two lanes can build on one assumption and break each other without touching a common file. So
+   the pass is expected to be conflict-free apart from the changelog and the checklist, which every
+   lane touches by design, and clause 2 still decides, branch by branch, whether a posted review
+   stands.
+8. **One session, many PRs, is sequential by construction.** The session finishes a branch's
+   review and fix round before it cuts the next, and never reviews branch n while building branch
+   n + 1.
+
+**Clauses 1 and 7 read as a contradiction and are not one.** Clause 1 is the default: a branch
+started after the one beneath already has work is cut only once that work is final for its round.
+Clause 7 is the case of lanes the coordinator starts together, which are cut above work that cannot
+be final yet because it does not exist yet — and that is allowed only because clause 2's pass is
+owed before anything merges. Both end in the same state, and it is the one wave 7 never reached:
+**before the first merge, `git merge-base --is-ancestor origin/<branch beneath> origin/<branch>`
+exits 0 for every adjacent pair in the stack.** A pair that exits 1 is a pass not yet made.
+
+**How this composes with step 3's merge-one-branch-at-a-time rule.** That rule holds a lane on its
+base and allows it one hop onto `main` at merge time, and says zero hops is better. A stack is the
+zero-hop case by construction: every branch already contains everything beneath it, so when the
+branch beneath merges with a merge commit and GitHub retargets, the PR's diff against `main` is its
+own commits and nothing needs replaying. The rebase in clause 2 is not a hop onto `main`; it is the
+one repair a moved branch beneath forces on the branches above it, and it happens before any merge,
+not between them.
 
 ## Weekly battery
 
@@ -889,23 +1007,87 @@ above has what changed and why, and `CLAUDE.md`'s mutation-battery paragraph is 
 record, unchanged. This section is the procedure for the founder side of that split.
 
 About once a week, on a clean `main` checkout — `git status --porcelain` empty, and no other
-battery already holding the checkout — run `scripts/mutate-all`. It walks every plan under
-`mutation/plans/` through `scripts/mutate` in turn, one after another, and prints one summary at
-the end (`scripts/mutate-all --help` has the format and the exit codes in full). The worktree is
-frozen for the whole run exactly as for a single battery — `scripts/mutate` re-checks the tree
-after every mutant it applies — and `scripts/warnings` refuses to run beside it, the same mutual
-refusal that already existed.
+battery already holding the checkout — run the battery from the repository root in these four
+steps. `scripts/mutate-all` walks every plan under `mutation/plans/` through `scripts/mutate` in
+turn, one after another, and prints one summary at the end (`scripts/mutate-all --help` has the
+format and the exit codes in full). The worktree is frozen for the whole run exactly as for a
+single battery — `scripts/mutate` re-checks the tree after every mutant it applies — and
+`scripts/warnings` refuses to run beside it, the same mutual refusal that already existed.
+
+```
+# 1. The server half's dependencies. `npm ci`, not `npm install`: it installs exactly what the
+#    lockfile says and never rewrites it, and a rewritten lockfile is a dirty tree every plan refuses.
+(cd server && npm ci)
+
+# 2. A test database, named and ported for this checkout — CLAUDE.md's server-half recipe.
+LANE="$(basename "$(git rev-parse --show-toplevel)")"
+docker run -d --name "sonny-gw-db-$LANE" -e POSTGRES_PASSWORD=postgres -p 0:5432 postgres:17
+PORT="$(docker port "sonny-gw-db-$LANE" 5432 | head -1 | sed 's/.*://')"
+: "${PORT:?no host port — did the docker run above fail?}"
+until docker exec "sonny-gw-db-$LANE" pg_isready -q -U postgres; do sleep 1; done
+export DATABASE_URL="postgres://postgres:postgres@localhost:$PORT/postgres"
+
+# 3. The battery, its exit read with nothing in between.
+scripts/mutate-all; echo "MUTATE_ALL_EXIT=$?"
+
+# 4. The database goes once the run is over.
+docker rm -f "sonny-gw-db-$LANE"
+```
+
+Step 1 is owed because the server default is `npx vitest run`, and a checkout without
+`server/node_modules` cannot pass that suite's baseline, which stops the run with exit 1 (PR #239's
+review, F6). The two lines in the middle of step 2 are the ones `CLAUDE.md` explains: the readiness
+wait, because `docker run -d` returns before Postgres accepts a connection, and the `PORT` guard,
+because an empty port quietly means 5432.
+
+**Each plan runs against its own half's suite, chosen from the plan's own `>>> file` paths**
+(SONNY-455, founders' decision 2026-09-12), each read as the name git gives the file, so
+`./server/x.ts`, `server//x.ts`, `scripts/../server/x.ts` and an absolute path are all `server/x.ts`
+(PR #239's review, F2). A plan whose every path is under `server/` runs `cd server && npx vitest
+run`; every other plan runs the flagged Swift suite; a plan with paths on both sides is refused by
+name, because either suite would report the other half's mutants SURVIVED with no test having seen
+them — the phantom survivor that one command over every plan used to produce, in both directions.
+**Which half a report line came from is on the line**: each plan's block carries a `suite :` line
+naming `swift` or `server` and the command, and every row in the summary's Reports, both SKIPPED
+lists, SURVIVORS, UNATTRIBUTED and REFUSED carries `swift`, `server` or `mixed` beside the plan
+file. Two things follow for the person running it:
+
+- **A server plan runs only with `DATABASE_URL` set, which is why step 2 starts a database**
+  (founders' decision on SONNY-455, 2026-09-13). Without it the plan is checked and then skipped
+  by name, under its own summary heading `SKIPPED (no database)` — never under `SKIPPED (stale)` —
+  and the run cannot exit 0. The server's database suites skip themselves without the variable, so
+  running the plan anyway would report a mutant only a database test kills as SURVIVED, and at
+  `ae74415c` one of the two server plans is that shape (`git grep -l '^>>> file \(\./\)*server/'
+  ae74415c -- mutation/plans | wc -l` → 2, of `git ls-tree -r --name-only ae74415c --
+  mutation/plans | grep -c '\.txt$'` → 14): `mutation/plans/fix/a-settle-never-moves-a-row-off-granted.txt`'s
+  header names its killers in `test/topup.db.test.ts`. The other server plan needs no database and
+  is skipped as well; that is the cost the founders accepted. The variable's value is never
+  printed. A `DATABASE_URL` that is set but reaches no database fails the database suites, so that
+  plan's baseline is red and the run stops with exit 1, like any red baseline.
+- **Do not export `MUTATE_TEST_CMD`**: the run refuses it, exit 1, since it would put one command
+  back over every plan. `MUTATE_ALL_SWIFT_TEST_CMD` and `MUTATE_ALL_SERVER_TEST_CMD` replace one
+  half's command each.
 
 Read the exit code with nothing between the command and `$?`:
 
 - **0** — every plan ran and every mutant was killed. Nothing to file.
 - **2** — at least one mutant SURVIVED or came back UNATTRIBUTED. File one ticket per such mutant
   (`scripts/plane create`), naming the mutant id, the plan file it came from, and the target file
-  it mutates, with the run's SHA.
-- **3** — nothing survived or came back unattributed, but at least one plan was SKIPPED because
-  its `from` block no longer matches the tree. That is a ticket for the branch that owns the plan
-  to re-anchor it against the current tree — it is not a survivor, and it is filed the same way,
-  naming the plan file and the run's SHA.
+  it mutates, with the run's SHA. **The same run can also have left plans unrun**: 2 outranks 3, so
+  the exit code says nothing about them, and the exit line then adds how many. Treat every plan the
+  summary lists under `SKIPPED (stale)`, `SKIPPED (no database)` or `REFUSED (mixed halves)` exactly
+  as the bullet for 3 says, in the same sitting (PR #239's review, F5).
+- **3** — nothing survived or came back unattributed, but at least one plan was not run. The
+  summary lists each under its own heading, and each heading has its own answer:
+  - `SKIPPED (stale)` — its `from` block no longer matches the tree. A ticket for the branch that
+    owns the plan, to re-anchor it against the current tree.
+  - `REFUSED (mixed halves)` — its mutants sit in both halves. A ticket for the branch that owns the
+    plan, to split it into one plan per half.
+  - `SKIPPED (no database)` — a server plan in a run with `DATABASE_URL` unset. **Not filed**: it
+    says nothing about the plan, only that step 2 did not happen. Start the database and run again.
+
+  The two tickets are not survivors, and are filed the same way, naming the plan file and the run's
+  SHA.
 - **1** — the run did not start, or had to stop partway through. Not filed as tickets;
   `scripts/mutate-all --help` has what to do (a dirty tree, another battery's lock, and a red
   baseline are the ordinary causes).
