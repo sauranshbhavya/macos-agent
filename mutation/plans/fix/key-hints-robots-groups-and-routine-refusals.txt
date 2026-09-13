@@ -96,3 +96,32 @@
                 continue
             }
 >>> end
+
+# SONNY-464 — no user-facing refusal of a routine step names an operation id. Killer, hand-traced
+# for all three and measured for W1's shape (the template put back failed the test with 29 issues
+# before this was committed): everyRefusedRoutineStepReadsInWordsWithNoOperationId alone.
+
+>>> mutant W1 the refusal is the old template again: "Routines cannot contain start_watching steps."
+>>> file Sources/MacAgentCore/AutomationStores.swift
+>>> from
+            return Self.unsafeRoutineStepSentence(refused)
+>>> to
+            return "Routines cannot contain \(refused) steps."
+>>> end
+
+>>> mutant W2 nested steps fall through to the fallback sentence
+>>> file Sources/MacAgentCore/AutomationStores.swift
+>>> from
+        if refused == nestedRoutineStepsRefusal {
+            return "A routine can't hold the steps of another routine."
+        }
+>>> to
+>>> end
+
+>>> mutant W3 one forbidden operation loses its own sentence and reads the fallback
+>>> file Sources/MacAgentCore/AutomationStores.swift
+>>> from
+        case .startWatching:
+            return "A routine can't watch a page for changes."
+>>> to
+>>> end
