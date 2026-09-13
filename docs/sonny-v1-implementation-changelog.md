@@ -171,6 +171,79 @@ Next branch: feature/<name> (per roadmap above, or state the reordering and why)
 
 ## Entries
 
+### Branch: chore/tooling-reads-fresh-main-and-records-catch-up
+Status: complete
+Date: 2026-09-13
+Tickets: **SONNY-480** (`scripts/changelog-order` reads whichever of local `main` and `origin/main` contains the other, refuses when they have diverged, and prints the ref and SHA it read on every run), **SONNY-478** (`CLAUDE.md`'s Commands section names the credentials scan as owed by every branch, matching `WORKFLOW.md` step 5), **SONNY-467** (`WORKFLOW.md` names the repository's current namespace and its current merge-method settings, each read live on 2026-09-13, with both earlier readings kept as history), **SONNY-466** (the two server-half mutation plans' headers describe `scripts/mutate-all` as it now runs them). One session (lane-480), in that order, cut from `origin/main` at `65a50865`: the bottom branch of wave 9's stack (SONNY-463), PR base `main`.
+Reviewed by: pending at the head this entry commits on; step 7's review, or the coordinator's right-sized verification, is recorded by the commit that closes it.
+
+Spec sections covered: none — tooling and records.
+Files changed:
+- `scripts/changelog-order` — `resolve_mainline` and the `Mainline` record it returns (ref, full SHA, and a note saying why that ref); `merge_index` reads the log from the resolved SHA; `main()` prints `changelog-order: mainline is …` on every run, on stdout ahead of the verdict or the findings, or on stderr after a refusal's reason; the module docstring's exit-1 causes and a WHICH MAINLINE paragraph; the selftest's five mainline arms, three command-line arms, the `check <path>` arm moved into the fixture repository, and a counted case total.
+- `CLAUDE.md` — one paragraph after the Commands section's two-halves opening, and the comment on the server block's `npm run check:secrets` line.
+- `WORKFLOW.md` — the opening's repository paragraph; step 7's merge sentence; §8's merge-method paragraph and its closing rule for the person at the control.
+- `mutation/plans/fix/three-account-routes-take-the-total-deadline.txt` and `mutation/plans/fix/a-settle-never-moves-a-row-off-granted.txt` — header comments only.
+- this entry.
+Tests: **No Swift suite, `scripts/warnings` or server suite is owed.** `git diff --name-only origin/main HEAD -- Sources Tests server` prints nothing, exit 0, at `c603a1ad` with `origin/main` at `65a50865`. The same command over `-- scripts CLAUDE.md WORKFLOW.md mutation` lists all five files, which is the control that says the path filter can find something. The entry commit adds only this file. Every command below ran at `c603a1ad` with a clean tree, redirected to a file, with its exit read on the next line:
+  - `scripts/changelog-order selftest` → exit 0, `20 case(s), 0 failure(s)`. Against **17 cases, 2 failures, exit 2 at `902f5fb5`** (`git show 902f5fb5:scripts/changelog-order` run through `python3 … selftest`), the commit that added the arms without the fix. The two failures there are the local-main-behind arm, reporting `entry 'new/b' matches no 'Merge pull request #N …'`, the ticket's own false finding, and the diverged arm. **12 cases, 0 failures at `65a50865`.**
+  - `.claude/hooks/verify-tests-before-stop-selftest.sh` → exit 0, `18 case(s), 0 failure(s)`. It copies this checkout's `scripts/changelog-order` into its fixtures, so this is the hook's own guard passing over the new script.
+  - `scripts/mutate-all selftest` → exit 0, `all checks passed` (`grep -c '^    PASS'` → 138, `grep -c 'FAIL'` → 0).
+  - `cd server && npm run check:secrets` → exit 0, `clean (757 tracked files scanned, 12 patterns, 8 baselined fixtures)`, in a worktree with no `server/node_modules`.
+  - `scripts/no-attribution tree` → exit 0, `0 of 753 tracked file(s) carry an attribution (4 excluded by path)`.
+  - `scripts/changelog-order` → exit 0, `in merge order, 214 entries, both eras`, `mainline is main at 65a50865 — origin/main is the same commit`.
+  - `scripts/mutate <plan> --check` → exit 0 for both server plans, one match per mutant: 12 of 12 for SONNY-434's, 5 of 5 for SONNY-435's, the same as before the header edits.
+
+  **Five mutants of the new behaviour**, each a scratch copy of the script run through its own selftest, never in the tree. Measured at `b525f4be` and carried to `c603a1ad` by `git rev-parse b525f4be:scripts/changelog-order c603a1ad:scripts/changelog-order`, which prints `b5e5e185…` twice. The selftest is self-contained in that one file, so that file is the whole path the figure depends on.
+  - M1, always read `origin/main` when it exists: 7 failures.
+  - M2, a clean run prints no mainline line: 1.
+  - M3, diverged refs read local `main` instead of refusing: 2.
+  - M4, the mainline line printed before a refusal's reason: 1.
+  - M5, today's first-found order put back: 6.
+
+  The unmutated copy passes 20 of 20.
+
+  **The ticket's incident, replayed.** A throwaway `git clone --no-checkout` of this repository had its local `main` set to `95325331`, with its `origin/main` at `65a50865`, and was checked over `git show 65a50865:docs/sonny-v1-implementation-changelog.md`. `65a50865`'s script exits 2 with exactly the two findings the coordinator recorded on SONNY-480, for `fix/key-hints-robots-groups-and-routine-refusals` and `fix/a-content-deletion-keeps-its-audit-row`. `b525f4be`'s exits 0 over 214 entries, printing `mainline is origin/main at 65a50865 — local main at 95325331 is 3 first-parent commits behind it, so it was not read`. This worktree's shared refs were never moved: `git rev-parse main origin/main` still answers `65a50865` twice.
+Mutation plan: none. The only behaviour this branch changes is `scripts/changelog-order`'s. A plan whose `>>> file` paths sit outside `server/` runs under `scripts/mutate-all` against the flagged Swift suite, which never runs this script, so every mutant would report SURVIVED with no test having seen it. `scripts/mutate-all --help` says as much: a plan mutating `scripts/` "runs against the Swift suite, which is … no suite for anything else". The five mutants above are the property-level measurement instead. The other three tickets change prose and comments only.
+
+Behavior added:
+- `scripts/changelog-order` reads the merge log from whichever of local `main` and `origin/main` contains the other; reads the one that exists when only one does; refuses with exit 1, naming both SHAs, when they have diverged; and prints the ref it read, its SHA and why on every run. It never fetches.
+- `CLAUDE.md` tells a session reading only it that the credentials scan is owed by every branch and runs from the repository root with no `npm install`.
+- `WORKFLOW.md` names `sauranshbhavya/macos-agent`, dates both namespace moves from merge subjects, and states that the repository refuses squash and rebase merges today (read 2026-09-13).
+- The two server plans' headers say `scripts/mutate-all` runs them against the whole vitest suite, only with `DATABASE_URL` set.
+
+Behavior preserved (required, no blanket claims):
+- `scripts/changelog-order`'s three arms are unchanged. All twelve selftest cases from `65a50865` still pass at `c603a1ad`: in-order file, newest-first out of order, oldest-first out of order, entry appended at the end, the branch's own unmerged first entry, an unmerged later entry, a bodiless heading, a glued heading, the missing era boundary, `check <path>`, no `## Entries`, and not a repository. Exit codes and finding texts are unchanged, and the exit-0 verdict line is unchanged beneath the new mainline line.
+- A clone with only a local `main` reads exactly what it read before. That is the hook selftest's fixture and the selftest's own twelve cases, and both pass.
+- The stop hook is not edited (`git diff --name-only 65a50865 c603a1ad -- .claude` prints nothing). It still acts on the exit code alone, and what it does after the change is recorded under the decisions below.
+- Every `>>> mutant` block in both plans and both killer lists is unchanged. `git diff 65a50865 c603a1ad -- mutation/plans` restricted to changed lines not starting with `#` prints nothing, and the same filter over this branch's `scripts/changelog-order` diff keeps 248 lines as its control.
+- `WORKFLOW.md`'s dated "116 … at `66c0f84`" reading and §8's PR #118 record are kept verbatim; the 2026-08-26 merge-method reading stays as history beside the new one.
+
+Architectural decisions / pitfalls discovered (required, write "none" if true):
+
+**The fresher of two refs, not "prefer `origin/main`".** The ticket's own example was to use `origin/main` when it is ahead of `main`. Preferring it outright would have been wrong the other way: a clone that has not fetched since a pull has a local `main` ahead of `origin/main`. So the rule is ancestry. Whichever ref contains the other has seen every merge the other has, and that one is read. Two refs that have diverged have no fresher side, so the tool refuses rather than guessing; a local commit on `main`, or a clone from before a history rewrite, can cause it. M1 (always `origin/main`) and M5 (always local `main`, today's order) are the two one-sided rules; both fail the local-main-ahead and local-main-behind arms. **"Freshest" means the freshest this clone holds.** The tool does not fetch, because a stop hook runs offline and must not move refs, so the printed SHA is what lets a reader compare a run with GitHub.
+
+**"Fails on today's code" is proved by a commit, not argued.** `902f5fb5` adds the arms with the resolver untouched, and its message says it is red by design. Anyone can re-run that commit's selftest and watch the two arms fail with the ticket's own finding. Three of the five arms pass on today's code, deliberately: main ahead, the two level, and `origin/main` alone. They are what stops a later "fix" from simply preferring `origin/main`.
+
+**A refusal puts its reason first, because the stop hook quotes only the head of it.** The hook flattens a refusal's output and keeps `cut -c1-200`. A mainline line printed ahead of the reason would have spent those columns on the least useful sentence. The mainline follows the reason on stderr, and the arm "a refusal after the mainline resolved gives its reason, then the mainline" holds that order (M4). A clean run and a run with findings print the mainline on stdout. In the hook's captured output a run's stderr summary still lands above its stdout findings, because Python block-buffers a piped stdout, as before this branch.
+
+**The selftest's `check <path>` arm used to run against this checkout's own refs, and the new refusal would have made it depend on the environment.** It ran with the working directory of whoever invoked the selftest. In a checkout whose `main` had diverged from `origin/main`, it would now exit 1 and report that `check <path>` does not read its argument, a false FAIL about an unrelated property. It runs inside the fixture repository now, where the refs are the selftest's own.
+
+**How the `.claude/` stop hook behaves after the change.** This was measured by running the real, unedited hook over throwaway fixtures, once with `65a50865`'s script and once with `b525f4be`'s.
+- A branch that wrote its own entry, with local `main` two merges behind: was exit 2, blocking the turn with two false findings; now exit 0 and silent.
+- The same branch with local `main` diverged: was exit 2 with the same false findings; now exit 0 with the hook's "scripts/changelog-order did NOT run … exited 1 without measuring" notice, on stderr, as a systemMessage and in the journal, both SHAs inside its 200-column quote.
+- A genuinely misplaced entry: still exit 2, and the block now shows which mainline it was measured against.
+
+**The hook's own trigger has the stale-ref defect this branch removed from the script, and it is filed rather than fixed: SONNY-488.** `verify-tests-before-stop.sh:171` (at `c603a1ad`) takes `git merge-base HEAD main` first. With a stale local `main`, a branch that never touched the changelog is judged to have committed a change, and the check runs anyway. Before this branch that run blocked such a branch outright: exit 2, one false finding, measured. Now it is silent when `main` is only behind. When the refs have diverged, it prints the "did NOT run" notice on such a branch. The hook is outside SONNY-480's surface and this branch's fence.
+
+**The second namespace move is dated by merge subjects and nothing finer.** A merge subject records the owner current when the PR merged. The move to `sauranshbhavya` therefore sits between PR #190 (`15c7bd9f`, 2026-09-02T19:14:21-04:00) and PR #191 (`f1005896`, 2026-09-03T14:03:57-04:00). GitHub's `mergedAt` gives the same instants. Whether it was a transfer or an organisation rename could not be found out from a session: `gh api users/exploringthroughbuilding` answers 404, and the events API's 300 events reach back only to 2026-09-07T20:23:40Z. `WORKFLOW.md` says so rather than guessing. **§8's reason for pressing Create a merge commit by hand changed with the setting.** It was that nothing greyed the wrong buttons out. Now the repository refuses them, but that is a GitHub option one toggle from its 2026-08-25 state, so the rule still does not rest on it. A sweep for the fact rather than the paragraph found two more sentences stating it: step 7's "the squash the page may offer first", and §8's closing "the page offers three buttons". Both were made true.
+
+**SONNY-466's description predates the founders' decision it had to describe.** It says `scripts/mutate-all` "does not refuse the run" without `DATABASE_URL`. Since the founders' 2026-09-13 decision on SONNY-455, a server plan is skipped by name under `SKIPPED (no database)`. The headers describe that, as the kickoff asked ("as it now behaves"), and `scripts/mutate-all --help` at `c603a1ad` is the source. SONNY-434's plan needs no database, since every mutant has a killer in `test/account-deadline.test.ts` and only M8 to M10 also have one in the database file. It is skipped anyway, the cost `WORKFLOW.md`'s Weekly battery section records. Its hand-run command stays in its header, because the header's killer lists say they were measured "under the command above".
+
+Known limitations / deferred scope: `scripts/changelog-order` does not fetch, so an unfetched `origin/main` is still stale; its printed SHA is what exposes that. The stop hook's trigger (SONNY-488, Backlog, low, filed by this branch) is untouched. How the repository reached `sauranshbhavya` is not recorded; a founder who knows can add one line.
+Open questions (required, write "none" if true): none.
+
+Next branch: fix/skills-ready-for-the-catalogue (SONNY-479, SONNY-481, SONNY-476), stacked above this one.
+
 ### Branch: feature/skills
 Status: complete
 Date: 2026-09-13
