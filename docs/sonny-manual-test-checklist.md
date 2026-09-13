@@ -4884,6 +4884,41 @@ Signed in, gateway up, screen control allowed for the account.
       were in comes back while the session waits; press Resume in the widget and the controlled app
       comes forward again **before** Sonny does anything else.
 
+### Key-hint tests, robots.txt groups, and routine refusals in words (new 2026-09-13, SONNY-458, SONNY-454 and SONNY-464)
+
+Three small fixes on one branch. The hold-⌘ tests stopped racing a clock (SONNY-458), and nothing
+about the hints themselves changed. A robots.txt line that is blank, whitespace or only a comment no
+longer ends a user-agent group (SONNY-454). And a routine refused a step says so in words, where it
+used to show an id such as `start_watching` (SONNY-464). Signed in, gateway up.
+
+- [ ] **SONNY-458, nothing should have moved.** Re-run the two hold-⌘ rows under "The modernized
+      Command Center and widget" (hold ⌘ alone, then Caps Lock, a closed and reopened window, and a
+      click on the widget). They read exactly as they did. The only source change is two doc
+      comments in `CommandKeyHints.swift`, so a difference here is a finding.
+- [ ] **SONNY-454.** `summarize https://en.wikipedia.org/wiki/Wikipedia:Copyright_problems and save it
+      as Markdown`. Wikipedia's robots.txt disallows that path for every agent, below comment lines
+      inside its `User-agent: *` group. **Expected:** no note, and the widget reads **"The source
+      could not be retrieved, so no note was written. Robots.txt does not allow Sonny to fetch
+      https://en.wikipedia.org/wiki/Wikipedia:Copyright_problems."** **What would be a finding:** a
+      note gets written. The page answers HTTP 200, so the unfixed build fetches it and writes one.
+      Optional, before running it: `curl -s https://en.wikipedia.org/robots.txt | grep -n
+      'Copyright_problems'` prints a `Disallow:` line, and a `#` line sits between that and the
+      `User-agent: *` line above it (both true on 2026-09-13). If the file has changed, this row
+      needs another site with a comment or blank line inside a group.
+- [ ] **SONNY-454, the control.** `summarize https://en.wikipedia.org/wiki/Robots.txt and save it as
+      Markdown`: a real note, as before. Nothing in that file disallows the article.
+- [ ] **SONNY-464, test 34 re-run.** Type exactly what test 34 typed: `create a routine called setup
+      that creates a workspace called x`, then `create a routine called price check that tells me
+      when https://example.com changes`. Both are still refused, and neither is saved as a routine
+      (Command Center › Routines shows neither). **For each, write down the exact words.** No
+      operation id may appear: nothing with an underscore such as `start_watching` or
+      `create_workspace`, and no `routineSteps`. Which words you get depends on how the planner
+      answers, and each is fine: "Sonny can't do that yet." (the planner refused, SONNY-447's
+      sentence); "A routine can't create a workspace." or "A routine can't watch a page for
+      changes." (the planner wrote the routine, and Sonny's own check refused it); or a question
+      in the planner's own words. **The last is the one to report**, with its words, if it names an
+      id. That door is not this branch's to change, and SONNY-464's closing comment says why.
+
 ## 8. How to report back
 
 For each real finding, give me:
