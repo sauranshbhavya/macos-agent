@@ -922,8 +922,8 @@ describeDb("the content store, its clocks, and what reaches training", () => {
         );
       }
 
-      // The clear is handed in rather than run first, so the count below is the one the wipe's own
-      // transaction took and recorded (SONNY-436).
+      // The clear is handed in rather than run by the caller, so the count below is the one the
+      // wipe's own transaction took and recorded (SONNY-436).
       const outcome = await deleteContentForAccount(
         client,
         CONSENTING,

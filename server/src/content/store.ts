@@ -565,14 +565,28 @@ export type ClearStoredResponses = (
  * cancel at any point leaves either nothing done or all of it recorded, and a retry after a rollback
  * clears and counts the bodies for real.
  *
- * **What the one transaction costs, stated rather than left to be found.** The clear takes row locks
- * on the account's completed `sonny.idempotency_key` rows, and those are now held until this commits
- * rather than for one statement. A replay of one of those keys (`claimKey`'s `FOR UPDATE`) or a
- * metering claim on one waits behind the wipe and then sees the cleared row, which is what a request
- * racing a deletion should see. The added locks open no deadlock cycle, because a cycle through them
- * would need another transaction holding a lock on the snapshot, content or deletion tables while it
- * waits for an `idempotency_key` row, and none does: `claimKey` touches that table alone, the
- * metering claim pairs it only with an insert into `sonny.metering_event`, and `completeClaim`,
+ * **The clear runs last, just before the record, so the account's `sonny.idempotency_key` rows are
+ * locked for milliseconds rather than for the whole wipe** (PR #242's review, F1; founders' decision
+ * B, 2026-09-13). The clear takes row locks on the account's completed keys, and a transaction keeps
+ * them until it ends. When the clear ran first, those locks covered the snapshot and content deletes
+ * too, which is the long part of a wipe and the part another connection's lock can stall. A replay or
+ * a metering claim on one of those keys then waited on its own statement bound, ten seconds, while
+ * this route may run fifteen. The review measured a metering claim cancelled with `57014` and its event
+ * lost, and reasoned that a replay in the same wait answers `500`. Now the locks cover one `UPDATE`,
+ * one `INSERT` and the `COMMIT`.
+ *
+ * **What a request on one of those keys sees now.** Before the clear runs — the whole snapshot and
+ * content phase — it neither waits nor sees anything gone, because nothing here has committed: a replay
+ * answers the stored response, and a metering claim is taken and its event written. The clear then
+ * still takes that body, and the claim survives it, as claims always do. A request arriving inside
+ * the last few statements waits for this transaction to end, then sees the cleared row. The wait now
+ * runs the other way as well: the clear can wait behind a replay's or a metering claim's own short
+ * transaction, and that wait counts against this wipe's own bound.
+ *
+ * **Those locks open no deadlock cycle, in either order.** A cycle through them would need another
+ * transaction that touches both `idempotency_key` and the snapshot, content or deletion tables, and none
+ * does. `claimKey` touches that table alone. The metering claim pairs it only with an insert into
+ * `sonny.metering_event`, which has no key or trigger into those tables. `completeClaim`,
  * `releaseClaim` and `pruneExpiredResponses` are single statements on it. Two wipes of one account
  * take every lock in the same order, since they are this function twice.
  */
@@ -580,9 +594,10 @@ export async function deleteContentForAccount(
   client: pg.Client,
   accountId: string,
   /**
-   * Run as the transaction's first statement, on this function's own `client` (see
-   * `ClearStoredResponses`). A parameter in the position the count used to take, so a caller still
-   * passing a number fails to compile rather than recording a figure from outside the transaction.
+   * Run inside the transaction, after the snapshot and content deletes and just before the record, on
+   * this function's own `client` (see `ClearStoredResponses`). A parameter in the position the count
+   * used to take, so a caller still passing a number fails to compile rather than recording a figure
+   * from outside the transaction.
    */
   clearStoredResponses: ClearStoredResponses,
   // Required rather than defaulted, on this repository's own recorded ground that a defaulted
@@ -605,7 +620,6 @@ export async function deleteContentForAccount(
 ): Promise<DeletionOutcome> {
   await client.query("BEGIN");
   try {
-    const storedResponses = await clearStoredResponses(client, accountId, occurredAtOrBefore);
     const removed =
       occurredAtOrBefore === undefined
         ? await removeSnapshotMembers(client, "account_id = $1", [accountId])
@@ -620,6 +634,8 @@ export async function deleteContentForAccount(
             "DELETE FROM sonny.retained_content WHERE account_id = $1 AND occurred_at <= $2",
             [accountId, occurredAtOrBefore],
           );
+    // Last before the record, so the key rows it locks are held only to the commit (see above).
+    const storedResponses = await clearStoredResponses(client, accountId, occurredAtOrBefore);
     const outcome: DeletionOutcome = {
       contentRows: content.rowCount ?? 0,
       snapshotRows: removed.rows,

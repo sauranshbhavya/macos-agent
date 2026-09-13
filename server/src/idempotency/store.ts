@@ -415,11 +415,12 @@ export async function pruneExpiredResponses(client: pg.Client, limit = 1000): Pr
  * `DELETE /v1/account` is a privacy wipe, and this table is the one place in the gateway that holds
  * response *content* outside the route that produced it.
  *
- * **In the gateway it runs only as the first statement of `deleteContentForAccount`'s transaction**
- * (SONNY-436); the database tests also call it directly. Both account wipes and the closed-account
- * sweep hand it to that function, and that function calls it on the client inside its own `BEGIN`,
- * so the count returned here is written
- * to `sonny.content_deletion` by the transaction that cleared the bodies. It issues one statement and
+ * **In the gateway it runs only inside `deleteContentForAccount`'s transaction, as the last statement
+ * before the record** (SONNY-436; last rather than first since PR #242's review, F1, so the rows it
+ * locks are held only to the commit). The database tests also call it directly. Both account wipes
+ * and the closed-account sweep hand it to that function, and that function calls it on the client
+ * inside its own `BEGIN`, so the count returned here is written to `sonny.content_deletion` by the
+ * transaction that cleared the bodies. It issues one statement and
  * no `BEGIN` of its own, which is what lets it join the caller's transaction. Called on a connection
  * with no transaction open, it commits by itself — the shape that lost the count: a cancel before the
  * content transaction committed left the bodies gone with no row naming them, and the retry recorded
