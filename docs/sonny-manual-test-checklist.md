@@ -5004,6 +5004,43 @@ Signed in, gateway up, screen control allowed for the account.
 - [ ] During the Safe-mode session above, while an action approval is waiting, press ⌃⌥⎋: the session
       stops. (It still holds the key while it waits.)
 
+### Reading your calendar and adding a reminder (new 2026-09-13, SONNY-453)
+
+Sonny can now answer what is on your calendar for a day, and add a reminder that alerts you. The
+calendar prompt and the reminders prompt are macOS's own and need the packaged app
+(`./scripts/package-app.sh`, then open it), not `swift run`. Signed in, gateway up. For a clean first
+run, reset both grants first: `tccutil reset Calendar com.sonny.MacAgent` and
+`tccutil reset Reminders com.sonny.MacAgent`. Weather is not part of this: it waits for the Apple
+Developer enrolment.
+
+- [ ] **Settings → Permissions** shows a **Calendars** row and a **Reminders** row, both reading
+      "Check when used": "Sonny will ask the first time you check your calendar." and "Sonny will ask
+      the first time you add a reminder."
+- [ ] Ask the widget: `what's on my calendar`. **Sonny does not ask you anything; macOS asks once**
+      for access to your calendars, and its prompt reads "Sonny reads your calendar when you ask what's
+      on it." Allow it. The result lists today's events, all-day ones first, then by time, for example
+      "Today: all day Holiday, 09:00 Standup, 12:30 Lunch." — or "Nothing on your calendar today." on an
+      empty day. Ask again: no prompt this time. **What would be a finding:** a Sonny approval before
+      the read, a second macOS prompt, or an event missing or on the wrong day.
+- [ ] Ask `what do I have on Friday`: the result names that Friday ("Friday 18 September: …") and its
+      events, and a day with more than five events ends "and N more".
+- [ ] Ask the widget: `remind me in 5 minutes to call the bank`. **Sonny asks first**: the approval
+      names the reminder, and its preview reads "When: <a time five or six minutes from now> today".
+      Allow it; macOS then asks once for Reminders access ("Sonny adds reminders when you ask it to
+      remind you."). Allow that too. The result reads "Added a reminder for <time> today: call the
+      bank." Open Reminders: the reminder is in your default list with that time. **Five minutes
+      later a reminder alert fires.** **What would be a finding:** no approval before the reminder,
+      a reminder at a different time from the one the approval named, or no alert.
+- [ ] Ask `remind me to call the bank` with no time: Sonny asks when, and adds nothing until you
+      answer.
+- [ ] **Refusals in plain words.** In System Settings → Privacy & Security → Calendars, turn Sonny
+      off, then ask `what's on my calendar`: Sonny says "Sonny doesn't have access to your calendars.
+      Allow it in System Settings › Privacy & Security › Calendars." and the Settings row reads "Needs
+      action". Do the same for Reminders with a reminder request. Turn both back on.
+- [ ] Ask `teach Sonny a routine called mornings that reads my calendar`: no routine is saved, and
+      Sonny says either "A routine can't read your calendar." or "Sonny can't do that yet."
+- [ ] Ask `what is the weather today`: Sonny says "Sonny can't do that yet." and nothing else.
+
 ### Every catalogue site has a skill pack (new 2026-09-13, SONNY-482)
 
 The Skills page now lists every site in the catalogue, 473 in all. Notion and Linear carry task flows.
