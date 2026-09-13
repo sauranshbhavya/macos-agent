@@ -4671,6 +4671,18 @@ struct SkillsCommandCenterTests {
     /// The manual row's claim, held end to end through the shipping planner factory: an added pack a
     /// command names is in that command's plan request, and once removed, the same command sends the
     /// fixed prompt. An un-added pack the command also names never joins.
+    ///
+    /// **`HangBackstop.waitOrAbandon`, not the fixture's `waitUntilIdle()`, and the difference is what
+    /// failed the flagged suite at `b410e8ce`** (the coordinator's verification on SONNY-452, two red
+    /// runs of two, and a third here). This run needs the main actor three times with a network round
+    /// trip between: to start the task, to send the plan request, and to take the reply. Every
+    /// `@MainActor` suite in the run shares that one actor. Probed in the full suite, the request
+    /// reached the stub 20.1 s after `start()` returned and the run went idle at 61.2 s, having been
+    /// looked at twice; alone, the whole test takes 0.07 s. So the fixture's wall-clock thirty seconds
+    /// expired on a run that was finishing correctly, and the test then asserted against a second run
+    /// that had not started — one timeout, three failures. `waitOrAbandon` keeps thirty seconds as the
+    /// deadlock deadline for a wait that has actually looked, reports starvation in its own declared
+    /// words for one that has not, and throws, so the test stops there rather than asserting.
     @Test
     func aCommandNamingAnAddedSkillCarriesItsPackToThePlannerAndStopsOnceRemoved() async throws {
         let catalogue = try Self.catalogue()
@@ -4689,16 +4701,21 @@ struct SkillsCommandCenterTests {
         let linear = try #require(catalogue.pack(id: "linear"))
         let command = "create a page in Notion called wave 7 notes about the linear bug"
 
-        fixture.viewModel.addSkill(notion)
-        fixture.viewModel.command = command
-        fixture.viewModel.start()
-        try await fixture.waitUntilIdle()
-        fixture.viewModel.cancelCurrentRun()
+        let viewModel = fixture.viewModel
+        viewModel.addSkill(notion)
+        viewModel.command = command
+        viewModel.start()
+        try await HangBackstop.waitOrAbandon(for: "the run with Notion added to stop at its question") {
+            !viewModel.isRunning && !viewModel.isAwaitingApproval
+        }
+        viewModel.cancelCurrentRun()
 
-        fixture.viewModel.removeSkill(notion)
-        fixture.viewModel.command = command
-        fixture.viewModel.start()
-        try await fixture.waitUntilIdle()
+        viewModel.removeSkill(notion)
+        viewModel.command = command
+        viewModel.start()
+        try await HangBackstop.waitOrAbandon(for: "the run with Notion removed to stop at its question") {
+            !viewModel.isRunning && !viewModel.isAwaitingApproval
+        }
 
         let systems = requests.all
             .filter { $0.path == "/v1/plan" }

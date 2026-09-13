@@ -620,7 +620,7 @@ struct LocalStorageSecurityTests {
             "deletions Sonny hasn't finished",
             // The sixteenth phrase and the fifteenth store (SONNY-452). The list of skills the user
             // added, named for what a person would notice gone: the Skills page back to Add on every
-            // row. The wording is the founders' to confirm.
+            // row. The founders confirmed the wording on 2026-09-13 (option A).
             "added skills"
         ])
 

@@ -29,15 +29,13 @@ enum SkillPackFixtures {
 
     static func flow(
         title: String = "Create a page",
-        steps: [String] = ["Click the new page icon.", "Type a title."],
-        effect: String = "changes"
+        steps: [String] = ["Click the new page icon.", "Type a title."]
     ) -> [String: Any] {
         [
             "title": title,
             "startURL": "https://www.example.com/",
             "steps": steps,
-            "source": "https://www.example.com/help/create",
-            "effect": effect
+            "source": "https://www.example.com/help/create"
         ]
     }
 
@@ -194,52 +192,64 @@ struct SkillPackTests {
         #expect(Self.error(object) == .flowHasNoSteps(flow: "Create a page"))
     }
 
-    // MARK: - Finance packs read only (SONNY-461, decision 4)
+    // MARK: - No flow moves money, in any pack (founders, 2026-09-13)
 
-    @Test
-    func aFinanceFlowThatDeclaresAChangeDoesNotLoad() throws {
-        var object = SkillPackFixtures.object(id: "mercury", name: "Mercury", domain: "mercury.com", category: "finance_billing")
-        object["flows"] = [SkillPackFixtures.flow(title: "Download a statement", steps: ["Open Statements.", "Pick a month."], effect: "changes")]
-        #expect(Self.error(object) == .readOnlyPackChangesSomething(flow: "Download a statement"))
-    }
-
-    /// Declaring `reads` is not enough: the wording is checked too, so a money-moving flow cannot
-    /// load under a declaration that says otherwise.
-    @Test
-    func aFinanceFlowThatMovesMoneyDoesNotLoadWhateverItDeclares() throws {
-        let cases: [(steps: [String], phrase: String)] = [
-            (["Open Payments.", "Send the amount to the vendor."], "send"),
-            (["Open Transfers.", "Transfer the balance."], "transfer"),
-            (["Open Bills.", "Pay the invoice."], "pay"),
-            (["Open Recipients.", "Add a new payee."], "payee"),
-            (["Open Settings.", "Update the payment details."], "payment details")
+    /// The founders' rule names no category, so neither does this test: every money-moving flow is
+    /// refused in a finance pack, a store, a CRM and a knowledge base alike. As first built the rule
+    /// held finance packs alone, and a store pack could have taught Sonny to issue a refund.
+    @Test(arguments: ["finance_billing", "websites_apps_commerce", "sales_crm", "knowledge_bases"])
+    func aFlowThatMovesMoneyDoesNotLoadWhateverTheCategory(category: String) throws {
+        let flows: [(title: String, steps: [String])] = [
+            ("Pay a vendor", ["Open Bills.", "Pay the invoice."]),
+            ("Send money", ["Open Payments.", "Send money to the vendor."]),
+            ("Move the balance", ["Open Transfers.", "Transfer funds to savings."]),
+            ("Issue a refund", ["Open the order.", "Click Refund."]),
+            ("Pay out a partner", ["Open Payouts.", "Pay out the balance."]),
+            ("Update a payee", ["Open Recipients.", "Edit the payee."]),
+            ("Change how you are paid", ["Open Settings.", "Update the payment details."]),
+            ("Charge a customer", ["Open Customers.", "Charge the card on file."]),
+            ("Approve a bill", ["Open Bills.", "Approve the bill."]),
+            ("Take money out", ["Open the account.", "Withdraw the balance."])
         ]
-        for testCase in cases {
-            var object = SkillPackFixtures.object(id: "wise", name: "Wise", domain: "wise.com", category: "finance_billing")
-            object["flows"] = [SkillPackFixtures.flow(title: "Handle a bill", steps: testCase.steps, effect: "reads")]
-            guard case .movesMoney(flow: "Handle a bill", phrase: _)? = Self.error(object) else {
-                Issue.record("\(testCase.steps) loaded in a finance pack")
+        for testFlow in flows {
+            var object = SkillPackFixtures.object(id: "store", name: "Store", domain: "store.example.com", category: category)
+            object["flows"] = [SkillPackFixtures.flow(title: testFlow.title, steps: testFlow.steps)]
+            guard case .movesMoney(flow: testFlow.title, phrase: _)? = Self.error(object) else {
+                Issue.record("\(testFlow.title) loaded in a \(category) pack")
                 continue
             }
         }
-
-        // The control: reading statements and transaction history is what a finance pack is for.
-        var reading = SkillPackFixtures.object(id: "wise", name: "Wise", domain: "wise.com", category: "finance_billing")
-        reading["flows"] = [SkillPackFixtures.flow(title: "Download a statement", steps: ["Open Statements.", "Pick the month and download it."], effect: "reads")]
-        #expect(Self.error(reading) == nil)
     }
 
-    /// The unambiguous money-moving phrases are refused in every pack, whatever its category — and
-    /// as whole words, so an ordinary sentence that happens to contain a money word still loads.
+    /// What a pack may still say: reading orders, invoices, statements and payouts — the founders'
+    /// named allowance — and the ordinary "send" and "transfer" that have nothing to do with money.
+    /// Whole words, so "refunded" is not "refund" and "payouts" is not "pay".
     @Test
-    func anyPackThatMovesMoneyDoesNotLoadButAWordThatOnlyLooksLikeMoneyDoes() throws {
-        var refund = SkillPackFixtures.object(id: "shopify", name: "Shopify", domain: "shopify.com", category: "websites_apps_commerce")
-        refund["flows"] = [SkillPackFixtures.flow(title: "Issue a refund", steps: ["Open the order.", "Click Refund."])]
-        #expect(Self.error(refund) == .movesMoney(flow: "Issue a refund", phrase: "issue a refund"))
+    func readingMoneyAndAnOrdinarySendOrTransferStillLoad() throws {
+        let flows: [(title: String, steps: [String])] = [
+            ("Download a statement", ["Open Statements.", "Pick the month and download it."]),
+            ("Review payouts", ["Open Payouts.", "Filter the payouts and payments by date."]),
+            ("Find refunded orders", ["Open Orders.", "Filter to refunded orders."]),
+            ("Read an invoice", ["Open Invoices.", "Open the invoice to see its lines."]),
+            ("Share a page", ["Open Share.", "Send the page to a teammate."]),
+            ("Transfer ownership of a page", ["Open the page's settings.", "Transfer ownership to a teammate."])
+        ]
+        for testFlow in flows {
+            var object = SkillPackFixtures.object(id: "wise", name: "Wise", domain: "wise.com", category: "finance_billing")
+            object["flows"] = [SkillPackFixtures.flow(title: testFlow.title, steps: testFlow.steps)]
+            #expect(Self.error(object) == nil, "\(testFlow.title) was refused")
+        }
+    }
 
-        var ownership = SkillPackFixtures.object()
-        ownership["flows"] = [SkillPackFixtures.flow(title: "Transfer ownership of a page", steps: ["Open Share.", "Send the page to a teammate."])]
-        #expect(Self.error(ownership) == nil)
+    /// The fields the category rule used to read are gone from the format, so a pack still carrying
+    /// one is refused like any other unknown field rather than read under a rule that no longer exists.
+    @Test
+    func aFlowStillDeclaringAnEffectIsAnUnknownField() throws {
+        var object = SkillPackFixtures.object()
+        var flow = SkillPackFixtures.flow()
+        flow["effect"] = "reads"
+        object["flows"] = [flow]
+        #expect(Self.error(object) == .unknownField("flows[0].effect"))
     }
 
     // MARK: - No credentials

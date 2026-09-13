@@ -359,7 +359,7 @@ public enum LocalStore: CaseIterable, Hashable, Sendable {
         case .addedSkills:
             // The list holds which skills were added and nothing of their content, which ships in
             // the app; "added skills" names what a person would notice gone — the Skills page back
-            // to every row reading Add. Founders to confirm (SONNY-452).
+            // to every row reading Add. Confirmed by the founders on 2026-09-13 (SONNY-452, option A).
             return ["added skills"]
         }
     }
