@@ -9,6 +9,8 @@ enum CommandCenterDestination: String, CaseIterable, Identifiable {
     case routines
     case workspaces
     case memory
+    // The sixth page (SONNY-452). Last, so every existing page keeps its ⌘-number and this one is ⌘6.
+    case skills
 
     var id: Self { self }
 
@@ -28,6 +30,9 @@ enum CommandCenterDestination: String, CaseIterable, Identifiable {
             return "rectangle.3.group"
         case .memory:
             return "brain"
+        case .skills:
+            // SF Symbols 2, inside the `.macOS(.v14)` deployment target.
+            return "puzzlepiece.extension"
         }
     }
 }
@@ -610,6 +615,8 @@ struct CommandCenterView: View {
                 select: select,
                 openSettings: { isSettingsPresented = true }
             )
+        case .skills:
+            SkillsView(viewModel: viewModel)
         }
     }
 }
@@ -4435,7 +4442,7 @@ struct MemoryRowPresentation: Equatable {
     /// It drives two things: what the row says, and whether Delete is live. Both matter, and the
     /// second is the one the ticket exists for — every door into a store loads before it acts, so a
     /// file that cannot be read cannot be cleared through the store, and this control is the only
-    /// recovery the product has short of wiping all fourteen stores from Settings.
+    /// recovery the product has short of wiping every store from Settings.
     ///
     /// Not defaulted, deliberately: every construction site decides, so a new one cannot inherit
     /// "readable" by saying nothing.
@@ -4571,7 +4578,137 @@ struct MemoryRowPresentation: Equatable {
             // `Sources/` is SF Symbols 5 or earlier for that reason;
             // `everyMemoryRowsIconIsAvailableOnTheDeploymentTarget` pins this set.
             return "arrow.clockwise"
+        case .skills:
+            // The Skills page's own glyph, the way Routines and Workspaces share theirs with their
+            // rows. SF Symbols 2.
+            return "puzzlepiece.extension"
         }
+    }
+}
+
+/// Command Center's Skills page (SONNY-452): every shipped skill pack as a row the user adds to, or
+/// removes from, their own Sonny.
+///
+/// **Rows, not cards**, the Memory page's collection idiom: one site per row with its name, its one
+/// line, an Added badge when it is added, and one button. The list is the catalogue in name order and
+/// the search narrows it; nothing here explains what a skill is, by the no-explanatory-copy rule.
+///
+/// **The three shared Command Center surfaces are present for the reason every page carries them** —
+/// a run started while this page is open, or an approval it raises, must show here —
+/// and `everyCommandCenterPageRendersTheSharedAttentionAndStorageSurfaces` holds that.
+private struct SkillsView: View {
+    @ObservedObject var viewModel: AgentViewModel
+    @State private var query = ""
+    @Environment(\.sonnyDensity) private var density
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: density.sectionGap) {
+            CommandCenterPageHeader(title: "Skills")
+
+            VStack(spacing: 0) {
+                HStack(spacing: SonnySpacing.md) {
+                    CollectionHeader(title: "All skills")
+                    TextField(SkillRowPresentation.searchPrompt, text: $query)
+                        .padding(.leading, SonnySpacing.xl)
+                        .padding(.trailing, SonnySpacing.sm)
+                        .sonnyTextField(size: .small)
+                        .frame(minWidth: 140, idealWidth: 220, maxWidth: 260)
+                        .overlay(alignment: .leading) {
+                            Image(systemName: "magnifyingglass")
+                                .font(SonnyType.icon(SonnyMetrics.iconRow, weight: .medium))
+                                .foregroundStyle(SonnyTheme.textTertiary)
+                                .padding(.leading, SonnySpacing.sm)
+                                .allowsHitTesting(false)
+                        }
+                        .accessibilityLabel(SkillRowPresentation.searchPrompt)
+                        .padding(.trailing, SonnySpacing.xl)
+                }
+
+                Rectangle()
+                    .fill(SonnyTheme.border)
+                    .frame(height: 1)
+
+                let rows = SkillRowPresentation.rows(for: viewModel, query: query)
+                if rows.isEmpty {
+                    CollectionEmptyState(
+                        systemImage: "magnifyingglass",
+                        title: SkillRowPresentation.noMatchTitle,
+                        message: SkillRowPresentation.noMatchMessage
+                    )
+                } else {
+                    ScrollView {
+                        LazyVStack(spacing: 0) {
+                            ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
+                                SkillRow(
+                                    presentation: row,
+                                    isLast: index == rows.count - 1,
+                                    toggle: { toggle(row) }
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .commandCenterPanel()
+
+            CommandCenterAttentionPanel(viewModel: viewModel)
+
+            // Self-gates on `localStorageNotice`, outside the running check like every other page's.
+            CommandCenterStorageNotice(viewModel: viewModel)
+
+            if viewModel.isRunning || viewModel.isAwaitingApproval {
+                CommandCenterRunningIndicator(viewModel: viewModel)
+            }
+        }
+        .commandCenterPageFrame()
+        .onAppear {
+            viewModel.refreshAddedSkills()
+        }
+    }
+
+    private func toggle(_ row: SkillRowPresentation) {
+        guard let pack = viewModel.skillPackCatalog.pack(id: row.id) else { return }
+        if row.isAdded {
+            viewModel.removeSkill(pack)
+        } else {
+            viewModel.addSkill(pack)
+        }
+    }
+}
+
+private struct SkillRow: View {
+    let presentation: SkillRowPresentation
+    let isLast: Bool
+    let toggle: () -> Void
+    @Environment(\.sonnyDensity) private var density
+
+    var body: some View {
+        HStack(spacing: SonnySpacing.md) {
+            VStack(alignment: .leading, spacing: SonnySpacing.xs) {
+                Text(presentation.title)
+                    .font(SonnyType.itemTitle)
+                    .foregroundStyle(SonnyTheme.text)
+                    .lineLimit(1)
+                Text(presentation.caption)
+                    .font(SonnyType.caption)
+                    .foregroundStyle(SonnyTheme.muted)
+                    .lineLimit(1)
+            }
+
+            Spacer(minLength: SonnySpacing.md)
+
+            if presentation.isAdded {
+                SonnyBadge(text: SkillRowPresentation.addedBadge, tone: .success)
+            }
+
+            Button(presentation.buttonTitle, action: toggle)
+                .buttonStyle(SonnyButtonStyle(tone: .secondary, size: .small))
+                .accessibilityLabel(presentation.buttonAccessibilityLabel)
+        }
+        .padding(.horizontal, SonnySpacing.xl)
+        .frame(height: density.scaled(52))
+        .sonnyDivider(isLast ? Color.clear : SonnyTheme.cardBorder)
     }
 }
 
@@ -4834,6 +4971,10 @@ enum MemoryRowDestination: Equatable {
             // history row to open — a row is written when a run terminates — so there is nowhere
             // else for it to lead.
             return .entriesSheet
+        case .skills:
+            // The Skills page already lists every pack with its Add or Remove, so View goes there
+            // rather than to a sheet that would be a second list of the same thing (SONNY-452).
+            return .page(.skills)
         }
     }
 }
@@ -4966,6 +5107,8 @@ enum MemoryDeletionCopy {
             return "This deletes every app you have allowed Sonny to control. Sonny asks again the next time it needs one of them."
         case .resumableTasks:
             return "This deletes every unfinished task Sonny is keeping. Sonny stops offering to carry on with them. Anything they already did is not undone."
+        case .skills:
+            return "This removes every skill you added. The skills stay on the Skills page to add again."
         }
     }
 
@@ -5041,7 +5184,7 @@ enum MemoryDeletionCopy {
     static func outcome(for category: MemoryCategory, deletedFileCount: Int, keptFileCount: Int) -> String {
         guard keptFileCount > 0 else {
             // **A row that owns no file counts none** (SONNY-236). The file figure is the whole point
-            // of this sentence for thirteen of the fourteen stores — a destructive press reporting a
+            // of this sentence for every store but one — a destructive press reporting a
             // concrete, checkable fact about the disk — and it is a falsehood for a row whose delete
             // rewrites a file it shares rather than removing one. Without this branch a successful
             // press on Unfinished tasks reported "0 files", which reads as a delete that did nothing.
@@ -5252,8 +5395,8 @@ enum MemoryDeletionCopy {
             // no control in the widget may lose work irreversibly. This one is the control that
             // does, it is the only one, and its confirmation described the other one's effect.
             return "This deletes the unfinished task, so Sonny can't carry on with it. Anything it already did is not undone."
-        case .routines, .workspaces, .taskHistory:
-            // Unreachable: the sheet opens for the cases above only, and these three are deleted
+        case .routines, .workspaces, .taskHistory, .skills:
+            // Unreachable: the sheet opens for the cases above only, and these four are removed
             // from their own pages.
             return ""
         }
@@ -5291,6 +5434,8 @@ enum MemoryDeletionCopy {
             // Pointed at the constant rather than repeated: `TaskSearchPresentation` owns the Tasks
             // page's empty copy, including the searching-versus-never-ran split this has no part in.
             return TaskSearchPresentation.neverRanAnything.detail
+        case .skills:
+            return "Add a skill on the Skills page, and it will appear here."
         }
     }
 }
@@ -5389,7 +5534,7 @@ struct MemoryEntryPresentation: Identifiable, Equatable {
                     canContinue: task.mayBeOfferedForResume
                 )
             }
-        case .routines, .workspaces, .taskHistory:
+        case .routines, .workspaces, .taskHistory, .skills:
             return []
         }
     }
@@ -6346,7 +6491,7 @@ private struct SettingsDataPage: View {
                         // uses** (SONNY-233). This literal named ten of the thirteen stores the
                         // wipe deleted at the time, having gone stale twice unnoticed as row E,
                         // row J and row 13's stores landed. `LocalDataDeletionCopy` builds it from
-                        // `LocalStore.allCases` through an exhaustive switch, so a fifteenth store
+                        // `LocalStore.allCases` through an exhaustive switch, so a new store
                         // cannot reach the tree without appearing here.
                         SettingsControlLabel(
                             title: "Delete Sonny local data",

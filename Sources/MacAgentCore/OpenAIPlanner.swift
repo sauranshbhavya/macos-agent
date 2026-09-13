@@ -87,6 +87,7 @@ public final class OpenAIPlanner: Planning {
     private let taskContext: BackendTaskContext
     private let toolRegistry: ToolRegistry
     private let usageRecorder: any TaskUsageRecording
+    private let skillGuidance: SkillGuidance
 
     /// **`client` and `taskContext` have no defaults**, for the two reasons this repository already
     /// records for parameters of this kind. A defaulted client would be a second construction of
@@ -98,12 +99,14 @@ public final class OpenAIPlanner: Planning {
         client: SonnyBackendClient,
         taskContext: BackendTaskContext,
         toolRegistry: ToolRegistry = .default,
-        usageRecorder: any TaskUsageRecording = NoopTaskUsageRecorder.shared
+        usageRecorder: any TaskUsageRecording = NoopTaskUsageRecorder.shared,
+        skillGuidance: SkillGuidance = .none
     ) {
         self.client = client
         self.taskContext = taskContext
         self.toolRegistry = toolRegistry
         self.usageRecorder = usageRecorder
+        self.skillGuidance = skillGuidance
     }
 
     public func plan(command: String, priorTaskContext: PriorTaskContext? = nil) async throws -> AgentPlan {
@@ -143,7 +146,7 @@ public final class OpenAIPlanner: Planning {
         priorTaskContext: PriorTaskContext?
     ) -> [(role: String, text: String)] {
         var messages: [(role: String, text: String)] = [
-            (role: "system", text: Self.systemPrompt(toolRegistry: toolRegistry))
+            (role: "system", text: Self.systemPrompt(toolRegistry: toolRegistry, command: command, skillGuidance: skillGuidance))
         ]
         if let priorTaskContext {
             messages.append((role: "user", text: priorTaskContext.plannerContextText))
@@ -187,6 +190,27 @@ public final class OpenAIPlanner: Planning {
             return names.first ?? ""
         }
         return names.dropLast().joined(separator: ", ") + (names.count == 2 ? " or " : ", or ") + last
+    }
+
+    /// The system prompt for one command: the fixed prompt, and — only when the command names a
+    /// skill the user added — that skill's guidance joined after it as one bounded block
+    /// (SONNY-452).
+    ///
+    /// **Joined into the system message rather than sent as a message of its own**, so §4.2's
+    /// message shape is unchanged and a command naming no added skill sends the fixed prompt byte for
+    /// byte, which is what keeps `theSystemPromptIsSentUnchangedAndIsStillTheOneTheRegistryDescribes`
+    /// true for every such command. After the rules rather than before them, and the block's own
+    /// header restates that no rule above it moves.
+    nonisolated public static func systemPrompt(
+        toolRegistry: ToolRegistry = .default,
+        command: String,
+        skillGuidance: SkillGuidance
+    ) -> String {
+        let prompt = systemPrompt(toolRegistry: toolRegistry)
+        guard let block = skillGuidance.block(for: command) else {
+            return prompt
+        }
+        return prompt + "\n\n" + block
     }
 
     nonisolated public static func systemPrompt(toolRegistry: ToolRegistry = .default) -> String {
@@ -277,11 +301,21 @@ extension OpenAIPlanner {
     /// `SonnyBackendClient` in the process, it holds the single-flight refresh guard that makes ten
     /// concurrent 401s cause one rotation, and a second one would defeat it. Taking it here rather
     /// than reaching for a shared instance is why no call site can acquire it by saying nothing.
+    ///
+    /// **`skills` has no default** (SONNY-452): a factory that quietly planned with no skills would
+    /// leave every added pack out of every request while the Skills page kept saying Added. It is read
+    /// when a planner is made, which is per run, so a pack added a moment ago is in the next request.
     nonisolated public static func throughSonnysBackend(
-        client: SonnyBackendClient
+        client: SonnyBackendClient,
+        skills: SkillGuidanceSource
     ) -> PlannerFactory {
         { taskContext, usageRecorder in
-            OpenAIPlanner(client: client, taskContext: taskContext, usageRecorder: usageRecorder)
+            OpenAIPlanner(
+                client: client,
+                taskContext: taskContext,
+                usageRecorder: usageRecorder,
+                skillGuidance: skills.guidance
+            )
         }
     }
 }

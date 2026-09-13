@@ -686,8 +686,8 @@ public struct PendingServerDeletionStore: @unchecked Sendable {
     /// corrupt. Both answer "usable key, unreadable file", and both heal. Telling them apart needs
     /// `LocalStorageEncryption` to raise a distinct case for a key-acquisition failure — correct at
     /// the root, since that type's own comment already claims key-material failures are "deliberately
-    /// *not* wrapped", which is true only of `.invalidKeyLength` — and that changes a type all
-    /// fourteen stores decode through, which is not this ticket's to move.
+    /// *not* wrapped", which is true only of `.invalidKeyLength` — and that changes a type every
+    /// store decodes through, which is not this ticket's to move.
     private var hasAUsableKey: Bool {
         ((try? encryption.encode([String: PendingServerDeletion]())) != nil)
     }

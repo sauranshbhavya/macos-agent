@@ -664,6 +664,9 @@ private func makeWatcherFixture(wipesRealStoreFiles: Bool = false) throws -> Wat
         pendingServerDeletionStore: PendingServerDeletionStore(
             fileURL: root.appendingPathComponent("pending-server-deletions.json")
         ),
+        skillSelectionStore: SkillSelectionStore(
+            fileURL: root.appendingPathComponent("added-skills.json")
+        ),
         standingWatcherObserver: observer,
         clipboardHistoryMonitor: ClipboardHistoryMonitor(
             store: UnreachableLocalStores.clipboardHistory(),

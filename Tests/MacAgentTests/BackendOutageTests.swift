@@ -649,6 +649,10 @@ struct BackendOutageTests {
                 fileURL: root.appendingPathComponent("pending-server-deletions.json"),
                 encryption: encryption
             ),
+            skillSelectionStore: SkillSelectionStore(
+                fileURL: root.appendingPathComponent("added-skills.json"),
+                encryption: encryption
+            ),
             standingWatcherObserver: UnreachableStandingWatcherObserver(),
             clipboardHistoryMonitor: ClipboardHistoryMonitor(
                 reader: HermeticPasteboardReader(),

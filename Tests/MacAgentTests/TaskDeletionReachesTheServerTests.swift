@@ -1138,6 +1138,10 @@ private struct TaskDeletionFixture {
                 fileURL: queueURL,
                 encryption: encryption
             ),
+            skillSelectionStore: SkillSelectionStore(
+                fileURL: queueURL.deletingLastPathComponent().appendingPathComponent("added-skills.json"),
+                encryption: encryption
+            ),
             standingWatcherObserver: UnreachableStandingWatcherObserver(),
             clipboardHistoryMonitor: ClipboardHistoryMonitor(
                 reader: SilentPasteboard(),

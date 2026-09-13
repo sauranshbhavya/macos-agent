@@ -123,7 +123,8 @@ struct ResumeOfferPresentationTests {
             .clipboardHistory: "doc.on.clipboard",  // SF Symbols 1, macOS 11
             .snippets: "text.quote",                // SF Symbols 1, macOS 11
             .approvedApps: "app.badge.checkmark",   // SF Symbols 4, macOS 13
-            .resumableTasks: "arrow.clockwise"      // SF Symbols 1, macOS 11
+            .resumableTasks: "arrow.clockwise",     // SF Symbols 1, macOS 11
+            .skills: "puzzlepiece.extension"        // SF Symbols 2, macOS 11
         ]
         for (category, icon) in icons {
             #expect(icon == expected[category], "\(category) renders \(icon)")

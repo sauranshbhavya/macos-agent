@@ -249,6 +249,74 @@ struct OpenAIPlannerTests {
         #expect(messages.first?["text"] as? String == OpenAIPlanner.systemPrompt(toolRegistry: .default))
     }
 
+    // MARK: - Skills (SONNY-452)
+
+    /// A command naming a skill the user added carries that skill's guidance, joined after the fixed
+    /// prompt inside the one system message — and a command naming none sends the fixed prompt byte
+    /// for byte, so §4.2's shape and the golden above both still hold for it.
+    @Test
+    func anAddedSkillTheCommandNamesJoinsTheSystemMessageAndNothingElseMoves() async throws {
+        let fixture = SignedInBackendFixture()
+        let recorded = RecordedBackendRequests()
+        fixture.register { request in
+            recorded.append(request)
+            return ModelRouteFixtures.reply(
+                ModelRouteFixtures.textRouteJSON(outputText: openAppPlanJSON)
+            )
+        }
+        defer { fixture.unregister() }
+        let notion = try SkillPackFixtures.pack(id: "notion", name: "Notion", domain: "notion.so")
+        let planner = OpenAIPlanner(
+            client: fixture.client,
+            taskContext: ModelRouteFixtures.standardContext,
+            skillGuidance: SkillGuidance(addedPacks: [notion])
+        )
+
+        _ = try await planner.plan(command: "create a page in Notion called wave 7 notes")
+        _ = try await planner.plan(command: "Open Safari")
+
+        let named = try #require(recorded.all.first?.json["messages"] as? [[String: Any]])
+        #expect(named.map { $0["role"] as? String } == ["system", "user"])
+        let system = try #require(named[0]["text"] as? String)
+        #expect(system == OpenAIPlanner.systemPrompt(toolRegistry: .default) + "\n\n" + SkillGuidance.header + "\n\n" + notion.guidance)
+        #expect(named[1]["text"] as? String == "create a page in Notion called wave 7 notes")
+
+        let unnamed = try #require(recorded.all.last?.json["messages"] as? [[String: Any]])
+        #expect(unnamed.first?["text"] as? String == OpenAIPlanner.systemPrompt(toolRegistry: .default))
+    }
+
+    /// The shipped factory reads the user's skills when it makes a planner, not when it was built —
+    /// a pack added after launch is in the next request, and one removed is out of it.
+    @Test
+    func theShippedFactoryPlansWithTheSkillsAddedAtTheMomentItPlans() async throws {
+        let fixture = SignedInBackendFixture()
+        let recorded = RecordedBackendRequests()
+        fixture.register { request in
+            recorded.append(request)
+            return ModelRouteFixtures.reply(
+                ModelRouteFixtures.textRouteJSON(outputText: openAppPlanJSON)
+            )
+        }
+        defer { fixture.unregister() }
+        let linear = try SkillPackFixtures.pack(id: "linear", name: "Linear", domain: "linear.app")
+        let source = SkillGuidanceSource()
+        let factory = OpenAIPlanner.throughSonnysBackend(client: fixture.client, skills: source)
+        let command = "file a Linear issue for the login bug"
+
+        _ = try await factory(ModelRouteFixtures.standardContext, NoopTaskUsageRecorder.shared).plan(command: command)
+        source.guidance = SkillGuidance(addedPacks: [linear])
+        _ = try await factory(ModelRouteFixtures.standardContext, NoopTaskUsageRecorder.shared).plan(command: command)
+        source.guidance = .none
+        _ = try await factory(ModelRouteFixtures.standardContext, NoopTaskUsageRecorder.shared).plan(command: command)
+
+        let systems = recorded.all.map { ($0.json["messages"] as? [[String: Any]])?.first?["text"] as? String }
+        #expect(systems.count == 3)
+        #expect(systems[0] == OpenAIPlanner.systemPrompt(toolRegistry: .default))
+        #expect(systems[1]?.hasSuffix(linear.guidance) == true)
+        #expect(systems[1]?.contains(SkillGuidance.header) == true)
+        #expect(systems[2] == OpenAIPlanner.systemPrompt(toolRegistry: .default))
+    }
+
     // MARK: - Usage
 
     @Test
@@ -609,7 +677,7 @@ private let openAppPlanJSON = #"{"summary":"Open Safari.","requiresConfirmation"
 struct ShippedPlannerFactoryTests {
     @Test
     func theShippedFactoryBuildsAPlannerThatTalksToSonnysBackend() {
-        let factory = OpenAIPlanner.throughSonnysBackend(client: makeHermeticBackendClient())
+        let factory = OpenAIPlanner.throughSonnysBackend(client: makeHermeticBackendClient(), skills: SkillGuidanceSource())
         let planner = factory(
             BackendTaskContext(taskID: "task-factory-1", retention: .standard),
             NoopTaskUsageRecorder.shared
@@ -624,7 +692,7 @@ struct ShippedPlannerFactoryTests {
     /// key and §2.4.2's privacy field, both wrong, both invisible.
     @Test
     func eachCallBuildsAPlannerForItsOwnRun() {
-        let factory = OpenAIPlanner.throughSonnysBackend(client: makeHermeticBackendClient())
+        let factory = OpenAIPlanner.throughSonnysBackend(client: makeHermeticBackendClient(), skills: SkillGuidanceSource())
         let first = factory(
             BackendTaskContext(taskID: "task-factory-1", retention: .standard),
             NoopTaskUsageRecorder.shared

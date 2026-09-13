@@ -1,0 +1,128 @@
+# SONNY-452 — the Skills groundwork. Each mutant breaks one property the ticket claims.
+
+>>> mutant S1 an un-added pack joins the prompt: the planner is handed the whole catalogue
+>>> file Sources/MacAgent/AgentViewModel.swift
+>>> from
+            addedPacks: skillPackCatalog.packs.filter { addedIDs.contains($0.id) }
+>>> to
+            addedPacks: skillPackCatalog.packs
+>>> end
+
+>>> mutant S2 only the first of two mentioned packs joins
+>>> file Sources/MacAgentCore/SkillGuidance.swift
+>>> from
+            .prefix(Self.maximumPacksPerCommand)
+>>> to
+            .prefix(1)
+>>> end
+
+>>> mutant S3 the block never reaches the system prompt
+>>> file Sources/MacAgentCore/OpenAIPlanner.swift
+>>> from
+        guard let block = skillGuidance.block(for: command) else {
+            return prompt
+        }
+>>> to
+        guard let block = skillGuidance.block(for: command), false else {
+            return prompt
+        }
+>>> end
+
+>>> mutant S4 a money-moving phrase loads in any pack
+>>> file Sources/MacAgentCore/SkillPack.swift
+>>> from
+            if let phrase = firstPhrase(of: moneyMovementPhrases, in: wording) {
+                throw SkillPackLoadError.movesMoney(flow: flow.title, phrase: phrase)
+            }
+>>> to
+>>> end
+
+>>> mutant S5 a finance flow that declares a change loads
+>>> file Sources/MacAgentCore/SkillPack.swift
+>>> from
+                guard flow.effect == .reads else {
+                    throw SkillPackLoadError.readOnlyPackChangesSomething(flow: flow.title)
+                }
+>>> to
+>>> end
+
+>>> mutant S6 a finance flow that sends or pays loads when it declares reads
+>>> file Sources/MacAgentCore/SkillPack.swift
+>>> from
+                if let phrase = firstPhrase(of: readOnlyRefusedVerbs, in: wording) {
+                    throw SkillPackLoadError.movesMoney(flow: flow.title, phrase: phrase)
+                }
+>>> to
+>>> end
+
+>>> mutant S7 a flow with a blank citation loads
+>>> file Sources/MacAgentCore/SkillPack.swift
+>>> from
+        guard let rawSource = flow["source"] as? String,
+              !rawSource.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw SkillPackLoadError.flowHasNoCitation(flow: title)
+        }
+        let source = try requiredHTTPSURL(flow, "source", prefix: prefix)
+>>> to
+        let source = (try? requiredHTTPSURL(flow, "source", prefix: prefix)) ?? startURL
+>>> end
+
+>>> mutant S8 an unknown field is ignored rather than refused
+>>> file Sources/MacAgentCore/SkillPack.swift
+>>> from
+        try refuseUnknownKeys(in: root, allowed: packFields, prefix: "")
+>>> to
+>>> end
+
+>>> mutant S9 wording that asks for a credential loads
+>>> file Sources/MacAgentCore/SkillPack.swift
+>>> from
+            if let phrase = firstPhrase(of: credentialPhrases, in: entry.text) {
+                throw SkillPackLoadError.mentionsCredential(field: entry.field, phrase: phrase)
+            }
+>>> to
+>>> end
+
+>>> mutant S10 the wipe leaves the added skills behind
+>>> file Sources/MacAgentCore/LocalDataDeletionService.swift
+>>> from
+            // saying Remove on every one of them.
+            SkillSelectionStore.realFileURL(fileManager: fileManager)
+        ]
+>>> to
+            // saying Remove on every one of them.
+        ]
+>>> end
+
+>>> mutant S11 the memory refresh stops reloading the added skills, so a wipe leaves the page and the planner stale
+>>> file Sources/MacAgent/AgentViewModel.swift
+>>> from
+        // Its own function for the same reason: the planner needs the added skills at launch, before
+        // any page has appeared.
+        refreshAddedSkills()
+>>> to
+>>> end
+
+>>> mutant S12 a duplicate id keeps the first file instead of refusing both
+>>> file Sources/MacAgentCore/SkillPack.swift
+>>> from
+            if idCounts[entry.pack.id, default: 0] > 1 {
+>>> to
+            if idCounts[entry.pack.id, default: 0] > 1, !packs.isEmpty {
+>>> end
+
+>>> mutant S13 matching drops the whole-word boundary, so nonlinear names Linear
+>>> file Sources/MacAgentCore/SkillPack.swift
+>>> from
+            if beforeIsBoundary && afterIsBoundary {
+>>> to
+            if beforeIsBoundary || afterIsBoundary || true {
+>>> end
+
+>>> mutant S14 Add ignores the Skills memory switch
+>>> file Sources/MacAgent/AgentViewModel.swift
+>>> from
+        guard memorySettings.allowsRecording(to: .addedSkills) else {
+>>> to
+        guard memorySettings.allowsRecording(to: .addedSkills) || true else {
+>>> end

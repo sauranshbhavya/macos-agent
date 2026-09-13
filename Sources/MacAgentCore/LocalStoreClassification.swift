@@ -79,7 +79,7 @@ public enum LocalStoreRowDeletionScope: Equatable, Sendable {
 ///   failed until each was classified here. Row 13's `output-locations.json` is the twelfth and
 ///   `resumable-tasks.json` the thirteenth (SONNY-209 and SONNY-210), and both arrived the same
 ///   way. `pending-server-deletions.json` is the fourteenth (SONNY-333), and it arrived the same
-///   way again. The fifteenth will too.
+///   way again. `added-skills.json` is the fifteenth (SONNY-452), and so did it.
 ///
 /// `fileURL(fileManager:)` delegates to the store types themselves rather than repeating their
 /// filenames, so the two lists cannot drift apart: a store that moves moves in both.
@@ -98,6 +98,7 @@ public enum LocalStore: CaseIterable, Hashable, Sendable {
     case outputLocations
     case resumableTasks
     case pendingServerDeletions
+    case addedSkills
 
     /// Deliberately one `case` per store rather than three grouped ones: each line is a separate
     /// classification decision, and a reviewer should be able to disagree with exactly one of them.
@@ -203,6 +204,23 @@ public enum LocalStore: CaseIterable, Hashable, Sendable {
             // live defect rather than a tidier reading: it would let a suppressed run stop a
             // deletion the user asked for from reaching the server.
             return .notWrittenByTasks
+        case .addedSkills:
+            // The skills the user added on Command Center's Skills page (SONNY-452). `.artifact`,
+            // and the reasoning is written out because `.notWrittenByTasks` is the literal reading
+            // of this branch and was not taken.
+            //
+            // Literally, no task writes here today: the only writer is a press of Add or Remove on
+            // the Skills page. But the classification answers what "Don't save this task" may do to
+            // a store, and the answer for a choice the user made by hand is the `.artifact` answer —
+            // never suppressed — whichever door the choice arrives through. A later command that
+            // adds a skill ("add the Notion skill") would be the user asking for exactly this, and
+            // `.artifact` is what it would need; `.notWrittenByTasks` would have to be revisited
+            // the day that door opens.
+            //
+            // It also decides where the Memory row sits. `MemorySection` groups rows by kind and has
+            // no group for `.notWrittenByTasks` — that case's stores are excluded from every row —
+            // so the literal reading would put the row nowhere, and "Saved by you" is what this is.
+            return .artifact
         }
     }
 
@@ -239,6 +257,8 @@ public enum LocalStore: CaseIterable, Hashable, Sendable {
             return ResumableTaskStore.realFileURL(fileManager: fileManager)
         case .pendingServerDeletions:
             return PendingServerDeletionStore.realFileURL(fileManager: fileManager)
+        case .addedSkills:
+            return SkillSelectionStore.realFileURL(fileManager: fileManager)
         }
     }
 
@@ -264,7 +284,7 @@ public enum LocalStore: CaseIterable, Hashable, Sendable {
     /// (row 13); common output locations was missing from the dialog alone.
     ///
     /// **So the sentence is derived rather than maintained.** This switch is exhaustive with no
-    /// `default`, the same guard `kind` and `memoryCategory` use, so a fifteenth store cannot reach
+    /// `default`, the same guard `kind` and `memoryCategory` use, so a new store cannot reach
     /// the tree without being named here — and `theWipeReachesEveryLocalStore` already pins that
     /// `allCases` and the wipe's own file list are the same population, which closes the chain from
     /// the words to the files.
@@ -336,6 +356,11 @@ public enum LocalStore: CaseIterable, Hashable, Sendable {
             // warning to give. It stays named for the ordinary reason every other store here is:
             // the sentence is a list of what the press deletes, and the press deletes this.
             return ["deletions Sonny hasn't finished"]
+        case .addedSkills:
+            // The list holds which skills were added and nothing of their content, which ships in
+            // the app; "added skills" names what a person would notice gone — the Skills page back
+            // to every row reading Add. Founders to confirm (SONNY-452).
+            return ["added skills"]
         }
     }
 
@@ -343,7 +368,7 @@ public enum LocalStore: CaseIterable, Hashable, Sendable {
     /// `LocalStoreRowDeletionScope`.
     ///
     /// Exhaustive with no `default`, the same guard `kind`, `memoryCategory` and `deletionCopyNames`
-    /// use: a fifteenth store cannot reach the tree without somebody deciding whether its row owns
+    /// use: a new store cannot reach the tree without somebody deciding whether its row owns
     /// its file. Answering that wrongly in the `.wholeFile` direction is how a row deletes a
     /// neighbour's data.
     public var rowDeletionScope: LocalStoreRowDeletionScope {
@@ -360,7 +385,8 @@ public enum LocalStore: CaseIterable, Hashable, Sendable {
              .taskPlanDetails,
              .approvedApps,
              .outputLocations,
-             .pendingServerDeletions:
+             .pendingServerDeletions,
+             .addedSkills:
             return .wholeFile
         case .resumableTasks:
             // The one store whose file holds a second collection: `ResumableTaskFile` carries

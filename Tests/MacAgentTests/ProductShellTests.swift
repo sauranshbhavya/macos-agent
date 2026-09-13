@@ -417,7 +417,9 @@ struct ProductShellTests {
                 .insights,
                 .routines,
                 .workspaces,
-                .memory
+                .memory,
+                // Skills joined last (SONNY-452), so every page above keeps its ⌘-number.
+                .skills
             ]
         )
     }
@@ -1142,6 +1144,7 @@ struct ProductShellTests {
             "storedApprovedAppCount",
             "outputLocations",            // ditto (SONNY-209)
             "resumableTasks",             // ditto, via refreshResumableTasks() (SONNY-210)
+            "addedSkills",                // ditto, via refreshAddedSkills() (SONNY-452)
             "clipboardHistoryEnabled",    // refreshClipboardHistoryNotice()
             "clipboardHistoryTimer",      // ditto, via start/stopClipboardHistoryMonitoring()
             "localStorageLoadFailures",   // record/clearLocalStorageLoadFailure, inside all four
@@ -1191,6 +1194,11 @@ struct ProductShellTests {
             // deleted the queue file underneath it and the pass reads that file itself — a pass
             // that survives the wipe finds an empty queue and does nothing, which is exactly right.
             "pendingServerDeletionStore", "taskDeletionService", "pendingServerDeletionDelivery",
+            // SONNY-452's store and the two things read beside it. The catalogue is the app's own
+            // bundle, which the wipe does not touch; the guidance source is rewritten by
+            // `refreshAddedSkills()` from the file the wipe has just deleted, so the planner comes
+            // back with no pack rather than the list the wipe removed.
+            "skillSelectionStore", "skillPackCatalog", "skillGuidanceSource",
             // **`localDataWipe` is the wipe's own handle** (SONNY-404's fix round), and it is in
             // this group for a sharper version of the same reason: the wipe is what would be doing
             // the clearing, so clearing its own handle from inside itself is a task cancelling
@@ -4233,6 +4241,9 @@ private func makeProductShellFixture(
         ),
         pendingServerDeletionStore: PendingServerDeletionStore(
             fileURL: root.appendingPathComponent("pending-server-deletions.json")
+        ),
+        skillSelectionStore: SkillSelectionStore(
+            fileURL: root.appendingPathComponent("added-skills.json")
         ),
         standingWatcherObserver: UnreachableStandingWatcherObserver(),
         clipboardHistoryMonitor: ClipboardHistoryMonitor(

@@ -215,6 +215,10 @@ final class AgentViewModel: ObservableObject {
     /// disagree with `approvedApps`; zero when that load fails, like every other list here.
     @Published private(set) var storedApprovedAppCount: Int = 0
     @Published private(set) var outputLocations: [OutputLocation] = []
+    /// The skills the user added on the Skills page, newest first (SONNY-452). Loaded by
+    /// `refreshAddedSkills()` — at launch, from the pages that show it, and after every write — and
+    /// emptied rather than left stale when the file will not read, like every list above.
+    @Published private(set) var addedSkills: [AddedSkill] = []
     /// Runs that began and did not finish (row 13, SONNY-210), newest activity first.
     ///
     /// Published rather than read on demand because two surfaces render it and they must agree: the
@@ -282,7 +286,7 @@ final class AgentViewModel: ObservableObject {
     var setAsideFilesFromLastDelete: [URL] {
         lastPerRowDelete?.keptFileURLs ?? []
     }
-    /// How many files are set aside across the fourteen stores and how much space they hold — the
+    /// How many files are set aside across every store and how much space they hold — the
     /// line Settings' Data page shows, with the control that removes them (SONNY-266, founder
     /// decision 2026-08-24).
     ///
@@ -661,6 +665,15 @@ final class AgentViewModel: ObservableObject {
     /// task deletions this Mac owes the gateway. Held so `refreshStoreReadability()` has a read door
     /// for it and so the wipe's population and this initializer's population stay the same list.
     private let pendingServerDeletionStore: PendingServerDeletionStore
+    /// The fifteenth store (SONNY-452): which skills the user added. Ids only; the packs are
+    /// `skillPackCatalog`, read from the app bundle.
+    private let skillSelectionStore: SkillSelectionStore
+    /// Every shipped pack that passed the loader's rules, in name order — what the Skills page
+    /// lists. A pack the loader refused is absent here and so from every prompt.
+    let skillPackCatalog: SkillPackCatalog
+    /// Where the planner factory reads the user's skills from, per run. Written only by
+    /// `refreshAddedSkills()`, so the page and the prompt read one list.
+    private let skillGuidanceSource: SkillGuidanceSource
     /// The other half of "delete means deleted everywhere" (SONNY-333, founder 2026-08-16 via
     /// SONNY-14). Built here from the store above and the one `backendClient`, the same way
     /// `screenControlAllowanceService` is built from that client — a second `SonnyBackendClient`
@@ -982,6 +995,7 @@ final class AgentViewModel: ObservableObject {
         case approvedApps
         case outputLocations
         case resumableTasks
+        case addedSkills
 
         var label: String {
             switch self {
@@ -1014,6 +1028,8 @@ final class AgentViewModel: ObservableObject {
                 // carry on with what they were partway through. "Resumable tasks" is the type's
                 // name, not theirs.
                 return "unfinished tasks"
+            case .addedSkills:
+                return "added skills"
             }
         }
 
@@ -1030,7 +1046,7 @@ final class AgentViewModel: ObservableObject {
         /// `canDelete` collapsed to `count > 0`, so an empty task history beside an unreadable
         /// `shortcuts-run-history.json` reproduced the founder's original dead end exactly, inside
         /// the branch whose whole outcome is that an unreadable memory is clearable. The row and its
-        /// Delete now both read `unreadableStores`, which is probed over all fourteen.
+        /// Delete now both read `unreadableStores`, which is probed over every store.
         ///
         /// **What this comment used to say, and why it was wrong twice over.** It said "Neither is
         /// loaded by this view model at all", which is false: `deleteTask` and `deleteScreenRecord`
@@ -1066,6 +1082,8 @@ final class AgentViewModel: ObservableObject {
                 return .outputLocations
             case .resumableTasks:
                 return .resumableTasks
+            case .addedSkills:
+                return .addedSkills
             }
         }
 
@@ -1175,7 +1193,7 @@ final class AgentViewModel: ObservableObject {
             workspaceStore: WorkspaceStore(fileURL: WorkspaceStore.realFileURL()),
             snippetStore: SnippetStore(fileURL: SnippetStore.realFileURL()),
             recentArtifactStore: RecentArtifactStore(fileURL: RecentArtifactStore.realFileURL()),
-            // The real thing, named here for the same reason the fourteen store locations are: this
+            // The real thing, named here for the same reason the store locations are: this
             // is the one place the shipping app asks for something that reaches the machine
             // (SONNY-239). It sits in this list rather than defaulting on the initializer because a
             // default nobody writes is a default nobody can see — SONNY-240's whole argument,
@@ -1198,6 +1216,7 @@ final class AgentViewModel: ObservableObject {
             pendingServerDeletionStore: PendingServerDeletionStore(
                 fileURL: PendingServerDeletionStore.realFileURL()
             ),
+            skillSelectionStore: SkillSelectionStore(fileURL: SkillSelectionStore.realFileURL()),
             // The real page fetch, named here for the same reason `finderRevealer` is: this is the
             // one place the shipping app asks for something that reaches outside the process.
             standingWatcherObserver: LiveStandingWatcherObserver(),
@@ -1210,6 +1229,8 @@ final class AgentViewModel: ObservableObject {
             // passed to `SonnyAccountModel` as well — one client, one session, one refresh guard.
             backendClient: backendClient,
             accountIdentity: accountIdentity,
+            // The packs the app ships, read from its own resource bundle (SONNY-452).
+            skillPackCatalog: SonnyResourceBundle.skillPackCatalog(),
             whitelist: whitelist
         )
     }
@@ -1247,8 +1268,8 @@ final class AgentViewModel: ObservableObject {
     /// **What this does not prevent**, stated rather than left to be discovered: a call site is now
     /// forced to *pass* a store, not to pass a sensible one. That used to mean `taskHistoryStore:
     /// TaskHistoryStore()` — a store that named no location and silently resolved the real one.
-    /// **SONNY-350 closed that spelling**: `fileURL` is a required parameter of all fourteen store
-    /// initializers, so the only way to reach `~/Library/Application Support/Sonny/` is to write
+    /// **SONNY-350 closed that spelling**: `fileURL` is a required parameter of every store
+    /// initializer, so the only way to reach `~/Library/Application Support/Sonny/` is to write
     /// `TaskHistoryStore(fileURL: TaskHistoryStore.realFileURL())`, in words, where a reader and a
     /// sweep can both see it. The residue is now that sentence rather than silence, and
     /// `LocalStoreInjectionScanTests.onlyTheShippedConstantsTestsNameAStoresRealLocation` holds the
@@ -1330,7 +1351,10 @@ final class AgentViewModel: ObservableObject {
         // from the real internet — and "a test that predates the parameter cannot know to pass it"
         // does not care that this one fetches rather than writes. `UnreachableStandingWatcherObserver`
         // is what a fixture with no interest in watchers passes; the shipping app's live one is named
-        // in `atItsRealStoreLocations()` beside the fourteen store locations.
+        // in `atItsRealStoreLocations()` beside the store locations.
+        // **The fifteenth store, undefaulted like every store above** (SONNY-452, SONNY-240's rule):
+        // a fixture that inherited a default would add and remove skills in the developer's own list.
+        skillSelectionStore: SkillSelectionStore,
         standingWatcherObserver: any StandingWatcherObserving,
         // **The clipboard-history store arrives inside this**, which is why it is required too even
         // though it is a service rather than a store: `ClipboardHistoryMonitor`'s own defaults are
@@ -1358,6 +1382,11 @@ final class AgentViewModel: ObservableObject {
         // server and the wipe records no obligation at all. A fixture that inherits it behaves as a
         // signed-out Mac, which is what a fixture with no session is.
         accountIdentity: @escaping @Sendable () -> String? = { nil },
+        // The shipped packs (SONNY-452). Defaulted to none, which is the safe direction for the
+        // same reason `accountIdentity`'s is: a fixture that inherits it has a Skills page with no
+        // rows and plans with no pack, and reads nothing off the disk to get there.
+        // `atItsRealStoreLocations()` passes the bundle's.
+        skillPackCatalog: SkillPackCatalog = .empty,
         memoryPolicyProvider: any MemoryPolicyProviding = UnmanagedMemoryPolicyProvider(),
         priorTaskContextStore: PriorTaskContextStore = PriorTaskContextStore(),
         taskUsageRecorder: TaskUsageRecorder = TaskUsageRecorder(),
@@ -1405,6 +1434,10 @@ final class AgentViewModel: ObservableObject {
         self.outputLocationStore = outputLocationStore
         self.resumableTaskStore = resumableTaskStore
         self.pendingServerDeletionStore = pendingServerDeletionStore
+        self.skillSelectionStore = skillSelectionStore
+        self.skillPackCatalog = skillPackCatalog
+        let skillGuidanceSource = SkillGuidanceSource()
+        self.skillGuidanceSource = skillGuidanceSource
         self.taskDeletionService = SonnyTaskDeletionService(
             client: backendClient,
             store: pendingServerDeletionStore,
@@ -1424,7 +1457,10 @@ final class AgentViewModel: ObservableObject {
         self.taskUsageRecorder = taskUsageRecorder
         self.backendClient = backendClient
         self.screenControlAllowanceService = ScreenControlAllowanceService(client: backendClient)
-        self.makePlanner = makePlanner ?? OpenAIPlanner.throughSonnysBackend(client: backendClient)
+        self.makePlanner = makePlanner ?? OpenAIPlanner.throughSonnysBackend(
+            client: backendClient,
+            skills: skillGuidanceSource
+        )
         self.whitelist = whitelist
         // Loaded here rather than on the Memory page's `onAppear`, because the switches gate
         // *recording*, not a view: an executor built before anything opened Command Center would
@@ -4763,6 +4799,55 @@ final class AgentViewModel: ObservableObject {
         // needs this list at launch without Command Center ever opening — `AppDelegate` calls it
         // directly — and the write path calls it after every save and delete.
         refreshResumableTasks()
+        // Its own function for the same reason: the planner needs the added skills at launch, before
+        // any page has appeared.
+        refreshAddedSkills()
+    }
+
+    /// Reads the added skills and hands the planner the packs they name (SONNY-452).
+    ///
+    /// **Called at launch by `AppDelegate`, not only when a page appears**, because the reader that
+    /// matters most is the planner: someone who added Notion, quit, relaunched and asks the widget for
+    /// a Notion page has opened no page, and the plan must still carry the pack.
+    ///
+    /// **Fails closed.** A file that will not read empties the list, so the planner is handed no pack
+    /// rather than the last list it happened to see, and the banner says which file.
+    func refreshAddedSkills() {
+        addedSkills = loadMemoryEntries(.addedSkills) {
+            try skillSelectionStore.loadAll()
+        }
+        let addedIDs = Set(addedSkills.map(\.id))
+        skillGuidanceSource.guidance = SkillGuidance(
+            addedPacks: skillPackCatalog.packs.filter { addedIDs.contains($0.id) }
+        )
+    }
+
+    /// Whether the user has added this pack. Read by the Skills page's badge and its one button.
+    func isSkillAdded(_ pack: SkillPack) -> Bool {
+        addedSkills.contains { $0.id == pack.id }
+    }
+
+    /// The Skills page's Add (SONNY-452).
+    ///
+    /// **Refused out loud while Skills memory is off**, the path `MemoryDisabledError` records for a
+    /// thing a person asked for by name: a silent no-op would leave the row saying Add after a press
+    /// that reported nothing. Remove is never refused — turning memory off stops new entries and
+    /// touches nothing already stored, and taking one away is its own control.
+    func addSkill(_ pack: SkillPack) {
+        guard memorySettings.allowsRecording(to: .addedSkills) else {
+            setError(MemoryDisabledError(category: .skills).errorDescription ?? "")
+            return
+        }
+        performMemoryStoreWrite(failureMessage: "Could not add the \(pack.name) skill") {
+            try skillSelectionStore.add(id: pack.id)
+        }
+    }
+
+    /// The Skills page's Remove (SONNY-452).
+    func removeSkill(_ pack: SkillPack) {
+        performMemoryStoreWrite(failureMessage: "Could not remove the \(pack.name) skill") {
+            try skillSelectionStore.remove(id: pack.id)
+        }
     }
 
     /// Empties the list on failure rather than leaving it stale, the same choice
@@ -4813,6 +4898,8 @@ final class AgentViewModel: ObservableObject {
             return outputLocations.count
         case .resumableTasks:
             return resumableTasks.count
+        case .skills:
+            return addedSkills.count
         }
     }
 
@@ -4947,7 +5034,7 @@ final class AgentViewModel: ObservableObject {
         // this row is named *Unfinished tasks* and `resumable-tasks.json` also holds the user's
         // standing watchers, so the file-level door would destroy something the row never mentions,
         // silently and with nothing failing. `LocalStoreRowDeletionScope` carries the reasoning and
-        // is exhaustive, so a fifteenth store has to answer the same question.
+        // is exhaustive, so a new store has to answer the same question.
         //
         // **The unreadable half is deliberately not split the same way** and goes to quarantine at
         // file level below, whatever a store's scope says: rewriting a file means decoding it, which
@@ -5036,7 +5123,7 @@ final class AgentViewModel: ObservableObject {
     ///
     /// **Exhaustive with no `default`, and every `.wholeFile` store is listed rather than swept
     /// up.** `rowDeletionScope` is what routes a store here, so all of those are unreachable —
-    /// but a `default:` would let a fifteenth store arrive classified as sharing a file and be
+    /// but a `default:` would let a new store arrive classified as sharing a file and be
     /// silently deleted by nothing at all, which is the same invisible failure the split exists to
     /// prevent, one door along. Listing them means the classification and the door have to be
     /// changed together.
@@ -5058,7 +5145,8 @@ final class AgentViewModel: ObservableObject {
              .taskPlanDetails,
              .approvedApps,
              .outputLocations,
-             .pendingServerDeletions:
+             .pendingServerDeletions,
+             .addedSkills:
             break
         }
     }
@@ -5082,7 +5170,7 @@ final class AgentViewModel: ObservableObject {
 
     /// Whether this store's file can be read right now.
     ///
-    /// Exhaustive over `LocalStore` with no `default`, so a fifteenth store cannot be added without
+    /// Exhaustive over `LocalStore` with no `default`, so a new store cannot be added without
     /// somebody naming its read door — and a store with no read door named here is a store the
     /// delete would destroy unreadable.
     ///
@@ -5134,6 +5222,8 @@ final class AgentViewModel: ObservableObject {
                 // knowing about a method named for a question (PR #194 cycle-3's residuals). It is
                 // the same heal any other door would perform and it happens once.
                 _ = try pendingServerDeletionStore.loadAll()
+            case .addedSkills:
+                _ = try skillSelectionStore.loadAll()
             }
             return true
         } catch {
@@ -5157,7 +5247,7 @@ final class AgentViewModel: ObservableObject {
 
     /// One store's file, resolved through the instance this view model was constructed with.
     ///
-    /// The switch is exhaustive over `LocalStore` with no `default`, so a fifteenth store
+    /// The switch is exhaustive over `LocalStore` with no `default`, so a new store
     /// cannot be added without someone deciding which injected instance answers for it here.
     private func storeFileURL(for store: LocalStore) -> URL {
         switch store {
@@ -5189,6 +5279,8 @@ final class AgentViewModel: ObservableObject {
             return resumableTaskStore.fileURL
         case .pendingServerDeletions:
             return pendingServerDeletionStore.fileURL
+        case .addedSkills:
+            return skillSelectionStore.fileURL
         }
     }
 
@@ -5361,6 +5453,8 @@ final class AgentViewModel: ObservableObject {
             // other row's does — when Sonny last recorded something here — and for this store that is
             // the last unit that finished, not the moment the task began.
             return resumableTasks.map(\.updatedAt).max()
+        case .skills:
+            return addedSkills.map(\.addedAt).max()
         }
     }
 
@@ -5394,7 +5488,7 @@ final class AgentViewModel: ObservableObject {
         case .resumableTasks:
             guard resumableTasks.indices.contains(index) else { return }
             deleteResumableTask(resumableTasks[index])
-        case .routines, .workspaces, .taskHistory:
+        case .routines, .workspaces, .taskHistory, .skills:
             return
         }
     }
@@ -7389,7 +7483,7 @@ final class AgentViewModel: ObservableObject {
         // **The probe re-reads eleven files the other two calls just read, and that duplication is
         // bought deliberately** (PR #110 fix-round review). Readability has to come from one place
         // or the row's words and its Delete disagree, which they did — and the loaders cannot supply
-        // it, because three of the fourteen stores have no load-failure source and so were invisible
+        // it, because three of the stores have no load-failure source and so were invisible
         // to anything derived from those. 12 ms of the 18 is that decision.
         //
         // **No ratio against task history, and the missing one is the point.** The obvious
