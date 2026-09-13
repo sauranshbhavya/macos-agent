@@ -3,7 +3,8 @@
   "permissions": {
     "allow": [
       "Bash(git fetch *)",
-      "Bash(swift test *)"
+      "Bash(swift test *)",
+      "Bash(gh pr comment:*)"
     ],
     "deny": [
       "Bash(rm -rf*)"
