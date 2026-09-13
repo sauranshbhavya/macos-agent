@@ -1,0 +1,30 @@
+# SONNY-479, SONNY-481 and SONNY-476 — the Skills gates. Each mutant breaks one property the branch
+# claims. Swift half only.
+
+>>> mutant X1 the money context words stop reading plurals: "Update the account at the banks." loads
+>>> file Sources/MacAgentCore/SkillPackContentRules.swift
+>>> from
+           moneyContext.first(in: units, readingPlurals: true) != nil || units.contains(where: hasCurrencyAmount) {
+>>> to
+           moneyContext.first(in: units) != nil || units.contains(where: hasCurrencyAmount) {
+>>> end
+
+>>> mutant X2 the contextual objects stop reading plurals: "Update the cards at the bank." loads
+>>> file Sources/MacAgentCore/SkillPackContentRules.swift
+>>> from
+        if let object = contextualObjects.first(in: units, readingPlurals: true),
+>>> to
+        if let object = contextualObjects.first(in: units),
+>>> end
+
+>>> mutant R1 the Command Center Skills suite reads the shipped packs folder again, so its exact rows pin today's packs
+>>> file Tests/MacAgentTests/MemoryCommandCenterTests.swift
+>>> from
+        try SkillPackFixtures.catalogue()
+>>> to
+        SkillPackCatalog.load(from: URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/MacAgent/Resources/SkillPacks"))
+>>> end

@@ -103,6 +103,45 @@ struct SkillPackTests {
         }
     }
 
+    /// **Only this file reads the shipped packs folder** (SONNY-481). The pack lanes add packs there, and
+    /// a test elsewhere that reads it for a page's rows or a planner's prompt goes red on a well-formed
+    /// pack for no product reason — the Skills suite in `MemoryCommandCenterTests` did, until it moved to
+    /// `SkillPackFixtures.catalogue()`. Every Swift file under `Tests/` goes through
+    /// `readsTheShippedPacks(_:)`, and so do the held samples, so the check the files meet is the check
+    /// the samples prove. A path assembled from pieces evades it.
+    @Test
+    func onlyTheValidatingTestsReadTheShippedPacksFolder() throws {
+        let root = Self.repositoryRoot.standardizedFileURL.path + "/"
+        let enumerator = try #require(FileManager.default.enumerator(at: Self.repositoryRoot.appendingPathComponent("Tests"), includingPropertiesForKeys: nil))
+        var scanned: Set<String> = []
+        var readers: [String] = []
+        for case let url as URL in enumerator where url.pathExtension == "swift" {
+            let path = url.standardizedFileURL.path.replacingOccurrences(of: root, with: "")
+            scanned.insert(path)
+            if Self.readsTheShippedPacks(try String(contentsOf: url, encoding: .utf8)) {
+                readers.append(path)
+            }
+        }
+
+        // The control: the walk reached this file and the suite that used to read the folder.
+        #expect(scanned.isSuperset(of: ["Tests/MacAgentCoreTests/SkillPackTests.swift", "Tests/MacAgentTests/MemoryCommandCenterTests.swift"]))
+        #expect(readers == ["Tests/MacAgentCoreTests/SkillPackTests.swift"])
+
+        #expect(Self.readsTheShippedPacks(#"    .appendingPathComponent("Sources/MacAgent/Resources/SkillPacks")"#))
+        #expect(Self.readsTheShippedPacks("    let catalogue = SonnyResourceBundle.skillPackCatalog()"))
+        #expect(Self.readsTheShippedPacks("    let files = SkillPackCatalog.packFileURLs(in: SkillPackTests.shippedPacksDirectory)"))
+        #expect(!Self.readsTheShippedPacks("    /// Never read from `Sources/MacAgent/Resources/SkillPacks/`."))
+    }
+
+    /// Whether a Swift file names the shipped packs folder, or a way to it, on a line that is not a
+    /// line comment.
+    static func readsTheShippedPacks(_ source: String) -> Bool {
+        source.split(separator: "\n", omittingEmptySubsequences: false).contains { line in
+            !line.drop(while: { $0 == " " || $0 == "\t" }).hasPrefix("//")
+                && ["Resources/SkillPacks", "SonnyResourceBundle", "shippedPacksDirectory"].contains { line.contains($0) }
+        }
+    }
+
     /// The check itself, held to the review's words in both directions, so a check that let
     /// everything through could not pass the shipped packs vacuously.
     @Test
