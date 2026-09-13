@@ -18,8 +18,7 @@
         "The new page opens. Type the page's title at the top.",
         "Start writing in the body of the page."
       ],
-      "source": "https://www.notion.com/help/create-your-first-page",
-      "effect": "changes"
+      "source": "https://www.notion.com/help/create-your-first-page"
     },
     {
       "title": "Find a page",
@@ -29,8 +28,7 @@
         "Type the words to look for. Put a phrase in quotes to match it exactly.",
         "Pick the page from the results. Recently viewed pages are listed first, and the sort and filter options narrow the list."
       ],
-      "source": "https://www.notion.com/help/search",
-      "effect": "reads"
+      "source": "https://www.notion.com/help/search"
     },
     {
       "title": "Share a page with someone",
@@ -41,8 +39,7 @@
         "Choose their permission level from the menu beside their name: Full access, Can edit, Can comment or Can view.",
         "Click Invite."
       ],
-      "source": "https://www.notion.com/help/sharing-and-permissions",
-      "effect": "changes"
+      "source": "https://www.notion.com/help/sharing-and-permissions"
     }
   ]
 }

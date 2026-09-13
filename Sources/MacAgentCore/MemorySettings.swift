@@ -156,8 +156,8 @@ public enum MemoryCategory: String, CaseIterable, Identifiable, Sendable {
             // bare "1 task" beside "184 tasks" invites the one arithmetic the page cannot support.
             return "unfinished task"
         case .skills:
-            // The ticket's proposed noun, matching the sidebar page it counts. Founders to confirm
-            // (SONNY-452).
+            // The ticket's proposed noun, matching the sidebar page it counts; confirmed by the founders
+            // on 2026-09-13 (SONNY-452, option A).
             return "skill"
         }
     }

@@ -28,7 +28,7 @@
         }
 >>> end
 
->>> mutant S4 a money-moving phrase loads in any pack
+>>> mutant S4 the money rule removed: a flow that moves money loads in any pack
 >>> file Sources/MacAgentCore/SkillPack.swift
 >>> from
             if let phrase = firstPhrase(of: moneyMovementPhrases, in: wording) {
@@ -37,22 +37,22 @@
 >>> to
 >>> end
 
->>> mutant S5 a finance flow that declares a change loads
+>>> mutant S5 paying and paying out load: the bare verbs leave the money list
 >>> file Sources/MacAgentCore/SkillPack.swift
 >>> from
-                guard flow.effect == .reads else {
-                    throw SkillPackLoadError.readOnlyPackChangesSomething(flow: flow.title)
-                }
+        "pay", "pays", "paying", "pay out", "refund", "refunds", "refunding", "issue a refund",
 >>> to
+        "refund", "refunds", "refunding", "issue a refund",
 >>> end
 
->>> mutant S6 a finance flow that sends or pays loads when it declares reads
+>>> mutant S6 the money rule held finance packs alone again, the reading the founders declined on 2026-09-13
 >>> file Sources/MacAgentCore/SkillPack.swift
 >>> from
-                if let phrase = firstPhrase(of: readOnlyRefusedVerbs, in: wording) {
-                    throw SkillPackLoadError.movesMoney(flow: flow.title, phrase: phrase)
-                }
+        for flow in flows {
+            let wording = ([flow.title] + flow.steps).joined(separator: "\n")
 >>> to
+        for flow in flows where category == "finance_billing" {
+            let wording = ([flow.title] + flow.steps).joined(separator: "\n")
 >>> end
 
 >>> mutant S7 a flow with a blank citation loads

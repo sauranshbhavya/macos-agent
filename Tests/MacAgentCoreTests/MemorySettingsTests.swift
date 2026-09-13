@@ -130,8 +130,8 @@ struct MemorySettingsTests {
             .snippets: ("snippet", "snippets"),
             .approvedApps: ("app", "apps"),
             .resumableTasks: ("unfinished task", "unfinished tasks"),
-            // The ticket's proposed noun (SONNY-452), matching the page it counts. Founders to
-            // confirm.
+            // The ticket's proposed noun (SONNY-452), matching the page it counts; the founders chose
+            // it on 2026-09-13 (option A).
             .skills: ("skill", "skills")
         ]
 

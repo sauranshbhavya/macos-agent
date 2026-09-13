@@ -16,11 +16,14 @@ import Foundation
 /// settles: the name, the domain, the sign-in URL, the words that mean it, and its top-level
 /// sections. Shallow still earns its place: it tells Sonny the tool exists and where it lives.
 ///
-/// **Finance packs read and never move money** (SONNY-461, decision 4). A pack in the
-/// `finance_billing` category may describe statements, invoices and transaction history, and every
-/// one of its flows must declare `"effect": "reads"`; sending, transferring, paying, and changing
-/// payment details or payees are refused by wording as well as by declaration. The unambiguous
-/// money-moving phrases are refused in every pack, whatever its category.
+/// **No flow moves money, in any pack, whatever its category** (founders, 2026-09-13 on SONNY-452,
+/// widening SONNY-461's decision 4). A flow may not send, transfer, pay, refund or pay out money, or
+/// change payment details or payees; a pack may still describe reading orders, invoices, statements
+/// and payouts. **The rule names no category, deliberately**: it held finance packs alone as first
+/// built, and a store or billing pack could then have taught Sonny to issue a refund or change a
+/// payout account, which moves money exactly as a finance flow would. The rule exists because money
+/// moves, not because of a label. It is read off a flow's wording, as whole words — see
+/// `SkillPackDecoder.moneyMovementPhrases` for what that catches and what it deliberately lets pass.
 ///
 /// **No pack carries, asks for or types a credential.** Wording that asks for one is refused, and so
 /// is a URL carrying a user name, a password or a token-shaped query parameter.
@@ -39,9 +42,6 @@ public struct SkillPack: Equatable, Sendable, Identifiable {
     /// A pack over it does not load, rather than being truncated when it joins a prompt: a flow cut
     /// off half way is a set of instructions that stops before the step that mattered.
     public static let guidanceByteLimit = 6_000
-
-    /// The category whose packs may only read (SONNY-461, decision 4).
-    public static let readOnlyCategory = "finance_billing"
 
     public let id: String
     public let name: String
@@ -118,22 +118,13 @@ public struct SkillPackFlow: Equatable, Sendable {
     /// The public page these steps were taken from. Required: a flow nobody can check against a
     /// page is a flow nobody can trust on a live account.
     public let source: URL
-    public let effect: SkillPackFlowEffect
 
-    public init(title: String, startURL: URL, steps: [String], source: URL, effect: SkillPackFlowEffect) {
+    public init(title: String, startURL: URL, steps: [String], source: URL) {
         self.title = title
         self.startURL = startURL
         self.steps = steps
         self.source = source
-        self.effect = effect
     }
-}
-
-/// Whether a flow only looks at something or changes something. Declared by the pack, and checked
-/// against its wording for the finance rule rather than trusted on its own.
-public enum SkillPackFlowEffect: String, Sendable, Equatable {
-    case reads
-    case changes
 }
 
 /// Why a pack did not load. Each case names the thing a pack author has to fix.
@@ -147,12 +138,10 @@ public enum SkillPackLoadError: Error, Equatable, Sendable {
     case duplicateID(String)
     case notHTTPS(field: String)
     case unknownDepth(String)
-    case unknownEffect(String)
     case deepPackHasNoFlows
     case shallowPackHasFlows
     case flowHasNoSteps(flow: String)
     case flowHasNoCitation(flow: String)
-    case readOnlyPackChangesSomething(flow: String)
     case movesMoney(flow: String, phrase: String)
     case mentionsCredential(field: String, phrase: String)
     case urlCarriesCredential(field: String)
@@ -259,21 +248,32 @@ public enum SkillPackDecoder {
         "format", "id", "name", "domain", "category", "summary", "signInURL",
         "triggers", "sections", "depth", "flows"
     ]
-    static let flowFields: Set<String> = ["title", "startURL", "steps", "source", "effect"]
+    static let flowFields: Set<String> = ["title", "startURL", "steps", "source"]
 
-    /// Phrases that move money, refused in every pack. Whole words, compared folded, so "refunded
-    /// orders" is not "refund" and "transfer ownership of a page" is not "transfer money".
+    /// What a flow may not say, in any pack: sending, transferring, paying, refunding or paying out
+    /// money, charging or approving a payment, and changing payment details or payees. Whole words,
+    /// compared folded.
+    ///
+    /// **Verbs where the verb alone can only mean money, phrases where it cannot.** `pay`, `refund`
+    /// and `withdraw` are refused bare. `send` and `transfer` are not — "send the page to a teammate"
+    /// and "transfer ownership of a page" are ordinary flows — so those are refused only with a money
+    /// object. The nouns a reading flow needs stay allowed: "payouts", "payments", "invoices",
+    /// "refunded orders", "withdrawals", "deposits". **What that cannot see**: a money verb this list
+    /// does not name, and a phrase split by other words ("send the vendor their money"). It is the
+    /// founders' rule held as far as wording can hold it, and a pack's citation is what a reviewer
+    /// checks the rest against.
     static let moneyMovementPhrases = [
-        "send money", "transfer money", "transfer funds", "make a payment", "pay an invoice",
-        "pay a bill", "pay the bill", "issue a refund", "refund", "payout", "withdraw", "payee",
-        "payees", "payment details", "payment method", "bank details", "wire transfer"
-    ]
-
-    /// Verbs refused on top of those in a read-only pack, where "send" and "pay" can only mean
-    /// money or a document that asks for it.
-    static let readOnlyRefusedVerbs = [
-        "send", "sends", "sending", "transfer", "transfers", "transferring", "pay", "pays", "paying",
-        "approve", "approves", "approving", "schedule a payment", "top up", "deposit"
+        "pay", "pays", "paying", "pay out", "refund", "refunds", "refunding", "issue a refund",
+        "withdraw", "withdrawing", "top up", "wire money", "wire funds", "wire transfer",
+        "send money", "send funds", "send a payment", "send payment", "send payments",
+        "transfer money", "transfer funds", "bank transfer", "make a transfer", "send a transfer",
+        "make a payment", "make payments", "schedule a payment", "approve a payment",
+        "approve payments", "approve a bill", "approve bills", "approve the bill",
+        "approve the payment", "charge a card", "charge the card", "charge a customer",
+        "charge the customer", "create a charge", "deposit money", "deposit funds", "make a deposit",
+        "payee", "payees", "payment details", "payment method", "payment methods", "bank details",
+        "bank account details", "card details", "billing details", "payout account", "payout method",
+        "payout details"
     ]
 
     /// Wording that asks for or handles a secret, refused in every text field of every pack.
@@ -336,19 +336,10 @@ public enum SkillPackDecoder {
             break
         }
 
-        let isReadOnly = category == SkillPack.readOnlyCategory
         for flow in flows {
             let wording = ([flow.title] + flow.steps).joined(separator: "\n")
             if let phrase = firstPhrase(of: moneyMovementPhrases, in: wording) {
                 throw SkillPackLoadError.movesMoney(flow: flow.title, phrase: phrase)
-            }
-            if isReadOnly {
-                guard flow.effect == .reads else {
-                    throw SkillPackLoadError.readOnlyPackChangesSomething(flow: flow.title)
-                }
-                if let phrase = firstPhrase(of: readOnlyRefusedVerbs, in: wording) {
-                    throw SkillPackLoadError.movesMoney(flow: flow.title, phrase: phrase)
-                }
             }
         }
 
@@ -396,11 +387,7 @@ public enum SkillPackDecoder {
         guard !steps.isEmpty else {
             throw SkillPackLoadError.flowHasNoSteps(flow: title)
         }
-        let effectText: String = try requiredText(flow, "effect", prefix: prefix)
-        guard let effect = SkillPackFlowEffect(rawValue: effectText) else {
-            throw SkillPackLoadError.unknownEffect(effectText)
-        }
-        return SkillPackFlow(title: title, startURL: startURL, steps: steps, source: source, effect: effect)
+        return SkillPackFlow(title: title, startURL: startURL, steps: steps, source: source)
     }
 
     private static func refuseUnknownKeys(in object: [String: Any], allowed: Set<String>, prefix: String) throws {

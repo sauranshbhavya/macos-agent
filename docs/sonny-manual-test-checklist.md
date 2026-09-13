@@ -4910,7 +4910,7 @@ the site — and the pack lanes add the rest. Signed in, gateway up, for the two
       View opens the Skills page; Delete asks, then removes every added skill, and the Skills page
       shows Add on every row.
 - [ ] Add Linear again, then Settings → Data → Delete Sonny local data. The confirmation's list
-      ends with "added skills" (**founders to confirm the wording**). After the wipe the Skills page
+      ends with "added skills" (the founders' wording, confirmed 2026-09-13). After the wipe the Skills page
       shows Add on every row and the Memory row reads `0 skills`.
 - [ ] Memory: switch the **Skills** row off, then press Add on any skill: Sonny says "Skills memory
       is off, so nothing was saved. Turn it on in Memory." and the row still reads Add. Switch it
