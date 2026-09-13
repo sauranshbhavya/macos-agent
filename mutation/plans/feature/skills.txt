@@ -225,8 +225,8 @@
 >>> to
 >>> end
 
->>> mutant V2 the trigger check stops reading a word's singular form, so teams and docs pass
->>> file Tests/MacAgentCoreTests/SkillPackTests.swift
+>>> mutant V2 the singular rule stops reading a word's singular form, so teams and docs pass the trigger check (and, since the second scoped round moved the rule into SkillWords, a plural money object loads)
+>>> file Sources/MacAgentCore/SkillPackContentRules.swift
 >>> from
         if word.hasSuffix("ies"), word.count > 4 { candidates.append(String(word.dropLast(3)) + "y") }
         if word.hasSuffix("es"), word.count > 3 { candidates.append(String(word.dropLast(2))) }
@@ -239,4 +239,30 @@
 >>> from
         "login and pass", "username and pass", "user name and pass", "email and pass",
 >>> to
+>>> end
+
+# PR #241's second scoped round.
+
+>>> mutant W1 the money rule stops reading a money object's plural, so "Add the IBANs" and "Update the cards on file" load
+>>> file Sources/MacAgentCore/SkillPackContentRules.swift
+>>> from
+        if let object = moneyObjects.first(in: units, readingPlurals: true) {
+>>> to
+        if let object = moneyObjects.first(in: units) {
+>>> end
+
+>>> mutant W2 "make a transfer" leaves the money-only acts
+>>> file Sources/MacAgentCore/SkillPackContentRules.swift
+>>> from
+        "wire money", "wire funds", "make a transfer", "send a transfer", "make a deposit"
+>>> to
+        "wire money", "wire funds", "send a transfer", "make a deposit"
+>>> end
+
+>>> mutant W3 "make a deposit" leaves the money-only acts
+>>> file Sources/MacAgentCore/SkillPackContentRules.swift
+>>> from
+        "wire money", "wire funds", "make a transfer", "send a transfer", "make a deposit"
+>>> to
+        "wire money", "wire funds", "make a transfer", "send a transfer"
 >>> end
