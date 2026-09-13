@@ -4985,6 +4985,25 @@ the site — and the pack lanes add the rest. Signed in, gateway up, for the two
       is off, so nothing was saved. Turn it on in Memory." and the row still reads Add. Switch it
       back on.
 
+### A screen-control task that asked first lets go when it ends (new 2026-09-13, SONNY-472)
+
+A screen-control session that Sonny asked about before it started now gives back ⌃⌥⎋ and stops showing
+Sonny as controlling once it has finished, the way a session that started without asking always did.
+Signed in, gateway up, screen control allowed for the account.
+
+- [ ] **Safe mode.** Ask the widget to do something small in Safari, for example `[s] open the reading
+      list in Safari`. Allow the session, each capture and each action until Sonny finishes. The widget
+      (or the run pill, if it minimised) shows the result and **no longer shows Sonny controlling Safari**:
+      no app name, no Pause, no Stop. **What would be a finding:** the controlling state still on screen
+      after the result, or a Stop that does nothing.
+- [ ] Straight after, in another app — TextEdit, say — press **⌃⌥⎋**. It does nothing in Sonny, and the
+      other app gets the key as it would with Sonny not running. **What would be a finding:** Sonny
+      reacting to it, or the key being swallowed.
+- [ ] Switch back to **Normal mode** and ask `2 + 2`. On the Tasks page, that task's row has **no screen
+      record** to open. **What would be a finding:** it offers the Safari session's screen record.
+- [ ] During the Safe-mode session above, while an action approval is waiting, press ⌃⌥⎋: the session
+      stops. (It still holds the key while it waits.)
+
 ## 8. How to report back
 
 For each real finding, give me:
