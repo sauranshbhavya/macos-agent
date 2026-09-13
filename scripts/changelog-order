@@ -210,10 +210,24 @@ def check(path: str, cwd: str, ref: str = "") -> list[str]:
 GOOD_ENTRY = "### Branch: %s\nStatus: complete\nDate: 2026-01-01\n\nbody\n"
 
 
-def _git(cwd: str, *args: str) -> None:
+def _git(cwd: str, *args: str) -> str:
     r = subprocess.run(("git",) + args, cwd=cwd, capture_output=True, text=True)
     if r.returncode != 0:
         raise SystemExit("selftest: git %s failed: %s" % (" ".join(args), r.stderr.strip()))
+    return r.stdout.strip()
+
+
+def _point_mainline_refs(repo: str, main: str | None, origin: str | None) -> None:
+    """Set the fixture's local `main` and its `origin/main` to the given commits, None deleting
+    the ref. HEAD is detached first, so moving or deleting `main` never moves a checkout."""
+    _git(repo, "checkout", "-q", "--detach")
+    for name, sha in (("refs/heads/main", main), ("refs/remotes/origin/main", origin)):
+        if sha is None:
+            if subprocess.run(["git", "rev-parse", "--verify", "--quiet", name],
+                              cwd=repo, capture_output=True).returncode == 0:
+                _git(repo, "update-ref", "-d", name)
+        else:
+            _git(repo, "update-ref", name, sha)
 
 
 def _fixture_repo(tmp: str, merges: list[tuple[int, str]]) -> str:
@@ -339,7 +353,42 @@ def selftest() -> int:
                 print("  FAIL  %s — it returned an answer instead" % name)
                 failures += 1
 
-    print("selftest: %d case(s), %d failure(s)" % (len(cases) + 3, failures))
+        # Which mainline is read (SONNY-480). Every worktree shares one local `main`, and nothing
+        # moves it when a pull request merges on GitHub, so between a merge and somebody's pull
+        # it names a commit from before that merge while `origin/main` already holds it. Read
+        # first, a stale `main` reports every entry merged since as unmerged — a false finding
+        # that reads exactly like a real one, and the stop hook blocks a turn on it.
+        # tip is #53's merge; tip~2 is #51's, the last merge a stale `main` would still hold.
+        tip = _git(repo, "rev-parse", "main")
+        behind = _git(repo, "rev-parse", "main~2")
+        # A commit on `main` that `origin/main` does not hold, and the reverse: diverged.
+        stray = _git(repo, "commit-tree", behind + "^{tree}", "-p", behind, "-m", "local only")
+        refs_cases = [
+            ("a local main behind origin/main is not what gets measured", behind, tip, "clean"),
+            ("a local main ahead of origin/main is what gets measured", tip, behind, "clean"),
+            ("main and origin/main at one commit measure clean", tip, tip, "clean"),
+            ("origin/main alone, with no local main, is measured", None, tip, "clean"),
+            ("a local main diverged from origin/main refuses rather than picking one",
+             stray, tip, "refuse"),
+        ]
+        for name, main_sha, origin_sha, expect in refs_cases:
+            _point_mainline_refs(repo, main_sha, origin_sha)
+            path = _write(tmp, good)
+            try:
+                findings = check(path, repo)
+            except Unmeasurable as exc:
+                ok = expect == "refuse"
+                detail = "refused: %s" % exc
+            else:
+                ok = expect == "clean" and not findings
+                detail = "; ".join(findings) or "measured clean"
+            print("  %s  %s" % ("ok  " if ok else "FAIL", name))
+            if not ok:
+                failures += 1
+                print("        got: " + detail)
+        _point_mainline_refs(repo, tip, None)
+
+    print("selftest: %d case(s), %d failure(s)" % (len(cases) + 3 + len(refs_cases), failures))
     return 0 if failures == 0 else 2
 
 
