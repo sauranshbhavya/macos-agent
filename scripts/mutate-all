@@ -750,6 +750,23 @@ selftest() {
   # below refuse, and a DATABASE_URL would change what a server plan's block says.
   unset MUTATE_TEST_CMD MUTATE_ALL_SWIFT_TEST_CMD MUTATE_ALL_SERVER_TEST_CMD DATABASE_URL
 
+  # The DATABASE_URL the scenarios below set whenever a server plan has to run. It points nowhere,
+  # and nothing in this script reads it beyond whether it is set.
+  #
+  # **It carries no user and no password, and that is SONNY-477.** Its three copies used to name a
+  # user and a password before the host, which is the credential shape
+  # server/scripts/check-secrets.sh refuses in every tracked file, so `check:secrets` read red on
+  # main from PR #239 until this change. A URL with no userinfo has no credential's shape. It was
+  # not baselined instead: the baseline exempts strings a test cannot do without, and this one
+  # never needed the shape. (This comment spells no example URL for the same reason.)
+  #
+  # **The sentinel scenario 13 hunts for is the database name, not a password.** Scenario 13 proves
+  # the value is never printed, and any printing of the value carries the database name. A
+  # password sentinel would also miss the common redacted form, the URL printed with its password
+  # masked.
+  local st_database_sentinel='not-a-real-database-8c1f'
+  local st_database_url="postgres://localhost:1/$st_database_sentinel"
+
   SELFTEST_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/mutate-all-selftest.XXXXXX")"
   trap 'selftest_cleanup' EXIT
 
@@ -1237,8 +1254,8 @@ PLAN
   git add mutation/plans/server-half.txt mutation/plans/swift-half.txt
   git commit -q -m "one plan per half"
   # A server plan runs only with DATABASE_URL set (scenario 13b is the unset side), so scenarios 11
-  # to 13 plant one. It points nowhere and carries a password-shaped string scenario 13 hunts for.
-  export DATABASE_URL='postgres://selftest:not-a-real-password-8c1f@localhost:1/none'
+  # to 13 plant one. It points nowhere, and its database name is the sentinel scenario 13 hunts for.
+  export DATABASE_URL="$st_database_url"
   : >"$ST_SUITES_LOG"
   st_run "$swift_half_suite" "$server_half_suite"
   local suites logdir
@@ -1293,10 +1310,10 @@ PLAN
   unset DATABASE_URL
   logdir="$(printf '%s\n' "$ST_OUT" | sed -n 's/^    logs       : //p' | head -1)"
   st_contains "the block says DATABASE_URL was set" "$ST_OUT" "DATABASE_URL is set (its value is not printed)"
-  st_absent "the value is not in the output" "$ST_OUT" "not-a-real-password-8c1f"
+  st_absent "the value is not in the output" "$ST_OUT" "$st_database_sentinel"
   if [[ -n "$logdir" && -d "$logdir" ]]; then
     st_eq "nor in any log the run wrote" \
-      "$(grep -rl 'not-a-real-password-8c1f' "$logdir" 2>/dev/null | wc -l | tr -d ' ')" "0"
+      "$(grep -rlF -- "$st_database_sentinel" "$logdir" 2>/dev/null | wc -l | tr -d ' ')" "0"
   else
     st_fail "could not find the logs directory the header printed"
   fi
@@ -1510,7 +1527,7 @@ PLAN
 PLAN
   git add mutation/plans/spelled-dotdot.txt mutation/plans/spelled-absolute.txt mutation/plans/spelled-double-slash.txt
   git commit -q -m "one server plan per unusual spelling"
-  export DATABASE_URL='postgres://selftest:not-a-real-password-8c1f@localhost:1/none'
+  export DATABASE_URL="$st_database_url"
   : >"$ST_SUITES_LOG"
   st_run "$swift_half_suite" "$server_half_suite"
   unset DATABASE_URL
@@ -1609,7 +1626,7 @@ export const quotedNameTier = "quoted-name-server-mutant";
 PLAN
   git add mutation/plans/quoted-non-ascii.txt mutation/plans/quoted-double-quote.txt
   git commit -q -m "one server plan per quoted name"
-  export DATABASE_URL='postgres://selftest:not-a-real-password-8c1f@localhost:1/none'
+  export DATABASE_URL="$st_database_url"
   : >"$ST_SUITES_LOG"
   st_run "$swift_half_suite" "$server_half_suite"
   unset DATABASE_URL
