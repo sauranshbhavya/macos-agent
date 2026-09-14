@@ -4936,15 +4936,42 @@ final class AgentViewModel: ObservableObject {
     /// once the line is in the log, either the run is parked on the load, or — with the wait gone —
     /// the factory has already run against guidance built before the catalogue landed.
     ///
-    /// **A stop during the wait ends as a stop.** The load does not observe the run's cancellation, so
-    /// the check after it keeps a cancelled run from making a planner and sending a request.
+    /// **A stop during the wait ends the run at once, and before any planning** (the founders' decision
+    /// on PR #246's review, F3). The wait returns as soon as the run is stopped, while the load may
+    /// still be in flight, so the check after it is what keeps a stopped run from making a planner.
     private func plannerOnceTheSkillsCatalogueHasLoaded(for taskContext: BackendTaskContext) async throws -> any Planning {
         if let load = skillPackCatalogueLoad {
             logStore.append(.observe, Self.waitingForSkillsLogMessage)
-            await load.value
+            await Self.waitUntilLandedOrStopped(load)
             try Task.checkCancellation()
         }
         return makePlanner(taskContext, taskUsageRecorder)
+    }
+
+    /// Returns when the catalogue load has landed or the waiting task is stopped, whichever comes
+    /// first (SONNY-476, the founders' decision on PR #246's review, F3). It does not say which, so the
+    /// caller checks for a stop afterwards.
+    ///
+    /// **`await load.value` alone ignores a stop.** Awaiting a task's value does not respond to the
+    /// awaiting task's cancellation, so a Stop pressed during the wait did nothing until the load
+    /// landed, and would do nothing at all if the bundle read stalled. Iterating an `AsyncStream` does
+    /// respond: cancelling the iterating task ends the loop at once, and so does a cancellation that
+    /// arrived before the loop began. A second task finishes the stream when the load lands.
+    ///
+    /// **The load itself is never cancelled.** It still lands, sets the catalogue and refreshes the
+    /// added skills for every run after this one. The task that finishes the stream lives until then,
+    /// and a stream finished after its loop has ended is a no-op.
+    ///
+    /// `EntitlementService.swift`'s private `RefreshWait` does the same job for a background refresh,
+    /// with a lock and a continuation. It is private to `MacAgentCore` and outside this branch's fence,
+    /// so this is a second implementation rather than a second caller.
+    private static func waitUntilLandedOrStopped(_ load: Task<Void, Never>) async {
+        let (untilLanded, landed) = AsyncStream.makeStream(of: Never.self)
+        Task {
+            await load.value
+            landed.finish()
+        }
+        for await _ in untilLanded {}
     }
 
     /// Whether the user has added this pack. Read by the Skills page's badge and its one button.

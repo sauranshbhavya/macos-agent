@@ -2,11 +2,9 @@
 # breaks one property the branch claims. Swift half only.
 #
 # The killers live in SkillsCommandCenterTests (Tests/MacAgentTests/MemoryCommandCenterTests.swift).
-# L8 is the one whose kill is not certain: it removes the stop check after the wait, and
-# stoppingARunThatIsWaitingForTheCatalogueCancelsItWithoutPlanning sees it only if a canceled run's
-# plan request still reaches the hermetic backend. A survivor there means the check is redundant
-# with URLSession refusing a canceled request, not that a stop goes unhandled: the run ends canceled
-# either way.
+# L8 to L11 were added or re-anchored in PR #246's fix round. L10 and L11 make a wait never end, so
+# their killers wait under a backstop and record a second issue in undeclared wording once the wait
+# is stuck (CLAUDE.md's SONNY-259 rule); each of those two kills takes the backstop's thirty seconds.
 
 >>> mutant L1 the load runs on the main thread again, inside the task
 >>> file Sources/MacAgent/AgentViewModel.swift
@@ -39,7 +37,7 @@
 >>> mutant L3 a plan skips the wait for a load still in flight
 >>> file Sources/MacAgent/AgentViewModel.swift
 >>> from
-            await load.value
+            await Self.waitUntilLandedOrStopped(load)
             try Task.checkCancellation()
 >>> to
             try Task.checkCancellation()
@@ -97,11 +95,44 @@
         }
 >>> end
 
->>> mutant L8 a stop pressed during the wait is not checked once the load lands
+>>> mutant L8 a stop that ends the wait is not checked, so a stopped run makes its planner
 >>> file Sources/MacAgent/AgentViewModel.swift
 >>> from
-            await load.value
+            await Self.waitUntilLandedOrStopped(load)
             try Task.checkCancellation()
 >>> to
+            await Self.waitUntilLandedOrStopped(load)
+>>> end
+
+>>> mutant L9 the shipping construction reads the catalogue on the main thread and hands the load a finished value
+>>> file Sources/MacAgent/AgentViewModel.swift
+>>> from
+        viewModel.loadSkillPackCatalogue { SonnyResourceBundle.skillPackCatalog() }
+>>> to
+        let shippedPacks = SonnyResourceBundle.skillPackCatalog()
+        viewModel.loadSkillPackCatalogue { shippedPacks }
+>>> end
+
+>>> mutant L10 the wait ignores a stop again and ends only when the load lands
+>>> file Sources/MacAgent/AgentViewModel.swift
+>>> from
+        let (untilLanded, landed) = AsyncStream.makeStream(of: Never.self)
+        Task {
             await load.value
+            landed.finish()
+        }
+        for await _ in untilLanded {}
+>>> to
+        await load.value
+>>> end
+
+>>> mutant L11 the wait never ends when the load lands, only when the waiter is stopped
+>>> file Sources/MacAgent/AgentViewModel.swift
+>>> from
+        Task {
+            await load.value
+            landed.finish()
+        }
+>>> to
+        _ = landed
 >>> end
