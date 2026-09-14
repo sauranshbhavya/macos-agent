@@ -5050,6 +5050,26 @@ it, now that the packs arrive after launch.
       Notion still shows **Added** and **Remove**. **What would be a finding:** an empty page that stays
       empty, or Notion showing Add.
 
+### Developer, data, design and people sites carry task flows (new 2026-09-14, SONNY-485)
+
+Thirty more packs now carry task flows, each step taken from the site's own help page: GitHub, GitLab,
+Figma, Miro, Vercel, Cloudflare, Sentry, Datadog, Airtable, Supabase, Greenhouse, Lattice and the rest
+of the developer, analytics, data, design, account and hiring sites the founders named. These rows use
+two of them in a real command. Signed in, gateway up. Nothing here needs you to finish the task: stop
+at the first approval Sonny asks for.
+
+- [ ] On the Skills page, **add GitHub**. Ask the widget: `open a new issue in GitHub on the
+      sauranshbhavya/macos-agent repository titled skills check`. When Sonny asks for approval, deny it,
+      so no issue is created. On the Tasks page, that task's plan names `https://github.com/` as where it
+      starts and follows the pack's steps: the repository's **Issues** tab, then **New issue**. **What
+      would be a finding:** a plan that searches the web for GitHub, names no GitHub URL, or goes
+      through a page the pack does not mention.
+- [ ] **Add Figma**. Ask the widget: `create a new design file in Figma`. Deny at the first approval.
+      The task's plan names `https://www.figma.com/files/` as where it starts and goes through **Drafts**
+      in the sidebar, then **Design**. Then **remove GitHub and Figma**, ask the Figma command again, and
+      deny again: this time the plan is Sonny's ordinary one, with nothing from the pack. **What would be
+      a finding:** the first plan not using the pack, or the second one still using it.
+
 ### Skill packs with task flows for documents, projects and communication sites (new 2026-09-14, SONNY-484)
 
 26 more skill packs now carry task flows, each step taken from the site's own public help page: Box,
