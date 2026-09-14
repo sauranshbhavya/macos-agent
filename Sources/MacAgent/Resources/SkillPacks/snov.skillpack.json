@@ -6,8 +6,43 @@
   "category": "sales_crm",
   "summary": "Lead generation and email outreach platform.",
   "signInURL": "https://app.snov.io/login?lang=en&signup_source=landing&signup_page=snov.io%2Findex&cta_type=button",
-  "triggers": ["snov.io"],
+  "triggers": ["snov.io", "snov", "snovio"],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Create a drip campaign",
+      "startURL": "https://app.snov.io/",
+      "steps": [
+        "Go to the Campaigns page and select + New campaign.",
+        "Build your sequence in the visual editor by adding elements in the order you want them to run: Email, LinkedIn, Condition, Delay, and Goal.",
+        "Choose the leads to contact by selecting a list from the dropdown menu under List name.",
+        "On the Sending options step, choose the sender accounts for the campaign and set tracking and schedule.",
+        "Name the campaign, review the sequence and settings, then click Start to launch it."
+      ],
+      "source": "https://snov.io/knowledgebase/how-to-create-a-drip-campaign-step-by-step/"
+    },
+    {
+      "title": "Verify emails in bulk",
+      "startURL": "https://app.snov.io/",
+      "steps": [
+        "Select Bulk Email Verification from the Verify emails menu on the navigation bar.",
+        "Choose Add from file and select Choose file to upload a CSV, XLS, XLSX, or TXT list, then click the column that contains the emails and click Upload file (or choose Add manually to paste emails and click Verify emails).",
+        "Click the Verify button to start the verification process; you can check progress in the Progress column.",
+        "Once verification is complete, click Add to list to add the verified emails to a list, or click the Export icon to download the results."
+      ],
+      "source": "https://snov.io/knowledgebase/how-to-use-the-bulk-email-verification-tool/"
+    },
+    {
+      "title": "Find a person's email",
+      "startURL": "https://app.snov.io/",
+      "steps": [
+        "In the Finder menu, click Email Search to open the search set-up page.",
+        "Enter the person's first name and last name, and the company's domain name, then click Find email.",
+        "Check the result below the search form; a green circle means the email passed verification and is safe to contact.",
+        "Click + Add to list to save the prospect to an existing or new list."
+      ],
+      "source": "https://snov.io/knowledgebase/how-to-find-someones-email-address-by-name-and-company-website/"
+    }
+  ]
 }

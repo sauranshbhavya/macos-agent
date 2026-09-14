@@ -6,8 +6,40 @@
   "category": "marketing_email",
   "summary": "Email warm-up service.",
   "signInURL": "https://app.warmupinbox.com/login",
-  "triggers": ["warmup inbox", "warmupinbox.com"],
+  "triggers": ["warmup inbox", "warmupinbox.com", "warmupinbox"],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Connect an Office 365 inbox for warm-up",
+      "startURL": "https://app.warmupinbox.com/",
+      "steps": [
+        "From your Warmup Inbox account, navigate to the Add Inbox page and click the Office 365 option.",
+        "Click the Connect Inbox option.",
+        "Microsoft then asks for a sign-in to the email address being connected. The person who owns that inbox signs in there themselves.",
+        "On the Permissions Requested page, click Accept to finish connecting the inbox."
+      ],
+      "source": "https://help.warmupinbox.com/en/articles/6369356-oauth-connecting-an-office-365-inbox"
+    },
+    {
+      "title": "Check your inbox's reputation score",
+      "startURL": "https://app.warmupinbox.com/",
+      "steps": [
+        "Open your Warmup Inbox dashboard to see the reputation graph, which shows your score for the last 30 days.",
+        "Check whether the score falls in the Low (0-65%), OK (65-80%), or Good (80-100%) range.",
+        "If the score is under 80%, configure SPF, DKIM, and DMARC for your email provider (Google Workspace or Microsoft 365) to raise it."
+      ],
+      "source": "https://help.warmupinbox.com/en/articles/4741858-health-score-explained"
+    },
+    {
+      "title": "Monitor your warm-up activity",
+      "startURL": "https://app.warmupinbox.com/",
+      "steps": [
+        "Open the inbox's dashboard in Warmup Inbox to see its sent-email stats.",
+        "Check how many emails were sent in total, how many landed in the inbox, spam, or promotions folders, how many replies were received, and how many were sent to each provider such as Google or Outlook.",
+        "Keep the default sending frequency, or increase it gradually, since a sudden spike in volume from a new inbox can hurt its reputation."
+      ],
+      "source": "https://help.warmupinbox.com/en/articles/15478604-how-does-email-warmup-work-and-what-to-expect-after-you-connect-your-first-inbox"
+    }
+  ]
 }
