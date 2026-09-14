@@ -5010,10 +5010,18 @@ Sonny now reads its skill packs just after it launches instead of while it launc
 of packs cannot slow the launch. A command given before they have loaded waits for them. Signed in,
 gateway up.
 
-- [ ] On the Skills page, **add Notion**. Quit Sonny (⌘Q). Relaunch, and **as soon as the widget
-      appears**, ask it: `create a page in Notion called wave 9 notes`. The plan uses the Notion pack:
-      the Tasks page's plan for that task names `https://www.notion.so/` as where it starts. **What
-      would be a finding:** a plan that searches the web for Notion or names no Notion URL.
+**These rows cannot catch a command waiting, and a pass says nothing about the wait.** With the three
+packs Sonny ships, they load in about 6 ms (the changelog entry's measurement), which is over before
+anyone can type. The wait, and a Stop pressed during it, are proved only by the tests. What these rows
+do check is that a skill added before a relaunch still reaches the planner and the Skills page after
+it, now that the packs arrive after launch.
+
+- [ ] On the Skills page, **add Notion**. Quit Sonny (⌘Q). Relaunch and, **before opening Command
+      Center**, ask the widget: `create a page in Notion called wave 9 notes`. (Opening the Skills or
+      Memory page reads the added skills again by itself, so asking first keeps those pages out of what
+      this row checks.) The plan uses the Notion pack: the Tasks page's plan for that task names
+      `https://www.notion.so/` as where it starts. **What would be a finding:** a plan that searches the
+      web for Notion or names no Notion URL.
 - [ ] After that relaunch, open Command Center › Skills: it lists **Docusign, Linear and Notion**, and
       Notion still shows **Added** and **Remove**. **What would be a finding:** an empty page that stays
       empty, or Notion showing Add.
