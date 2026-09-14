@@ -8,6 +8,39 @@
   "signInURL": "https://app.productboard.com/",
   "triggers": ["productboard", "productboard.com"],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Add a feature",
+      "startURL": "https://app.productboard.com/",
+      "steps": [
+        "From the Main menu, click Library, then Products, then Product hierarchy.",
+        "Hover over a product or component, click the Add under button, and select Add feature.",
+        "Give the feature a name. Press Enter/Return to create another, or click away to stop."
+      ],
+      "source": "https://support.productboard.com/hc/en-us/articles/360058212333-Add-features-to-your-hierarchy"
+    },
+    {
+      "title": "Submit feedback",
+      "startURL": "https://app.productboard.com/",
+      "steps": [
+        "Open an insights board. Main menu, then Library, then Feedback is easiest.",
+        "Click the Submit feedback button at the bottom of the board.",
+        "Give the feedback a short title that describes its source, and identify the company or user it came from.",
+        "Optionally add tags. Write the feedback in the empty field below.",
+        "Optionally make someone else the owner with the Owner button in the bottom-left corner.",
+        "Feedback autosaves, so click away or close the item when done."
+      ],
+      "source": "https://support.productboard.com/hc/en-us/articles/360056354314-Submit-feedback-manually"
+    },
+    {
+      "title": "Share a roadmap by link",
+      "startURL": "https://app.productboard.com/",
+      "steps": [
+        "On the roadmap, click Share, then Publish, then Copy link.",
+        "Anyone who opens the link can see the published view of the board."
+      ],
+      "source": "https://support.productboard.com/hc/en-us/articles/4417696648339-Share-your-roadmaps-with-external-stakeholders-and-customers"
+    }
+  ]
 }

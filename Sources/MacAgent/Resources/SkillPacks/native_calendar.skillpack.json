@@ -8,6 +8,40 @@
   "signInURL": "https://www.icloud.com/calendar/",
   "triggers": ["icloud calendar"],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Create an event",
+      "startURL": "https://www.icloud.com/calendar/",
+      "steps": [
+        "Go to icloud.com/calendar, signed in to your Apple Account.",
+        "Select the New Event button in the top-right corner, or on a computer double-click the time and date of the event.",
+        "Type a name and location for the event, and set any other details.",
+        "Select Add."
+      ],
+      "source": "https://support.apple.com/guide/icloud/create-and-edit-an-event-mmfbbb32be/icloud"
+    },
+    {
+      "title": "Create a calendar",
+      "startURL": "https://www.icloud.com/calendar/",
+      "steps": [
+        "Go to icloud.com/calendar.",
+        "Select the Add icon at the top of the sidebar, next to Calendar.",
+        "Type a name for the calendar, then press Return or Enter."
+      ],
+      "source": "https://support.apple.com/guide/icloud/create-and-edit-a-calendar-mmfbbb2cf9/icloud"
+    },
+    {
+      "title": "Share a calendar with people",
+      "startURL": "https://www.icloud.com/calendar/",
+      "steps": [
+        "Go to icloud.com/calendar.",
+        "Hold the pointer over the calendar in the sidebar, then select the Calendar Information button.",
+        "In Sharing With, select the Add button, type the invitee's email address, then press Return or Enter.",
+        "Select the Options button and choose access: Allow editing, or Read-Only.",
+        "When finished, select Done, then Save."
+      ],
+      "source": "https://support.apple.com/guide/icloud/share-a-calendar-mm6b1a9479/icloud"
+    }
+  ]
 }

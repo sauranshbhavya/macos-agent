@@ -8,6 +8,37 @@
   "signInURL": "https://outlook.office365.com",
   "triggers": ["microsoft outlook"],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Write and send an email",
+      "startURL": "https://outlook.office.com/mail/",
+      "steps": [
+        "At the top of the page, select New message (New, in classic Outlook on the web).",
+        "On the To line, enter the name or email address of the person who will receive it.",
+        "On the Add a subject line, enter a brief description of the message.",
+        "To attach a file, select Attach.",
+        "Type the message, then select Send."
+      ],
+      "source": "https://support.microsoft.com/en-us/outlook/create-reply-to-or-forward-email-messages-in-outlook-on-the-web"
+    },
+    {
+      "title": "Search mail",
+      "startURL": "https://outlook.office.com/mail/",
+      "steps": [
+        "In the Search box in Mail, type what to search for (a contact, subject, part of a message or name of a file) and press Enter.",
+        "When done, select Exit Search in the Search box, or choose any folder in the navigation pane."
+      ],
+      "source": "https://support.microsoft.com/en-us/outlook/search-mail-and-people-in-outlook-on-the-web"
+    },
+    {
+      "title": "Create a mail folder",
+      "startURL": "https://outlook.office.com/mail/",
+      "steps": [
+        "At the bottom of the folder list, select New folder.",
+        "In the new folder box, enter a name for the folder, then press Enter."
+      ],
+      "source": "https://support.microsoft.com/en-us/office/working-with-message-folders-in-outlook-on-the-web-ae0f10d6-54e7-4f29-acd3-78cdc3fdcb9f"
+    }
+  ]
 }

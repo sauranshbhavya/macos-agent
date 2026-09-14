@@ -8,6 +8,41 @@
   "signInURL": "https://www.microsoft365.com/",
   "triggers": ["microsoft lists", "lists.live.com"],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Create a list",
+      "startURL": "https://lists.live.com/",
+      "steps": [
+        "With a work or school account, go to microsoft365.com and select App launcher, More apps, All apps, then Lists.",
+        "Select + New list.",
+        "Choose how to create it: Blank list, From existing list, From Excel or From CSV.",
+        "Choose the options for the list, then select Create.",
+        "To add items, select + Add new item, fill in the form, and select Save."
+      ],
+      "source": "https://support.microsoft.com/en-us/sharepoint/lists/create-a-list-from-the-lists-app"
+    },
+    {
+      "title": "Add an item to a list",
+      "startURL": "https://lists.live.com/",
+      "steps": [
+        "Open the list.",
+        "Above the list, select + New or + Add new item to open the New item window.",
+        "Enter the item's information. To attach files, select Add attachments, locate the file, and select Open.",
+        "Select Save."
+      ],
+      "source": "https://support.microsoft.com/en-us/office/add-list-items-63414298-c53a-4c87-9255-2d10899f095e"
+    },
+    {
+      "title": "Share a list or list item",
+      "startURL": "https://lists.live.com/",
+      "steps": [
+        "Go to the list, or select the list item, and select Share.",
+        "Enter the names of the people or groups to share it with.",
+        "Select the pencil icon to the right to set their level of access.",
+        "Include a message if you want, then select Send."
+      ],
+      "source": "https://support.microsoft.com/en-us/sharepoint/lists/sharepoint-sharing-and-permissions/share-a-list-or-list-item"
+    }
+  ]
 }
