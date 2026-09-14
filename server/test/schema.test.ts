@@ -132,12 +132,12 @@ const MAY_REACH_THE_MIGRATION_RUNNER = new Set([
   // migrations: the ten tests it was split from live in `instance-identity.db.test.ts`, and an
   // entry for THAT name is the "switched off one line at a time" case the paragraph above names.
   "migration-round-trip.db.test.ts",
-  // SONNY-370's two, by the same criterion. The database file measures every migration's lock
-  // profile through the observer `up` and `down` take — a measurement taken anywhere but on the
-  // runner's own path would be a copy of it — and runs `runCommand` inside a transaction to read
-  // the locks its read path holds. The other file calls `loadMigrations` to check every shipped
-  // half declares a profile, with no database at all.
-  "migration-lock-profile.db.test.ts", "migration-lock-profile.test.ts",
+  // SONNY-370's, by the same criterion. It measures every migration's lock profile through the
+  // observer `up` and `down` take — a measurement taken anywhere but on the runner's own path would
+  // be a copy of it — and runs `runCommand` inside a transaction to read the locks its read path
+  // holds. Its pure sibling, `migration-lock-profile.test.ts`, tests the parser alone and imports
+  // nothing from the runner, so it has no entry here.
+  "migration-lock-profile.db.test.ts",
 ]);
 
 describe("the shared schema rebuild", () => {

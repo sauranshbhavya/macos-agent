@@ -2,6 +2,7 @@ import { readFile, readdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import pg from "pg";
+import { declaredLockProfile, LOCKS_MARKER, SCANS_MARKER } from "./lock-profile.js";
 import { migrationContentHash } from "./migration-hash.js";
 
 /**
@@ -18,6 +19,10 @@ import { migrationContentHash } from "./migration-hash.js";
  * **Every migration must supply a rollback.** The file is split on the `-- @rollback` marker; a
  * file without one is refused at load rather than at 2am. That is what makes the ticket's
  * "applied and rolled back" requirement a property of the system rather than of a lucky migration.
+ *
+ * **Every half must declare its lock profile** (SONNY-370): a `-- @locks` and a `-- @scans` line,
+ * refused at load when absent, the same way as a missing rollback. `lock-profile.ts` has the format
+ * and the measurement that holds each declaration true.
  *
  * **Every applied migration is recorded with a hash of its executable SQL, and a later run refuses
  * to proceed past a file that has changed** (SONNY-364). The ledger used to hold the id alone, so
@@ -40,6 +45,26 @@ export interface Migration {
   readonly contentHash: string;
 }
 
+/**
+ * Refuses a half that does not say what it locks and what it scans (SONNY-370, founders' option B).
+ *
+ * The same shape as the rollback rule above and for the same reason: a file that never stated its
+ * lock profile is refused when it is loaded, on every command, rather than discovered after it has
+ * stalled a deploy. **What this cannot do is check that the declaration is true** — the runner has no
+ * seeded shadow database to measure against — so a present and wrong declaration passes here, and
+ * `test/migration-lock-profile.db.test.ts` is what finds it wrong. A declaration that is present and
+ * unreadable is refused by `declaredLockProfile` itself, which names the file and half the same way.
+ */
+function refuseUndeclaredLockProfile(file: string, half: "up" | "down", sql: string): void {
+  if (declaredLockProfile(sql, `${file} ${half} half`) !== undefined) return;
+  throw new Error(
+    `${file}'s ${half} half declares no lock profile. Every migration half needs a "${LOCKS_MARKER}" ` +
+      `line and a "${SCANS_MARKER}" line — "none" is a valid answer for either — so that what it ` +
+      `blocks and what it reads through are stated before it runs. Write your best reading, then run ` +
+      `npm run test:db: it measures every half and prints the two lines that are true.`,
+  );
+}
+
 export async function loadMigrations(dir: string = migrationsDir): Promise<readonly Migration[]> {
   const files = (await readdir(dir)).filter((name) => name.endsWith(".sql")).sort();
   const migrations: Migration[] = [];
@@ -54,6 +79,8 @@ export async function loadMigrations(dir: string = migrationsDir): Promise<reado
     }
     const up = text.slice(0, marker).trim();
     const down = text.slice(marker + ROLLBACK_MARKER.length).trim();
+    refuseUndeclaredLockProfile(file, "up", up);
+    refuseUndeclaredLockProfile(file, "down", down);
     migrations.push({
       id: file.replace(/\.sql$/, ""),
       up,
