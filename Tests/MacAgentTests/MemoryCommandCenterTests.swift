@@ -4744,17 +4744,11 @@ struct SkillsCommandCenterTests {
         #expect(linear.buttonAccessibilityLabel == "Remove Linear")
     }
 
-    /// The shipped packs, read from the source tree the app target's resources come from.
+    /// The three packs this suite owns, never the shipped folder (SONNY-481): every row list, button
+    /// and prompt asserted here is about this fixture, so a pack added to the app changes none of
+    /// them. `SkillPackTests` is what reads and validates every shipped pack.
     static func catalogue() throws -> SkillPackCatalog {
-        let directory = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .appendingPathComponent("Sources/MacAgent/Resources/SkillPacks")
-        let catalogue = SkillPackCatalog.load(from: directory)
-        try #require(catalogue.failures.isEmpty)
-        try #require(catalogue.packs.count >= 3)
-        return catalogue
+        try SkillPackFixtures.catalogue()
     }
 }
 
