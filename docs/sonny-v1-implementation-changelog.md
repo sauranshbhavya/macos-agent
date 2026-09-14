@@ -171,6 +171,68 @@ Next branch: feature/<name> (per roadmap above, or state the reordering and why)
 
 ## Entries
 
+### Branch: feature/every-catalogue-site-has-a-shallow-pack
+Status: complete
+Date: 2026-09-13
+Tickets: **SONNY-482** — every catalogue site without a pack now has a shallow one. That is 470 new packs, so all 473 catalogue sites ship a pack. The packs are data. This entry exists for the one test change the founders ratified on SONNY-482, and for the reason behind it.
+
+This is the fourth branch in wave 9's stack. It was cut at `e83c5561` from `fix/skill-packs-load-after-launch` (SONNY-476) while that branch was still empty, and rebases once onto that branch's final head.
+Reviewed by: not yet reviewed. The review owed is R1, a sampled review for shallow packs (SONNY-463, decision 3): a sample of domains and sign-in pages resolves and belongs to its site.
+
+Spec sections covered: none new. This is data for SONNY-452's Skills page.
+Files changed:
+- `Sources/MacAgent/Resources/SkillPacks/`: 470 new `*.skillpack.json` files. `git diff --name-only --diff-filter=A e83c5561 a806b1fd -- Sources/MacAgent/Resources/SkillPacks | wc -l` → 470, and the same command with `--diff-filter=MD` → 0.
+- `Tests/MacAgentCoreTests/SkillPackTests.swift`: the depth assertion in `everyShippedPackLoadsAndEveryOneIsARowOfTheCommittedCatalogue`, and a two-line comment above it. Nothing else in the file changed.
+- `docs/sonny-manual-test-checklist.md`: one new section.
+- This entry.
+
+Tests: **3383 in 245, exit 0, 8 known issues, at `a806b1fd`.**
+- **The run:** `Test run with 3383 tests in 245 suites passed after 89.554 seconds with 8 known issues.` The flagged command from `CLAUDE.md` was redirected to its own file, with its exit on the next line. Over that log, `grep -cE 'recorded an issue'` → 0, `grep -cE ' failed after'` → 0 and `grep -cE 'recorded a known issue'` → 8.
+- **This branch adds no test:** `git diff e83c5561 a806b1fd -- Tests | grep -cE '^\+\s*@Test'` → 0. So the count is `fix/skills-ready-for-the-catalogue`'s 3383 in 245.
+- **The tree during the run.** This entry was being drafted in the working tree while the suite ran, and no test reads the changelog or the checklist: `git grep -n 'implementation-changelog\|manual-test-checklist' -- Tests | grep -vE ':[0-9]+: *//'` → 0 lines. As the control, the same pipeline over `Resources/SkillPacks` → 4 lines.
+- **The Skills suites, `--filter 'Skill'`:** `Test run with 51 tests in 5 suites passed after 0.823 seconds.`, exit 0, on the tree then committed as `bec36b07`.
+
+**Warnings: 0 at `a806b1fd`** (`scripts/warnings`, exit 0, header `measured at : a806b1fd (clean)`, every file compiled). The draft entry was moved out of the tree for this run and put back afterwards.
+
+**Carried to the head that carries this entry, not re-run.** That commit changes only the changelog, and `git rev-parse "a806b1fd:${x}" "HEAD:${x}"` prints one hash twice for each path:
+
+| Path | Object at `a806b1fd` |
+|---|---|
+| `Sources` | `04719840` |
+| `Tests` | `f53536a1` |
+| `Package.swift` | `fbbe36d7` |
+
+`scripts/changelog-order`, `scripts/no-attribution tree` and `npm run check:secrets` read this file, or every tracked file, so they were run at that head instead. Their exits are on SONNY-482 and the PR.
+
+Mutation plan: none. The one behaviour change is in a test, and the founders asked for a hand-applied demonstration instead (under Behavior preserved). **A plan would not measure the property anyway.** Put the old equality back and the suite kills it, since 409 shipped packs are shallow on deep rows. Weaken the assertion to `true` and it survives, because no shipped pack is deep on a shallow row. So a battery could only report a survivor for exactly the case the demonstration covers.
+
+Behavior added:
+- Every catalogue site has a pack a user can find, add and remove on the Skills page. Each of the 470 new packs carries its catalogue row's id, name, domain, category and sign-in page, a one-line summary of what the tool is, no sections and no flows. A command that names an added site by one of its triggers brings those facts to the planner.
+
+Behavior preserved (required, no blanket claims):
+- **A deep pack still needs a deep row.** This was hand-applied at `8b35a306`, before any pack was committed. With a deep `canva` pack on its shallow row, plus a shallow `gmail` pack on its deep row, `--filter 'SkillPackTests/everyShippedPackLoadsAndEveryOneIsARowOfTheCommittedCatalogue'` exited 1: `Test run with 1 test in 1 suite failed after 0.064 seconds with 1 issue.`, the issue at `SkillPackTests.swift:33:13` naming canva and nothing naming gmail. Both files were then removed, and `git status --porcelain` listed only the assertion edit.
+- **The three shipped packs, the loader, the rules and the catalogue are untouched.** `git diff --name-only e83c5561 a806b1fd -- docs/sonny-skill-sites.tsv Sources ':!Sources/MacAgent/Resources/SkillPacks'` → 0 lines, and `git diff --stat e83c5561 a806b1fd -- Sources/MacAgent/Resources/SkillPacks/docusign.skillpack.json Sources/MacAgent/Resources/SkillPacks/linear.skillpack.json Sources/MacAgent/Resources/SkillPacks/notion.skillpack.json` prints nothing.
+- **The validating tests read the new packs, and their rules still refuse.** Before the packs were committed, a money summary planted in `zerobounce` and the trigger `stripe` planted in `stripe` gave `Test run with 2 tests in 1 suite failed after 0.669 seconds with 3 issues.` Those issues were `movesMoney(field: "summary", words: "send + money")`, `(catalogue.packs.count → 472) == (files.count → 473)` and `"stripe is an ordinary word"`. Both files were restored, and `cmp` against the copies taken first was clean.
+- **Every new pack's fixed fields equal its catalogue row.** A scratch script compared id, name, domain, category, sign-in URL, sections, depth, flows, key order and file name for all 470: 0 mismatches, and 0 packs mention Sonny.
+
+Architectural decisions / pitfalls discovered (required, write "none" if true):
+
+**The depth assertion predated the founders' order of work, and a never-touch exception was the fix** (founders, 2026-09-13, recorded on SONNY-482). The test required each pack's depth to equal its row's `task_flow_docs`. By that column, 409 of the 470 rows without a pack are `deep` and 61 are `shallow`. Decision 2 on SONNY-463 puts a shallow pack on every site first, and accepts that a deep site's file is written twice. The ticket fenced off the test and the catalogue, so the lane stopped and measured before choosing. At `e83c5561`, a shallow `gmail` probe failed at `:31`, `(row["task_flow_docs"] → "deep") == (pack.depth.rawValue → "shallow")`, while a shallow `canva` control loaded clean. Of the options offered, the founders chose to change that one assertion: a shallow pack may sit on any row, and a deep pack still needs a deep row, because its flows need documentation. They declined moving the change to another lane, and shipping the 61 shallow rows alone. **The deep lanes meet the mirror of this**: a deep pack on a shallow row still fails, so the eight help centres SONNY-461 promotes to deep need their catalogue rows changed in the same branch.
+
+**"Passes the trigger check" is not the same as "not an ordinary word".** The check reads `/usr/share/dict/words`, and that list has gaps for everyday words: `grep -xc box /usr/share/dict/words` → 0, while `cat`, `fox` and `tax` each answer 1. So `box`, `expo`, `grok` and `podia` passed as one-word triggers. They were caught by reading all 247 one-word triggers by hand, and those four sites carry only their domain. Filed as SONNY-492, since the check's word list is outside this branch's fence.
+
+**Triggers are the site's name or its domain, and nothing anchored.** A name the check refuses as ordinary, such as Slack, Stripe, Zoom or Front, gets its domain alone, so `post in slack` does not bring the Slack pack in until its deep pack adds anchored phrases. Two kinds of domain are left out. A domain another catalogue row shares (`atlassian.net`, `linkedin.com`, `facebook.com`, `outlook.office.com`) would bring several packs in at once. A domain that covers far more than the product (`proton.me`, `icloud.com`, `jetbrains.com`, `freshworks.com`, `goto.com`, `sage.com`, `mongodb.com`, `redis.io`, `elastic.co`, `toggl.com`, `revolut.com`, `console.cloud.google.com`, `play.google.com`, `google.com`) does not name this site. Eight rows take a name the plain rule could not produce: `icloud calendar`, `lucidchart`, `openphone`, `iru` with `kandji`, `bigin`, `linkedin jobs` with `linkedin recruiter`, `atlassian confluence`, and `google account` for the Google row, whose bare name is the first word of every Google product.
+
+**No pack has sections.** None of the 470 sites' public navigation was verified, and the ticket's rule is "when in doubt, none".
+
+Known limitations / deferred scope:
+- A site with an ordinary-word name matches only on its domain until its deep pack lands. That follows from the founders' matching rule and is not deferred work.
+- **Catalogue domains that now redirect elsewhere** were recorded on SONNY-482 and not edited. The packs use the catalogue's domain as their trigger, so typing the new domain does not match.
+
+Open questions (required, write "none" if true): none.
+
+Next branch: the deep-pack branches above this one, in the order recorded on SONNY-463.
+
 ### Branch: fix/skill-packs-load-after-launch
 Status: complete
 Date: 2026-09-13
