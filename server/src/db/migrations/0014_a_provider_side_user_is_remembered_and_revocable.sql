@@ -1,3 +1,6 @@
+-- @locks ACCESS EXCLUSIVE sonny.identity
+-- @scans sonny.identity
+
 -- 0014 — every provider-side user an identity has ever named is remembered, and a superseded one is
 -- owed a revocation from the moment it is superseded (SONNY-196, SONNY-230).
 --
@@ -295,6 +298,8 @@ ALTER TABLE sonny.identity DROP COLUMN provider_session_revoked_at;
 ALTER TABLE sonny.identity DROP COLUMN revocation_claimed_at;
 
 -- @rollback
+-- @locks ACCESS EXCLUSIVE sonny.identity, ACCESS EXCLUSIVE sonny.identity_provider_user
+-- @scans sonny.identity
 
 DROP TRIGGER IF EXISTS identity_records_its_provider_side_user ON sonny.identity;
 DROP FUNCTION IF EXISTS sonny.record_provider_side_user();

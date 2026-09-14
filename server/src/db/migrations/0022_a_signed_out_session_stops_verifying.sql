@@ -1,3 +1,6 @@
+-- @locks none
+-- @scans none
+
 -- 0022 — a signed-out access token stops working before its own `exp` (SONNY-237).
 --
 -- **The defect.** A Supabase access token is a self-contained JWT and this gateway verifies it
@@ -98,5 +101,7 @@ COMMENT ON COLUMN sonny.revoked_provider_session.expires_at IS
 CREATE INDEX revoked_provider_session_expiry ON sonny.revoked_provider_session (expires_at);
 
 -- @rollback
+-- @locks ACCESS EXCLUSIVE sonny.revoked_provider_session
+-- @scans none
 
 DROP TABLE IF EXISTS sonny.revoked_provider_session;

@@ -1,3 +1,6 @@
+-- @locks ACCESS EXCLUSIVE sonny.account, ACCESS EXCLUSIVE sonny.identity
+-- @scans sonny.identity
+
 -- 0004 — a closed account's identities are MARKED closed, never deleted (SONNY-127, PR #87 R1/R3/R19).
 --
 -- **One choice in 0003 caused three separate defects, which is why this replaces the design rather
@@ -98,6 +101,8 @@ CREATE TRIGGER identity_insert_derives_closed
 -- migration file nobody re-reads.
 
 -- @rollback
+-- @locks ACCESS EXCLUSIVE sonny.account, ACCESS EXCLUSIVE sonny.identity
+-- @scans sonny.identity
 DROP TRIGGER IF EXISTS identity_insert_derives_closed ON sonny.identity;
 DROP FUNCTION IF EXISTS sonny.derive_identity_closed();
 DROP TRIGGER IF EXISTS account_close_marks_identities ON sonny.account;

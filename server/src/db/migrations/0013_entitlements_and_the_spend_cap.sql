@@ -1,3 +1,6 @@
+-- @locks none
+-- @scans none
+
 -- 0013 — what an account is allowed to do, and what it has spent doing it (SONNY-135).
 -- Contract §5.3 for the claim, §7.2 cases 2/2a/3/3a for the refusals, and
 -- `docs/sonny-row-12-host-decision.md` §9 for the cap mechanism, which this file implements and
@@ -138,6 +141,8 @@ CREATE INDEX usage_reservation_account_idx
   WHERE NOT settled;
 
 -- @rollback
+-- @locks ACCESS EXCLUSIVE sonny.entitlement, ACCESS EXCLUSIVE sonny.usage_period, ACCESS EXCLUSIVE sonny.usage_reservation
+-- @scans none
 DROP INDEX IF EXISTS sonny.usage_reservation_account_idx;
 DROP INDEX IF EXISTS sonny.usage_reservation_expiry_idx;
 DROP TABLE IF EXISTS sonny.usage_reservation;

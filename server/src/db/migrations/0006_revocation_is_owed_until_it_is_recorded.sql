@@ -1,3 +1,6 @@
+-- @locks ACCESS EXCLUSIVE sonny.identity
+-- @scans sonny.identity
+
 -- 0006 — a provider-side revocation is OWED until something records that it happened
 -- (SONNY-127, PR #87 third round, F1).
 --
@@ -44,5 +47,7 @@ CREATE INDEX identity_revocation_owed
 -- the stranded ones this migration exists for.
 
 -- @rollback
+-- @locks ACCESS EXCLUSIVE sonny.identity
+-- @scans none
 DROP INDEX IF EXISTS sonny.identity_revocation_owed;
 ALTER TABLE sonny.identity DROP COLUMN provider_session_revoked_at;

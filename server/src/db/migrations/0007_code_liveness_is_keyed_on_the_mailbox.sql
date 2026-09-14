@@ -1,3 +1,6 @@
+-- @locks ACCESS EXCLUSIVE sonny.sign_in_code_issue
+-- @scans sonny.sign_in_code_issue
+
 -- 0007 — a sign-in code's lifecycle is keyed on the MAILBOX, not on the identity address
 -- (SONNY-127, PR #87 third round, F4).
 --
@@ -62,6 +65,8 @@ UPDATE sonny.sign_in_code_issue older
    AND (newer.issued_at, newer.id) > (older.issued_at, older.id);
 
 -- @rollback
+-- @locks ACCESS EXCLUSIVE sonny.sign_in_code_issue
+-- @scans none
 -- The name goes back. The FOLD does not, and cannot: `victim+1@x` was rewritten to `victim@x` and
 -- the tag it carried is not recoverable from the row. Stated rather than pretended — a rollback that
 -- silently leaves data in the new shape under the old name is worse than one that says so. The

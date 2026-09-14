@@ -1,3 +1,6 @@
+-- @locks none
+-- @scans none
+
 -- 0001 — the baseline this row builds on.
 --
 -- Deliberately small. SONNY-126 is the foundation ticket and owns no domain tables: accounts are
@@ -16,4 +19,6 @@ COMMENT ON SCHEMA sonny IS
   'Tables owned by the Sonny gateway. Created by server/src/db/migrations, never by hand.';
 
 -- @rollback
+-- @locks none
+-- @scans none
 DROP SCHEMA IF EXISTS sonny CASCADE;

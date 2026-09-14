@@ -1,3 +1,6 @@
+-- @locks none
+-- @scans none
+
 -- 0012 — what every call cost, per account, per call (SONNY-133). Contract §11.
 --
 -- **This table is the measurement, and it is never the price.** SONNY-17 sets the credit weight and
@@ -158,6 +161,8 @@ CREATE INDEX metering_event_session_idx
   WHERE session_id IS NOT NULL;
 
 -- @rollback
+-- @locks ACCESS EXCLUSIVE sonny.metering_event
+-- @scans none
 DROP INDEX IF EXISTS sonny.metering_event_session_idx;
 DROP INDEX IF EXISTS sonny.metering_event_account_occurred_idx;
 DROP TABLE IF EXISTS sonny.metering_event;

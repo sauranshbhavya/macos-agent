@@ -1,3 +1,6 @@
+-- @locks none
+-- @scans none
+
 -- 0013 — the content store, its clock, the snapshots training reads from, and the records that make
 -- deletion traceable (SONNY-134). Contract §10.
 --
@@ -369,6 +372,8 @@ COMMENT ON TABLE sonny.content_access IS
 CREATE INDEX content_access_occurred_idx ON sonny.content_access (occurred_at DESC);
 
 -- @rollback
+-- @locks ACCESS EXCLUSIVE sonny.content_access, ACCESS EXCLUSIVE sonny.content_deletion, ACCESS EXCLUSIVE sonny.retained_content, ACCESS EXCLUSIVE sonny.training_snapshot, ACCESS EXCLUSIVE sonny.training_snapshot_member
+-- @scans none
 DROP INDEX IF EXISTS sonny.content_access_occurred_idx;
 DROP TABLE IF EXISTS sonny.content_access;
 DROP INDEX IF EXISTS sonny.content_deletion_account_idx;

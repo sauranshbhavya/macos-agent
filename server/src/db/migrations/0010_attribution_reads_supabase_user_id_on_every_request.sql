@@ -1,3 +1,6 @@
+-- @locks SHARE sonny.identity
+-- @scans sonny.identity
+
 -- 0010 — `supabase_user_id` gets an index, because SONNY-203 made it a per-request lookup.
 --
 -- **Nothing was wrong with this column until the gate landed; what changed is how often it is read.**
@@ -31,4 +34,6 @@
 CREATE INDEX identity_supabase_user_idx ON sonny.identity (supabase_user_id);
 
 -- @rollback
+-- @locks ACCESS EXCLUSIVE sonny.identity
+-- @scans none
 DROP INDEX IF EXISTS sonny.identity_supabase_user_idx;

@@ -1,3 +1,6 @@
+-- @locks ACCESS EXCLUSIVE sonny.sign_in_code_issue
+-- @scans sonny.sign_in_code_issue
+
 -- 0017 — "the latest code at this mailbox" is decided by insertion order, not by a timestamp two
 -- rows can share (SONNY-353).
 --
@@ -185,6 +188,8 @@ CREATE INDEX sign_in_code_issue_mailbox_seq_idx
 DROP INDEX sonny.sign_in_code_issue_email_idx;
 
 -- @rollback
+-- @locks ACCESS EXCLUSIVE sonny.sign_in_code_issue, ACCESS EXCLUSIVE sonny.sign_in_code_issue_issue_seq_seq
+-- @scans sonny.sign_in_code_issue
 
 -- The column and its sequence go, and the old index comes back. Nothing is lost that was not
 -- already absent: `issued_at` is still on every row, and the queries that read it are back to
