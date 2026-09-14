@@ -34,6 +34,25 @@ struct SkillPackTests {
         }
     }
 
+    /// **Every catalogue row has exactly one pack**, the direction the test above does not hold
+    /// (review-247's R4, SONNY-492). That test looks each pack up among the rows, and its count check
+    /// compares the files with the packs they load, so a row whose pack file is missing passes it:
+    /// both counts drop by one and nothing looks the row up. The deep-pack lanes rewrite these files.
+    @Test
+    func everyCatalogueRowHasExactlyOnePack() throws {
+        let rows = try Self.catalogueRows()
+        // The control: the catalogue was read, so a loop that finds nothing wrong is not a loop over
+        // no rows.
+        #expect(rows.count >= 3)
+
+        let catalogue = SkillPackCatalog.load(fileURLs: SkillPackCatalog.packFileURLs(in: Self.shippedPacksDirectory))
+        let packsByID = Dictionary(grouping: catalogue.packs, by: \.id)
+        for row in rows {
+            let id = try #require(row["id"])
+            #expect(packsByID[id]?.count == 1, "\(id) is a catalogue row with \(packsByID[id]?.count ?? 0) loaded packs")
+        }
+    }
+
     /// The catalogue is the SONNY-461 list with the founders' 2026-09-12 decisions applied: the four
     /// unresolved names and the four password managers out, Zapier, Make and n8n in.
     @Test
@@ -64,7 +83,8 @@ struct SkillPackTests {
     /// How "ordinary language" is decided, and it is decided here rather than at launch — the loader
     /// runs on every launch and this runs before a pack ships (launch-time validation is SONNY-476):
     /// - **A word is ordinary** when it, or its singular form (`-s`, `-es`, `-ies` → `-y`), is in
-    ///   macOS's own word list (`/usr/share/dict/words`) or in `modernWords` below. So "make",
+    ///   macOS's own word list (`/usr/share/dict/words`), in `modernWords` or in
+    ///   `ordinaryWordsTheSystemListLacks` below. So "make",
     ///   "close", "x", "slack", "notion", "teams", "docs", "sheets" and "email" are ordinary, and
     ///   "docusign", "zapier", "gmail" and "n8n" are not.
     /// - **One word** is refused when it is ordinary, two characters or fewer, or only digits.
@@ -88,10 +108,16 @@ struct SkillPackTests {
     /// in a macOS update, and what this test refuses would then move with nothing in this repository
     /// changing.
     ///
+    /// **The system list has gaps for ordinary words as well as modern ones** (SONNY-492). It spells
+    /// neither "box" nor "boxes", while "cat", "fox" and "tax" are all there. So `box`, `expo`, `grok`
+    /// and `podia` passed as one-word triggers until a person reading every one caught them, and they
+    /// are in this file's own lists now. Nothing predicts where the next gap is.
+    ///
     /// **What this check still cannot catch:** an ordinary phrase that contains the site's name
-    /// ("close deal"); a modern word neither list holds; an irregular plural the system list does not
-    /// spell and the suffix rules do not reach ("women", "feet" — "people" is in the list and is
-    /// refused); and what a command means.
+    /// ("close deal"); a modern word, or an ordinary word the system list does not spell, that neither
+    /// of this file's lists holds; an irregular plural the system list does not spell and the suffix
+    /// rules do not reach ("women", "feet" — "people" is in the list and is refused); and what a
+    /// command means.
     @Test
     func everyShippedTriggerIsDistinctiveOrAnchoredToItsSite() throws {
         let ordinary = try Self.ordinaryWords()
@@ -117,7 +143,7 @@ struct SkillPackTests {
     /// reads the packs; a call to `AgentViewModel.atItsRealStoreLocations()`, which reads them through
     /// `SonnyResourceBundle`; and a CRLF file whose first line is a line comment, because `"\r\n"` is
     /// one `Character`, so the file never splits and reads as one comment line. And the exemption is
-    /// the whole of this file, not its two validating tests: a test added here could pin shipped
+    /// the whole of this file, not only its validating tests: a test added here could pin shipped
     /// contents and pass.
     ///
     /// **The `readers` assertion does not show the validating tests read the folder.** This file's own
@@ -173,7 +199,10 @@ struct SkillPackTests {
             ("forms", "Google Forms"), ("slides", "Google Slides"), ("tasks", "Google Tasks"),
             ("notes", "Apple Notes"), ("issues", "Linear"), ("tickets", "Zendesk"), ("email", "Gmail"),
             ("inbox", "Gmail"), ("app", "Probe"), ("website", "Probe"), ("download", "Probe"),
-            ("new docs", "Google Docs"), ("my files", "Dropbox")
+            ("new docs", "Google Docs"), ("my files", "Dropbox"),
+            // SONNY-492: ordinary and modern words the system list does not spell, and one by ruling.
+            ("box", "Box"), ("boxes", "Box"), ("expo", "Expo"), ("grok", "Grok"), ("podia", "Podia"),
+            ("luma", "Luma")
         ]
         for entry in refused {
             #expect(Self.triggerProblem(entry.trigger, siteName: entry.site, ordinary: ordinary) != nil, "\(entry.trigger) was allowed")
@@ -181,7 +210,10 @@ struct SkillPackTests {
         let allowed: [(trigger: String, site: String)] = [
             ("docusign", "Docusign"), ("zapier", "Zapier"), ("n8n", "n8n"), ("make.com", "Make"),
             ("make scenario", "Make"), ("in notion", "Notion"), ("post on x", "X"), ("linear issue", "Linear"),
-            ("gmail", "Gmail"), ("google docs", "Google Docs"), ("microsoft teams", "Microsoft Teams")
+            ("gmail", "Gmail"), ("google docs", "Google Docs"), ("microsoft teams", "Microsoft Teams"),
+            // SONNY-492's rulings: a closed compound whose everyday spelling is two words, and rare
+            // headwords a command does not use in these spellings.
+            ("basecamp", "Basecamp"), ("homebase", "Homebase"), ("firebase", "Firebase"), ("okta", "Okta")
         ]
         for entry in allowed {
             #expect(Self.triggerProblem(entry.trigger, siteName: entry.site, ordinary: ordinary) == nil, "\(entry.trigger) was refused")
@@ -640,17 +672,32 @@ struct SkillPackTests {
     /// (`grep -ixc <word> /usr/share/dict/words` → 0 for every entry, on macOS 26.6.2). Singular forms
     /// only: `isOrdinary` reads each word's singular too. A duplicate here would trap the test process,
     /// since a `Set` literal refuses one.
+    ///
+    /// `luma` is here by ruling rather than by gap (SONNY-492): it is the word video and photo editors
+    /// use for brightness, as in a luma key or a luma matte, and it is also another company's usual
+    /// name, Luma AI. So a command about either would bring in the Luma events pack.
     static let modernWords: Set<String> = [
         "email", "inbox", "app", "website", "online", "offline", "download", "logout", "signup", "dm",
         "sms", "blog", "podcast", "webinar", "emoji", "hashtag", "username", "wifi", "laptop",
         "smartphone", "spreadsheet", "workspace", "homepage", "chatbot", "url", "pdf", "csv",
-        "screenshot", "selfie", "meme", "livestream", "ebook", "todo", "checklist", "whiteboard"
+        "screenshot", "selfie", "meme", "livestream", "ebook", "todo", "checklist", "whiteboard",
+        "expo", "grok", "luma"
     ]
+
+    /// Ordinary words the system list does not spell at all, though nothing about them is modern
+    /// (SONNY-492). `grep -xc box /usr/share/dict/words` → 0, and the same for `boxes`, while `cat`,
+    /// `dog`, `fox`, `tax` and `mix` each answer 1 (macOS 26.6.2). So the gaps are scattered rather
+    /// than a broken list, and no rule predicts one. `podia` is the plural of `podium`, which the list
+    /// does spell, and no suffix rule reaches it. Both were found by a person reading every shipped
+    /// one-word trigger, not by this check.
+    static let ordinaryWordsTheSystemListLacks: Set<String> = ["box", "podia"]
 
     /// Whether `word` or one of its singular forms is ordinary. The forms come from
     /// `SkillWords.singularCandidates(of:)`, the copy the money rule reads plurals through as well.
     static func isOrdinary(_ word: String, ordinary: Set<String>) -> Bool {
-        SkillWords.singularCandidates(of: word).contains { ordinary.contains($0) || modernWords.contains($0) }
+        SkillWords.singularCandidates(of: word).contains {
+            ordinary.contains($0) || modernWords.contains($0) || ordinaryWordsTheSystemListLacks.contains($0)
+        }
     }
 
     /// Why `trigger` would match ordinary language for a site called `siteName`, or `nil`.

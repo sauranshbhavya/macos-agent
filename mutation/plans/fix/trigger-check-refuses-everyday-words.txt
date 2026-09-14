@@ -1,0 +1,73 @@
+# SONNY-492 — the trigger check refuses everyday words the system word list lacks, and every
+# catalogue row has exactly one pack. Swift half only.
+#
+# W1 to W6 undo the word-list change one word, or one read, at a time. Each is killed by the held
+# samples in SkillPackTests.theTriggerCheckRefusesOrdinaryLanguageAndAllowsTheSitesOwnWords
+# (Tests/MacAgentCoreTests/SkillPackTests.swift). No shipped pack uses any of these words alone as a
+# trigger, so everyShippedTriggerIsDistinctiveOrAnchoredToItsSite is not expected among the killers.
+#
+# C1 is the completeness test's mutant. It is not "the completeness test's assertion removed": a
+# mutant of a test's own assertion survives on every tree where the property holds, which is every
+# tree a battery runs on, so it would be a survivor every week and measure nothing. C1 instead
+# removes one pack from what the tests read, the way a lost file would, and the other validating
+# test cannot see it: its file count and pack count drop together. The expected killer is
+# SkillPackTests.everyCatalogueRowHasExactlyOnePack, naming zoominfo. The assertion itself was shown
+# to fail with one pack file removed, by hand, on the branch (its changelog entry has the run).
+
+>>> mutant W1 box is no longer an ordinary word
+>>> file Tests/MacAgentCoreTests/SkillPackTests.swift
+>>> from
+    static let ordinaryWordsTheSystemListLacks: Set<String> = ["box", "podia"]
+>>> to
+    static let ordinaryWordsTheSystemListLacks: Set<String> = ["podia"]
+>>> end
+
+>>> mutant W2 podia is no longer an ordinary word
+>>> file Tests/MacAgentCoreTests/SkillPackTests.swift
+>>> from
+    static let ordinaryWordsTheSystemListLacks: Set<String> = ["box", "podia"]
+>>> to
+    static let ordinaryWordsTheSystemListLacks: Set<String> = ["box"]
+>>> end
+
+>>> mutant W3 expo is no longer a modern word
+>>> file Tests/MacAgentCoreTests/SkillPackTests.swift
+>>> from
+        "expo", "grok", "luma"
+>>> to
+        "grok", "luma"
+>>> end
+
+>>> mutant W4 grok is no longer a modern word
+>>> file Tests/MacAgentCoreTests/SkillPackTests.swift
+>>> from
+        "expo", "grok", "luma"
+>>> to
+        "expo", "luma"
+>>> end
+
+>>> mutant W5 luma is no longer refused, against SONNY-492's ruling
+>>> file Tests/MacAgentCoreTests/SkillPackTests.swift
+>>> from
+        "expo", "grok", "luma"
+>>> to
+        "expo", "grok"
+>>> end
+
+>>> mutant W6 the check stops reading the list of ordinary words the system list lacks
+>>> file Tests/MacAgentCoreTests/SkillPackTests.swift
+>>> from
+            ordinary.contains($0) || modernWords.contains($0) || ordinaryWordsTheSystemListLacks.contains($0)
+>>> to
+            ordinary.contains($0) || modernWords.contains($0)
+>>> end
+
+>>> mutant C1 the walk loses the last pack file, and a catalogue row has no pack
+>>> file Sources/MacAgentCore/SkillPack.swift
+>>> from
+            .sorted { $0.lastPathComponent < $1.lastPathComponent }
+>>> to
+            .sorted { $0.lastPathComponent < $1.lastPathComponent }
+            .dropLast()
+            .map { $0 }
+>>> end
