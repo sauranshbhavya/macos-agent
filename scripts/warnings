@@ -840,6 +840,10 @@ EOF
 ST_FAILURES=0
 ST_CHECKS=0
 ST_ROOT=""
+ST_WRITER_PID=""
+ST_WRITER_VERDICT=""
+ST_WRITER_STATUS=""
+ST_WRITER_OUT=""
 
 selftest_cleanup() {
   if [[ -n "$ST_ROOT" && -d "$ST_ROOT" ]]; then
@@ -872,6 +876,143 @@ st_absent() {
     *"$3"*) st_fail "$1" "expected output NOT to contain [$3]" ;;
     *) st_pass "$1" ;;
   esac
+}
+
+# ---------------------------------------------------------------------------------------------
+# Layer 1's arm (SONNY-367): the tee ignores SIGHUP because report_begin says so, in whatever
+# environment this selftest was started from.
+#
+# scripts/mutate carries the measurements behind all three helpers — under ST_DEFAULT_DISPOSITION_EXEC
+# and its "Layer 1 and nohup" section of --help — and these are copies, for the reason REPORT_PATH's
+# comment gives. The short version: `nohup` hands SIGHUP-ignored to everything it starts and that
+# survives fork and exec, so an arm that inherits its environment passes under `nohup` against a
+# build with layer 1 deleted; bash cannot put the default back (it refuses to reset a signal ignored
+# when it started) and perl can, measured in the foreground, backgrounded, and under `nohup` both
+# ways. Perl rather than python3, because python3 ignores SIGPIPE at startup and its exec keeps
+# that, which would put this run's build in a different signal environment from a plain one.
+# ---------------------------------------------------------------------------------------------
+readonly ST_DEFAULT_DISPOSITION_EXEC='my $signal = shift @ARGV;
+$SIG{$signal} = "DEFAULT";
+exec { $ARGV[0] } @ARGV or die "could not exec $ARGV[0]: $!\n";'
+
+# Writes <dir>/warnings: this script, with its library beside it, whose report writer does NOT
+# ignore <signal>. The negative control. The edit is checked rather than trusted — one tee line in
+# this file, one differing line in the copy, and that line no longer naming the signal — because a
+# sed that matched nothing would leave the control ignoring the signal too, and it would then fail
+# for a reason its message misstates.
+st_copy_without_tee_ignoring() {
+  local signal="$1" dir="$2" tee_lines line_number changed
+  # Anchored at the start of the line, which is what keeps this function's own source out of it.
+  tee_lines="$(grep -n "^  ( trap '' .*; exec tee -a " "$SELF" || true)"
+  if [[ "$(printf '%s' "$tee_lines" | grep -c '^' || true)" != "1" ]]; then
+    st_fail "SIG$signal control: exactly one report-writer line in this script" "found [$tee_lines]"
+    return 1
+  fi
+  line_number="${tee_lines%%:*}"
+  rm -rf -- "$dir"
+  mkdir -p "$dir/lib"
+  sed "${line_number}s/ $signal / /" "$SELF" >"$dir/warnings"
+  chmod +x "$dir/warnings"
+  cp "$BATTERY_STATE_LIB" "$dir/lib/battery-state.sh"
+  changed="$(diff "$SELF" "$dir/warnings" | grep -c '^>' || true)"
+  if [[ "$changed" != "1" ]] || sed -n "${line_number}p" "$dir/warnings" | grep -q " $signal "; then
+    st_fail "SIG$signal control: a copy with $signal out of the report writer's ignore list" \
+      "$dir/warnings is not that ($changed line(s) differ)"
+    return 1
+  fi
+  st_pass "SIG$signal control: a copy with $signal out of the report writer's ignore list, and nothing else changed"
+}
+
+# Runs <script> in the throwaway repository with <signal>'s default disposition put back first,
+# HOLDS that run inside its build while its report writer is signalled and watched, then lets it
+# finish. Sets:
+#   ST_WRITER_PID      the report writer that was signalled; empty if none was found
+#   ST_WRITER_VERDICT  yes (still alive), no (dead or reaped), not-a-tee:<ps line>, or empty
+#   ST_WRITER_STATUS   the run's exit code
+#   ST_WRITER_OUT      everything the run printed
+#
+# The hold is what makes this deterministic rather than likely. Without it the run could finish
+# its build inside the watch window, the tee would exit for the ordinary reason, and a healthy
+# layer 1 would read as a dead report writer — an arm deciding on how long a compile takes. So a
+# stand-in `swift` earlier on PATH waits at `swift build` until this function releases it, and only
+# then execs the real one; nothing else in the run is touched. The writer is found by pid-and-name
+# under the run, polled rather than looked up once, because the subshell that becomes the tee
+# already holds the fifo before it execs and a single look can land in between.
+st_signal_the_report_writer() {
+  local signal="$1" script="$2" limit="$3"
+  local gate="$ST_ROOT/build-gate" held="$ST_ROOT/held-swift" real_swift runner waited line found
+  real_swift="$(command -v swift)"
+  mkdir -p "$held"
+  cat >"$held/swift" <<EOF
+#!/bin/sh
+if [ "\$1" = build ] && [ -n "\${WARNINGS_SELFTEST_BUILD_GATE:-}" ]; then
+  : >"\$WARNINGS_SELFTEST_BUILD_GATE/reached"
+  waited=0
+  while [ ! -e "\$WARNINGS_SELFTEST_BUILD_GATE/release" ] && [ "\$waited" -lt 1200 ]; do
+    sleep 0.1
+    waited=\$((waited + 1))
+  done
+fi
+exec "$real_swift" "\$@"
+EOF
+  chmod +x "$held/swift"
+  rm -rf -- "$gate"
+  mkdir -p "$gate"
+  ST_WRITER_PID=""
+  ST_WRITER_VERDICT=""
+  ST_WRITER_STATUS=""
+  ST_WRITER_OUT=""
+  ( cd "$ST_ROOT/repo"
+    export PATH="$held:$PATH" WARNINGS_SELFTEST_BUILD_GATE="$gate"
+    exec perl -e "$ST_DEFAULT_DISPOSITION_EXEC" "$signal" "$script" ) >"$gate/run.out" 2>&1 &
+  runner=$!
+  # Two minutes to reach the build, which on a loaded machine is still generous; the run gets there
+  # after its lock and a scratch wipe and nothing else.
+  waited=0
+  while [[ ! -e "$gate/reached" && $waited -lt 1200 ]] && kill -0 "$runner" 2>/dev/null; do
+    sleep 0.1
+    waited=$((waited + 1))
+  done
+  if [[ -e "$gate/reached" ]]; then
+    waited=0
+    while [[ $waited -lt 600 ]]; do
+      found="$(ps -A -ww -o pid=,ppid=,command= \
+        | awk -v p="$runner" '$2 == p && $3 == "tee" { print $1 }')"
+      [[ -n "$found" ]] && break
+      sleep 0.1
+      waited=$((waited + 1))
+    done
+    # Exactly one, or nothing is signalled: two matches would mean signalling a process nobody can
+    # vouch for, which is how an arm of this kind passes having tested nothing.
+    if [[ -n "$found" && "$(printf '%s\n' "$found" | grep -c '^' || true)" == "1" ]]; then
+      ST_WRITER_PID="$found"
+      kill -"$signal" "$ST_WRITER_PID" 2>/dev/null || true
+      # A zombie counts as dead: the tee is the run's child, not this shell's, so a killed one can
+      # linger unreaped. A tee that ignores the signal never dies of it, so how long a survivor is
+      # watched decides nothing; a tee that does not is dead as soon as it is next scheduled, which
+      # is why the control is given the longer limit.
+      ST_WRITER_VERDICT=yes
+      waited=0
+      while [[ $waited -lt $limit ]]; do
+        line="$(ps -p "$ST_WRITER_PID" -o state=,command= 2>/dev/null || true)"
+        case "$line" in
+          ""|Z*) ST_WRITER_VERDICT=no; break ;;
+        esac
+        case "$line" in
+          *"tee -a "*) : ;;
+          *) ST_WRITER_VERDICT="not-a-tee:$line"; break ;;
+        esac
+        sleep 0.1
+        waited=$((waited + 1))
+      done
+    fi
+  fi
+  : >"$gate/release"
+  set +e
+  wait "$runner"
+  ST_WRITER_STATUS=$?
+  set -e
+  ST_WRITER_OUT="$(cat "$gate/run.out" 2>/dev/null || true)"
 }
 
 st_write_package() {
@@ -915,6 +1056,7 @@ EOF
 selftest() {
   require_command git
   require_command swift
+  require_command perl
   trap 'selftest_cleanup; assert_intended_exit' EXIT
 
   ST_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/warnings-selftest.XXXXXX")"
@@ -1010,14 +1152,55 @@ selftest() {
   st_eq "and two whole reports — neither run wrote over the other" "$kept_reports" "2"
 
   # ------------------------------------------------------------------------------------------
-  # THE SIGHUP ARM THAT BELONGS HERE IS DELIBERATELY ABSENT, and the absence is honest rather than
-  # forgotten. HUP is the signal layer 1 exists for; the property is demonstrated standalone (5 runs
-  # of 5 against a build with HUP removed from the tee's ignore list, in `scripts/mutate --help`
-  # under "Demonstrating layer 1"), and could not be made to fire reliably inside a selftest — it
-  # depends on the invocation environment in a way that was characterised but not isolated. A flaky
-  # arm fails at random in every future run and teaches people to skip the whole selftest, so it is
-  # out. What remains below watches the second layer, which is the part no ignore-list can cover.
+  # Layer 1, for HUP — the signal it exists for (SONNY-367). Until that ticket this arm was
+  # deliberately absent: it fired in the foreground and never under `nohup`, and an arm that fails
+  # at random teaches people to skip the whole selftest. The split was the environment — `nohup`
+  # makes the tee ignore HUP by inheritance, whatever report_begin says — so the run is started with
+  # HUP's default put back, and the control below is the same check run first against a copy whose
+  # tee does NOT ignore HUP, where the writer has to die. If some launch environment ever defeats the
+  # reset, the control fails and says so, rather than the arm passing where it could not have failed.
+  # This proves report_begin's trap; a real run under `nohup` is covered by `nohup` itself as well.
   # ------------------------------------------------------------------------------------------
+  printf '\n  a SIGHUP aimed at the report writer is ignored, and the check is shown able to fail\n'
+  local hup_control="$ST_ROOT/without-HUP"
+  if st_copy_without_tee_ignoring HUP "$hup_control"; then
+    st_signal_the_report_writer HUP "$hup_control/warnings" 100
+    if [[ -n "$ST_WRITER_PID" ]]; then
+      st_pass "SIGHUP control: its report writer was found and signalled"
+    else
+      st_fail "SIGHUP control: its report writer was found and signalled" \
+        "nothing was signalled, so the control proves nothing (exit $ST_WRITER_STATUS)"
+    fi
+    if [[ "$ST_WRITER_VERDICT" == "no" ]]; then
+      st_pass "SIGHUP control: and it died of it — so the same check below is one that can fail"
+    else
+      st_fail "SIGHUP control: and it died of it" \
+        "got [$ST_WRITER_VERDICT] — in this environment the check below cannot fail, so its PASS would mean nothing"
+    fi
+    # The control run lost its report writer and may have ended anywhere after that.
+    rm -rf -- "$repo/.git/warnings.lock"
+  fi
+  rm -rf -- "$hup_control"
+
+  st_signal_the_report_writer HUP "$SELF" 30
+  if [[ -n "$ST_WRITER_PID" ]]; then
+    st_pass "SIGHUP: the report writer was found, so something was actually signalled"
+  else
+    st_fail "SIGHUP: the report writer was found, so something was actually signalled" \
+      "nothing was signalled — every check below would pass vacuously (exit $ST_WRITER_STATUS)"
+  fi
+  st_eq "SIGHUP: the report writer ignored it and was still alive" "$ST_WRITER_VERDICT" "yes"
+  st_eq "SIGHUP: the run still finishes and exits 2" "$ST_WRITER_STATUS" "2"
+  report_rel="$(printf '%s\n' "$ST_WRITER_OUT" | sed -n 's/^  this report : //p' | head -1)"
+  st_contains "SIGHUP: and its report is whole, count and all" \
+    "$(cat "$repo/$report_rel" 2>/dev/null || true)" "1 warning(s)"
+  if [[ -e "$repo/.git/warnings.lock" ]]; then
+    st_fail "SIGHUP: the run lock was released" "exit was $ST_WRITER_STATUS"
+    rm -rf -- "$repo/.git/warnings.lock"
+  else
+    st_pass "SIGHUP: and the run lock was released"
+  fi
+
   # And the second layer, which the arm above does not watch: with HUP restored to the tee's ignore
   # list the run survives, so nothing in that arm can tell whether this shell also ignores SIGPIPE.
   # SIGKILL is the case no ignore-list reaches — nothing catches it — so the report writer dies
