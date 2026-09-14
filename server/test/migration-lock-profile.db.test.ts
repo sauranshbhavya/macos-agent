@@ -12,6 +12,7 @@ import {
   measuredLockProfile,
   relationSnapshot,
   sameLockProfile,
+  tablesScannedSince,
   type LockProfile,
 } from "../src/db/lock-profile.js";
 import { afterAllUnderHangBackstop, beforeAllUnderHangBackstop, itUnderHangBackstop } from "./support/backstop.js";
@@ -27,10 +28,15 @@ import { dropSchema, rebuildSchema } from "./support/schema.js";
  * runner ever changed how it applies a migration, and stay green while doing it — a sample entering
  * downstream of the mechanism it claims to hold.
  *
- * **Empty tables, on purpose.** Postgres counts a scan when it starts, so an index build or a
- * backfill registers on a table with no rows (`lock-profile.ts` carries the measurements), and no
- * seeding is needed to see the shape. What an empty table cannot give is a duration; a duration is a
- * property of the data an environment holds, and this file makes no claim about one.
+ * **Every half is measured twice: from empty tables, and with rows seeded** (PR #250 review, F1).
+ * The first version measured only from empty tables and said no seeding was needed, and that was
+ * wrong: on an empty table the executor skips a join's second table and a per-row subquery, so five
+ * shipped declarations were missing a table they read once rows exist. `lock-profile.ts` now builds
+ * the scan line from the locks a statement takes when it is planned as well as from the scans that
+ * start, and the seeded pass is what holds that: each half must measure the same both ways. What the
+ * seed cannot prove is that nothing is left — a row trigger or a branch the seed never takes is still
+ * unplanned — and `lock-profile.ts` and the README say so. Neither pass gives a duration; a duration
+ * is a property of the data an environment holds, and this file makes no claim about one.
  */
 const url = process.env["DATABASE_URL"];
 const describeDb = url ? describe : describe.skip;
@@ -40,7 +46,8 @@ const shippedDir = join(here, "..", "src", "db", "migrations");
 
 /**
  * PR #171's first 0017, as that branch wrote it before review (`git show fb3fb2f9:server/src/db/
- * migrations/0017_the_latest_sign_in_code_is_the_last_one_issued.sql`, executable lines only): a
+ * migrations/0017_the_latest_sign_in_code_is_the_last_one_issued.sql`, executable lines only — the
+ * `COMMENT ON COLUMN` included, since it is one): a
  * backfill of every row of `sonny.sign_in_code_issue` under the `ACCESS EXCLUSIVE` its `ADD COLUMN`
  * took, on the table `latestIssuance` reads on the sign-in path. The reviewer measured a concurrent
  * read of that query blocked for 2851 ms at 200,000 rows.
@@ -66,6 +73,13 @@ ALTER TABLE sonny.sign_in_code_issue
 SELECT setval(pg_get_serial_sequence('sonny.sign_in_code_issue', 'issue_seq'),
               GREATEST((SELECT max(issue_seq) FROM sonny.sign_in_code_issue), 1),
               (SELECT count(*) FROM sonny.sign_in_code_issue) > 0);
+COMMENT ON COLUMN sonny.sign_in_code_issue.issue_seq IS
+  'Issuance order, and the only thing that decides which code at a mailbox is the latest one '
+  '(SONNY-353). issued_at is not unique and two codes sharing an instant have no defined newest, '
+  'which makes both "which code does a verify redeem" and "which of the three failures is '
+  'disclosed" depend on the query plan. GENERATED ALWAYS: application code may not write it. '
+  'Per mailbox this is exactly issuance order, because issueCode holds an advisory lock on the '
+  'mailbox across its invalidate-and-insert.';
 CREATE INDEX sign_in_code_issue_mailbox_seq_idx
     ON sonny.sign_in_code_issue (mailbox_key, issue_seq DESC);
 DROP INDEX sonny.sign_in_code_issue_email_idx;
@@ -104,9 +118,54 @@ function measuring(into: Map<string, LockProfile>): MigrationObserver {
 
 const silent = { out: () => {}, err: () => {} };
 
+/** A throwaway directory holding every shipped migration whose file name sorts below `before`. */
+async function shippedBelow(before: string): Promise<string> {
+  const dir = await mkdtemp(join(tmpdir(), "sonny-lock-"));
+  for (const name of await readdir(shippedDir)) {
+    if (name.endsWith(".sql") && name < before) await copyFile(join(shippedDir, name), join(dir, name));
+  }
+  return dir;
+}
+
+/**
+ * Rows for the tables 0002 creates, written between 0002 and 0003: six accounts, every other one
+ * closed, and one identity each carrying a provider-side id. That is the review's seed, and it is
+ * enough for every join the five halves F1 named to reach its second table — 0003's and 0004's
+ * `USING`/`FROM sonny.account` over identities of closed accounts, 0005's over live ones, and 0014's
+ * copy into `sonny.identity_provider_user`, which its rollback joins back.
+ */
+const SEED = `
+  INSERT INTO sonny.account (id, deleted_at)
+  SELECT gen_random_uuid(), CASE WHEN g % 2 = 0 THEN now() END FROM generate_series(1, 6) AS g;
+  INSERT INTO sonny.identity (account_id, provider, subject, supabase_user_id, link_method)
+  SELECT a.id, 'email', 'seed-' || row_number() OVER (), gen_random_uuid(), 'primary'
+    FROM sonny.account a`;
+
+/** Every half declared, compared against a measurement; the lines that would be true, when not. */
+async function declarationsAgainst(measured: ReadonlyMap<string, LockProfile>): Promise<string> {
+  const wrong: string[] = [];
+  for (const migration of await loadMigrations()) {
+    for (const half of ["up", "down"] as const) {
+      const key = `${migration.id} ${half}`;
+      const actual = measured.get(key);
+      if (actual === undefined) continue; // each pass's own reach test names a half it missed
+      const declared = declaredLockProfile(half === "up" ? migration.up : migration.down, key);
+      if (declared === undefined || !sameLockProfile(declared, actual)) {
+        wrong.push(
+          `${key} declares\n${declared === undefined ? "(nothing)" : formatLockProfile(declared)}\n` +
+            `but measures\n${formatLockProfile(actual)}`,
+        );
+      }
+    }
+  }
+  return wrong.join("\n\n");
+}
+
 describeDb("every migration's lock profile, measured", () => {
   let client: pg.Client;
   const measured = new Map<string, LockProfile>();
+  const seeded = new Map<string, LockProfile>();
+  let seedRows = { accounts: 0, identities: 0 };
 
   beforeAllUnderHangBackstop(async () => {
     client = new pg.Client({ connectionString: testDatabaseUrl() });
@@ -116,6 +175,19 @@ describeDb("every migration's lock profile, measured", () => {
     await dropSchema(client);
     await up(client, undefined, measuring(measured));
     while (await down(client, undefined, measuring(measured))) { /* one migration per pass */ }
+
+    // Every half again, with rows: 0001 and 0002 applied unmeasured, the seed written, then the rest
+    // up and everything down, measured. Counted rather than trusted, because a seed that inserted
+    // nothing would make this pass the empty one twice.
+    await dropSchema(client);
+    await up(client, await shippedBelow("0003"));
+    await client.query(SEED);
+    const { rows } = await client.query<{ accounts: string; identities: string }>(
+      "SELECT (SELECT count(*) FROM sonny.account) AS accounts, (SELECT count(*) FROM sonny.identity) AS identities",
+    );
+    seedRows = { accounts: Number(rows[0]!.accounts), identities: Number(rows[0]!.identities) };
+    await up(client, undefined, measuring(seeded));
+    while (await down(client, undefined, measuring(seeded))) { /* one migration per pass */ }
   });
   afterAllUnderHangBackstop(async () => { await client.end(); });
 
@@ -127,23 +199,39 @@ describeDb("every migration's lock profile, measured", () => {
   });
 
   itUnderHangBackstop("finds each half's declaration true, or prints the lines that would be", async () => {
+    expect(await declarationsAgainst(measured)).toBe("");
+  });
+
+  itUnderHangBackstop("seeded rows, and reached every half after the seed", async () => {
+    expect(seedRows).toEqual({ accounts: 6, identities: 6 });
     const shipped = await loadMigrations();
-    const wrong: string[] = [];
-    for (const migration of shipped) {
-      for (const half of ["up", "down"] as const) {
-        const key = `${migration.id} ${half}`;
-        const declared = declaredLockProfile(half === "up" ? migration.up : migration.down, key);
-        const actual = measured.get(key);
-        if (actual === undefined) continue; // the test above names a half the walk missed
-        if (declared === undefined || !sameLockProfile(declared, actual)) {
-          wrong.push(
-            `${key} declares\n${declared === undefined ? "(nothing)" : formatLockProfile(declared)}\n` +
-              `but measures\n${formatLockProfile(actual)}`,
-          );
-        }
-      }
-    }
-    expect(wrong.join("\n\n")).toBe("");
+    const expected = shipped
+      .flatMap((m) => [`${m.id} down`, `${m.id} up`])
+      .filter((key) => !/^000[12]_.* up$/.test(key))
+      .sort();
+    expect(expected.length).toBe(shipped.length * 2 - 2);
+    expect([...seeded.keys()].sort()).toEqual(expected);
+  });
+
+  itUnderHangBackstop("finds every declaration still true with rows in the tables", async () => {
+    // At 4b2ae723 this failed on exactly the review's five: the scan line was the scan counter alone,
+    // and with rows each of them read a second table the empty run never started a scan of.
+    expect(await declarationsAgainst(seeded)).toBe("");
+  });
+
+  itUnderHangBackstop("reads the second table in each of the five halves an empty table used to hide", async () => {
+    const scansOf = (key: string) => ({ key, empty: measured.get(key)?.scans, seeded: seeded.get(key)?.scans });
+    const both = (key: string, scans: string[]) => ({ key, empty: scans, seeded: scans });
+    expect(scansOf("0003_release_identities_on_close up")).toEqual(
+      both("0003_release_identities_on_close up", ["sonny.account", "sonny.identity"]));
+    expect(scansOf("0004_identities_are_closed_not_deleted up")).toEqual(
+      both("0004_identities_are_closed_not_deleted up", ["sonny.account", "sonny.identity"]));
+    expect(scansOf("0005_account_closed_follows_the_account up")).toEqual(
+      both("0005_account_closed_follows_the_account up", ["sonny.account", "sonny.identity"]));
+    expect(scansOf("0004_identities_are_closed_not_deleted down")).toEqual(
+      both("0004_identities_are_closed_not_deleted down", ["sonny.account", "sonny.identity"]));
+    expect(scansOf("0014_a_provider_side_user_is_remembered_and_revocable down")).toEqual(
+      both("0014_a_provider_side_user_is_remembered_and_revocable down", ["sonny.identity", "sonny.identity_provider_user"]));
   });
 
   itUnderHangBackstop("measures 0016 as the harmless shape: ACCESS EXCLUSIVE, and nothing scanned", async () => {
@@ -163,7 +251,7 @@ describeDb("every migration's lock profile, measured", () => {
   });
 });
 
-describeDb("the two cases SONNY-370 was filed for", () => {
+describeDb("the two cases SONNY-370 was filed for, and the edges of the instrument", () => {
   let client: pg.Client;
 
   beforeAllUnderHangBackstop(async () => {
@@ -175,12 +263,9 @@ describeDb("the two cases SONNY-370 was filed for", () => {
     await client.end();
   });
 
-  itUnderHangBackstop("refuses PR #171's first 0017: a scan of the sign-in table under ACCESS EXCLUSIVE", async () => {
+  itUnderHangBackstop("measures PR #171's first 0017 as a scan of the sign-in table under ACCESS EXCLUSIVE, which a lock-and-no-scan declaration of it cannot state", async () => {
     // 0001 to 0016 as they ship, then the first 0017 in its place, applied by the real runner.
-    const dir = await mkdtemp(join(tmpdir(), "sonny-lock-"));
-    for (const name of await readdir(shippedDir)) {
-      if (name.endsWith(".sql") && name < "0017") await copyFile(join(shippedDir, name), join(dir, name));
-    }
+    const dir = await shippedBelow("0017");
     await writeFile(join(dir, "0017_pr_171_first_draft.sql"), PR_171_FIRST_0017);
     const measured = new Map<string, LockProfile>();
     await dropSchema(client);
@@ -198,7 +283,55 @@ describeDb("the two cases SONNY-370 was filed for", () => {
     const asDeclared = declaredLockProfile(loaded!.up, "0017_pr_171_first_draft up")!;
     expect(asDeclared).toEqual({ locks: first!.locks, scans: [] });
     expect(sameLockProfile(asDeclared, first!)).toBe(false);
-    expect(sameLockProfile({ ...asDeclared, scans: ["sonny.sign_in_code_issue"] }, first!)).toBe(true);
+    // **What this test does not show, said so its name cannot be read as more** (PR #250 review, R1):
+    // declared the way the suite prints it, this draft passes, and with exactly the profile the
+    // shipped 0017 carries. The check does not refuse a backfill under ACCESS EXCLUSIVE; it makes the
+    // shape impossible to state as anything else, which is what puts it in front of a reviewer.
+    const shipped0017 = (await loadMigrations()).find((m) => m.id.startsWith("0017_"))!;
+    expect(declaredLockProfile(shipped0017.up, "0017 up")).toEqual(first);
+  });
+
+  itUnderHangBackstop("counts an index scan against its table, and still counts it after the half drops that index", async () => {
+    // The scan counter on its own, through the runner (PR #250 review, F3). A statement that scans
+    // an index also takes a weak lock on the table, so the full profile would report the table either
+    // way — this reads the counter half alone, which is the only thing that sees an index scan run
+    // under a strong lock, and is where deleting the index branch used to go unnoticed.
+    await dropSchema(client);
+    await client.query("DROP SCHEMA IF EXISTS lock_probe CASCADE");
+    const dir = await mkdtemp(join(tmpdir(), "sonny-lock-index-"));
+    const declared = "-- @locks none\n-- @scans none\n";
+    const probe = "SET LOCAL enable_seqscan = off;\nSET LOCAL enable_bitmapscan = off;\n" +
+      "SELECT * FROM lock_probe.t WHERE k = 1;\n";
+    await writeFile(join(dir, "0001_probe_table.sql"),
+      `${declared}CREATE SCHEMA lock_probe;\nCREATE TABLE lock_probe.t (id int PRIMARY KEY, k int);\n` +
+        `CREATE INDEX t_k_idx ON lock_probe.t (k);\n-- @rollback\n${declared}DROP SCHEMA lock_probe CASCADE;`);
+    await writeFile(join(dir, "0002_index_scan.sql"),
+      `-- @locks none\n-- @scans lock_probe.t\n${probe}-- @rollback\n${declared}SELECT 1;`);
+    await writeFile(join(dir, "0003_index_scan_then_drop.sql"),
+      `-- @locks ACCESS EXCLUSIVE lock_probe.t\n-- @scans lock_probe.t\n${probe}DROP INDEX lock_probe.t_k_idx;\n` +
+        `-- @rollback\n${declared}CREATE INDEX t_k_idx ON lock_probe.t (k);`);
+
+    const counted = new Map<string, readonly string[]>();
+    const full = new Map<string, LockProfile>();
+    try {
+      await up(client, dir, async (c, migration, half, run) => {
+        const snapshot = await relationSnapshot(c);
+        await run();
+        counted.set(`${migration.id} ${half}`, await tablesScannedSince(c, snapshot));
+        full.set(`${migration.id} ${half}`, await measuredLockProfile(c, snapshot));
+      });
+      expect({
+        scan: counted.get("0002_index_scan up"),
+        scanThenDrop: counted.get("0003_index_scan_then_drop up"),
+      }).toEqual({ scan: ["lock_probe.t"], scanThenDrop: ["lock_probe.t"] });
+      expect(full.get("0003_index_scan_then_drop up")).toEqual({
+        locks: [{ relation: "lock_probe.t", mode: "ACCESS EXCLUSIVE" }],
+        scans: ["lock_probe.t"],
+      });
+    } finally {
+      await client.query("DROP SCHEMA IF EXISTS lock_probe CASCADE");
+      await dropSchema(client);
+    }
   });
 
   itUnderHangBackstop("reads PR #169's unconditional ledger ALTER as ACCESS EXCLUSIVE on the ledger", async () => {

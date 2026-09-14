@@ -1,5 +1,5 @@
 -- @locks SHARE ROW EXCLUSIVE sonny.account
--- @scans sonny.identity
+-- @scans sonny.account, sonny.identity
 
 -- 0003 — a closed account cannot hold identities (SONNY-127, PR #87 F3).
 --
@@ -51,6 +51,6 @@ DELETE FROM sonny.identity i
 
 -- @rollback
 -- @locks ACCESS EXCLUSIVE sonny.account
--- @scans none
+-- @scans sonny.account
 DROP TRIGGER IF EXISTS account_close_releases_identities ON sonny.account;
 DROP FUNCTION IF EXISTS sonny.release_identities_on_close();

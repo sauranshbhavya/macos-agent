@@ -94,7 +94,7 @@ LANGUAGE sql IMMUTABLE AS $$ SELECT 300 $$;
 
 -- @rollback
 -- @locks ACCESS EXCLUSIVE sonny.account, ACCESS EXCLUSIVE sonny.identity
--- @scans none
+-- @scans sonny.account
 DROP TRIGGER IF EXISTS account_delete_refuses_owed_revocation ON sonny.account;
 DROP FUNCTION IF EXISTS sonny.refuse_delete_while_revocation_owed();
 DROP FUNCTION IF EXISTS sonny.revocation_lease_seconds();
