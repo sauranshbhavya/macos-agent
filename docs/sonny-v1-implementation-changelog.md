@@ -171,6 +171,113 @@ Next branch: feature/<name> (per roadmap above, or state the reordering and why)
 
 ## Entries
 
+### Branch: fix/skill-packs-load-after-launch
+Status: complete
+Date: 2026-09-13
+Tickets:
+- **SONNY-476** — the Skills catalogue was read and validated on the main thread while the app launched, a cost that grows with the number of packs. It now loads in a background task after launch, and every planner the view model makes waits for a load that has not landed. This is the founders' decision C of 2026-09-13 (design A on its own branch), with their added rule: nothing plans without the catalogue.
+
+This is the third branch in wave 9's stack. It was cut from `fix/skills-ready-for-the-catalogue` at `e83c5561`, PR #245's final head. SONNY-482's shallow-pack branch sits directly above it and rebases over this one.
+Reviewed by: pending. The founders asked for a review deep enough to hand-trace the main-actor hand-off and the wait, because a missed wait is silent.
+
+Spec sections covered: none new. This moves when the catalogue is read, not what the Skills page or the planner does with it (SONNY-452's design note).
+Files changed:
+- `Sources/MacAgent/AgentViewModel.swift`:
+  - `skillPackCatalog` is `@Published private(set)`, and new `skillPackCatalogueLoad` holds the load that has not landed.
+  - New `loadSkillPackCatalogue(_:)`, `waitingForSkillsLogMessage`, `plannerAfterTheSkillsCatalogue(for:)`, `plannerOnceTheSkillsCatalogueHasLoaded(for:)`, and the private `PlannerAfterTheSkillsCatalogue`.
+  - `atItsRealStoreLocations()` builds the view model with no catalogue and starts the load before it returns.
+  - `performStart`'s planner branch and `makeDelegationRunner()` build their planner through the helper.
+- `Tests/MacAgentTests/MemoryCommandCenterTests.swift` — six tests in `SkillsCommandCenterTests`, and `CatalogueLoaderProbe`.
+- `Tests/MacAgentTests/ProductShellTests.swift` — one entry, `skillPackCatalogueLoad`, in the wipe classifier's `outsideTheWipe`. **This file is outside the fence the founders recorded.** The founder ratified exactly this edit in this lane's session before it was made, and the ratification is on SONNY-476.
+- `docs/sonny-manual-test-checklist.md` — two rows.
+- `mutation/plans/fix/skill-packs-load-after-launch.txt`, and this entry.
+
+(`git diff --name-only e83c5561 HEAD`, six files, at the head that carries this entry.)
+Tests: **3389 in 245, exit 0, 8 known issues, at `35afc834`'s tree.**
+- **The run:** `Test run with 3389 tests in 245 suites passed after 89.708 seconds with 8 known issues.` It was the flagged command from `CLAUDE.md`, redirected to its own file, with its exit written on the next line. Over the log, `grep -cE 'failed after'` → 0.
+- **Which tree it measured.** It ran on the working tree before the first commit. `git status --porcelain`, saved before the run, listed three modified files and nothing else. Their `git hash-object` values, saved after the run, equal `git rev-parse 35afc834:<path>` for all three. The only other file `35afc834` changes is the checklist.
+- **Where the count comes from:** 3383 in 245 at `2b84c9c4` (`fix/skills-ready-for-the-catalogue`'s figure). `e83c5561` names the same `Sources`, `Tests` and `Package.swift` objects as `2b84c9c4` (`git rev-parse "2b84c9c4:${x}" "e83c5561:${x}"` prints one hash twice for each). This branch adds six tests to an existing suite: `git diff e83c5561 35afc834 -- Tests | grep -cE '^\+\s*@Test'` → 6, the same with `^-` → 0, and `^\+\s*@Suite` → 0.
+
+**Warnings: 0 at `b3576bfb`** (`scripts/warnings`, exit 0, header `measured at : b3576bfb (clean)`, every file compiled). `b3576bfb` names the same `Sources`, `Tests` and `Package.swift` objects as `35afc834`, below.
+
+**Carried to the head that carries this entry, not re-run.** The two commits above `35afc834` change only the mutation plan and the changelog. Each path the suite and warnings figures depend on names the same object at `35afc834`, at `b3576bfb` and at that head:
+
+| Path | Object at `35afc834` |
+|---|---|
+| `Sources` | `3db1020f` |
+| `Tests` | `22a2a35a` |
+| `Package.swift` | `fbbe36d7` |
+
+`git rev-parse "35afc834:${x}" "b3576bfb:${x}" "HEAD:${x}"` prints one hash three times for each. `scripts/changelog-order`, `scripts/no-attribution tree` and `npm run check:secrets` read the changelog or every tracked file, so they ran at that head instead.
+
+**The launch's main-thread time on skill packs, before and after** (the founders' measurement):
+
+| Packs | Before: main thread | After: main thread, in the factory | After: the landing turn | After: the load lands |
+|---|---|---|---|---|
+| 3 | 6.591 ms (6.157–7.242) | 0.117 ms (0.088–0.901) | 0.001 ms (0.001–0.006) | 6.373 ms (5.992–7.375) |
+| 470 | 297.408 ms (292.231–322.842) | 0.127 ms (0.094–0.418) | 0.102 ms (0.100–0.121) | 296.212 ms (290.103–310.371) |
+
+Each cell is the median of 21 runs, with the minimum and maximum in brackets.
+- **The instrument, for every cell:** `ContinuousClock`, read on the main thread, in a throwaway SwiftPM package outside the tree (this session's scratchpad), built with `swift build -c release`. Each run is a fresh process, so every reading includes the first read of the bundle.
+  - It compiles `SkillPack.swift`, `SkillPackContentRules.swift`, `SearchTextNormalization.swift` and `SonnyResourceBundle.swift`, each byte-identical to `e83c5561` (`git hash-object` of the copy equals `git rev-parse e83c5561:<path>` for all four), plus a `main.swift`.
+  - The bundle beside the binary is a copy of the debug build's `MacAgent_MacAgent.bundle`, which holds the three shipped packs. For 470, 467 more packs were added, each `notion.skillpack.json` with the site renamed (1,769 bytes by `wc -c`). Both load with 0 failures. The generated packs never entered the tree.
+  - The 84 runs were interleaved. Load averages were 5.10 and 4.63 (`uptime` before and after).
+- **Before** is `SonnyResourceBundle.skillPackCatalog()`, the call `atItsRealStoreLocations()` made inline at `e83c5561`.
+- **After** is `loadSkillPackCatalogue(_:)`, called with the closure the factory passes. Its body is pasted from `35afc834`'s `AgentViewModel.swift` into a stand-in class that holds the three properties it touches: `diff` of the two extracted method texts prints nothing.
+  - "In the factory" is the call itself, which is all `atItsRealStoreLocations()` now spends on packs.
+  - "The landing turn" is setting the catalogue and the stand-in's `refreshAddedSkills()`, timed on its own. **The stand-in is only the pack filter.** The app's `refreshAddedSkills()` also reads the encrypted added-skills file, which does not grow with packs and was not measured, because no session can launch the app.
+  - "The load lands" is the time from the call until a waiter resumes: roughly how long a command given at launch waits.
+- **Not the same instrument as lane-479's 282.7 ms.** That figure is the loader alone, `SkillPackCatalog.load(from:)`, built `swiftc -O -wmo` at `f6fe7853` (pre-rebase, replayed as `87dea417`) (on SONNY-476), and is cited as that. The before column here also resolves the bundle and runs in a fresh process, so the two are not comparable: at 3 packs this one reads 6.591 ms, and lane-479's reads 1.4 ms.
+
+Mutation plan: mutation/plans/fix/skill-packs-load-after-launch.txt (founder-triggered, not run on this branch). `scripts/mutate mutation/plans/fix/skill-packs-load-after-launch.txt --check` → exit 0 at `b3576bfb`, eight of eight mutants each `1 match`. Their expected killers, all in `SkillsCommandCenterTests`:
+- **L1**, the load runs on the main thread inside its task — `theCatalogueLoadsOffTheMainThreadAndThePageFillsInWhenItLands` (`ranOnTheMainThread == [false]`). The three in-flight tests are expected to fail too, because their runs find the load already landed and log no wait.
+- **L2**, the shipping construction reads the catalogue inline again and starts no load — `theShippingViewModelStartsTheCatalogueLoadRatherThanReadingItInline`.
+- **L3**, a plan skips the wait — `aCommandGivenBeforeTheCatalogueLandsWaitsForItAndCarriesTheAddedPack`, `aDelegatedInstructionAskedForBeforeTheCatalogueLandsWaitsForIt` and `stoppingARunThatIsWaitingForTheCatalogueCancelsItWithoutPlanning`.
+- **L4** and **L5**, each planning door calls the factory directly — the command test or the delegation test, and `thePlannerFactoryIsCalledOnlyWhereTheCatalogueIsWaitedFor`.
+- **L6**, the refresh after the load dropped — the command and delegation tests, whose request then carries the fixed prompt.
+- **L7**, the load's handle never clears — the command test's second run, which must not log the wait.
+- **L8**, the stop check after the wait removed — `stoppingARunThatIsWaitingForTheCatalogueCancelsItWithoutPlanning`, **if** a canceled run's plan request still reaches the hermetic backend. The plan's header says a survivor means the check is redundant with URLSession refusing a canceled request, not that a stop goes unhandled.
+None of these kills was proved on this branch: batteries are the founders' (WORKFLOW step 5).
+
+Behavior added:
+- The app no longer reads or validates skill packs on the main thread while it launches. `atItsRealStoreLocations()` starts a load and returns; the Skills page fills in when it lands.
+- A command given before the catalogue lands waits for it and plans with the person's added skills. Its log says "Waiting for skills to load before planning." while it waits.
+- A delegated instruction inside a screen session waits the same way. A run resumed at launch carries its plan, so this door and the command door above are the two ways it can reach a planner, and both wait.
+- A stop pressed during that wait ends the run as "Canceled.", with no plan request sent.
+
+Behavior preserved (required, no blanket claims):
+- **The loader, the pack rules and their validation are untouched, and they still run inside the app.** `git diff --name-only e83c5561 HEAD -- Sources` names only `AgentViewModel.swift`. The closure the factory passes is `SonnyResourceBundle.skillPackCatalog()`, the same function it called before, so a money-moving, credential-bearing or malformed pack is still refused at run time.
+- **A fixture that passes a ready catalogue starts no load and never waits.** `aCommandNamingAnAddedSkillCarriesItsPackToThePlannerAndStopsOnceRemoved` and the rest of `SkillsCommandCenterTests` pass unchanged in the run above.
+- **A delegated instruction is still planned by the same factory, under the run's task id.** `PlannerConstructionTests.aDelegatedInstructionGoesThroughTheSameFactory` passes: one factory call, the view model's current task id. `BackendTaskIdentityTests` passes too. The task context is still computed when the runner is built; only the factory call moved, into `AgentRunner.prepare(command:)`.
+- **Every foreground runner still takes the foreground stores.** `everyForegroundRunnerIsHandedTheForegroundSeams` passes: no `AgentRunner(` was added, and both changed sites still hand over the `ForThisRun` seams.
+- **Runs that do not plan are unchanged and never wait.** A pre-built plan, an instant command and a scheduled run build their runner on `InstantOnlyFallbackPlanner`, which never reaches the helper.
+- **`AppDelegate`'s launch call to `refreshAddedSkills()` is unchanged** and still reads the added skills for the widget and the Memory row. It is correct whether it runs before or after the load lands, because it reads whatever catalogue is set, and the load refreshes again when it lands.
+- **The wipe.** `theWholeDataWipeClearsTheAddedSkills` passes, and the new handle is classified outside the wipe: it reads the app bundle and holds no local data.
+- **The shipped packs are read only by the validating tests.** `onlyTheValidatingTestsReadTheShippedPacksFolder` passes; the new tests name neither the bundle type nor the folder.
+
+Architectural decisions / pitfalls discovered (required, write "none" if true):
+
+**The wait lives where a planner is made, not where a run starts.** The first place to put it is the top of `performStart`, and it is wrong twice. It would make every run wait, instant commands included. And it would miss `makeDelegationRunner()`, which is synchronous, is called from `AgentViewModel+VisionSession.swift` (outside the fence), and is the door a run resumed at launch plans through. So both planning doors hand their runner a planner, `PlannerAfterTheSkillsCatalogue`, that asks for the real one only when a plan is asked for. `plannerOnceTheSkillsCatalogueHasLoaded(for:)` is the one caller of `makePlanner`, and `thePlannerFactoryIsCalledOnlyWhereTheCatalogueIsWaitedFor` pins that count, so a third door cannot plan without the wait unnoticed. **The cost is that the factory now runs inside `prepare(command:)`**, not when the runner is built. The task context is still taken at construction, and the tests that capture what the factory is given (`PlannerConstructionTests`, `BackendTaskIdentityTests`) pass with the move.
+
+**The order after the load is one main-actor turn: set the catalogue, refresh the added skills, clear the handle.** A planner awaits the load task's value, so it resumes only after all three. The handle is always set before it can clear: the task body first runs on a later main-actor turn than the one that creates it and stores it. A second call while a load is in flight returns that load, so the handle a planner waits on is always the one that will clear.
+
+**Proving a wait by construction needs a signal from inside the wait, and a log line is that signal.** The obvious test releases the loader right after `start()` and checks the plan. That test is timing: whether the run's first turn or the load's landing turn reaches the main actor first decides whether a run without the wait would still see the packs. So the helper appends `waitingForSkillsLogMessage` and awaits the load in one main-actor stretch, and the factory call follows in the same stretch. The test reads the log on the same actor and releases the loader only after the line appears. When the line is visible, either the run is parked on the load, or the wait is gone and the factory has already read guidance built before the catalogue landed. **The test's wait also ends on `!isRunning`**, so a run that never waits fails on an assertion. A `HangBackstop` timeout would have been declared wording, reported `UNATTRIBUTED`, which is `CLAUDE.md`'s SONNY-259 non-kill.
+
+**The loader is a synchronous closure on purpose.** An async closure's isolation is decided where the closure is written, not by how the method calls it. Then "off the main thread" would be a property of how the caller wrote its closure, and a mutant that moved the method's call back onto the main actor could change nothing. With a synchronous closure run inside `Task.detached`, the method is what keeps the work off the main thread, and L1 is a real mutant.
+
+**The test loader holds only off the main thread.** A loader blocking on a semaphore on the main thread would block the actor the test needs to release it, so L1 would hang the suite instead of failing it. On the main thread the probe returns at once and records where it ran, and the thread test fails on that.
+
+**A new stored property on `AgentViewModel` is always a `ProductShellTests` edit.** `everyAgentViewModelStoredPropertyIsClassifiedAgainstTheLocalDataWipe` reflects over the live instance and fails until every stored property is classified. So a fence that names `AgentViewModel.swift` alone cannot add state to it. This lane stopped for a ratification it could have been given at kickoff. A design that remembers a load in flight needs a stored property. Avoiding one would have meant changing `skillPackCatalog`'s type, which `SkillsPresentation.swift` and `CommandCenterView.swift` read, outside the fence.
+
+Known limitations / deferred scope:
+- **For about the time the load takes, the Skills page lists nothing and a command given at launch waits.** At 470 packs that is a median 296.212 ms, and at 3 packs 6.373 ms, both from the harness above. Nothing says why a command is waiting, apart from the run's log.
+- **No figure here comes from the real app.** The before and after columns are the real loader and a verbatim copy of the real method in a release harness, because no session can launch the packaged app.
+- **L8 may survive**, for the reason in the plan's header.
+
+Open questions (required, write "none" if true): none.
+
+Next branch: SONNY-482's shallow-pack branch, directly above this one, which rebases over it once this branch is final.
+
 ### Branch: fix/skills-ready-for-the-catalogue
 Status: complete
 Date: 2026-09-13
