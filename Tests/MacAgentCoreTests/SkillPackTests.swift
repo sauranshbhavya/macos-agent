@@ -28,7 +28,9 @@ struct SkillPackTests {
             let row = try #require(rowsByID[pack.id], "\(pack.id) ships as a pack but is not a catalogue row")
             #expect(row["domain"] == pack.domain, "\(pack.id)'s domain disagrees with its catalogue row")
             #expect(row["category"] == pack.category, "\(pack.id)'s category disagrees with its catalogue row")
-            #expect(row["task_flow_docs"] == pack.depth.rawValue, "\(pack.id)'s depth disagrees with its catalogue row")
+            // A deep pack needs a deep row, because its flows need documentation. A shallow pack may sit on
+            // any row: every site gets one before its flows are written (founders, SONNY-463 decision 2).
+            #expect(pack.depth == .shallow || row["task_flow_docs"] == "deep", "\(pack.id) is deep but its catalogue row is not")
         }
     }
 
