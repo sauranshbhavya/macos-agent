@@ -60,9 +60,13 @@ struct CalendarDayTests {
         #expect(try due(5, date(2026, 9, 13, 15, 0)) == date(2026, 9, 13, 15, 5))
         #expect(try due(120, now) == date(2026, 9, 13, 17, 1))
         #expect(try due(ReminderDue.maxMinutesFromNow, date(2026, 9, 13, 15, 0)) != nil)
-        for minutes in [0, -5, ReminderDue.maxMinutesFromNow + 1] {
-            #expect(throws: ReminderDueError.minutesOutOfRange) { _ = try due(minutes, now) }
+        // Each end of the range has its own case, because each has its own true sentence (PR #244, F6).
+        for minutes in [0, -5] {
+            let thrown = #expect(throws: ReminderDueError.minutesNotAfterNow) { _ = try due(minutes, now) }
+            #expect(thrown?.localizedDescription == "A reminder needs a time after now.")
         }
+        let tooFar = #expect(throws: ReminderDueError.minutesOutOfRange) { _ = try due(ReminderDue.maxMinutesFromNow + 1, now) }
+        #expect(tooFar?.localizedDescription == "Sonny can set a reminder up to a year ahead.")
     }
 
     @Test
@@ -82,6 +86,5 @@ struct CalendarDayTests {
             #expect(throws: ReminderDueError.unrecognisedTime(bad)) { _ = try due(bad, nil) }
         }
         #expect(try ReminderDue.dueDate(minutesFromNow: nil, time: nil, day: "tomorrow", now: now, calendar: calendar) == nil)
-        #expect(ReminderDue.pinnedClock(date(2026, 9, 13, 9, 5), calendar: calendar) == "09:05")
     }
 }

@@ -204,6 +204,11 @@ public struct StoredRoutine: Codable, Equatable, Sendable, Identifiable {
             // reason as the three above it: resolver-written, decode-excluded, and never a thing a
             // stored routine should be able to assert.
             stripped.itemIndex = nil
+            // PR #244, F2. A reminder's pinned instant is resolver-written and decode-excluded on the
+            // same terms. A routine cannot carry `create_reminder` at all, so this reaches only a
+            // routines file something other than Sonny wrote — and a forged time there is cleared for
+            // the reason every pin above is, not because it is dangerous on its own.
+            stripped.resolvedReminderDueDate = nil
             if let nested = step.routineSteps {
                 stripped.routineSteps = strippingResolverPins(nested)
             }
@@ -223,6 +228,7 @@ public struct StoredRoutine: Codable, Equatable, Sendable, Identifiable {
                 || step.resolvedBundleIdentifier != nil
                 || step.resolvedFromFinderSelection != nil
                 || step.itemIndex != nil
+                || step.resolvedReminderDueDate != nil
             let selfCount = carriesAPin ? 1 : 0
             return total + selfCount + resolverPinnedStepCount(step.routineSteps ?? [])
         }

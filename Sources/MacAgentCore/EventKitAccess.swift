@@ -18,24 +18,34 @@ public enum EventKitAccessState: Equatable, Sendable {
     case notDetermined
     /// Full access. Reading events and writing reminders both need it.
     case granted
-    /// Denied, restricted, or write-only access. Sonny refuses rather than asking again, because
-    /// macOS will not show the prompt a second time.
+    /// Denied, or write-only access. Sonny refuses rather than asking again, because macOS will not
+    /// show the prompt a second time — and the user can change it in System Settings.
     case denied
+    /// Restricted: something other than the user — device management, Screen Time — decides, and
+    /// the switch in System Settings is not theirs to turn (PR #244, F6). Refused in words that do
+    /// not send them to it.
+    case restricted
+    /// No calendar store is wired into this copy of Sonny. **Never a system answer** — `init(_:)`
+    /// cannot produce it — only `UnavailableEventKitStore`'s, so an unwired seam says so rather than
+    /// reading as a refusal the user could fix (PR #244, F6).
+    case unavailable
 
     /// **Write-only counts as denied**, because a calendar read is the only thing Sonny does with
     /// calendars and write-only access cannot read. Reminders have no write-only grant at all.
     ///
-    /// `default` rather than naming `.denied`, `.restricted` and `.writeOnly` beside
-    /// `@unknown default`: `.authorized` is `.fullAccess` under a name deprecated in macOS 14, and
-    /// both spellings of an exhaustive switch over this enum warn. Anything that is not full access
-    /// or not-yet-asked is refused, which is also the direction a status macOS adds later should
-    /// fail in until someone decides what it means.
+    /// `default` rather than naming `.denied` and `.writeOnly` beside `@unknown default`:
+    /// `.authorized` is `.fullAccess` under a name deprecated in macOS 14, and both spellings of an
+    /// exhaustive switch over this enum warn. Anything that is not full access, not-yet-asked or
+    /// restricted is refused, which is also the direction a status macOS adds later should fail in
+    /// until someone decides what it means.
     public init(_ status: EKAuthorizationStatus) {
         switch status {
         case .fullAccess:
             self = .granted
         case .notDetermined:
             self = .notDetermined
+        case .restricted:
+            self = .restricted
         default:
             self = .denied
         }
@@ -87,11 +97,37 @@ public protocol EventKitAccessing: Sendable {
     func addReminder(title: String, dueDate: Date, calendar: Calendar) throws
 }
 
+extension EventKitAccessState {
+    /// The refusal for a state that is not `.granted`, or `nil` when it is — one place, so the two
+    /// capabilities cannot give one state two sentences. `.notDetermined` is answered too, as a
+    /// denial, for the caller that reads it after a request that came back unanswered.
+    func refusal(for kind: EventKitDataKind) -> EventKitAccessError? {
+        switch (self, kind) {
+        case (.granted, _):
+            return nil
+        case (.denied, .calendars), (.notDetermined, .calendars):
+            return .calendarsDenied
+        case (.denied, .reminders), (.notDetermined, .reminders):
+            return .remindersDenied
+        case (.restricted, .calendars):
+            return .calendarsRestricted
+        case (.restricted, .reminders):
+            return .remindersRestricted
+        case (.unavailable, _):
+            return .unavailable
+        }
+    }
+}
+
 public enum EventKitAccessError: Error, Equatable, LocalizedError {
     /// The user has not allowed Sonny to read their calendars, or allowed less than a read needs.
     case calendarsDenied
     /// The user has not allowed Sonny to use their reminders.
     case remindersDenied
+    /// Access to calendars is restricted on this Mac, which the user cannot change themselves.
+    case calendarsRestricted
+    /// Access to reminders is restricted on this Mac, which the user cannot change themselves.
+    case remindersRestricted
     /// A construction site that never wired the live store asked for calendar data.
     case unavailable
     /// The user has no list new reminders can go into.
@@ -105,8 +141,12 @@ public enum EventKitAccessError: Error, Equatable, LocalizedError {
             return "Sonny doesn't have access to your calendars. Allow it in System Settings \u{203A} Privacy & Security \u{203A} Calendars."
         case .remindersDenied:
             return "Sonny doesn't have access to your reminders. Allow it in System Settings \u{203A} Privacy & Security \u{203A} Reminders."
+        case .calendarsRestricted:
+            return "Access to calendars is restricted on this Mac, so Sonny can't read them."
+        case .remindersRestricted:
+            return "Access to reminders is restricted on this Mac, so Sonny can't add one."
         case .unavailable:
-            return "Sonny can't reach your calendars or reminders here."
+            return "This copy of Sonny isn't connected to calendars or reminders."
         case .noDefaultReminderList:
             return "Sonny couldn't find a Reminders list to add this to."
         case .storeFailed:
@@ -115,16 +155,17 @@ public enum EventKitAccessError: Error, Equatable, LocalizedError {
     }
 }
 
-/// The default seam: refuses everything and touches nothing.
+/// The default seam: refuses everything and touches nothing. It answers `.unavailable` rather than
+/// `.denied`, so a construction site that never wired a store reads as exactly that (PR #244, F6).
 public struct UnavailableEventKitStore: EventKitAccessing {
     public init() {}
 
     public func accessState(for kind: EventKitDataKind) -> EventKitAccessState {
-        .denied
+        .unavailable
     }
 
     public func requestAccess(to kind: EventKitDataKind) async -> EventKitAccessState {
-        .denied
+        .unavailable
     }
 
     public func events(from start: Date, to end: Date) throws -> [CalendarEventRecord] {

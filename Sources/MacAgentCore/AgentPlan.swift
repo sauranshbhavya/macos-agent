@@ -234,11 +234,13 @@ public struct AgentStep: Codable, Equatable, Identifiable, Sendable {
     /// The day a `read_calendar_events` step reads, or the day a `create_reminder` step is due, in
     /// the closed vocabulary `CalendarDay.startOfDay(named:now:calendar:)` accepts (SONNY-453).
     ///
-    /// **Planner-visible, and rewritten once by the resolve phase.** The model writes what the user
-    /// said — `friday`, `tomorrow` — because its prompt carries no clock; both adapters' resolvers
-    /// write the real date back as `YYYY-MM-DD` before anything previews the step, so every gate after
-    /// that reads one day. That is a resolved default `outputPath`'s shape rather than a decode-excluded
-    /// pin's: the rewritten value is one a model could legitimately have written itself.
+    /// **Planner-visible, and read once by the resolve phase.** The model writes what the user said —
+    /// `friday`, `tomorrow` — because its prompt carries no clock. For a read, the resolver writes the
+    /// real date back as `YYYY-MM-DD` before anything previews the step, so every gate after that
+    /// reads one day; a date has no second occurrence, so a resolved default `outputPath`'s shape is
+    /// enough there, and the rewritten value is one a model could legitimately have written itself.
+    /// For a reminder the day is only half of a time, and a time can occur twice, so the resolver
+    /// pins `resolvedReminderDueDate` instead and leaves this field as the model wrote it.
     ///
     /// Shared by the two operations rather than paired, for `workspaceApps`' reason: the field carries
     /// a day, the operation carries the verb.
@@ -249,14 +251,32 @@ public struct AgentStep: Codable, Equatable, Identifiable, Sendable {
 
     /// How many minutes from now a `create_reminder` step is due — "in 5 minutes" is 5 (SONNY-453).
     ///
-    /// **Cleared by the resolve phase**, which replaces it with the `calendarDay` and `reminderTime`
-    /// it works out to. So the approval names a clock time, and the time approved is the time set
-    /// however long the approval sat open: resolving "in 5 minutes" again at execution would move the
-    /// reminder by exactly that delay.
+    /// **Read once.** The resolve phase turns it into `resolvedReminderDueDate`, and every gate after
+    /// that reads the pin: resolving "in 5 minutes" again at execution would move the reminder by
+    /// exactly as long as the approval sat open.
     public var reminderMinutesFromNow: Int?
 
     /// The clock time a `create_reminder` step is due, `HH:mm` on a 24-hour clock (SONNY-453).
     public var reminderTime: String?
+
+    /// **The instant a `create_reminder` step is due, pinned once by the resolve phase** (PR #244,
+    /// F2). Nil until `CreateReminderCapabilityAdapter.resolveDefaultOutputs` runs; never emitted by
+    /// the planner, because the key is absent from `AgentPlanDecoder.stepKeys` and from the schema.
+    ///
+    /// **An instant rather than the wall-clock `calendarDay` and `reminderTime` it came from**, and
+    /// that is the whole reason this field exists. The first version of this branch pinned by
+    /// rewriting those two fields as `YYYY-MM-DD` and `HH:mm`, and every later gate turned them back
+    /// into a date — which is ambiguous for the hour a daylight-saving fall-back repeats. Foundation
+    /// resolves a repeated time to its first occurrence, so "in 90 minutes" at 00:50 before the
+    /// change pinned `01:20` and was added thirty minutes from now, and "in 5 minutes" inside the
+    /// repeated hour was refused as already passed. An instant has no second occurrence.
+    ///
+    /// **Resolver-only on `resolvedAppName`'s terms, and not an identity.** It names no app and
+    /// resolves no query; it is one date worked out from the step's own words against this Mac's
+    /// clock. The routine store's read door strips it with the others
+    /// (`StoredRoutine.strippingResolverPins`), although a routine cannot carry the operation that
+    /// reads it.
+    public var resolvedReminderDueDate: Date?
 
 
     public init(
@@ -299,7 +319,8 @@ public struct AgentStep: Codable, Equatable, Identifiable, Sendable {
         calendarDay: String? = nil,
         reminderTitle: String? = nil,
         reminderMinutesFromNow: Int? = nil,
-        reminderTime: String? = nil
+        reminderTime: String? = nil,
+        resolvedReminderDueDate: Date? = nil
     ) {
         self.id = id
         self.operation = operation
@@ -341,6 +362,7 @@ public struct AgentStep: Codable, Equatable, Identifiable, Sendable {
         self.reminderTitle = reminderTitle
         self.reminderMinutesFromNow = reminderMinutesFromNow
         self.reminderTime = reminderTime
+        self.resolvedReminderDueDate = resolvedReminderDueDate
     }
 }
 

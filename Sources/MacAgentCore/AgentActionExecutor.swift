@@ -1818,11 +1818,34 @@ public final class AgentActionExecutor {
             appendIfPresent(step.routineName.map { "Routine: \($0)" }, to: &resources)
             appendIfPresent(step.workspaceName.map { "Workspace: \($0)" }, to: &resources)
             appendIfPresent(step.shortcutName.map { "Shortcut: \($0)" }, to: &resources)
-            // SONNY-453. The reminder's own words, and for a read the day — which is a pinned date by
-            // the time a panel is built.
-            appendIfPresent(step.reminderTitle.map { "Reminder: \($0)" }, to: &resources)
+            // SONNY-453. **When a reminder is due is the one fact a panel must show before Allow**
+            // (PR #244, F1): the planner can turn "at 5" into 05:00 or 17:00, and before this line
+            // neither approval panel named the time at all — the widget renders `involvedResource`
+            // after "Allow access to", and Command Center renders it on its "Involves:" line.
+            //
+            // **This line and not the escalation's reason**, because consent is matched to reasons
+            // and never to this, so a line built here cannot re-arm an approval. It reads the same
+            // at every gate: it formats the pinned instant, and with an absolute date — "today"
+            // formatted before midnight would read "yesterday" at a gate after it. The title is
+            // already on the panel in the reason, so it is not repeated here. A step the resolve
+            // phase has not pinned names no time rather than inventing one.
+            if step.operation == .createReminder {
+                if let due = step.resolvedReminderDueDate {
+                    resources.append("Reminder at \(CalendarDay.absoluteName(of: due, calendar: calendar))")
+                } else {
+                    resources.append("Reminder")
+                }
+            }
+            // A read names its day, which the resolve phase has pinned as `YYYY-MM-DD`; spelled for a
+            // person rather than as that token, and only ever seen on Safe mode's panel, since a
+            // tier-0 read asks nothing anywhere else.
             if step.operation == .readCalendarEvents {
-                resources.append("Calendar: \(step.calendarDay ?? "today")")
+                if let day = try? CalendarDay.startOfDay(named: step.calendarDay, now: now(), calendar: calendar),
+                   CalendarDay.isPinned(step.calendarDay, calendar: calendar) {
+                    resources.append("Calendar for \(CalendarDay.dayName(of: day, calendar: calendar))")
+                } else {
+                    resources.append("Calendar")
+                }
             }
             if let provider = step.mediaProvider, let title = step.mediaTitle {
                 resources.append("\(provider.displayName): \(title)")
