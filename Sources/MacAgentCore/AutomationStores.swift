@@ -134,6 +134,13 @@ public struct StoredRoutine: Codable, Equatable, Sendable, Identifiable {
         // is already standing work, so wrapping one in a schedule buys nothing a second watcher
         // would not.
         .startWatching,
+        // **A routine may not read a calendar or add a reminder** (SONNY-453). A reminder asks first,
+        // and a scheduled routine runs under a standing tier-2 grant that a tier-2 reminder passes —
+        // so a routine carrying one would add a reminder once per occurrence with nobody asked. A
+        // calendar read asks macOS for access the first time, and a routine can run with nobody at
+        // the Mac to answer, leaving the run waiting on a prompt.
+        .readCalendarEvents,
+        .createReminder,
         .clarify,
         .unsupported
     ]
@@ -197,6 +204,11 @@ public struct StoredRoutine: Codable, Equatable, Sendable, Identifiable {
             // reason as the three above it: resolver-written, decode-excluded, and never a thing a
             // stored routine should be able to assert.
             stripped.itemIndex = nil
+            // PR #244, F2. A reminder's pinned instant is resolver-written and decode-excluded on the
+            // same terms. A routine cannot carry `create_reminder` at all, so this reaches only a
+            // routines file something other than Sonny wrote — and a forged time there is cleared for
+            // the reason every pin above is, not because it is dangerous on its own.
+            stripped.resolvedReminderDueDate = nil
             if let nested = step.routineSteps {
                 stripped.routineSteps = strippingResolverPins(nested)
             }
@@ -216,6 +228,7 @@ public struct StoredRoutine: Codable, Equatable, Sendable, Identifiable {
                 || step.resolvedBundleIdentifier != nil
                 || step.resolvedFromFinderSelection != nil
                 || step.itemIndex != nil
+                || step.resolvedReminderDueDate != nil
             let selfCount = carriesAPin ? 1 : 0
             return total + selfCount + resolverPinnedStepCount(step.routineSteps ?? [])
         }
@@ -371,6 +384,10 @@ public enum AutomationStoreError: Error, LocalizedError, Equatable {
             return "A routine can't control an app on your screen."
         case .startWatching:
             return "A routine can't watch a page for changes."
+        case .readCalendarEvents:
+            return "A routine can't read your calendar."
+        case .createReminder:
+            return "A routine can't add a reminder."
         case .clarify:
             return "A routine can't stop to ask you a question."
         case .unsupported:

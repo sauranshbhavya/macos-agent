@@ -37,6 +37,8 @@ public enum DefaultCapabilityAdapters {
             InvokeShortcutCapabilityAdapter(),
             VisionSessionCapabilityAdapter(),
             StandingWatcherCapabilityAdapter(),
+            ReadCalendarEventsCapabilityAdapter(),
+            CreateReminderCapabilityAdapter(),
             MetadataOnlyCapabilityAdapter(metadata: clarify)
         ]
     }

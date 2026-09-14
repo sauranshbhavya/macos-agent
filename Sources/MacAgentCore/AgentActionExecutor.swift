@@ -146,9 +146,13 @@ public final class AgentActionExecutor {
     /// Unfinished runs and standing watchers. Held only so `start_watching` can reach it through
     /// `CapabilityExecutionContext` (SONNY-382); nothing in this class reads it directly.
     private let resumableTaskStore: ResumableTaskStore
+    /// The user's calendars and reminders, held only to reach `CapabilityExecutionContext`
+    /// (SONNY-453); nothing in this class reads it directly.
+    private let eventKit: any EventKitAccessing
     private let capabilityRegistry: CapabilityRegistry
     private let fileManager: FileManager
     private let now: () -> Date
+    private let calendar: Calendar
     private let hotKeyReady: () -> Bool
     /// See `CapabilityExecutionContext.modelAccessReadiness` for why this is a closure and why its
     /// default is `.undetermined`.
@@ -200,11 +204,16 @@ public final class AgentActionExecutor {
         // here would be the real `~/Library` file, and a fixture that never heard of watchers would
         // be writing into the developer's own unfinished runs.
         resumableTaskStore: ResumableTaskStore,
+        // **The default refuses and touches nothing** (SONNY-453), the focus restorer's direction one
+        // parameter up and for its reason: a fixture that never heard of calendars must not be one
+        // plan away from the developer's. `AgentViewModel` passes the live store.
+        eventKit: any EventKitAccessing = UnavailableEventKitStore(),
         // **The default reveals nowhere** (SONNY-395). `.revealingNowhere`'s own doc comment has
         // the reasoning and the reason the usual remove-the-default remedy was not available here.
         capabilityRegistry: CapabilityRegistry = .revealingNowhere,
         fileManager: FileManager = .default,
         now: @escaping () -> Date = Date.init,
+        calendar: Calendar = .autoupdatingCurrent,
         hotKeyReady: @escaping () -> Bool = { true },
         modelAccessReadiness: @escaping () -> ModelAccessReadiness = { .undetermined },
         planReadiness: @escaping () -> PlanReadiness = { .undetermined },
@@ -247,9 +256,11 @@ public final class AgentActionExecutor {
         self.shortcutInvoker = shortcutInvoker
         self.shortcutRunHistoryStore = shortcutRunHistoryStore
         self.resumableTaskStore = resumableTaskStore
+        self.eventKit = eventKit
         self.capabilityRegistry = capabilityRegistry
         self.fileManager = fileManager
         self.now = now
+        self.calendar = calendar
         self.hotKeyReady = hotKeyReady
         self.modelAccessReadiness = modelAccessReadiness
         self.planReadiness = planReadiness
@@ -945,6 +956,10 @@ public final class AgentActionExecutor {
             return try previewCapability(for: .startWatching, plan: plan, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan)
         case .rename:
             return try previewCapability(for: .rename, plan: plan, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan)
+        case .calendarRead:
+            return try previewCapability(for: .readCalendarEvents, plan: plan, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan)
+        case .reminderCreate:
+            return try previewCapability(for: .createReminder, plan: plan, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan)
         case .chain:
             // Discarded deliberately — see `previewChain`'s parameter note for why every caller but
             // `prepare` has nothing to do with a job's unavailable items.
@@ -1095,6 +1110,10 @@ public final class AgentActionExecutor {
             return try await executeCapability(for: .startWatching, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, focusHandoff: focusHandoff, log: log)
         case .rename:
             return try await executeCapability(for: .rename, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, focusHandoff: focusHandoff, log: log)
+        case .calendarRead:
+            return try await executeCapability(for: .readCalendarEvents, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, focusHandoff: focusHandoff, log: log)
+        case .reminderCreate:
+            return try await executeCapability(for: .createReminder, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, focusHandoff: focusHandoff, log: log)
         case .chain:
             return try await executeChain(resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, onUnitCompleted: onUnitCompleted, onItemFailed: onItemFailed, log: log)
         }
@@ -1130,6 +1149,8 @@ public final class AgentActionExecutor {
         case visionSession
         case startWatching
         case rename
+        case calendarRead
+        case reminderCreate
         case chain
     }
 
@@ -1257,6 +1278,10 @@ public final class AgentActionExecutor {
             return .startWatching
         case .rename:
             return .rename
+        case .readCalendarEvents:
+            return .calendarRead
+        case .createReminder:
+            return .reminderCreate
         case .unsupported:
             throw AgentExecutionError.unsupported("Unsupported operation.")
         }
@@ -1586,6 +1611,22 @@ public final class AgentActionExecutor {
                 .resolveDefaultOutputs(in: resolvedPlan, context: capabilityContext(scope: .unscoped))
         }
 
+        // Resolve no output path either — they pin a day, and a reminder's time, onto the step
+        // (SONNY-453), so the day the preview names is the day the run reads or writes. Idempotent
+        // for the reason the switch pin below is: a pinned `YYYY-MM-DD` resolves to itself. Either
+        // may answer with a clarification, which the caller's early return already handles.
+        if resolvedPlan.steps.contains(where: { $0.operation == .readCalendarEvents }) {
+            resolvedPlan = try capabilityRegistry
+                .adapter(for: .readCalendarEvents)
+                .resolveDefaultOutputs(in: resolvedPlan, context: capabilityContext(scope: .unscoped))
+        }
+
+        if resolvedPlan.steps.contains(where: { $0.operation == .createReminder }) {
+            resolvedPlan = try capabilityRegistry
+                .adapter(for: .createReminder)
+                .resolveDefaultOutputs(in: resolvedPlan, context: capabilityContext(scope: .unscoped))
+        }
+
         // Resolves no output path — it pins the running app the query will actually activate, so
         // that every gate downstream of this phase (the scope assessment above all) reads one
         // identity rather than re-fuzzy-matching the query per gate (SONNY-58). Idempotent by the
@@ -1687,7 +1728,7 @@ public final class AgentActionExecutor {
     ) -> RiskApprovalCopy {
         RiskApprovalCopy(
             actionDescription: actionDescription(for: plan, metadata: metadata),
-            riskReason: riskReason(for: tier),
+            riskReason: riskReason(for: tier, plan: plan),
             involvedResource: involvedResource(in: plan, metadata: metadata),
             dataLeavesDevice: dataLeavesDevice(in: plan),
             undoDescription: undoDescription(for: tier, plan: plan)
@@ -1737,13 +1778,19 @@ public final class AgentActionExecutor {
             + "\u{201C}\(goal)\u{201D} by controlling \(app) directly — clicking and typing in its window."
     }
 
-    private func riskReason(for tier: CapabilityRiskTier) -> String {
+    private func riskReason(for tier: CapabilityRiskTier, plan: AgentPlan) -> String {
         switch tier {
         case .tier0:
             return "This only reads local context or status."
         case .tier1:
             return "This opens an app, URL, media result, or Finder location."
         case .tier2:
+            // A reminder is none of the three things the general sentence names (SONNY-453), and this
+            // is the line the approval it raises is read under.
+            if plan.steps.contains(where: { $0.operation == .createReminder }),
+               plan.steps.allSatisfy({ $0.operation == .createReminder }) {
+                return "This adds a reminder to your Reminders."
+            }
             return "This can create or change local files, routines, or workspaces."
         case .tier3:
             return "This may affect external services or overwrite/destructively change data."
@@ -1771,6 +1818,35 @@ public final class AgentActionExecutor {
             appendIfPresent(step.routineName.map { "Routine: \($0)" }, to: &resources)
             appendIfPresent(step.workspaceName.map { "Workspace: \($0)" }, to: &resources)
             appendIfPresent(step.shortcutName.map { "Shortcut: \($0)" }, to: &resources)
+            // SONNY-453. **When a reminder is due is the one fact a panel must show before Allow**
+            // (PR #244, F1): the planner can turn "at 5" into 05:00 or 17:00, and before this line
+            // neither approval panel named the time at all — the widget renders `involvedResource`
+            // after "Allow access to", and Command Center renders it on its "Involves:" line.
+            //
+            // **This line and not the escalation's reason**, because consent is matched to reasons
+            // and never to this, so a line built here cannot re-arm an approval. It reads the same
+            // at every gate: it formats the pinned instant, and with an absolute date — "today"
+            // formatted before midnight would read "yesterday" at a gate after it. The title is
+            // already on the panel in the reason, so it is not repeated here. A step the resolve
+            // phase has not pinned names no time rather than inventing one.
+            if step.operation == .createReminder {
+                if let due = step.resolvedReminderDueDate {
+                    resources.append("Reminder at \(CalendarDay.absoluteName(of: due, calendar: calendar))")
+                } else {
+                    resources.append("Reminder")
+                }
+            }
+            // A read names its day, which the resolve phase has pinned as `YYYY-MM-DD`; spelled for a
+            // person rather than as that token, and only ever seen on Safe mode's panel, since a
+            // tier-0 read asks nothing anywhere else.
+            if step.operation == .readCalendarEvents {
+                if let day = try? CalendarDay.startOfDay(named: step.calendarDay, now: now(), calendar: calendar),
+                   CalendarDay.isPinned(step.calendarDay, calendar: calendar) {
+                    resources.append("Calendar for \(CalendarDay.dayName(of: day, calendar: calendar))")
+                } else {
+                    resources.append("Calendar")
+                }
+            }
             if let provider = step.mediaProvider, let title = step.mediaTitle {
                 resources.append("\(provider.displayName): \(title)")
             }
@@ -1950,6 +2026,12 @@ public final class AgentActionExecutor {
             if plan.steps.contains(where: { $0.operation == .saveSnippet }) {
                 return "Edit or delete the saved snippet manually."
             }
+            // SONNY-453. Another membership branch no compiler forces, found the way the comment above
+            // says the others were: a reminder falls through to "Delete generated local files", and it
+            // generates none.
+            if plan.steps.contains(where: { $0.operation == .createReminder }) {
+                return "Delete the reminder in Reminders if needed."
+            }
             return "Delete generated local files manually if needed."
         case .tier3:
             return "May not be automatically undoable."
@@ -2025,8 +2107,10 @@ public final class AgentActionExecutor {
             shortcutInvoker: shortcutInvoker,
             shortcutRunHistoryStore: shortcutRunHistoryStore,
             resumableTaskStore: resumableTaskStore,
+            eventKit: eventKit,
             fileManager: fileManager,
             now: now,
+            calendar: calendar,
             hotKeyReady: hotKeyReady,
             modelAccessReadiness: modelAccessReadiness,
             planReadiness: planReadiness,

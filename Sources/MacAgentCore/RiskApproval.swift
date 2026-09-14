@@ -270,10 +270,14 @@ public struct RiskApprovalConsent: Codable, Equatable, Sendable {
         /// keeping them on a pure tier ceiling is deliberate rather than an omission. Their ceiling
         /// is tier 2 — no external or destructive action can pass it at all — and re-arming an
         /// unattended run on a reason nobody is present to read would convert a grant the user
-        /// explicitly gave into a paused schedule. (Today the two rules coincide exactly: every
-        /// escalation any adapter or the scope evaluator produces targets tier 3, so an assessment
-        /// at or below tier 2 carries no escalations for either rule to compare. They diverge only
-        /// if a tier-2 escalation is ever added, and this case records which answer that day gets.)
+        /// explicitly gave into a paused schedule. (The two rules coincided exactly while every
+        /// escalation targeted tier 3, and they no longer do: `CreateReminderCapabilityAdapter`
+        /// raises one that stays at tier 2 (SONNY-453), so a tier-2 assessment can carry a reason,
+        /// and a standing tier-2 grant passes it without comparing that reason. This case's answer
+        /// for that day is the one recorded here — the grant is a tier ceiling — and what keeps it
+        /// from reaching a reminder is `StoredRoutine.forbiddenStepOperations`, which refuses
+        /// `create_reminder` in the only runs that hold such a grant; pinned by
+        /// `aStandingTierTwoGrantWouldPassAReminderSoRoutinesRefuseIt`. SONNY-489.)
         ///
         /// The consequence rule (2026-08-13) leans on the same ceiling from the other side: an
         /// advisory-only tier 3 auto-runs when a user dispatched it, but no unattended run can
@@ -294,16 +298,24 @@ public struct RiskApprovalConsent: Codable, Equatable, Sendable {
         /// SONNY-62 the difference cannot change an authorize/deny outcome, and claiming it could
         /// was this file's own first mistake.** For the two to disagree on an outcome, a consent
         /// would need a tier-3 ceiling with an empty acknowledged set. No adapter can produce that
-        /// assessment: no `defaultTier` anywhere can reach tier 3, while all eleven
+        /// assessment: no `defaultTier` anywhere can reach tier 3, while every
         /// (**this phrase has two copies — the other is on `requirement(for:context:)` below, and
         /// row I corrected only this one, leaving them disagreeing at `0e892c0`; PR #50 review, F6.
-        /// Any future re-count has to move both**)
-        /// `CapabilityRiskEscalation` construction sites target tier 3 (the eight counted at
+        /// Any future re-count has to move both — SONNY-489 moved both**)
+        /// `CapabilityRiskEscalation` construction site but one targets tier 3 (the eight counted at
         /// `fcccab5`, plus SONNY-98's whitelist-root widening, plus row I's two — the vision
         /// session's envelope escalation and its per-action one; re-swept at `618350d`) and each
         /// assessment forwards the escalations of any plan nested inside it — so a tier-3
-        /// assessment always carries at least one reason, and a non-empty reason set always means
-        /// tier 3.
+        /// assessment always carries at least one reason. **The one that does not is
+        /// `create_reminder`'s, which stays at tier 2 (SONNY-453)**, so a non-empty reason set no
+        /// longer means tier 3: a tier-2 prompt a human answered now carries a reason too. That
+        /// opens a second way for the two cases to disagree — a fresh tier-2 assessment naming a
+        /// reason the prompt did not — and it is not reachable today, because that reason names only
+        /// the reminder's title, which the prepared plan fixes, and the only runs holding a standing
+        /// grant may not carry the step. Counted at `713bdc3f`:
+        /// `git grep -n 'CapabilityRiskEscalation(' 713bdc3f -- Sources | grep -vE ':[0-9]+: *//' | wc -l`
+        /// → 14, and `git grep -n -A4 'CapabilityRiskEscalation(' 713bdc3f -- Sources | grep -c 'toTier: .tier3'`
+        /// → 13; the fourteenth is the reminder's `.tier2` (SONNY-489).
         ///
         /// **Why no `defaultTier` reaches tier 3.** Swept at `fcccab5` — and first at `042f74e`,
         /// before this branch rebased onto row F, which edited several of the files counted here and
@@ -501,11 +513,14 @@ public struct CapabilityRiskEscalation: Codable, Equatable, Sendable {
         /// replace-on-save of a routine/workspace/snippet, a deletion. Always asks — there is no
         /// relaxing this class.
         case destructive
-        /// Reaches someone other than the user: send, post, share, publish, purchase. **Armed but
-        /// empty today** — no v1 capability can affect anyone but the user, so no construction
-        /// site carries this class yet. It exists now so that when vision actions arrive, their
-        /// escalations classify into a class that already asks, rather than needing the rule
-        /// rebuilt under time pressure.
+        /// Reaches someone other than the user: send, post, share, publish, purchase. It was armed
+        /// ahead of use so that vision actions would classify into a class that already asks, and
+        /// it is carried now by two sources: a vision session's per-action escalation, when
+        /// `VisionConsequenceClassifier` reads a send/post/share control, and `create_reminder`'s
+        /// plan escalation, because the default Reminders list may be shared and EventKit cannot say
+        /// whether it is (SONNY-453; the founders chose this class for it on 2026-09-13). It said
+        /// "armed but empty today — no construction site carries this class yet" until SONNY-489,
+        /// already untrue of the vision classifier by then.
         case affectsOthers = "affects_others"
         /// A fact worth telling the user, not a consent worth interrupting them for: an
         /// out-of-scope resource, a workspace-entry removal, a whitelist-root widening. Advisory
@@ -709,13 +724,13 @@ public extension RiskApprovalPolicy {
     /// body order, and the ask term still reads only the escalations' consequence classes:
     ///
     /// - Any escalation whose class asks first (destructive, affects-others) asks, **at every
-    ///   tier that can run**. On tiers 0–2 that term is unreachable through any adapter today —
-    ///   all eleven construction sites target tier 3, so a derived `effectiveTier` at or below 2
-    ///   means no escalation fired — but the rule is "asks when destructive", not "asks when
-    ///   destructive and the tier arithmetic agrees", so the term is written where the rule puts
-    ///   it and pinned by a hand-built test. The day an escalation targets tier 2 (a possibility
-    ///   `Coverage.standingGrant`'s comment already records), it asks without anyone remembering
-    ///   to make it.
+    ///   tier that can run**. On tiers 0–2 that term is reached by one adapter:
+    ///   `create_reminder`'s escalation stays at tier 2 and asks through it (SONNY-453), and every
+    ///   other construction site targets tier 3 (the count is on `Coverage.acknowledgedReasons`
+    ///   above, SONNY-489). The rule is "asks when destructive or affecting others", not "asks when
+    ///   the tier arithmetic agrees", so the term was written where the rule puts it before any
+    ///   adapter reached it, pinned by a hand-built test, and it asked the day one did without
+    ///   anyone having to remember to make it.
     /// - Otherwise tiers 0/1/2 auto-run unconditionally — the policy dials no longer gate them.
     /// - Advisory-only tier 3 auto-runs, with the ran-without-asking trace naming what was
     ///   advisory. A tier-3 assessment carrying **no** escalations is unreachable through any

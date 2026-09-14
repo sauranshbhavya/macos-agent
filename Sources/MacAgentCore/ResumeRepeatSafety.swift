@@ -80,8 +80,16 @@ extension AgentOperation {
             // what this is" is the one that does not offer to do it twice.
             return .mustNotRepeatSilently
 
+        case .createReminder:
+            // **Doing it twice adds a second copy to a list other people may see** (SONNY-453) — the
+            // same fact that makes `CreateReminderCapabilityAdapter.assessRisk` ask, and this bar is
+            // that consequence. A resume re-prepares, so the repeat would ask anyway; this withholds
+            // the offer to continue as well, which is the one-directional thing this property does.
+            return .mustNotRepeatSilently
+
         case .scanSelectLargestFiles, .scanDocx, .getFinderSelection, .lookupClipboardHistory,
-             .lookupRecentArtifacts, .calculateUtility, .showPermissionReadiness, .fetchHNHeadlines:
+             .lookupRecentArtifacts, .calculateUtility, .showPermissionReadiness, .fetchHNHeadlines,
+             .readCalendarEvents:
             // Reads. Repeating one changes nothing at all.
             return .safeToRepeat
 

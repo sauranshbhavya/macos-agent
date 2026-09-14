@@ -163,7 +163,9 @@ struct PermissionReadinessModelAccessTests {
             let items = PermissionReadinessService
                 .deterministic()
                 .currentStatus(modelAccess: readiness, planAccess: plan, hotKeyReady: true)
-            #expect(items.count == 8)
+            // Ten since SONNY-453 added the Calendars and Reminders rows beside the others; the
+            // account row is still one of them and still first, which is this test's point.
+            #expect(items.count == 10)
             #expect(items.filter { $0.id == "sonny-account" }.count == 1)
             #expect(!items.contains { $0.id == "openai" })
             #expect(items.first?.id == "sonny-account", "the account row is still the first one")

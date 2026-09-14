@@ -215,7 +215,15 @@ struct SpokenPathTests {
         // separator, so expanding a spoken folder phrase into it would turn a name the user said
         // into a rename Sonny then refuses. The folder half of a rename is `inputPath`, already
         // `true` above, and that is where a spoken phrase belongs.
-        "newName": false
+        "newName": false,
+        // SONNY-453. A day, a reminder's words, a number of minutes and a clock time — none of them
+        // a folder, and a spoken folder phrase expanded into any of them would be nonsense.
+        "calendarDay": false,
+        "reminderTitle": false,
+        "reminderMinutesFromNow": false,
+        "reminderTime": false,
+        // PR #244, F2. An instant, not a phrase of any kind.
+        "resolvedReminderDueDate": false
     ]
 
     /// Every property the table above calls a path is normalised, and every property it does not is
@@ -260,7 +268,12 @@ struct SpokenPathTests {
             itemIndex: 7,
             visionGoal: phrase,
             watchSubject: phrase,
-            newName: phrase
+            newName: phrase,
+            calendarDay: phrase,
+            reminderTitle: phrase,
+            reminderMinutesFromNow: 5,
+            reminderTime: phrase,
+            resolvedReminderDueDate: Date(timeIntervalSince1970: 1_800_000_000)
         )
 
         let after = SpokenPath.normalizingFolderPhrases(in: before)

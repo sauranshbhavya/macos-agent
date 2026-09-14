@@ -1179,7 +1179,7 @@ struct ProductShellTests {
             "voiceRecordingAutoStopTask", "voiceRecordingListeningWindow",
             "routineStore", "workspaceStore", "snippetStore", "recentArtifactStore",
             "shortcutCatalog", "browserOpener", "appOpener", "fileOpener", "mediaOpener",
-            "runningAppSwitcher", "focusRestorer", "shortcutInvoker", "finderContextReader", "documentConverter",
+            "runningAppSwitcher", "focusRestorer", "eventKit", "shortcutInvoker", "finderContextReader", "documentConverter",
             "zipArchiver", "shortcutRunHistoryStore", "taskHistoryStore", "taskPlanDetailStore",
             "clipboardHistorySettingsStore", "approvedAppStore", "outputLocationStore",
             "resumableTaskStore",
