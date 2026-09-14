@@ -670,21 +670,38 @@ a rehearsal if production's rollback is the one staging walked.
 
 **No `lock_timeout` is set, and step 4 is where that matters** (PR #164 review, F8). Five up halves
 declare `ACCESS EXCLUSIVE` on `sonny.identity` — 0004, 0005, 0006, 0008 and 0014 (the first line of
-each file, `grep -cE 'ACCESS EXCLUSIVE sonny\.identity(,|$)'` over them → 5 at the commit that wrote
-this; without the `(,|$)` it answers 6, the sixth being 0016's `sonny.identity_provider_user`) — and
-0010 and 0015 take the write-blocking `SHARE` and `SHARE ROW EXCLUSIVE` on it. That table is what
-`accountForSupabaseUser` reads on **every authenticated request**. A lock request queues every reader behind it, so even a lock held for
+each file: `for f in src/db/migrations/*.sql; do head -n1 "$f"; done | grep -cE 'ACCESS EXCLUSIVE
+sonny\.identity(,|$)'` → 5 at `d85b3ec0`; without the `(,|$)` it answers 6, the sixth being 0016's
+`sonny.identity_provider_user`) — and 0010 and 0015 take the write-blocking `SHARE` and
+`SHARE ROW EXCLUSIVE` on it. That table is what `accountForSupabaseUser` reads on **every
+authenticated request**. A lock request queues every reader behind it, so even a lock held for
 microseconds costs the full **wait** for it behind whatever transaction got there first.
 
 **This paragraph used to say those statements "are metadata-only, so the lock is held for
-microseconds", and for four of them that was false** (SONNY-370, measured by the check below):
-0004 and 0005 each backfill `sonny.identity` with an `UPDATE`, and 0006 and 0014 each build an index
-over it, all under the `ACCESS EXCLUSIVE` their `ALTER` took — so on a populated table every
-authenticated request would wait for a full pass over it. Only 0008 is metadata-only. They are
-harmless where they have run so far, because every one of them ran against an empty table, and a
-fresh environment's first deploy applies them the same way. They are not harmless as a pattern, and
-nothing about the next one is guaranteed by the practice of the last — which is why the declaration
-and measurement below exist.
+microseconds". For four of the five that was incomplete, and the first correction of it was wrong
+about two** (SONNY-370, then PR #250's review, F2). Read against the SQL and measured with rows in the
+table:
+
+- **0004 and 0006 read every row of `sonny.identity` under the `ACCESS EXCLUSIVE` their `ALTER` took
+  first** — 0004 an `UPDATE … FROM sonny.account` and a unique index build, 0006 an index build — so
+  on a populated table every authenticated request, read or write, waits for the whole pass.
+- **0005 does the same, but its lock comes from `DROP TRIGGER … ON sonny.identity`, not an `ALTER`**:
+  0005 has no `ALTER TABLE` at all, which is this section's own warning about keywords arriving from the
+  other side.
+- **0014 is the one the first correction got wrong.** Its only read of `sonny.identity` is the
+  `INSERT … SELECT` that copies provider-side ids into the new table, and that runs under the
+  `SHARE ROW EXCLUSIVE` the new table's foreign key took on `sonny.identity` — which blocks writers,
+  not readers. Its `ACCESS EXCLUSIVE` arrives only afterwards, from a `DROP INDEX` and two
+  `DROP COLUMN`s that read no rows. So on a populated table writers wait for the pass and readers wait
+  only from the drops to COMMIT. Both indexes it builds are on the new table. (Measured by the review
+  with a second session and `lock_timeout = '500ms'`: just after the scan, a read succeeded and a write
+  was refused; after the whole half, both were refused.)
+- **Only 0008 is metadata-only.**
+
+They are harmless where they have run so far, because every one of them ran against an empty table,
+and a fresh environment's first deploy applies them the same way. They are not harmless as a pattern,
+and nothing about the next one is guaranteed by the practice of the last — which is why the
+declaration and measurement below exist.
 
 **"Metadata-only, so microseconds" is a property of those migrations and not of the runner, and this
 paragraph used to state it as though it were the rule** (PR #171 review, F1). **Two separate things
@@ -761,47 +778,90 @@ it. Each half of every migration opens with two lines:
 -- @scans sonny.sign_in_code_issue
 ```
 
-`@locks` names every relation that existed before the migration and on which it holds a lock ordinary
-traffic waits for — `ACCESS EXCLUSIVE` stalls reads; `SHARE`, `SHARE ROW EXCLUSIVE` and `EXCLUSIVE`
-stall writes — with the strongest mode it holds. `@scans` names every pre-existing table it reads
-through: a backfill, an index build, a `SET NOT NULL` or `CHECK` validation, a rewrite. Either line may
-say `none`. **A table on both lines is the shape that stalls traffic for a time that grows with the
-table**, and it is the shape PR #171's first 0017 had; 0016, with `ACCESS EXCLUSIVE` on the first line
-and `none` on the second, is the harmless one beside it.
+`@locks` names every relation that existed before the half ran and on which it holds a relation lock
+ordinary traffic waits for — `ACCESS EXCLUSIVE` stalls reads; `SHARE`, `SHARE ROW EXCLUSIVE` and
+`EXCLUSIVE` stall writes — with the strongest mode it holds. `@scans` names every pre-existing table it
+reads through: a backfill, a join, an index build, a `SET NOT NULL` or `CHECK` validation, a rewrite.
+Either line may say `none`.
+
+**How to read the two lines, and the one thing they cannot tell you** (PR #250's review, F2). A
+blocking lock and a scan in the same half *can* stall the locked tables for as long as the scan runs —
+because the transaction holds every lock to COMMIT, and that is so whether the scan is of the locked
+table or of a different one. **Whether they do depends on which came first, and the two lines do not
+say.** A declaration is two sets with no order in them: a lock taken before the scan stalls traffic
+for the whole pass, and a lock taken after it stalls traffic only from that statement to COMMIT. 0014's
+up half is the shipped case of the second (above), and 0004's the first; their two lines look alike. So
+a table on both lines, or any lock beside any scan, is the shape to go and read the SQL for — not a
+verdict. PR #171's first 0017 was the dangerous order; 0016, with `ACCESS EXCLUSIVE` on the first line
+and `none` on the second, is the harmless shape beside it.
 
 **Declared in the file, refused by the runner when absent, measured by the suite.**
 `test/migrate.load.test.ts` (no database) pins the runner's refusal of a missing `@locks`, a missing
-`@scans` and a half with no declaration at all, and loads every shipped file;
-`test/migration-lock-profile.test.ts` (no database) pins what the parser reads and refuses.
-`test/migration-lock-profile.db.test.ts` applies every migration and rolls every one back through the
-runner's own `up` and `down`, reads `pg_locks` and Postgres's per-transaction scan counter inside each
-half's transaction, and fails on any half whose declaration differs — printing the two lines that would
-be true. It also holds the two cases this was filed for: PR #171's first 0017 measures as a scan of the
-sign-in table under `ACCESS EXCLUSIVE`, and the runner's read path — `status`, and `up` with nothing
-pending — holds no blocking lock at all, which PR #169's unconditional `ALTER` would break. The lines
-are comments, so adding them to an applied migration leaves its content hash alone; all 23 files
-received them on that branch with every hash unchanged.
+`@scans` and a half with no declaration at all, and of a declaration anywhere but the half's head — its
+leading comment lines, above the first statement. Below that a line can sit inside a `$$` function body
+or a string, where Postgres keeps it and the content hash covers it, so a marker line down there is
+refused rather than read. `test/migration-lock-profile.test.ts` (no database) pins what the parser reads
+and refuses. `test/migration-lock-profile.db.test.ts` applies every migration and rolls every one back
+through the runner's own `up` and `down`, **twice** — once from empty tables and once with rows seeded
+after 0002 — and fails on any half whose declaration differs from either measurement, printing the two
+lines that would be true. It also holds the cases this was filed for: PR #171's first 0017 measures as a
+scan of the sign-in table under `ACCESS EXCLUSIVE` (declared the way the suite prints it, that draft
+would pass — the check puts the shape in front of a reviewer rather than refusing it), and the runner's
+read path — `status`, and `up` with nothing pending — holds no blocking lock at all, which PR #169's
+unconditional `ALTER` would break. The lines are comments at the head of a half, so adding them to an
+applied migration leaves its content hash alone; all 23 files received them on this branch with every
+hash unchanged.
 
-**What it deliberately does not do.**
+**How the scan line is measured, and why it is two readings** (PR #250's review, F1). The suite's
+tables are empty, and on an empty table Postgres skips work: a join whose first side has no rows never
+reads the second, a per-row subquery never runs. The first version of this check read Postgres's scan
+counter alone, and with six rows seeded five shipped declarations turned out to be missing a table —
+0003 up, 0004 up, 0005 up, 0004 down and 0014 down — in the direction that hides the stall. So `@scans`
+is now the union of:
+
+- **every table the half holds a weak relation lock on** (`ACCESS SHARE`, `ROW SHARE`,
+  `ROW EXCLUSIVE`), which Postgres takes while it *plans* a statement naming the table, before it reads a
+  row — so it is there on an empty database, and all five are caught by construction; and
+- **every table whose scan counter, or one of its indexes', rose** — the DDL that reads rows without a
+  weak lock (an index build, a validation, a rewrite) starts its scan on an empty table too.
+
+**What it deliberately does not do, and what it cannot see.**
 
 - **It does not decide whether a stall is acceptable.** 0017 declares `ACCESS EXCLUSIVE` across an
   index build on the sign-in table and ships, because its header argues for the cost. The check makes
   that shape impossible to miss in review, and a wrong statement of it fails the database suite; the
   judgement stays with the review, and with whoever schedules the deploy.
-- **It measures shapes, not durations.** The tables are empty — a scan is counted when it starts, so
-  no seeding is needed — and a duration depends on the rows an environment holds. Read a table on both
-  lines as *this will take as long as that table is big*, and measure it against realistic data before
-  a deploy that matters, as 0017's figures were.
-- **A scan is not always proportional.** A `DELETE … WHERE id = …` counts as a scan of its table.
-  The check errs toward declaring too much, never too little.
-- **Only relation locks.** A stall that holds nothing — a `pg_sleep` under `ACCESS EXCLUSIVE` — declares
-  the lock and no scan, and waits anyway.
+- **It cannot see a statement that is never planned on the database it measures.** A row trigger that
+  never fires, a branch of a `DO` block or a function that is never taken, and a function called once
+  per row of an empty table plan their statements only when they run. So **a table such a statement
+  reads, and a lock it takes, appear on neither line** — the review measured a row trigger taking
+  `ACCESS EXCLUSIVE` on a third table that the empty measurement did not report at all. For a
+  migration whose work happens inside a trigger or behind a condition on the data, the two lines are a
+  floor, and the SQL is the only complete account.
+- **It measures shapes, not durations.** A duration depends on the rows an environment holds. Read a
+  lock beside a scan as *this may take as long as that table is big*, and measure it against realistic
+  data before a deploy that matters, as 0017's figures were.
+- **The scan line over-reports, in known ways.** A `DELETE … WHERE id = …` counts as a scan of its
+  table though it reads one row. An `INSERT … VALUES` counts though it reads none. And some DDL takes a
+  weak lock on a table it never reads — `DROP TRIGGER … ON` a table does, and so does a
+  `CREATE TABLE … REFERENCES` on the referenced table — so five shipped down halves (0003, 0005, 0008,
+  0013's content half and 0015) declare a scan for a `DROP TRIGGER` alone. Over-reporting sends a
+  reader to the SQL for nothing; that is the cost accepted for not under-reporting the planned reads.
+- **Only relation locks — row locks are not measured.** An `UPDATE` over a whole table takes a row
+  lock on every row it changes and no blocking relation lock, so `UPDATE t SET v = v + 1` declares
+  `@locks none` and `@scans t` — and until COMMIT, any other session writing one of those rows waits
+  (the review measured a concurrent `UPDATE t SET v = 0 WHERE id = 1` refused at `lock_timeout`).
+  Readers are not blocked. In the shipped halves a stronger relation lock on the same table covers this
+  everywhere but 0003 up's `DELETE` on `sonny.identity`, where a writer to one of the deleted rows waits
+  until COMMIT. A stall that holds no lock at all — a `pg_sleep` under `ACCESS EXCLUSIVE` — declares the
+  lock and no scan, and waits anyway.
 - **It does not make the escapes available.** `CREATE INDEX CONCURRENTLY` and batched backfills need a
-  migration outside a transaction, and this runner gives every migration one.
+  migration outside a transaction, and this runner gives every migration one (SONNY-495).
 
-**Writing a new migration:** write the two lines per half as best you understand it — the runner will
-not load the file without them — then run `npm run test:db`, and if the measurement disagrees, the
-failure prints what to write instead. The disagreement is the thing to understand before copying it.
+**Writing a new migration:** write the two lines at the head of each half as best you understand it —
+the runner will not load the file without them — then run `npm run test:db`, and if the measurement
+disagrees, the failure prints what to write instead. The disagreement is the thing to understand before
+copying it.
 
 ### An applied migration cannot change silently
 
