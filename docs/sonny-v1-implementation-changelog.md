@@ -179,8 +179,23 @@ Tickets:
 - **SONNY-481** — the Command Center Skills tests pinned the three shipped packs. They now own a fixture catalogue, and a scan keeps any other test from reading the shipped folder.
 - **SONNY-476 is not on this branch.** It was assigned here, stopped before any code because it needs `AgentViewModel.swift`, outside this branch's fence, and moved to its own branch, `fix/skill-packs-load-after-launch`, directly above this one. That was the founders' decision C of 2026-09-13, recorded on SONNY-476 together with an added rule: nothing plans before the catalogue has loaded.
 
-This is the second branch in wave 9's stack. It was cut from `chore/tooling-reads-fresh-main-and-records-catch-up` at `65a50865` while that branch was empty, and it rebases once onto that branch's final head after PR #243's review closes.
-Reviewed by: PR #245's fresh review at `7421d0ae` (posted on the PR, 2026-09-13), with nothing blocking. It raised one Low finding, F1: a claim in this entry that no refusal was lost, which is false for invented words. It also recorded three residuals — R-a, what the scan cannot see; R-b, what its `readers` assertion shows; R-c, the plan's header — and offered one mutant, X3. The coordinator routed all of it to one records round on this branch (SONNY-479). That round is `a1718d4f` (comment lines in code, and the plan) plus the docs commit carrying this entry, and the coordinator verifies it directly.
+This is the second branch in wave 9's stack. It was cut from `chore/tooling-reads-fresh-main-and-records-catch-up` at `65a50865` while that branch was empty, and was rebased once onto that branch's final head, `a9beb7c5` (below).
+Reviewed by: PR #245's fresh review at `7421d0ae` (pre-rebase, replayed as `3d917e16`) (posted on the PR, 2026-09-13), with nothing blocking. It raised one Low finding, F1: a claim in this entry that no refusal was lost, which is false for invented words. It also recorded three residuals — R-a, what the scan cannot see; R-b, what its `readers` assertion shows; R-c, the plan's header — and offered one mutant, X3. The coordinator routed all of it to one records round on this branch (SONNY-479). That round is `a1718d4f` (pre-rebase, replayed as `7b0435c2`) (comment lines in code, and the plan) plus `d52b3bef` (pre-rebase, replayed as `2b84c9c4`) (this entry). The coordinator verified it directly at `d52b3bef` on SONNY-479, and found no further review pass owed.
+
+**Rebased once, onto PR #243's final head** (WORKFLOW, Stacked pull requests, clause 2; the cut point `65a50865` is recorded on SONNY-463). `git rebase --onto a9beb7c5 65a50865 fix/skills-ready-for-the-catalogue` replayed this branch's six commits and nothing else (`git rev-list --count a9beb7c5..2b84c9c4` → 6). `git merge-base --is-ancestor a9beb7c5 2b84c9c4` exits 0.
+- **The six pairs, in order:** `9764a84f` → `b1eae83b`; `f6fe7853` → `87dea417`; `f6b99eb6` → `a8db95a3`; `7421d0ae` → `3d917e16`; `a1718d4f` → `7b0435c2`; `d52b3bef` → `2b84c9c4`. Each pair has the same subject and names the same `Sources` and `Tests` trees (`git rev-parse "${old}:Sources" "${new}:Sources"`, and the same for `Tests`). That is because the range crossed touched neither. Every pre-rebase SHA below is history, true of the tree it names, and labelled with its replayed twin where it appears.
+- **One conflict, in the changelog, replaying `7421d0ae` (now `3d917e16`), and nowhere else.** This entry and PR #243's were both inserted directly under `## Entries`. It was resolved by putting this entry above #243's and keeping each whole. The resolution first dropped the blank line between the two entries, and that line was put back before continuing. The last two commits replayed cleanly.
+  - **The proof is a comparison, not a reading.** At `2b84c9c4`, before this record was written on top of it, this entry was byte-identical to its text at `d52b3bef` (pre-rebase, replayed as `2b84c9c4`), and #243's entry is byte-identical to its text at `a9beb7c5`.
+  - The changelog with this entry and the one dated correction cut out is byte-identical to `a9beb7c5`'s. As a control, the same comparison with the correction kept is not equal.
+  - Outside the changelog, `git diff 65a50865 d52b3bef` and `git diff a9beb7c5 2b84c9c4`, `index` lines aside, are identical patches over the same seven files.
+- **What moved:** `git diff --name-only 65a50865 a9beb7c5` → 7 files: `.claude/hooks/verify-tests-before-stop.sh`, `CLAUDE.md`, `WORKFLOW.md`, the changelog, `mutation/plans/fix/a-settle-never-moves-a-row-off-granted.txt`, `mutation/plans/fix/three-account-routes-take-the-total-deadline.txt` and `scripts/changelog-order`. Nothing under `Sources/`, `Tests/` or `Package.swift` (`git diff --stat 65a50865 a9beb7c5 -- Sources Tests Package.swift` prints nothing).
+- **Whether this branch uses any of it: only through the changelog, enumerated across the tree.**
+  - **The coordinator's reader grep, re-run at `2b84c9c4`:** `git grep -lE '"(CLAUDE|WORKFLOW)\.md"|CLAUDE\.md"|WORKFLOW\.md"|"scripts/|changelog-order|sonny-v1-implementation-changelog' 2b84c9c4 -- Tests` names `AgentActionExecutorTests.swift` and `UntrustedFailureDeclarationTests.swift`, as it did at `7421d0ae` (pre-rebase, replayed as `3d917e16`).
+  - **Its only code reads name files that did not move:** `"scripts/mutate-untrusted-failures"` and `"scripts/mutate"`. The only script that moved is `scripts/changelog-order`.
+  - **Widened to all seven moved names across `Sources` and `Tests`**, with the three changelog-adjacent names, `verify-tests-before-stop`, `.claude/`, both plan names and `mutation/plans` added. It hits many files, and every hit is a comment line: the filter `grep -vE '^[^:]+:[0-9]+:[[:space:]]*(//|\*|/\*)'` keeps 0. That filter keeps both code lines above for the `"scripts/` pattern, which is the control.
+  - **Outside Swift,** the moved plans and the changelog are read by `scripts/changelog-order` and the `.claude/` stop hook. Both read this entry, so `scripts/changelog-order` was re-run here. Nothing reads this branch's plan except `scripts/mutate`, which did not move.
+- **So, under clause 2, PR #245's review stands**, pending the coordinator's reading. Nothing the branch uses changed except the changelog tool that reads its entry, and the only conflict was confined to the changelog and resolved by keeping each entry whole.
+
 
 Spec sections covered: none new. This branch changes which pack wording the loader refuses, and which catalogue the tests read. It is gating work for the pack lanes, and SONNY-452's design note already covers it.
 Files changed:
@@ -191,49 +206,47 @@ Files changed:
 - `Tests/MacAgentTests/MemoryCommandCenterTests.swift` — `SkillsCommandCenterTests.catalogue()` reads the fixture.
 - `mutation/plans/fix/skills-ready-for-the-catalogue.txt`, and this entry, with a dated correction inside `feature/skills`' entry below.
 
-(`git diff --name-only 65a50865 f6b99eb6`, six files, plus this commit's changelog.)
-Tests: **3383 in 245, exit 0, 8 known issues, at `a1718d4f`**, on a clean tree.
-- **The run:** `Test run with 3383 tests in 245 suites passed after 107.608 seconds with 8 known issues.` The flagged command from `CLAUDE.md` was redirected to its own file and its exit written on the next line. Over the log, `grep -cE 'recorded an issue'` → 0, `grep -cE ' failed after'` → 0 and `grep -cE 'recorded a known issue'` → 8.
-- **Where the count comes from:** `main`'s 3381 in 245 (`feature/skills`' union figure) plus two tests in existing suites. `git diff 65a50865 a1718d4f -- Tests | grep -cE '^\+\s*@Test'` → 2, the same with `^-` → 0, and `^\+\s*@Suite` → 0.
-- **Why it was re-run rather than carried.** PR #245's round (`a1718d4f`) changed comment lines only in `Sources/` and `Tests/`. The proof is the command `git diff -U0 7421d0ae a1718d4f -- Sources`, with added and removed lines kept and header and `//` lines dropped (`grep -E '^[+-]' | grep -vE '^(\+\+\+ |--- )' | grep -vE '^[+-][[:space:]]*//'`). It keeps 0 of 4 changed lines, and the same over `Tests` keeps 0 of 16. That filter was first shown to keep an executable line: a synthetic diff's `+        if let object = …` line, and 25 lines of the real code diff `65a50865..9764a84f`. But a comment still moves the tree, so the suite was run again.
-- **SONNY-481's acceptance was measured at `f6b99eb6`**, an ancestor of this head. Since then `Sources/` and `Tests/` have moved by comment lines only (above), and the run was not repeated at `a1718d4f`.
-  - Without the extra pack: `… 3383 tests in 245 suites passed after 87.748 seconds with 8 known issues.`
-  - With a well-formed `asana.skillpack.json` added to `Sources/MacAgent/Resources/SkillPacks/`: `… passed after 109.049 seconds with 8 known issues.` Before that run, `git status --porcelain` printed that one untracked file and nothing else, and the file was deleted afterwards.
-  - Both exited 0, with 0 issue lines.
+(`git diff --name-only a9beb7c5 a8db95a3`, six files, plus the changelog.)
+Tests: **3383 in 245, exit 0, 8 known issues, at `2b84c9c4`**, the rebased head, on a clean tree.
+- **The run:** `Test run with 3383 tests in 245 suites passed after 87.111 seconds with 8 known issues.` The flagged command from `CLAUDE.md` was redirected to its own file and its exit written on the next line. Over the log, `grep -cE 'recorded an issue'` → 0, `grep -cE ' failed after'` → 0 and `grep -cE 'recorded a known issue'` → 8.
+- **Where the count comes from:** `main`'s 3381 in 245 (`feature/skills`' union figure). The base adds no test, since `a9beb7c5` changes nothing under `Sources/`, `Tests/` or `Package.swift` (above). Then two tests in existing suites: `git diff a9beb7c5 2b84c9c4 -- Tests | grep -cE '^\+\s*@Test'` → 2, the same with `^-` → 0, and `^\+\s*@Suite` → 0.
+- **PR #245's review round changed comment lines only in `Sources/` and `Tests/`.** The proof filter keeps added and removed diff lines and drops header and `//` lines: `grep -E '^[+-]' | grep -vE '^(\+\+\+ |--- )' | grep -vE '^[+-][[:space:]]*//'`. Over `git diff -U0 3d917e16 7b0435c2`, it keeps 0 of 4 changed lines under `Sources` and 0 of 16 under `Tests`. The control: it keeps a synthetic diff's executable line, and 25 lines of the real code diff `a9beb7c5..b1eae83b -- Sources`.
+- **History, before the rebase.** The suite was also green at `a1718d4f` (pre-rebase, replayed as `7b0435c2`), 3383 in 245 after 107.608 seconds. SONNY-481's acceptance was measured at `f6b99eb6` (pre-rebase, replayed as `a8db95a3`), both runs exit 0 with 0 issue lines:
+  - without the extra pack, `… 3383 tests in 245 suites passed after 87.748 seconds with 8 known issues.`;
+  - with a well-formed `asana.skillpack.json` added to `Sources/MacAgent/Resources/SkillPacks/`, `… passed after 109.049 seconds with 8 known issues.`. Before that run, `git status --porcelain` printed that one untracked file and nothing else, and the file was deleted afterwards.
+  - Neither acceptance run was repeated after the rebase, and `Sources/` and `Tests/` have since moved by comment lines only.
 
-**Warnings: 0 at `a1718d4f`** (`scripts/warnings`, exit 0, header `measured at : a1718d4f (clean)`, every file compiled).
+**Warnings: 0 at `2b84c9c4`** (`scripts/warnings`, exit 0, header `measured at : 2b84c9c4 (clean)`, every file compiled).
 
-**Carried from `a1718d4f` to the head that carries this entry, not re-run.** This entry's commit changes only the changelog. Each path the suite, warnings and plan figures depend on names the same object at both:
+**Carried from `2b84c9c4` to the head that carries this rebase record, not re-run.** That commit changes only the changelog. Each path the suite, warnings and plan figures depend on names the same object at both:
 
-| Path | Object at `a1718d4f` |
+| Path | Object at `2b84c9c4` |
 |---|---|
 | `Sources` | `808f36e8` |
 | `Tests` | `1b6bf3be` |
 | `Package.swift` | `fbbe36d7` |
-| `server` | `be97f308` |
-| `scripts` | `53903c8d` |
-| `mutation` | `1c84e8a2` |
+| `mutation` | `e43d775d` |
 
-`git rev-parse "a1718d4f:${x}" "HEAD:${x}"` prints one hash twice for each. `scripts/changelog-order`, `scripts/no-attribution tree` and `npm run check:secrets` read the changelog or every tracked file, so they were re-run at that head instead.
+`git rev-parse "2b84c9c4:${x}" "HEAD:${x}"` prints one hash twice for each. `scripts/changelog-order`, `scripts/no-attribution tree` and `npm run check:secrets` read the changelog or every tracked file, so they were re-run at that head instead.
 
-Mutation plan: mutation/plans/fix/skills-ready-for-the-catalogue.txt (founder-triggered, not run on this branch). `scripts/mutate mutation/plans/fix/skills-ready-for-the-catalogue.txt --check` → exit 0 at `a1718d4f`, all four mutants each `1 match`:
+Mutation plan: mutation/plans/fix/skills-ready-for-the-catalogue.txt (founder-triggered, not run on this branch). `scripts/mutate mutation/plans/fix/skills-ready-for-the-catalogue.txt --check` → exit 0 at `2b84c9c4`, all four mutants each `1 match`:
 - **X1**, the money context words stop reading plurals.
 - **X2**, the contextual objects stop reading plurals.
 - **X3**, the plural lookup reads only a word's first two singular candidates. This is PR #245's review's mutant, and the plan gained it in that round. It guards the part of SONNY-479 that dropping `invoices` and `balances` from the lists relies on: every candidate is kept, and `invoices` needs its third.
-  - Proved by hand at `a1718d4f`, under `--filter 'SkillPackTests/aContextWordOrAContextualObjectInThePluralCountsAsItsSingularDoes'`: exit 1, `Test run with 1 test in 1 suite failed after 0.027 seconds with 1 issue.`, the issue naming `Update the account on the invoices. → nil` against `update + account`.
-  - Reverted with `git checkout --`. Afterwards `git diff` printed 0 bytes, `git status --porcelain` 0 lines, and `git hash-object` on the file equalled `git rev-parse HEAD:Sources/MacAgentCore/SkillPackContentRules.swift` (`df5b2d2f…`).
+  - Proved by hand at `a1718d4f` (pre-rebase, replayed as `7b0435c2`, the same `Sources` and `Tests` trees), under `--filter 'SkillPackTests/aContextWordOrAContextualObjectInThePluralCountsAsItsSingularDoes'`: exit 1, `Test run with 1 test in 1 suite failed after 0.027 seconds with 1 issue.`, the issue naming `Update the account on the invoices. → nil` against `update + account`.
+  - Reverted with `git checkout --`. Afterwards `git diff` printed 0 bytes, `git status --porcelain` 0 lines, and `git hash-object` on the file equalled HEAD's blob, `df5b2d2f…`, which is also the blob at `2b84c9c4`.
 - **R1**, the Command Center Skills suite reads the shipped folder again, so its exact rows pin today's packs.
-  - Proved by hand once on the tree then committed as `f6b99eb6`, because its only killer is new. Applied under `--filter 'SkillPackTests/onlyTheValidating|SkillsCommandCenterTests'` it gave `Test run with 7 tests in 2 suites failed after 0.566 seconds with 1 issue.`, the scan's `readers` holding both files.
+  - Proved by hand once on the tree then committed as `f6b99eb6` (pre-rebase, replayed as `a8db95a3`), because its only killer is new. Applied under `--filter 'SkillPackTests/onlyTheValidating|SkillsCommandCenterTests'` it gave `Test run with 7 tests in 2 suites failed after 0.566 seconds with 1 issue.`, the scan's `readers` holding both files.
   - The Skills suite's own six tests passed under it. It was reverted with `git checkout --`.
 
-`feature/skills`' plan still anchors: `scripts/mutate mutation/plans/feature/skills.txt --check` → exit 0 at `a1718d4f`, thirty mutants each `1 match`.
+`feature/skills`' plan still anchors: `scripts/mutate mutation/plans/feature/skills.txt --check` → exit 0 at `2b84c9c4`, thirty mutants each `1 match`.
 
 Behavior added:
 - **SONNY-479:** a pack flow naming a contextual object — a recipient, card, account, balance or amount — beside a money context word in the plural is refused exactly as with the singular. "Update the account at the banks." and "Update the balance in two currencies." no longer load.
 - **SONNY-481:** adding a well-formed pack to the shipped folder changes no test's result except the two tests that load and validate every shipped pack.
 
 Behavior preserved (required, no blanket claims):
-- **For every English word, every refusal the money rule made before still happens, and nothing it allowed is refused except the plural context words.** (This said "every refusal" without the qualifier until PR #245's review, F1; the exception is below.) This was measured, not argued. A temporary test, deleted before any commit, compared the old lists and lookups (copied from `65a50865`) with the new ones on the tree committed as `9764a84f`. Its corpus was 14,720 generated texts: five verbs, each listed word and its one regular plural, four second objects and eight context phrases.
+- **For every English word, every refusal the money rule made before still happens, and nothing it allowed is refused except the plural context words.** (This said "every refusal" without the qualifier until PR #245's review, F1; the exception is below.) This was measured, not argued. A temporary test, deleted before any commit, compared the old lists and lookups (copied from `65a50865`) with the new ones on the tree committed as `9764a84f` (pre-rebase, replayed as `b1eae83b`). Its corpus was 14,720 generated texts: five verbs, each listed word and its one regular plural, four second objects and eight context phrases.
   - 226 texts are newly refused, and every one names banks, billings or currencies.
   - 0 texts that were refused now load.
   - 482 are refused either way, and now report the object under its singular (`update + card` rather than `update + cards`), which is what `aMoneyObjectInThePluralIsRefusedAsItsSingularIs` already required of money objects.
@@ -242,11 +255,11 @@ Behavior preserved (required, no blanket claims):
   - **Removing the listed plurals from `moneyObjects` changes a result only for a removed plural followed by `-es`, which no English word is.** (Narrowed by PR #245's review, F1: this said it "cannot change a result".)
     - **Why the argument holds for every other word.** A removed plural is a candidate of a text word in only two ways: the word is that plural, or the word is that plural plus `-es`. When the word is the plural, its singular is a candidate too, and the singular sits earlier in the list, so it matches first.
     - **The exception.** Plural plus `-es` gives candidates that include the plural but not its singular. `singularCandidates(of: "paymentses")` → `[paymentses, payments, paymentse]`. So "Add the paymentses." was refused as `add + payments` and now loads, and so does "Update the chargeses.".
-    - **Checked here with an optimized build of the rules file at `7421d0ae`**, whose code lines `a1718d4f` did not change (the comment-only proof under Tests): "Add the paymentses." and "Update the chargeses." both load. The review found the affected set is exactly the 13 removed plurals with `-es` added.
-    - **Across the dictionary, the review found 0 refusals lost.** It took every alphabetic headword in `/usr/share/dict/words` plus its regular plural, 467,292 words, and put each into three texts, 1,401,876 in all. Through both rules (built at `65a50865` and at `7421d0ae`), 0 were refused before and load now. 3 are newly refused — banks, billings and currencies. Those are the review's figures.
+    - **Checked here with an optimized build of the rules file at `7421d0ae` (pre-rebase, replayed as `3d917e16`)**, whose code lines the review round did not change (the comment-only proof under Tests): "Add the paymentses." and "Update the chargeses." both load. The review found the affected set is exactly the 13 removed plurals with `-es` added.
+    - **Across the dictionary, the review found 0 refusals lost.** It took every alphabetic headword in `/usr/share/dict/words` plus its regular plural, 467,292 words, and put each into three texts, 1,401,876 in all. Through both rules (built at `65a50865` and at `7421d0ae` (pre-rebase, replayed as `3d917e16`)), 0 were refused before and load now. 3 are newly refused — banks, billings and currencies. Those are the review's figures.
 - **Every existing money, credential, URL and trigger test is unchanged and green** in the runs above, including the money table in all four categories and `readingMoneyAndAnOrdinarySendOrTransferStillLoad`.
-- **The loader, its validation, the pack files and the catalogue are untouched.** `git diff --name-only 65a50865 f6b99eb6 -- Sources` names only `SkillPackContentRules.swift`.
-- **The two validating tests still read the whole shipped folder.** With the extra pack made malformed by an unknown `approval` field, `everyShippedPackLoadsAndEveryOneIsARowOfTheCommittedCatalogue` failed with `(catalogue.packs.count → 3) == (files.count → 4)`. That was on the tree then committed as `f6fe7853`.
+- **The loader, its validation, the pack files and the catalogue are untouched.** `git diff --name-only a9beb7c5 2b84c9c4 -- Sources` names only `SkillPackContentRules.swift`.
+- **The two validating tests still read the whole shipped folder.** With the extra pack made malformed by an unknown `approval` field, `everyShippedPackLoadsAndEveryOneIsARowOfTheCommittedCatalogue` failed with `(catalogue.packs.count → 3) == (files.count → 4)`. That was on the tree then committed as `f6fe7853` (pre-rebase, replayed as `87dea417`).
 - **The Command Center Skills suite asserts exactly what it did before**: the same rows, buttons, searches, wipe, Memory row, memory switch and plan request. Those assertions are now true of a catalogue it builds, not of whatever ships.
 
 Architectural decisions / pitfalls discovered (required, write "none" if true):
@@ -265,7 +278,7 @@ The ticket offered two fixes, reading plurals in the context lookup or listing t
 The command reads the lists out of the committed file:
 
 ```
-git show f6b99eb6:Sources/MacAgentCore/SkillPackContentRules.swift | python3 -c 'import re,sys; s=sys.stdin.read(); c=lambda w:[x for x in [w[:-3]+"y" if w.endswith("ies") and len(w)>4 else "", w[:-2] if w.endswith("es") and len(w)>3 else "", w[:-1] if w.endswith("s") and not w.endswith("ss") and len(w)>2 else ""] if x]; p=lambda h:h+"es" if h.endswith(("s","x","z","ch","sh")) else (h[:-1]+"ies" if len(h)>1 and h[-1]=="y" and h[-2] not in "aeiou" else h+"s"); H=sorted({l.strip().lower() for l in open("/usr/share/dict/words") if l.strip().isalpha()}); [print(n, sorted({(p(h),x) for h in H for x in c(p(h)) if x!=h and x in V})) for n in ["moneyObjects","contextualObjects","moneyContext"] for V in [{w for q in re.findall(r"\"([^\"]+)\"", re.search(n+r" = SkillPhraseList\(\[(.*?)\]\)", s, re.S).group(1)) for w in q.split()}]]'
+git show 2b84c9c4:Sources/MacAgentCore/SkillPackContentRules.swift | python3 -c 'import re,sys; s=sys.stdin.read(); c=lambda w:[x for x in [w[:-3]+"y" if w.endswith("ies") and len(w)>4 else "", w[:-2] if w.endswith("es") and len(w)>3 else "", w[:-1] if w.endswith("s") and not w.endswith("ss") and len(w)>2 else ""] if x]; p=lambda h:h+"es" if h.endswith(("s","x","z","ch","sh")) else (h[:-1]+"ies" if len(h)>1 and h[-1]=="y" and h[-2] not in "aeiou" else h+"s"); H=sorted({l.strip().lower() for l in open("/usr/share/dict/words") if l.strip().isalpha()}); [print(n, sorted({(p(h),x) for h in H for x in c(p(h)) if x!=h and x in V})) for n in ["moneyObjects","contextualObjects","moneyContext"] for V in [{w for q in re.findall(r"\"([^\"]+)\"", re.search(n+r" = SkillPhraseList\(\[(.*?)\]\)", s, re.S).group(1)) for w in q.split()}]]'
 ```
 
 The control is the same extraction printing each list's word count: 35, 5 and 11.
@@ -276,7 +289,7 @@ The control is the same extraction printing each list's word count: 35, 5 and 11
 - `SkillPackTests.swift:145` is the trigger check, a validating test whose `>= 3` control holds as packs are added.
 - `SkillSelectionStoreTests.swift:64-70` hands opaque ids to the store and reads no catalogue.
 
-**The control:** with the extra pack added and the tests unchanged, `--filter 'SkillPackTests|SkillsCommandCenterTests'` at `9764a84f` failed at exactly `:4737` (`rows("") → ["asana", "docusign", "linear", "notion"]`) and `:4613` (`["Add", "Add", "Remove", "Remove"]`).
+**The control:** with the extra pack added and the tests unchanged, `--filter 'SkillPackTests|SkillsCommandCenterTests'` at `9764a84f` (pre-rebase, replayed as `b1eae83b`) failed at exactly `:4737` (`rows("") → ["asana", "docusign", "linear", "notion"]`) and `:4613` (`["Add", "Add", "Remove", "Remove"]`).
 
 **The fixture builder moved, rather than being copied.** `SkillPackFixtures` moved into `MacAgentTestSupport`, so the Command Center suite builds its catalogue with the same JSON builder the loader's tests use, through the real `SkillPackCatalog.load(files:)`. `catalogue()` throws rather than returning a shorter list when the loader refuses a fixture. `OpenAIPlannerTests` already imported `MacAgentTestSupport` and needed no edit.
 
@@ -294,7 +307,7 @@ The control is the same extraction printing each list's word count: 35, 5 and 11
 
 **The loader's cost at catalogue size, measured for SONNY-476 and handed to that branch.** 470 Notion-sized packs take **282.7 ms** in `SkillPackCatalog.load(from:)`: median of 21 runs, min 276.5, max 327.1, of which the money and credential rules take 222.8 ms. Today's three shipped packs take 1.4 ms.
 - **This is the loader alone, not the launch path.** SONNY-476's decision names it that way: that branch's "before" and "after" are the main-thread time `atItsRealStoreLocations()` spends on packs, a different instrument.
-- **Instrument:** `xcrun swiftc -O -wmo` over `SkillPack.swift`, `SkillPackContentRules.swift` and `SearchTextNormalization.swift` exactly as committed at `f6fe7853` (`Sources` identical to `f6b99eb6`'s, above). A scratch `main.swift` timed `SkillPackCatalog.load(from:)` with `ContinuousClock.measure`.
+- **Instrument:** `xcrun swiftc -O -wmo` over `SkillPack.swift`, `SkillPackContentRules.swift` and `SearchTextNormalization.swift` exactly as committed at `f6fe7853` (pre-rebase, replayed as `87dea417`), whose `Sources` tree is the one every commit on this branch before the review round names (`8a773894…`). A scratch `main.swift` timed `SkillPackCatalog.load(from:)` with `ContinuousClock.measure`.
 - **The packs:** 470 generated copies of the shipped `notion.skillpack.json`, 1,706 bytes each (`wc -c`), all 470 loading with 0 failures. `uptime`'s load averages were 8.06 to 8.84 with other lanes running.
 - **Why launch cannot be fixed inside this branch's files:** `atItsRealStoreLocations()` builds the catalogue on the main thread, and `AppDelegate` reads every pack at launch through `refreshAddedSkills()`. The SONNY-476 comment of 2026-09-13 has the options that were weighed.
 
