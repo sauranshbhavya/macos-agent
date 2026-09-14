@@ -668,13 +668,23 @@ Staging exists precisely for this, so the rule is stated rather than implied:
 `down` reworded after step 2 makes step 3 refuse — which is the guard working: the rehearsal is only
 a rehearsal if production's rollback is the one staging walked.
 
-**No `lock_timeout` is set, and step 4 is where that matters** (PR #164 review, F8). Several
-migrations take `ACCESS EXCLUSIVE` on `sonny.identity` — 0004, 0006 and 0008 each carry an
-`ALTER TABLE`, 0014 carries two `DROP COLUMN`s, and 0005's `CREATE TRIGGER` takes
-`SHARE ROW EXCLUSIVE`. That table is what `accountForSupabaseUser` reads on **every authenticated
-request**. Those statements are metadata-only, so the lock is held for microseconds; the risk is the
-**wait** for it, because a lock request queues every reader behind it. Against an idle database this
-is invisible, which is why it has never mattered: no migration has met real traffic yet.
+**No `lock_timeout` is set, and step 4 is where that matters** (PR #164 review, F8). Five up halves
+declare `ACCESS EXCLUSIVE` on `sonny.identity` — 0004, 0005, 0006, 0008 and 0014 (the first line of
+each file, `grep -cE 'ACCESS EXCLUSIVE sonny\.identity(,|$)'` over them → 5 at the commit that wrote
+this; without the `(,|$)` it answers 6, the sixth being 0016's `sonny.identity_provider_user`) — and
+0010 and 0015 take the write-blocking `SHARE` and `SHARE ROW EXCLUSIVE` on it. That table is what
+`accountForSupabaseUser` reads on **every authenticated request**. A lock request queues every reader behind it, so even a lock held for
+microseconds costs the full **wait** for it behind whatever transaction got there first.
+
+**This paragraph used to say those statements "are metadata-only, so the lock is held for
+microseconds", and for four of them that was false** (SONNY-370, measured by the check below):
+0004 and 0005 each backfill `sonny.identity` with an `UPDATE`, and 0006 and 0014 each build an index
+over it, all under the `ACCESS EXCLUSIVE` their `ALTER` took — so on a populated table every
+authenticated request would wait for a full pass over it. Only 0008 is metadata-only. They are
+harmless where they have run so far, because every one of them ran against an empty table, and a
+fresh environment's first deploy applies them the same way. They are not harmless as a pattern, and
+nothing about the next one is guaranteed by the practice of the last — which is why the declaration
+and measurement below exist.
 
 **"Metadata-only, so microseconds" is a property of those migrations and not of the runner, and this
 paragraph used to state it as though it were the rule** (PR #171 review, F1). **Two separate things
@@ -717,8 +727,8 @@ boundary is not an extrapolation, which is how an earlier draft of 0017's header
 eight seconds". `CREATE INDEX CONCURRENTLY` and a batched backfill are the standard escapes and
 **neither is available in this runner**, because both must run outside a transaction. So before
 writing a migration that touches rows, read 0017's header for what that costs and what the escape
-would take. **The general form — nothing checks any migration's lock profile — is SONNY-370**, filed
-after the same class turned up in the ledger's `ALTER` on PR #169 the same day.
+would take. How every migration's lock profile is declared and then measured is the section after
+this one.
 
 **And the `lock_timeout` decision the top of this section opens with is still owed.** Before
 **SONNY-126**'s first remote deploy, decide whether the runner should set one: it turns "every
@@ -733,6 +743,61 @@ lot. They are split on purpose — `test/migrate.load.test.ts` needs no database
 skipped on every run of the documented command; `test/migrate.db.test.ts` needs one and pins apply →
 roll back → re-apply, a half-failed migration leaving neither schema nor ledger row, and the ledger's
 schema.
+
+### Every migration declares its lock profile, and the suite measures it
+
+**Nothing promises a migration is metadata-only. What is enforced is that every shipped migration
+states its lock profile, and that the suite finds each statement true** (SONNY-370, filed after this
+class turned up in 0017 on PR #171 and in the ledger's `ALTER` on PR #169 the same week). **The suite
+enforces it, not the runner**: `npm run migrate -- up` does not read the declarations and will apply a
+file that has none, so what stands between an unmeasured migration and a deploy is the database suite
+(`npm run test:db`) being run on the branch that adds it. Each half of every migration opens with two
+lines:
+
+```
+-- @locks ACCESS EXCLUSIVE sonny.sign_in_code_issue
+-- @scans sonny.sign_in_code_issue
+```
+
+`@locks` names every relation that existed before the migration and on which it holds a lock ordinary
+traffic waits for — `ACCESS EXCLUSIVE` stalls reads; `SHARE`, `SHARE ROW EXCLUSIVE` and `EXCLUSIVE`
+stall writes — with the strongest mode it holds. `@scans` names every pre-existing table it reads
+through: a backfill, an index build, a `SET NOT NULL` or `CHECK` validation, a rewrite. Either line may
+say `none`. **A table on both lines is the shape that stalls traffic for a time that grows with the
+table**, and it is the shape PR #171's first 0017 had; 0016, with `ACCESS EXCLUSIVE` on the first line
+and `none` on the second, is the harmless one beside it.
+
+**Declared in the file, measured by the suite.** `test/migration-lock-profile.test.ts` (no database)
+refuses a shipped half with no declaration or one that does not parse.
+`test/migration-lock-profile.db.test.ts` applies every migration and rolls every one back through the
+runner's own `up` and `down`, reads `pg_locks` and Postgres's per-transaction scan counter inside each
+half's transaction, and fails on any half whose declaration differs — printing the two lines that would
+be true. It also holds the two cases this was filed for: PR #171's first 0017 measures as a scan of the
+sign-in table under `ACCESS EXCLUSIVE`, and the runner's read path — `status`, and `up` with nothing
+pending — holds no blocking lock at all, which PR #169's unconditional `ALTER` would break. The lines
+are comments, so adding them to an applied migration leaves its content hash alone; all 23 files
+received them on that branch with every hash unchanged.
+
+**What it deliberately does not do.**
+
+- **It does not decide whether a stall is acceptable.** 0017 declares `ACCESS EXCLUSIVE` across an
+  index build on the sign-in table and ships, because its header argues for the cost. The check makes
+  that shape impossible to miss in review and impossible to state wrongly; the judgement stays with the
+  review, and with whoever schedules the deploy.
+- **It measures shapes, not durations.** The tables are empty — a scan is counted when it starts, so
+  no seeding is needed — and a duration depends on the rows an environment holds. Read a table on both
+  lines as *this will take as long as that table is big*, and measure it against realistic data before
+  a deploy that matters, as 0017's figures were.
+- **A scan is not always proportional.** A `DELETE … WHERE id = …` counts as a scan of its table.
+  The check errs toward declaring too much, never too little.
+- **Only relation locks.** A stall that holds nothing — a `pg_sleep` under `ACCESS EXCLUSIVE` — declares
+  the lock and no scan, and waits anyway.
+- **It does not make the escapes available.** `CREATE INDEX CONCURRENTLY` and batched backfills need a
+  migration outside a transaction, and this runner gives every migration one.
+
+**Writing a new migration:** write the two lines per half as best you understand it, run
+`npm run test:db`, and if the measurement disagrees, the failure prints what to write instead — and
+the disagreement is the thing to understand before copying it.
 
 ### An applied migration cannot change silently
 
