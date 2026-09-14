@@ -1,0 +1,69 @@
+# SONNY-370 — every migration half declares its lock profile (-- @locks, -- @scans), the runner refuses
+# a half with no declaration at load (founders' option B, 2026-09-14), and the database suite measures
+# every half through the runner's own up and down — pg_locks and the per-transaction scan counter,
+# read inside the half's transaction — failing on any half whose declaration differs. The two cases the
+# ticket was filed for are held as tests: PR #171's first 0017, a scan of sonny.sign_in_code_issue under
+# ACCESS EXCLUSIVE, and PR #169's unconditional ledger ALTER on the runner's read path.
+#
+# SERVER HALF, DATABASE SUITE. Every path below is under server/, so scripts/mutate-all runs this plan
+# against `cd server && npx vitest run`, and only with DATABASE_URL set (WORKFLOW.md's weekly battery
+# starts the database). M2's killers need no database; M1, M3 and M4's all live in
+# migration-lock-profile.db.test.ts and skip without one, so without a database those three would read
+# as survivors nobody tested.
+#
+# Not run on this branch (founder-triggered batteries, 2026-09-10): only `scripts/mutate <plan> --check`
+# was run. The killers below are the tests each mutant was written against, not a measurement — with
+# one exception, M3's shape, which was applied by hand on the branch before this plan existed (the
+# changelog entry carries that run and its SHA).
+#
+# Intended killers:
+#   M1 — migration-lock-profile.db.test.ts: "refuses PR #171's first 0017: a scan of the sign-in table
+#        under ACCESS EXCLUSIVE", "measures the shipped 0017 as holding ACCESS EXCLUSIVE across its index
+#        build", and "finds each half's declaration true, or prints the lines that would be" (every
+#        half declaring a scan, 0017's up among them, then disagrees).
+#   M2 — migrate.load.test.ts: "refuses a migration with an up half that declares nothing, naming the
+#        file and the half" and the same for a down half. The missing-@locks and missing-@scans cases
+#        survive this mutant by design: the parser refuses a half-present declaration on its own, and
+#        this mutant leaves the parser's call in place.
+#   M3 — migration-lock-profile.db.test.ts: "holds no blocking lock on the runner's read path: status,
+#        and up with nothing pending".
+#   M4 — migration-lock-profile.db.test.ts: "finds each half's declaration true, or prints the lines
+#        that would be", "measures 0016 as the harmless shape: ACCESS EXCLUSIVE, and nothing scanned",
+#        the shipped-0017 test, the PR #171 test, the PR #169 control, and — in the direction that
+#        matters most — nothing else: the read-path test's expected [] would PASS under this mutant,
+#        which is why it is not listed and why the PR #169 control exists beside it.
+
+>>> mutant M1 the scan check dropped: every half measures as scanning nothing, so a backfill under ACCESS EXCLUSIVE reads as 0016's shape
+>>> file server/src/db/lock-profile.ts
+>>> from
+  return { locks: await blockingLocksHeld(client, snapshot), scans: await tablesScannedSince(client, snapshot) };
+>>> to
+  return { locks: await blockingLocksHeld(client, snapshot), scans: [] };
+>>> end
+
+>>> mutant M2 a missing declaration accepted at load: the parser still runs, so only a half that declares nothing at all gets through
+>>> file server/src/db/migrate.ts
+>>> from
+  if (declaredLockProfile(sql, `${file} ${half} half`) !== undefined) return;
+>>> to
+  declaredLockProfile(sql, `${file} ${half} half`);
+  return;
+>>> end
+
+>>> mutant M3 PR #169's unconditional ALTER restored: the ledger's ADD COLUMN IF NOT EXISTS runs on every command, status included, and takes ACCESS EXCLUSIVE doing nothing
+>>> file server/src/db/migrate.ts
+>>> from
+  const { rowCount } = await client.query(HAS_CONTENT_HASH);
+  if (rowCount === 0) {
+>>> to
+  await client.query(HAS_CONTENT_HASH);
+  {
+>>> end
+
+>>> mutant M4 locks read from outside the migration's own transaction: every other backend's locks instead of this one's
+>>> file server/src/db/lock-profile.ts
+>>> from
+      WHERE pid = pg_backend_pid() AND locktype = 'relation' AND granted`,
+>>> to
+      WHERE pid <> pg_backend_pid() AND locktype = 'relation' AND granted`,
+>>> end
