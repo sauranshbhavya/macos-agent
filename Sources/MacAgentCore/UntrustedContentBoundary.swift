@@ -197,11 +197,13 @@ public enum UntrustedContentBoundary {
         /// The sentence that tells the model which lines are boundaries, for the trusted part of a
         /// prompt.
         ///
-        /// **One sentence, in one place, because two prompts declare it and a second copy is how one
+        /// **One sentence, in one place, because three prompts declare it and a second copy is how one
         /// gets it right.** `VisionSessionPromptBuilder.systemRules` and
-        /// `WebResearchPromptBuilder.systemPrompt` both interpolate this; neither writes a delimiter
-        /// name of its own, which is also what keeps the bare names out of every production file but
-        /// this one (`noProductionFileOutsideTheBoundaryWritesADelimiterName`).
+        /// `WebResearchPromptBuilder.systemPrompt` both interpolate this, and since SONNY-343
+        /// `OpenAIPlanner` declares the same sentence over its prior-task message's markers through
+        /// ``segmentTagRule(naming:)``; none of them writes a delimiter name of its own, which is also
+        /// what keeps the bare names out of every production file but this one
+        /// (`noProductionFileOutsideTheBoundaryWritesADelimiterName`).
         ///
         /// **It contains no line break, and that is checked rather than intended.** Every marker it
         /// names appears mid-sentence: a rule that put one at the start of its own line would be a
