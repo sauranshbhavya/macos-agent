@@ -158,9 +158,9 @@ public struct PriorTaskContext: Codable, Equatable, Sendable {
         delimiters.segmentTagRule(naming: markers(delimiters))
     }
 
-    /// What the planner receives about the previous task: a **trusted** block holding only what
-    /// Sonny's code or the user wrote, and an **observed** segment holding everything a model or
-    /// someone outside Sonny wrote.
+    /// What the planner receives about the previous task: a **trusted** block holding the command
+    /// that was submitted and the fields no model and no stranger can write, and an **observed**
+    /// segment holding everything else.
     ///
     /// **Why the line is drawn there, and why provenance alone could not draw it** (SONNY-491, whose
     /// enumeration is on the ticket). Until this change every field sat in the trusted block, and the
@@ -180,9 +180,18 @@ public struct PriorTaskContext: Codable, Equatable, Sendable {
     /// Routing only the result by `StoredTaskResult.Provenance` would have closed the first and left
     /// the third: the same title would have re-entered the trusted block on the next command as a
     /// `searchQuery=` detail and inside "Saved web research Markdown for search query …", a sentence
-    /// code wrote. So the trusted block is built from the fields no model and no stranger can write —
-    /// the command, each step's operation, the outcome's status and the capture time — and everything
-    /// else goes to the observed segment **whatever its provenance**. Provenance is still read: the
+    /// code wrote. So the trusted block is built from the command and the fields no model and no
+    /// stranger can write — each step's operation, the outcome's status and the capture time — and
+    /// everything else goes to the observed segment **whatever its provenance**.
+    ///
+    /// **The command is the one exception to "no model and no stranger", and it is not always typed**
+    /// (PR #249's review, F2). On most paths it is what the user typed or said. Four paths build it in
+    /// code around a value the user did not type: "Run my <name> routine" from the routine card and
+    /// from a scheduled run's history row, "Open my <name> workspace", and the workspace sheet's edit
+    /// sentence, which can name an installed app by the display name its maker wrote. A routine's or
+    /// a workspace's name comes from a planner's `save_routine` or `create_workspace` step. That is
+    /// not a new route — the same sentence is already the *current* command when the card is pressed
+    /// — and it belongs to SONNY-494, which covers model-written text in the command position. Provenance is still read: the
     /// trusted block says in Sonny's words who wrote the result, which is the one fact about that text
     /// the planner cannot learn from the text itself.
     ///
