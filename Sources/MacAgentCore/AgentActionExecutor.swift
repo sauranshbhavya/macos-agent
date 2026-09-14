@@ -2567,10 +2567,10 @@ public final class AgentActionExecutor {
             // Forwarded, not authored (SONNY-147): a chain whose vision segment wrote free text
             // produces a joined summary that contains it, so the join is model-authored as soon as
             // any one segment was. `.codeAuthored` on the whole because the joining is done here
-            // would launder the one segment the declaration exists to mark.
-            if result.summaryProvenance == .modelAuthored {
-                summaryProvenance = .modelAuthored
-            }
+            // would launder the one segment the declaration exists to mark. Since SONNY-491 a segment
+            // quoting a stranger's words raises it too, through the one ordering
+            // `Provenance.joined(with:)` keeps — a model segment still wins over it.
+            summaryProvenance = summaryProvenance.joined(with: result.summaryProvenance)
             suggestions.append(contentsOf: result.suggestions)
             // Accumulate each segment's real result previews — re-running previewChain after
             // execution would re-resolve default output paths and misreport what was written.
@@ -2608,12 +2608,20 @@ public final class AgentActionExecutor {
         // needs — that thirty-eight worked and two did not — would be buried in it.
         let summary: String
         if let itemJob {
+            let joinedSummaries = summaries.joined(separator: " ")
             summary = Self.itemJobSummary(
                 job: itemJob,
                 plan: plan,
                 failures: itemJobFailures,
-                fallback: summaries.joined(separator: " ")
+                fallback: joinedSummaries
             )
+            // **A job that names its failures quotes file and folder names read off the disk**
+            // (SONNY-491): `itemJobSummary` writes each failed item's name, and whoever saved that item
+            // wrote the name. A job with no failure names none, and neither does the fallback, which
+            // is the segments' own summaries with their own provenance already joined above.
+            if !itemJobFailures.isEmpty, summary != joinedSummaries {
+                summaryProvenance = summaryProvenance.joined(with: .outsideAuthored)
+            }
         } else {
             summary = summaries.joined(separator: " ")
         }

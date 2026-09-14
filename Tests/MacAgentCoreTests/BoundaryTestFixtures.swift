@@ -28,6 +28,13 @@ let fixedTagBoundary = UntrustedContentBoundary.Delimiters(tag: "QXZJVWHKMPFRBNL
 /// one prompt is not a marker in another, which is what makes an echoed tag inert.
 let otherFixedTagBoundary = UntrustedContentBoundary.Delimiters(tag: "MDKWSPXHVBLQZFNRJGTY")!
 
+extension UntrustedContentBoundary.Delimiters {
+    /// The planner's trusted prior-task pair under this boundary's tag (SONNY-343), named here so a
+    /// test reads the same way for both pairs.
+    var priorTaskBegin: String { PriorTaskContext.trustedBegin(self) }
+    var priorTaskEnd: String { PriorTaskContext.trustedEnd(self) }
+}
+
 
 // MARK: - The forgery corpus
 

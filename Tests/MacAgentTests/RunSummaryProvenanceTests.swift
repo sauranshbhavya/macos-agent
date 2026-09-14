@@ -78,13 +78,17 @@ struct RunSummaryProvenanceTests {
             namingFiles == [
                 // The one authoring site: free text a model wrote after reading the user's screen.
                 "VisionSessionCapabilityAdapter.swift": 1,
-                // The chain join. Two mentions, not one: it compares a segment's provenance against
-                // the value and then assigns it. Both are the forward, pinned by name below.
-                "AgentActionExecutor.swift": 2,
-                // The enum's own home — `StoredTaskResult.modelAuthored(_:)`, the factory every
-                // authoring site goes through. Named here rather than excluded: it genuinely
-                // mentions the value, and an exclusion rule is one more thing that can go stale.
-                "StoredTaskResult.swift": 1
+                // The enum's own home: `StoredTaskResult.modelAuthored(_:)`, the factory every
+                // authoring site goes through, and — since SONNY-491 — `Provenance.joined(with:)`,
+                // which names the value three times (two comparisons and its return). The chain join
+                // used to name it twice in `AgentActionExecutor.swift` and now calls `joined(with:)`
+                // instead, so the forward is one ordering in one place rather than a copy per site.
+                // Named here rather than excluded: an exclusion rule is one more thing that can go
+                // stale.
+                "StoredTaskResult.swift": 4,
+                // A reader, not a declaration: the prior-task block's authorship phrase switches on
+                // every case (SONNY-491).
+                "PriorTaskContext.swift": 1
             ],
             """
             These are every mention of `\(Self.namesTheValue)` in Sources/MacAgentCore's compiled \
@@ -136,15 +140,20 @@ struct RunSummaryProvenanceTests {
         let executor = try MacAgentSource.read(
             MacAgentSource.coreSourceDirectory.appendingPathComponent("AgentActionExecutor.swift")
         )
-        // 2. Assignment afterwards.
+        // 2. A `return` of the value — the shape `Provenance.joined(with:)` writes it in since
+        // SONNY-491, which replaced the chain's `summaryProvenance = .modelAuthored` assignment. The
+        // scan's reach over a non-declaration mention is what this keeps exercised.
+        let stored = try MacAgentSource.read(
+            MacAgentSource.coreSourceDirectory.appendingPathComponent("StoredTaskResult.swift")
+        )
         #expect(
-            MacAgentSource.count(of: "summaryProvenance = .modelAuthored", inText: executor) == 1,
-            "the assignment shape must still occur, or the scan's reach over it is unexercised"
+            MacAgentSource.count(of: "return .modelAuthored", inText: stored) == 1,
+            "the return shape must still occur, or the scan's reach over it is unexercised"
         )
         // 3. Declaration with an explicit type annotation — the shape neither old search term could
         // see. It holds `.codeAuthored` today, which is exactly why the hole was invisible: there
-        // was nothing to find. Pinned by its current value, so a flip to `.modelAuthored` changes
-        // `AgentActionExecutor.swift`'s count in the enumeration above from 2 to 3 and fails it.
+        // was nothing to find. Pinned by its current value, so a flip to `.modelAuthored` gives
+        // `AgentActionExecutor.swift` a count in the enumeration above, where it has none, and fails it.
         #expect(
             MacAgentSource.count(
                 of: "var summaryProvenance: StoredTaskResult.Provenance = .codeAuthored",
@@ -173,12 +182,52 @@ struct RunSummaryProvenanceTests {
             MacAgentSource.coreSourceDirectory.appendingPathComponent("AgentActionExecutor.swift")
         )
         #expect(executor.contains("summaryProvenance: summaryProvenance"))
-        #expect(executor.contains("if result.summaryProvenance == .modelAuthored"))
+        #expect(executor.contains("summaryProvenance = summaryProvenance.joined(with: result.summaryProvenance)"))
 
         let routine = try MacAgentSource.read(
             MacAgentSource.coreSourceDirectory.appendingPathComponent("RunRoutineCapabilityAdapter.swift")
         )
         #expect(routine.contains("summaryProvenance: result.summaryProvenance"))
+    }
+
+    /// **The summaries that quote text someone outside Sonny wrote are exactly the ones SONNY-491's
+    /// enumeration found** — the same whole-population scan as the model-authored one above, over the
+    /// third case's value.
+    ///
+    /// Since SONNY-491 a wrong provenance is a wrong sentence about authorship rather than a trusted
+    /// result, because `PriorTaskContext` puts every result in its untrusted segment. This is still the
+    /// backstop that says so when a new adapter quotes a stranger and nobody declares it, and when a
+    /// declared one is removed.
+    @Test
+    func theOutsideAuthoredSummariesAreTheOnesTheEnumerationFound() throws {
+        var namingFiles: [String: Int] = [:]
+        for url in try MacAgentSource.coreSourceFiles() {
+            let count = MacAgentSource.count(of: ".outsideAuthored", inText: try MacAgentSource.read(url))
+            guard count > 0 else {
+                continue
+            }
+            namingFiles[MacAgentSource.coreRelativePath(of: url)] = count
+        }
+
+        #expect(
+            namingFiles == [
+                // Event titles, which whoever sends an invitation writes.
+                "ReadCalendarEventsCapabilityAdapter.swift": 1,
+                // Selected files' names.
+                "FinderSelectionCapabilityAdapter.swift": 1,
+                // A catalogue's track and artist names, or the provider's failure detail.
+                "OpenMediaResultCapabilityAdapter.swift": 1,
+                // A search's skipped result URLs.
+                "WebResearchMarkdownCapabilityAdapter.swift": 1,
+                // An item job naming the files it could not do.
+                "AgentActionExecutor.swift": 1,
+                // `joined(with:)`'s comparisons and return.
+                "StoredTaskResult.swift": 3,
+                // The authorship phrase's switch, a reader.
+                "PriorTaskContext.swift": 1
+            ],
+            "every mention of .outsideAuthored in Sources/MacAgentCore's compiled code: \(namingFiles.sorted { $0.key < $1.key })"
+        )
     }
 
     /// And the default itself, which is what makes 26 of the 27 sites correct without saying

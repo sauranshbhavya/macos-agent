@@ -100,7 +100,11 @@ public struct ReadCalendarEventsCapabilityAdapter: CapabilityAdapter {
         return AgentRunResult(
             plan: plan,
             previews: [previewValue(day: day, context: context)],
-            summary: Self.summary(of: events, day: day, now: context.now(), calendar: context.calendar)
+            summary: Self.summary(of: events, day: day, now: context.now(), calendar: context.calendar),
+            // **Outside-authored whenever an event is listed** (SONNY-491): its title is written by
+            // whoever sent the invitation, and most calendar services add one without the user
+            // acting. "Nothing on your calendar today." names no event and is Sonny's alone.
+            summaryProvenance: events.isEmpty ? .codeAuthored : .outsideAuthored
         )
     }
 
