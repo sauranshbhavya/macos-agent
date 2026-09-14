@@ -746,13 +746,15 @@ schema.
 
 ### Every migration declares its lock profile, and the suite measures it
 
-**Nothing promises a migration is metadata-only. What is enforced is that every shipped migration
-states its lock profile, and that the suite finds each statement true** (SONNY-370, filed after this
-class turned up in 0017 on PR #171 and in the ledger's `ALTER` on PR #169 the same week). **The suite
-enforces it, not the runner**: `npm run migrate -- up` does not read the declarations and will apply a
-file that has none, so what stands between an unmeasured migration and a deploy is the database suite
-(`npm run test:db`) being run on the branch that adds it. Each half of every migration opens with two
-lines:
+**Nothing promises a migration is metadata-only. What is enforced is that every migration states its
+lock profile, and that the suite finds each statement true** (SONNY-370, filed after this class turned
+up in 0017 on PR #171 and in the ledger's `ALTER` on PR #169 the same week). **The two halves of that
+are enforced in two different places.** The runner refuses, at load and on every command, a file with a
+half that has no declaration or an unreadable one — the same shape as its refusal of a file with no
+`-- @rollback`, and the founders' choice of 2026-09-14. It cannot tell a true declaration from a wrong
+one, because it has nothing to measure against; that is the database suite's (`npm run test:db`), so
+what stands between a *wrong* declaration and a deploy is that suite being run on the branch that adds
+it. Each half of every migration opens with two lines:
 
 ```
 -- @locks ACCESS EXCLUSIVE sonny.sign_in_code_issue
@@ -767,8 +769,10 @@ say `none`. **A table on both lines is the shape that stalls traffic for a time 
 table**, and it is the shape PR #171's first 0017 had; 0016, with `ACCESS EXCLUSIVE` on the first line
 and `none` on the second, is the harmless one beside it.
 
-**Declared in the file, measured by the suite.** `test/migration-lock-profile.test.ts` (no database)
-refuses a shipped half with no declaration or one that does not parse.
+**Declared in the file, refused by the runner when absent, measured by the suite.**
+`test/migrate.load.test.ts` (no database) pins the runner's refusal of a missing `@locks`, a missing
+`@scans` and a half with no declaration at all, and loads every shipped file;
+`test/migration-lock-profile.test.ts` (no database) pins what the parser reads and refuses.
 `test/migration-lock-profile.db.test.ts` applies every migration and rolls every one back through the
 runner's own `up` and `down`, reads `pg_locks` and Postgres's per-transaction scan counter inside each
 half's transaction, and fails on any half whose declaration differs — printing the two lines that would
@@ -782,8 +786,8 @@ received them on that branch with every hash unchanged.
 
 - **It does not decide whether a stall is acceptable.** 0017 declares `ACCESS EXCLUSIVE` across an
   index build on the sign-in table and ships, because its header argues for the cost. The check makes
-  that shape impossible to miss in review and impossible to state wrongly; the judgement stays with the
-  review, and with whoever schedules the deploy.
+  that shape impossible to miss in review, and a wrong statement of it fails the database suite; the
+  judgement stays with the review, and with whoever schedules the deploy.
 - **It measures shapes, not durations.** The tables are empty — a scan is counted when it starts, so
   no seeding is needed — and a duration depends on the rows an environment holds. Read a table on both
   lines as *this will take as long as that table is big*, and measure it against realistic data before
@@ -795,9 +799,9 @@ received them on that branch with every hash unchanged.
 - **It does not make the escapes available.** `CREATE INDEX CONCURRENTLY` and batched backfills need a
   migration outside a transaction, and this runner gives every migration one.
 
-**Writing a new migration:** write the two lines per half as best you understand it, run
-`npm run test:db`, and if the measurement disagrees, the failure prints what to write instead — and
-the disagreement is the thing to understand before copying it.
+**Writing a new migration:** write the two lines per half as best you understand it — the runner will
+not load the file without them — then run `npm run test:db`, and if the measurement disagrees, the
+failure prints what to write instead. The disagreement is the thing to understand before copying it.
 
 ### An applied migration cannot change silently
 

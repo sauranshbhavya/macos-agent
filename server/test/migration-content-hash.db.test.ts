@@ -53,7 +53,13 @@ const NEXT = "0000_probe_content_hash_b";
 
 const upSql = (column: string): string => `CREATE TABLE public.sonny_hash_probe (${column});`;
 const downSql = "DROP TABLE IF EXISTS public.sonny_hash_probe;";
-const file = (up: string, down = downSql): string => `${up}\n-- @rollback\n${down}`;
+/**
+ * Both halves carry the lock-profile declaration every migration must now have (SONNY-370), or the
+ * runner refuses the probe at load and no test here reaches the ledger it is about. They are comments,
+ * so they move no hash — which leaves every before-and-after comparison below exactly as it was.
+ */
+const DECLARED = "-- @locks none\n-- @scans none\n";
+const file = (up: string, down = downSql): string => `${DECLARED}${up}\n-- @rollback\n${DECLARED}${down}`;
 
 describeDb("an applied migration cannot change silently", () => {
   let client: pg.Client;

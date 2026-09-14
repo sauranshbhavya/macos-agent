@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { loadMigrations } from "../src/db/migrate.js";
 import {
   declaredLockProfile,
   formatLockProfile,
@@ -8,11 +7,12 @@ import {
 } from "../src/db/lock-profile.js";
 
 /**
- * The declaration half of SONNY-370, which needs no database and so runs on every `npm test`.
+ * The declaration format of SONNY-370, which needs no database and so runs on every `npm test`.
  *
- * What it guarantees: every shipped migration states, in both halves, which relations it blocks and
- * which tables it scans, in a form that parses — so a new migration cannot arrive with no profile at
- * all, which is how PR #171's first 0017 arrived. Whether each statement is TRUE is
+ * What it pins is the parser: what reads, what is refused, and that a refusal is never mistaken for
+ * "undeclared". That every half of a migration must carry a declaration at all is the runner's rule
+ * and is held in `migrate.load.test.ts`, beside the rollback rule it copies — the shipped files are
+ * held there too, since loading them is the check. Whether each declaration is TRUE is
  * `migration-lock-profile.db.test.ts`'s, and it is the half that measures.
  */
 describe("a migration's declared lock profile", () => {
@@ -70,16 +70,5 @@ describe("a migration's declared lock profile", () => {
   ])("refuses %s", (_name, text) => {
     expect(() => declaredLockProfile(text, where)).toThrow(LockDeclarationError);
     expect(() => declaredLockProfile(text, where)).toThrow(/^0099_x up: /);
-  });
-
-  it("is carried by both halves of every migration that ships", async () => {
-    const shipped = await loadMigrations();
-    // The walk reached something, so an empty directory cannot read as a clean one.
-    expect(shipped.length).toBeGreaterThan(20);
-    const undeclared = shipped.flatMap((migration) => [
-      ...(declaredLockProfile(migration.up, `${migration.id} up`) === undefined ? [`${migration.id} up`] : []),
-      ...(declaredLockProfile(migration.down, `${migration.id} down`) === undefined ? [`${migration.id} down`] : []),
-    ]);
-    expect(undeclared).toEqual([]);
   });
 });

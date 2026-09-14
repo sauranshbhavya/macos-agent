@@ -43,10 +43,17 @@ const shippedDir = join(here, "..", "src", "db", "migrations");
  * migrations/0017_the_latest_sign_in_code_is_the_last_one_issued.sql`, executable lines only): a
  * backfill of every row of `sonny.sign_in_code_issue` under the `ACCESS EXCLUSIVE` its `ADD COLUMN`
  * took, on the table `latestIssuance` reads on the sign-in path. The reviewer measured a concurrent
- * read of that query blocked for 2851 ms at 200,000 rows. It carries no declaration, because the
- * mechanism did not exist; the test gives it the one the README's old paragraph effectively made.
+ * read of that query blocked for 2851 ms at 200,000 rows.
+ *
+ * **The declaration lines are this file's, not that branch's**: the mechanism did not exist, and the
+ * runner now refuses a file without them. The up half declares what the README's old paragraph
+ * promised of migrations like it — a lock and nothing scanned, "metadata-only, so microseconds" — which
+ * is the claim the measurement has to be able to refute. The down half's lines are there so the file
+ * loads; nothing here rolls this fixture back, so they are never measured.
  */
 const PR_171_FIRST_0017 = `
+-- @locks ACCESS EXCLUSIVE sonny.sign_in_code_issue
+-- @scans none
 ALTER TABLE sonny.sign_in_code_issue ADD COLUMN issue_seq bigint;
 UPDATE sonny.sign_in_code_issue s
    SET issue_seq = ordered.n
@@ -63,6 +70,8 @@ CREATE INDEX sign_in_code_issue_mailbox_seq_idx
     ON sonny.sign_in_code_issue (mailbox_key, issue_seq DESC);
 DROP INDEX sonny.sign_in_code_issue_email_idx;
 -- @rollback
+-- @locks ACCESS EXCLUSIVE sonny.sign_in_code_issue
+-- @scans none
 CREATE INDEX sign_in_code_issue_email_idx
     ON sonny.sign_in_code_issue (mailbox_key, issued_at DESC);
 DROP INDEX sonny.sign_in_code_issue_mailbox_seq_idx;
@@ -182,15 +191,14 @@ describeDb("the two cases SONNY-370 was filed for", () => {
       locks: [{ relation: "sonny.sign_in_code_issue", mode: "ACCESS EXCLUSIVE" }],
       scans: ["sonny.sign_in_code_issue"],
     });
-    // Undeclared, it is refused by the shipped-migrations test; declared the way 0016 truthfully
-    // declares (a lock, no scan), which is what "metadata-only, so microseconds" asserted, the
-    // measurement disagrees — and on exactly the scan.
-    const asPromised = declaredLockProfile(
-      "-- @locks ACCESS EXCLUSIVE sonny.sign_in_code_issue\n-- @scans none",
-      "0017_pr_171_first_draft up",
-    )!;
-    expect(sameLockProfile(asPromised, first!)).toBe(false);
-    expect(sameLockProfile({ ...asPromised, scans: ["sonny.sign_in_code_issue"] }, first!)).toBe(true);
+    // Its own declaration, read out of the file the runner loaded: a lock and no scan, the shape 0016
+    // truthfully has. The measurement disagrees, and on exactly the scan — the one line that turns a
+    // lock held for microseconds into a lock held for as long as the sign-in table is big.
+    const loaded = (await loadMigrations(dir)).find((m) => m.id === "0017_pr_171_first_draft");
+    const asDeclared = declaredLockProfile(loaded!.up, "0017_pr_171_first_draft up")!;
+    expect(asDeclared).toEqual({ locks: first!.locks, scans: [] });
+    expect(sameLockProfile(asDeclared, first!)).toBe(false);
+    expect(sameLockProfile({ ...asDeclared, scans: ["sonny.sign_in_code_issue"] }, first!)).toBe(true);
   });
 
   itUnderHangBackstop("reads PR #169's unconditional ledger ALTER as ACCESS EXCLUSIVE on the ledger", async () => {
