@@ -8,6 +8,46 @@
   "signInURL": "https://app.plain.com/",
   "triggers": ["plain.com"],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "View all threads for a customer",
+      "startURL": "https://app.plain.com/",
+      "steps": [
+        "Open any thread in Plain, then find the customer's name near the top of the customer section in the right-hand sidebar.",
+        "Click the name to open the customer's profile page, which lists every thread for that customer across Todo, Snoozed and Done; you can filter and sort these threads the same way as any queue.",
+        "For quick context without leaving the thread, check the Recent threads section in the sidebar, which shows the customer's five most recent threads."
+      ],
+      "source": "https://help.plain.com/article/how-to-view-all-threads-for-a-customer-bhffzsdvkfm2ixzwoslrxyb1"
+    },
+    {
+      "title": "Assign a thread",
+      "startURL": "https://app.plain.com/",
+      "steps": [
+        "Plain automatically assigns a thread to you as soon as you begin typing in it.",
+        "To assign it yourself, press A while viewing the thread, use Cmd+K, or select an assignee from the top-right of the thread view.",
+        "You can add more than one assignee to a thread: one lead, plus optional co-assignees."
+      ],
+      "source": "https://www.plain.com/docs/product/platform/threads/assignment"
+    },
+    {
+      "title": "Apply a label to a thread",
+      "startURL": "https://app.plain.com/",
+      "steps": [
+        "Open the thread.",
+        "Click Labels in the thread sidebar.",
+        "Search for or select a label from the list; applying a label also applies any of its parent labels automatically."
+      ],
+      "source": "https://www.plain.com/docs/product/platform/labels"
+    },
+    {
+      "title": "Reply to a thread",
+      "startURL": "https://app.plain.com/",
+      "steps": [
+        "Press R while viewing a thread to focus the composer.",
+        "Type your reply, then press Cmd+Enter to send it, or Cmd+Shift+Enter to send it and mark the thread Done."
+      ],
+      "source": "https://www.plain.com/docs/product/platform/keyboard-shortcuts"
+    }
+  ]
 }

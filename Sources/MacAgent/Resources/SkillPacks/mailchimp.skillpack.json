@@ -8,6 +8,42 @@
   "signInURL": "https://login.mailchimp.com",
   "triggers": ["mailchimp", "mailchimp.com"],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Import contacts from a file",
+      "startURL": "https://admin.mailchimp.com/",
+      "steps": [
+        "Click Audience, click the Add contacts drop-down, choose Import contacts, click Upload a file, then click Continue.",
+        "Click Select a file to choose your import file, or drag and drop it in, then click Continue and confirm the audience to import into.",
+        "Click Continue to tag, choose or create tags for the imported contacts if you want, then continue through matching your file's columns to Mailchimp fields.",
+        "Use the marketing status drop-downs to choose Subscribed, Unsubscribed, or Non-subscribed for the imported contacts.",
+        "Click Finalize import to review your settings, then click Complete Import."
+      ],
+      "source": "https://mailchimp.com/help/import-contacts-mailchimp/"
+    },
+    {
+      "title": "Create a tag",
+      "startURL": "https://admin.mailchimp.com/",
+      "steps": [
+        "Click Audience, then click Tags.",
+        "If you have more than one audience, click the Audience drop-down and choose the one you want to work with.",
+        "Click Create new tag.",
+        "Enter the tag name, then click Create."
+      ],
+      "source": "https://mailchimp.com/help/create-add-remove-tags/"
+    },
+    {
+      "title": "Create a regular email campaign",
+      "startURL": "https://admin.mailchimp.com/",
+      "steps": [
+        "From the homepage, click Create email, then click the X icon on the design popup to go straight to the email checklist.",
+        "In the To section, click the Audience drop-down, choose the audience to send to, then click Save.",
+        "In the From section, enter the name and email address recipients will see, and click Save. In the Subject section, enter a subject line and optional preview text, and click Save.",
+        "In the Send time section, click Schedule to pick a time in the future or Send now to send immediately, then click Save.",
+        "Design the email in the Content section. A checkmark appears beside each required section once it is done."
+      ],
+      "source": "https://mailchimp.com/help/create-and-send-regular-email/"
+    }
+  ]
 }

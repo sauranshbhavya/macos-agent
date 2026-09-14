@@ -6,8 +6,41 @@
   "category": "sales_crm",
   "summary": "Relationship intelligence CRM for dealmaking firms.",
   "signInURL": "https://affinity.co/auth/signin",
-  "triggers": ["affinity.co"],
+  "triggers": ["affinity.co", "affinity crm"],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Create a person or organization",
+      "startURL": "https://app.affinity.co/",
+      "steps": [
+        "Click the + Add New button in the bottom-left corner, then click Add Person, Add Organization, or New Opportunity.",
+        "For a person, enter the first and last name (required) and, ideally, an email address. For an organization, enter the organization name (required) and, ideally, its URL.",
+        "Click Create."
+      ],
+      "source": "https://support.affinity.co/s/article/How-to-manually-create-a-new-entity-in-Affinity"
+    },
+    {
+      "title": "Find a warm introduction to a contact",
+      "startURL": "https://app.affinity.co/",
+      "steps": [
+        "Press Cmd+K (Mac) or Alt+K (Windows) to open quick search, and type the person's or company's name.",
+        "On the contact's profile, click the Connections tab to see which of your colleagues has the strongest relationship with them.",
+        "Click the team member with the strongest connection to review their activity timeline with this contact — emails, meetings, and notes.",
+        "Reach out to your colleague to ask for the introduction, then log it in Affinity once they make it."
+      ],
+      "source": "https://support.affinity.co/s/article/Find-warm-introductions-to-a-target"
+    },
+    {
+      "title": "Log an interaction",
+      "startURL": "https://app.affinity.co/",
+      "steps": [
+        "Click + Add New on the bottom-left of the global navigation sidebar, or, from a contact's profile page, click the dropdown arrow and click Log Interaction.",
+        "Choose an interaction type — Meeting, Call, or Message — and specify the date and time it took place.",
+        "Add the people you interacted with in the Participants field, and add any other people, organizations, or opportunities discussed in the Add note to field.",
+        "Write your note, then click Publish."
+      ],
+      "source": "https://support.affinity.co/s/article/How-to-log-interactions-into-Affinity"
+    }
+  ]
 }
