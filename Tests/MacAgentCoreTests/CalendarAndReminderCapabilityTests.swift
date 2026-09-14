@@ -39,11 +39,11 @@ struct CalendarAndReminderCapabilityTests {
 
     private let normal = ApprovalContext(mode: .normal, appControl: .notApplicable)
 
-    private func runner(eventKit: RecordingEventKitStore, clock: Clock) -> AgentRunner {
-        AgentRunner(planner: RefusingPlanner(), executor: executor(eventKit: eventKit, clock: clock))
+    private func runner(eventKit: RecordingEventKitStore, clock: Clock, calendar: Calendar = FixedCalendar.calendar) -> AgentRunner {
+        AgentRunner(planner: RefusingPlanner(), executor: executor(eventKit: eventKit, clock: clock, calendar: calendar))
     }
 
-    private func executor(eventKit: (any EventKitAccessing)?, clock: Clock) -> AgentActionExecutor {
+    private func executor(eventKit: (any EventKitAccessing)?, clock: Clock, calendar: Calendar = FixedCalendar.calendar) -> AgentActionExecutor {
         if let eventKit {
             return AgentActionExecutor(
                 routineStore: UnreachableLocalStores.routines(),
@@ -55,7 +55,7 @@ struct CalendarAndReminderCapabilityTests {
                 resumableTaskStore: UnreachableLocalStores.resumableTasks(),
                 eventKit: eventKit,
                 now: { clock.now },
-                calendar: Self.calendar
+                calendar: calendar
             )
         }
         return AgentActionExecutor(
@@ -67,7 +67,7 @@ struct CalendarAndReminderCapabilityTests {
             shortcutRunHistoryStore: UnreachableLocalStores.shortcutRunHistory(),
             resumableTaskStore: UnreachableLocalStores.resumableTasks(),
             now: { clock.now },
-            calendar: Self.calendar
+            calendar: calendar
         )
     }
 
@@ -136,7 +136,7 @@ struct CalendarAndReminderCapabilityTests {
         #expect(request.requirement == .explicitApproval)
         #expect(request.approvalCopy.riskReason == "This adds a reminder to your Reminders.")
         #expect(request.approvalCopy.undoDescription == "Delete the reminder in Reminders if needed.")
-        #expect(request.approvalCopy.involvedResource == "Reminder: call the bank")
+        #expect(request.approvalCopy.involvedResource == "Reminder at 15:06 on Sunday 13 September")
         #expect(request.approvalCopy.dataLeavesDevice == false)
 
         // Nothing is added without the answer.
@@ -244,16 +244,45 @@ struct CalendarAndReminderCapabilityTests {
         }
     }
 
-    /// The seam's default: an executor nobody handed a calendar refuses rather than reaching one.
+    /// The seam's default: an executor nobody handed a calendar refuses rather than reaching one, and
+    /// says that it is not connected rather than sending the user to a System Settings switch that
+    /// would change nothing (PR #244, F6).
     @Test
     func anExecutorBuiltWithoutACalendarRefusesRatherThanReachingOne() async throws {
         let runner = AgentRunner(planner: RefusingPlanner(), executor: executor(eventKit: nil, clock: Clock()))
-        let prepared = try runner.prepare(plan: Self.readPlan())
-        await #expect(throws: EventKitAccessError.calendarsDenied) {
-            _ = try await runner.execute(prepared, scope: .unscoped, context: normal)
+        for plan in [Self.readPlan(), Self.reminderPlan(minutes: 5)] {
+            let prepared = try runner.prepare(plan: plan)
+            let thrown = await #expect(throws: EventKitAccessError.unavailable) {
+                _ = try await runner.execute(prepared, approvalDecision: .approved(.tier2), scope: .unscoped, context: normal)
+            }
+            #expect(thrown?.localizedDescription == "This copy of Sonny isn't connected to calendars or reminders.")
         }
+        #expect(UnavailableEventKitStore().accessState(for: .calendars) == .unavailable)
         #expect(throws: EventKitAccessError.unavailable) {
             _ = try UnavailableEventKitStore().events(from: Date(), to: Date())
+        }
+    }
+
+    /// Restricted access is not the user's switch to turn, so its sentence does not send them to
+    /// System Settings, and nothing asks macOS or touches the store (PR #244, F6).
+    @Test
+    func restrictedAccessRefusesInWordsThatDoNotSendTheUserToSettings() async throws {
+        let eventKit = RecordingEventKitStore(calendarsAccess: .restricted, remindersAccess: .restricted)
+        let runner = runner(eventKit: eventKit, clock: Clock())
+
+        let read = await #expect(throws: EventKitAccessError.calendarsRestricted) {
+            _ = try await runner.execute(try runner.prepare(plan: Self.readPlan()), scope: .unscoped, context: normal)
+        }
+        #expect(read?.localizedDescription == "Access to calendars is restricted on this Mac, so Sonny can't read them.")
+
+        let reminder = await #expect(throws: EventKitAccessError.remindersRestricted) {
+            _ = try await runner.execute(try runner.prepare(plan: Self.reminderPlan(minutes: 5)), approvalDecision: .approved(.tier2), scope: .unscoped, context: normal)
+        }
+        #expect(reminder?.localizedDescription == "Access to reminders is restricted on this Mac, so Sonny can't add one.")
+
+        #expect(eventKit.calls == [.accessState(.calendars), .accessState(.reminders)])
+        for sentence in [read?.localizedDescription, reminder?.localizedDescription] {
+            #expect(sentence?.contains("System Settings") == false)
         }
     }
 
@@ -267,9 +296,11 @@ struct CalendarAndReminderCapabilityTests {
         let prepared = try runner.prepare(plan: Self.reminderPlan(minutes: 5))
 
         let step = try #require(prepared.plan.steps.first)
-        #expect(step.calendarDay == "2026-09-13")
-        #expect(step.reminderTime == "15:06")
-        #expect(step.reminderMinutesFromNow == nil)
+        #expect(step.resolvedReminderDueDate == Self.date(2026, 9, 13, 15, 6))
+        // The model's own words are left as it wrote them; the pin is the instant.
+        #expect(step.reminderMinutesFromNow == 5)
+        #expect(step.calendarDay == nil)
+        #expect(step.reminderTime == nil)
         #expect(prepared.previews.map(\.details) == [["Reminder: call the bank", "When: 15:06 today"]])
 
         let request = try runner.approvalRequest(for: prepared, scope: .unscoped, context: normal)
@@ -286,12 +317,11 @@ struct CalendarAndReminderCapabilityTests {
         let runner = runner(eventKit: RecordingEventKitStore(), clock: Clock())
 
         let rolled = try runner.prepare(plan: Self.reminderPlan(time: "09:00"))
-        #expect(rolled.plan.steps.first?.calendarDay == "2026-09-14")
-        #expect(rolled.plan.steps.first?.reminderTime == "09:00")
+        #expect(rolled.plan.steps.first?.resolvedReminderDueDate == Self.date(2026, 9, 14, 9))
         #expect(rolled.previews.map(\.details) == [["Reminder: call the bank", "When: 09:00 tomorrow"]])
 
         let later = try runner.prepare(plan: Self.reminderPlan(time: "17:30"))
-        #expect(later.plan.steps.first?.calendarDay == "2026-09-13")
+        #expect(later.plan.steps.first?.resolvedReminderDueDate == Self.date(2026, 9, 13, 17, 30))
 
         let thrown = #expect(throws: ReminderDueError.timeHasPassed) {
             _ = try runner.prepare(plan: Self.reminderPlan(time: "09:00", day: "today"))
@@ -307,6 +337,9 @@ struct CalendarAndReminderCapabilityTests {
             (Self.reminderPlan(day: "tomorrow"), "When should Sonny remind you?"),
             (Self.reminderPlan(minutes: 5, time: "17:00"), "When should Sonny remind you?"),
             (Self.reminderPlan(time: "25:00"), "When should Sonny remind you?"),
+            // Zero or fewer minutes asks when, rather than reading "up to a year ahead" (PR #244, F6).
+            (Self.reminderPlan(minutes: 0), "When should Sonny remind you?"),
+            (Self.reminderPlan(minutes: -5), "When should Sonny remind you?"),
             (Self.reminderPlan(title: "  ", minutes: 5), "What should Sonny remind you about?"),
             (Self.reminderPlan(time: "09:00", day: "someday"), "Which day should Sonny remind you?"),
             (Self.readPlan(day: "next-ish"), "Which day should Sonny look at?")
@@ -358,6 +391,156 @@ struct CalendarAndReminderCapabilityTests {
             ReadCalendarEventsCapabilityAdapter.summary(of: [], day: Self.date(2026, 9, 14), now: now, calendar: Self.calendar)
                 == "Nothing on your calendar tomorrow."
         )
+    }
+
+    // MARK: - What the approval says (PR #244, F1)
+
+    /// Both approval panels render `involvedResource` — the widget after "Allow access to", Command
+    /// Center on its "Involves:" line (`ReminderApprovalPanelTests` holds the two surfaces) — so
+    /// that is where the pinned time is. Built across midnight, because a line that said "today"
+    /// would read differently at the gate after it; and answered with the first gate's request, to
+    /// show the time on the panel re-arms nothing.
+    @Test
+    func theApprovalNamesThePinnedTimeTheSameAtEveryGateAndReArmsNothing() async throws {
+        let clock = Clock()
+        clock.now = Self.date(2026, 9, 13, 23, 58, 30)
+        let eventKit = RecordingEventKitStore()
+        let runner = runner(eventKit: eventKit, clock: clock)
+        let prepared = try runner.prepare(plan: Self.reminderPlan(minutes: 5))
+
+        let first = try runner.approvalRequest(for: prepared, scope: .unscoped, context: normal)
+        #expect(first.approvalCopy.involvedResource == "Reminder at 00:04 on Monday 14 September")
+        #expect(first.approvalCopy.lines.contains("Involves: Reminder at 00:04 on Monday 14 September"))
+        #expect(first.approvalCopy.safeModeLines.contains("Involves: Reminder at 00:04 on Monday 14 September"))
+
+        clock.now = Self.date(2026, 9, 14, 0, 2)
+        let later = try runner.approvalRequest(for: prepared, scope: .unscoped, context: normal)
+        #expect(later.approvalCopy == first.approvalCopy)
+        #expect(later.assessment.escalations == first.assessment.escalations)
+
+        _ = try await runner.execute(prepared, approvalDecision: .approved(answering: first), scope: .unscoped, context: normal)
+        #expect(eventKit.addedReminders.map(\.dueDate) == [Self.date(2026, 9, 14, 0, 4)])
+    }
+
+    /// A step the planner sends cannot carry the pin: the key is not one the decoder accepts, at any
+    /// nesting depth, so the instant a reminder is due is always the Mac's own reading.
+    @Test
+    func aPlannerCannotAssertTheInstantAReminderIsDue() {
+        #expect(throws: AgentPlanDecodingError.unexpectedStepKey("resolvedReminderDueDate")) {
+            _ = try AgentPlanDecoder.decodeStrict(from: """
+            {"summary":"x","requiresConfirmation":true,"itemJob":null,"steps":[
+              {"id":"1","operation":"create_reminder","description":"d","reminderTitle":"t","resolvedReminderDueDate":0}
+            ]}
+            """)
+        }
+    }
+
+    // MARK: - A pin that passes while the approval is open (PR #244, F4)
+
+    /// The time is refused as passed at preview and nowhere after it, so a reminder whose pinned
+    /// time goes by while its approval sits open is still the reminder the user allowed, and is added
+    /// at that time rather than lost.
+    @Test
+    func aReminderWhosePinnedTimePassesWhileItsApprovalIsOpenIsStillAddedAtThatTime() async throws {
+        let clock = Clock()
+        let eventKit = RecordingEventKitStore()
+        let runner = runner(eventKit: eventKit, clock: clock)
+        let prepared = try runner.prepare(plan: Self.reminderPlan(minutes: 5))
+        let request = try runner.approvalRequest(for: prepared, scope: .unscoped, context: normal)
+
+        clock.now = Self.date(2026, 9, 13, 15, 20)
+        #expect(clock.now > Self.date(2026, 9, 13, 15, 6))
+        let result = try await runner.execute(prepared, approvalDecision: .approved(answering: request), scope: .unscoped, context: normal)
+
+        #expect(eventKit.addedReminders.map(\.dueDate) == [Self.date(2026, 9, 13, 15, 6)])
+        #expect(result.summary == "Added a reminder for 15:06 today: call the bank.")
+    }
+
+    // MARK: - Daylight saving (PR #244, F2)
+
+    /// New York: clocks go back from 02:00 EDT to 01:00 EST on 1 November 2026, and forward from 02:00
+    /// EST to 03:00 EDT on 8 March 2026. Every instant here is written in UTC and every assertion is
+    /// on an instant, never on a formatted time.
+    static let newYork: Calendar = {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "America/New_York")!
+        calendar.locale = Locale(identifier: "en_US_POSIX")
+        return calendar
+    }()
+
+    static func utc(_ month: Int, _ day: Int, _ hour: Int, _ minute: Int) -> Date {
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = TimeZone(identifier: "UTC")!
+        return utc.date(from: DateComponents(year: 2026, month: month, day: day, hour: hour, minute: minute))!
+    }
+
+    /// Prepares at one instant, lets fifteen minutes pass with the approval open, and returns the
+    /// instant the approved run added the reminder for.
+    private func addedDue(for plan: AgentPlan, at start: Date) async throws -> Date? {
+        let clock = Clock()
+        clock.now = start
+        let eventKit = RecordingEventKitStore()
+        let runner = runner(eventKit: eventKit, clock: clock, calendar: Self.newYork)
+        let prepared = try runner.prepare(plan: plan)
+        let request = try runner.approvalRequest(for: prepared, scope: .unscoped, context: normal)
+        clock.now = start.addingTimeInterval(15 * 60)
+        _ = try await runner.execute(prepared, approvalDecision: .approved(answering: request), scope: .unscoped, context: normal)
+        return eventKit.addedReminders.first?.dueDate
+    }
+
+    @Test
+    func minutesFromNowAcrossTheFallBackAreAddedThatManyMinutesLater() async throws {
+        // 00:50 EDT; "in 90 minutes" is 01:20 EST, ninety minutes on — not 01:20 EDT, thirty on.
+        let beforeTheChange = Self.utc(11, 1, 4, 50)
+        #expect(try await addedDue(for: Self.reminderPlan(minutes: 90), at: beforeTheChange) == beforeTheChange.addingTimeInterval(90 * 60))
+        // 01:50 EDT, in the first pass; "in 20 minutes" is 01:10 EST, not a time already gone.
+        let firstPass = Self.utc(11, 1, 5, 50)
+        #expect(try await addedDue(for: Self.reminderPlan(minutes: 20), at: firstPass) == firstPass.addingTimeInterval(20 * 60))
+    }
+
+    @Test
+    func minutesFromNowInsideTheRepeatedHourAreNotRefusedAsPassed() async throws {
+        // 01:28 EST, in the second pass through 01:00–02:00.
+        let secondPass = Self.utc(11, 1, 6, 28)
+        #expect(try await addedDue(for: Self.reminderPlan(minutes: 5), at: secondPass) == secondPass.addingTimeInterval(5 * 60))
+    }
+
+    @Test
+    func anUndatedClockTimeInTheRepeatedHourTakesItsNextOccurrenceNotTomorrow() async throws {
+        // 01:10 EST, in the second pass: 01:30 EDT has gone, 01:30 EST is twenty minutes on.
+        let secondPass = Self.utc(11, 1, 6, 10)
+        #expect(try await addedDue(for: Self.reminderPlan(time: "01:30"), at: secondPass) == Self.utc(11, 1, 6, 30))
+        // 00:10 EDT: the first 01:30 is still ahead, and that is the one.
+        #expect(try await addedDue(for: Self.reminderPlan(time: "01:30"), at: Self.utc(11, 1, 4, 10)) == Self.utc(11, 1, 5, 30))
+    }
+
+    @Test
+    func aClockTimeTheSpringForwardSkipsTakesTheNextTimeThatExistsAndKeepsIt() async throws {
+        // 01:00 EST on 8 March; 02:30 does not exist, and 03:00 EDT is the next time that does.
+        #expect(try await addedDue(for: Self.reminderPlan(time: "02:30"), at: Self.utc(3, 8, 6, 0)) == Self.utc(3, 8, 7, 0))
+        // "In 90 minutes" across the same change is ninety minutes on.
+        let start = Self.utc(3, 8, 6, 20)
+        #expect(try await addedDue(for: Self.reminderPlan(minutes: 90), at: start) == start.addingTimeInterval(90 * 60))
+    }
+
+    // MARK: - A day whose midnight does not exist (PR #244, F7)
+
+    /// `America/Santiago` springs forward at midnight: 6 September 2026 starts at 01:00 (04:00 UTC)
+    /// and 7 September starts at 00:00 (03:00 UTC). The read's window for the 6th ends where the 7th
+    /// starts, not an hour into it.
+    @Test
+    func aReadOnADayWhoseMidnightIsSkippedEndsWhereTheNextDayStarts() async throws {
+        var santiago = Calendar(identifier: .gregorian)
+        santiago.timeZone = TimeZone(identifier: "America/Santiago")!
+        santiago.locale = Locale(identifier: "en_GB")
+        let clock = Clock()
+        clock.now = Self.utc(9, 6, 15, 0)
+        let eventKit = RecordingEventKitStore()
+        let runner = runner(eventKit: eventKit, clock: clock, calendar: santiago)
+
+        _ = try await runner.execute(try runner.prepare(plan: Self.readPlan(day: "2026-09-06")), scope: .unscoped, context: normal)
+
+        #expect(eventKit.calls.last == .events(from: Self.utc(9, 6, 4, 0), to: Self.utc(9, 7, 3, 0)))
     }
 
     // MARK: - The planner

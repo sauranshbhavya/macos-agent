@@ -221,7 +221,9 @@ struct SpokenPathTests {
         "calendarDay": false,
         "reminderTitle": false,
         "reminderMinutesFromNow": false,
-        "reminderTime": false
+        "reminderTime": false,
+        // PR #244, F2. An instant, not a phrase of any kind.
+        "resolvedReminderDueDate": false
     ]
 
     /// Every property the table above calls a path is normalised, and every property it does not is
@@ -270,7 +272,8 @@ struct SpokenPathTests {
             calendarDay: phrase,
             reminderTitle: phrase,
             reminderMinutesFromNow: 5,
-            reminderTime: phrase
+            reminderTime: phrase,
+            resolvedReminderDueDate: Date(timeIntervalSince1970: 1_800_000_000)
         )
 
         let after = SpokenPath.normalizingFolderPhrases(in: before)

@@ -145,6 +145,32 @@ struct AutomationStoresTests {
         #expect(innerStep.count == 3)
     }
 
+    /// The behavioural half of `resolvedReminderDueDate`'s membership (PR #244, F2). A routine may not
+    /// hold a reminder step at all, so the file this reaches is one Sonny did not write; the pin goes
+    /// at both nesting levels, and the counting function the read door logs with sees it.
+    @Test
+    func aForgedReminderDueDateIsStrippedAtBothNestingLevels() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
+
+        var nested = AgentStep(id: "remind", operation: .createReminder, description: "Remind.", reminderTitle: "call the bank")
+        nested.resolvedReminderDueDate = Date(timeIntervalSince1970: 1_800_000_000)
+        var outer = AgentStep(id: "open", operation: .openApp, description: "Open Safari.", appName: "Safari")
+        outer.resolvedReminderDueDate = Date(timeIntervalSince1970: 1_800_000_000)
+        outer.routineSteps = [nested]
+        #expect(StoredRoutine.resolverPinnedStepCount([outer]) == 2)
+        try store.saveBypassingStepValidation(StoredRoutine(name: "Forged", steps: [outer]))
+
+        let loaded = try store.routine(named: "Forged")
+
+        #expect(loaded.steps[0].resolvedReminderDueDate == nil)
+        let innerStep = try #require(loaded.steps.first?.routineSteps?.first)
+        #expect(innerStep.resolvedReminderDueDate == nil)
+        #expect(innerStep.reminderTitle == "call the bank")
+        #expect(loaded.steps[0].appName == "Safari")
+    }
+
     /// The other direction, and the one that makes the strip safe to apply unconditionally: a routine
     /// saved the way the product saves them round-trips byte-identically. If this ever fails, the
     /// strip has started removing something a legitimate store had.
@@ -263,7 +289,10 @@ struct AutomationStoresTests {
             // decode-excluded on the same terms, and meaningless outside the plan whose `itemJob`
             // holds the list, so the strip must clear it. Held behaviourally by
             // `aForgedJobItemIndexIsStrippedAtBothNestingLevels`.
-            "itemIndex"
+            "itemIndex",
+            // PR #244, F2. The instant a reminder is due, pinned by the resolve phase and absent from
+            // the decoder's keys. Held behaviourally by `aForgedReminderDueDateIsStrippedAtBothNestingLevels`.
+            "resolvedReminderDueDate"
         ]
 
         #expect(

@@ -34,19 +34,26 @@ public struct CreateReminderCapabilityAdapter: CapabilityAdapter {
         defaultRiskTier: .tier2
     )
 
-    /// Works out when the reminder is due and writes it back as `calendarDay` and `reminderTime`,
-    /// clearing `reminderMinutesFromNow`.
+    /// Works out the instant the reminder is due and pins it as `resolvedReminderDueDate`.
     ///
     /// **This is what makes the approved time the time that is set.** Every gate runs the resolve
     /// phase again, and "in 5 minutes" resolved at execution would move the reminder by however long
-    /// the approval sat open. A pinned day and time resolve to themselves, so only the first pass
-    /// decides anything.
+    /// the approval sat open. A pinned step is left exactly as it is, so only the first pass decides
+    /// anything — the pin-once rule `RunningAppSwitchCapabilityAdapter` follows for its app.
     ///
-    /// A step with nothing to remind about, or no time, becomes the question that would answer it.
+    /// **An instant, not the wall-clock day and time** (PR #244, F2): the first version rewrote
+    /// `calendarDay` and `reminderTime` as `YYYY-MM-DD` and `HH:mm`, and a clock time in the hour a
+    /// fall-back repeats came back as its first occurrence at the next gate, an hour early.
+    ///
+    /// A step with nothing to remind about, or no usable time, becomes the question that would
+    /// answer it.
     public func resolveDefaultOutputs(in plan: AgentPlan, context: CapabilityExecutionContext) throws -> AgentPlan {
         var resolved = plan
         for index in resolved.steps.indices where resolved.steps[index].operation == .createReminder {
             let step = resolved.steps[index]
+            guard step.resolvedReminderDueDate == nil else {
+                continue
+            }
             guard !Self.trimmed(step.reminderTitle).isEmpty else {
                 return ReadCalendarEventsCapabilityAdapter.clarification("What should Sonny remind you about?")
             }
@@ -61,15 +68,16 @@ public struct CreateReminderCapabilityAdapter: CapabilityAdapter {
                 )
             } catch CalendarDayError.unrecognisedDay {
                 return ReadCalendarEventsCapabilityAdapter.clarification("Which day should Sonny remind you?")
-            } catch ReminderDueError.twoTimes, ReminderDueError.unrecognisedTime {
+            } catch ReminderDueError.twoTimes, ReminderDueError.unrecognisedTime, ReminderDueError.minutesNotAfterNow {
+                // Zero or fewer minutes asks too (PR #244, F6): it is a time the model misheard
+                // rather than one the user can be refused for, and the sentence that used to reach
+                // them — "up to a year ahead" — was about the other end of the range.
                 return ReadCalendarEventsCapabilityAdapter.clarification("When should Sonny remind you?")
             }
             guard let due else {
                 return ReadCalendarEventsCapabilityAdapter.clarification("When should Sonny remind you?")
             }
-            resolved.steps[index].calendarDay = CalendarDay.pinned(context.calendar.startOfDay(for: due), calendar: context.calendar)
-            resolved.steps[index].reminderTime = ReminderDue.pinnedClock(due, calendar: context.calendar)
-            resolved.steps[index].reminderMinutesFromNow = nil
+            resolved.steps[index].resolvedReminderDueDate = due
         }
         return resolved
     }
@@ -102,7 +110,9 @@ public struct CreateReminderCapabilityAdapter: CapabilityAdapter {
     /// never `.advisory`; of the two that ask, only this one describes something that can happen.
     ///
     /// The reason names the title and not the time, so it reads the same at every gate — an approval
-    /// is matched to its reasons, and a reason that moved with the clock would never match.
+    /// is matched to its reasons, and a reason that moved with the clock would never match. The time
+    /// reaches both approval panels through `RiskApprovalCopy.involvedResource` instead, which consent
+    /// does not compare (`AgentActionExecutor.involvedResource(in:metadata:)`, PR #244 F1).
     public func assessRisk(plan: AgentPlan, context: CapabilityExecutionContext) throws -> CapabilityRiskAssessment {
         let spec = try spec(in: plan, context: context)
         return CapabilityRiskAssessment(
@@ -130,9 +140,9 @@ public struct CreateReminderCapabilityAdapter: CapabilityAdapter {
             log(.act, "Asking macOS for access to your reminders")
             access = await context.eventKit.requestAccess(to: .reminders)
         }
-        guard access == .granted else {
+        if let refusal = access.refusal(for: .reminders) {
             log(.summarize, "No access to reminders")
-            throw EventKitAccessError.remindersDenied
+            throw refusal
         }
 
         let when = whenText(spec.due, context: context)
@@ -163,6 +173,9 @@ public struct CreateReminderCapabilityAdapter: CapabilityAdapter {
         let title = Self.trimmed(step.reminderTitle)
         guard !title.isEmpty else {
             throw AgentExecutionError.invalidPlan("create_reminder needs reminderTitle: what to remind the user about.")
+        }
+        if let pinned = step.resolvedReminderDueDate {
+            return ReminderSpec(title: title, due: pinned)
         }
         guard let due = try ReminderDue.dueDate(
             minutesFromNow: step.reminderMinutesFromNow,

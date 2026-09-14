@@ -8,12 +8,14 @@ import Foundation
 /// what the user said in a small closed vocabulary, and the date is worked out here, on the Mac,
 /// against the Mac's own clock and calendar.
 ///
-/// **Once, in the resolve phase.** `ReadCalendarEventsCapabilityAdapter` and
-/// `CreateReminderCapabilityAdapter` both write the answer back onto the step as `YYYY-MM-DD`
-/// before anything previews it, and a `YYYY-MM-DD` resolves to itself. So the day the approval
-/// panel names is the day the run reads or writes, however long the panel sat open — the pin-once
-/// shape `resolvedAppName` uses, carried in the planner's own field the way a resolved default
-/// `outputPath` is.
+/// **Once, in the resolve phase.** `ReadCalendarEventsCapabilityAdapter` writes the day back onto
+/// the step as `YYYY-MM-DD` before anything previews it, and a `YYYY-MM-DD` resolves to itself.
+/// `CreateReminderCapabilityAdapter` pins the instant the reminder is due instead
+/// (`AgentStep.resolvedReminderDueDate`), because a clock time can occur twice on one day and a day
+/// cannot. So the day a read runs on is the day its preview named, and the time a reminder is set for
+/// is the time its approval named — both approval panels render it through
+/// `RiskApprovalCopy.involvedResource`, spelled by `absoluteName(of:calendar:)` below — however long
+/// the panel sat open.
 public enum CalendarDay {
     /// The start of the day `phrase` names.
     ///
@@ -90,13 +92,28 @@ public enum CalendarDay {
         case -1:
             return "yesterday"
         default:
-            let formatter = DateFormatter()
-            formatter.calendar = calendar
-            formatter.locale = calendar.locale ?? Locale.current
-            formatter.timeZone = calendar.timeZone
-            formatter.setLocalizedDateFormatFromTemplate("EEEEdMMMM")
-            return "on \(formatter.string(from: startOfDay))"
+            return "on \(dayName(of: startOfDay, calendar: calendar))"
         }
+    }
+
+    /// A time and a date with no word relative to today: `15:06 on Sunday 13 September`.
+    ///
+    /// **What an approval panel says, and why it is not `spokenName`.** An approval is assessed again
+    /// at every gate, and "today" read before midnight is "yesterday" after it, so a panel line built
+    /// from a relative word would read differently at two gates of one run. This reads the same at
+    /// every gate for a pinned instant.
+    public static func absoluteName(of date: Date, calendar: Calendar) -> String {
+        "\(clockTime(of: date, calendar: calendar)) on \(dayName(of: date, calendar: calendar))"
+    }
+
+    /// A date with no word relative to today: `Sunday 13 September`.
+    public static func dayName(of date: Date, calendar: Calendar) -> String {
+        let formatter = DateFormatter()
+        formatter.calendar = calendar
+        formatter.locale = calendar.locale ?? Locale.current
+        formatter.timeZone = calendar.timeZone
+        formatter.setLocalizedDateFormatFromTemplate("EEEEdMMMM")
+        return formatter.string(from: date)
     }
 
     /// A clock time in the calendar's own locale, as a list line or a reminder sentence shows it.
@@ -151,11 +168,19 @@ public enum ReminderDue {
     /// The due date the fields describe, or `nil` when they name no time at all.
     ///
     /// - Minutes from now: now plus that many minutes, rounded up to the next whole minute, so a
-    ///   reminder never arrives early and the pinned `HH:mm` names exactly the minute it fires in.
-    /// - A clock time with no day: today at that time, or tomorrow if that time has already gone.
-    /// - A clock time with a day: that day at that time, whether or not it has passed — refusing a
-    ///   past time is `CreateReminderCapabilityAdapter.preview`'s job, not this function's, and the
-    ///   reason is recorded there.
+    ///   reminder never arrives early. Instant arithmetic, so a daylight-saving change between now and
+    ///   then moves nothing.
+    /// - A clock time with no day: its next occurrence after now — today, or tomorrow if every
+    ///   occurrence today has gone.
+    /// - A clock time with a day: its first occurrence on that day that is still ahead, or the first
+    ///   occurrence if none is — refusing a past time is `CreateReminderCapabilityAdapter.preview`'s
+    ///   job, not this function's, and the reason is recorded there.
+    ///
+    /// **"Occurrence", because a clock time is not always one instant** (PR #244, F2). In the hour a
+    /// daylight-saving fall-back repeats, `01:30` happens twice, and Foundation's
+    /// `date(bySettingHour:minute:second:of:)` answers the first; asked at 01:10 in the second pass,
+    /// that first one has gone and the time rolled to tomorrow. Both occurrences are considered, in
+    /// order. A time the spring-forward skips (`02:30`) takes the next time that exists (`03:00`).
     public static func dueDate(
         minutesFromNow: Int?,
         time: String?,
@@ -172,7 +197,10 @@ public enum ReminderDue {
             guard clock == nil, namedDay == nil else {
                 throw ReminderDueError.twoTimes
             }
-            guard minutesFromNow >= 1, minutesFromNow <= maxMinutesFromNow else {
+            guard minutesFromNow >= 1 else {
+                throw ReminderDueError.minutesNotAfterNow
+            }
+            guard minutesFromNow <= maxMinutesFromNow else {
                 throw ReminderDueError.minutesOutOfRange
             }
             let due = now.addingTimeInterval(TimeInterval(minutesFromNow * 60))
@@ -186,18 +214,15 @@ public enum ReminderDue {
         }
         let (hour, minute) = try parseClock(clock)
         let startOfDay = try CalendarDay.startOfDay(named: namedDay, now: now, calendar: calendar)
-        let due = try at(hour: hour, minute: minute, on: startOfDay, calendar: calendar)
-        if namedDay == nil, due <= now {
-            let tomorrow = try CalendarDay.startOfDay(named: "tomorrow", now: now, calendar: calendar)
-            return try at(hour: hour, minute: minute, on: tomorrow, calendar: calendar)
+        let occurrences = try self.occurrences(hour: hour, minute: minute, on: startOfDay, calendar: calendar)
+        if let ahead = occurrences.first(where: { $0 > now }) {
+            return ahead
         }
-        return due
-    }
-
-    /// The pinned spelling of a time: `HH:mm`, 24-hour, in `calendar`.
-    public static func pinnedClock(_ date: Date, calendar: Calendar) -> String {
-        let parts = calendar.dateComponents([.hour, .minute], from: date)
-        return String(format: "%02d:%02d", parts.hour ?? 0, parts.minute ?? 0)
+        guard namedDay == nil else {
+            return occurrences[0]
+        }
+        let tomorrow = try CalendarDay.startOfDay(named: "tomorrow", now: now, calendar: calendar)
+        return try self.occurrences(hour: hour, minute: minute, on: tomorrow, calendar: calendar)[0]
     }
 
     private static func parseClock(_ clock: String) throws -> (Int, Int) {
@@ -210,11 +235,26 @@ public enum ReminderDue {
         return (hour, minute)
     }
 
-    private static func at(hour: Int, minute: Int, on startOfDay: Date, calendar: Calendar) throws -> Date {
-        guard let date = calendar.date(bySettingHour: hour, minute: minute, second: 0, of: startOfDay) else {
+    /// Every instant `hour:minute` names on the day starting at `startOfDay`, earliest first: one on
+    /// an ordinary day, two in a repeated hour, and the next time that exists for one a
+    /// spring-forward skips.
+    private static func occurrences(hour: Int, minute: Int, on startOfDay: Date, calendar: Calendar) throws -> [Date] {
+        let found = [Calendar.RepeatedTimePolicy.first, .last].compactMap { policy in
+            calendar.date(
+                bySettingHour: hour,
+                minute: minute,
+                second: 0,
+                of: startOfDay,
+                matchingPolicy: .nextTime,
+                repeatedTimePolicy: policy,
+                direction: .forward
+            )
+        }
+        let distinct = Array(Set(found)).sorted()
+        guard !distinct.isEmpty else {
             throw ReminderDueError.unrecognisedTime(String(format: "%02d:%02d", hour, minute))
         }
-        return date
+        return distinct
     }
 
     private static func roundedUpToMinute(_ date: Date, calendar: Calendar) throws -> Date {
@@ -238,6 +278,9 @@ public enum CalendarDayError: Error, Equatable, LocalizedError {
 
 public enum ReminderDueError: Error, Equatable, LocalizedError {
     case twoTimes
+    /// Zero or fewer minutes from now (PR #244, F6). Its own case, because the sentence for the other
+    /// end of the range — "up to a year ahead" — is false about it.
+    case minutesNotAfterNow
     case minutesOutOfRange
     case unrecognisedTime(String)
     case timeHasPassed
@@ -246,6 +289,8 @@ public enum ReminderDueError: Error, Equatable, LocalizedError {
         switch self {
         case .twoTimes, .unrecognisedTime:
             return "Sonny couldn't tell when to remind you."
+        case .minutesNotAfterNow:
+            return "A reminder needs a time after now."
         case .minutesOutOfRange:
             return "Sonny can set a reminder up to a year ahead."
         case .timeHasPassed:

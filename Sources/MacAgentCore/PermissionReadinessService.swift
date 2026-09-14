@@ -341,6 +341,19 @@ public struct PermissionReadinessService: Sendable {
             return PermissionReadinessItem(id: "reminders", title: "Reminders", state: .unknown, detail: "Sonny will ask the first time you add a reminder.")
         case (.reminders, .denied):
             return PermissionReadinessItem(id: "reminders", title: "Reminders", state: .needsAction, detail: "Allow Sonny in System Settings \u{203A} Privacy & Security \u{203A} Reminders.")
+        // Restricted is not the user's switch to turn — device management or Screen Time decides —
+        // so the row says what it is and does not send them to System Settings (PR #244, F6).
+        case (.calendars, .restricted):
+            return PermissionReadinessItem(id: "calendars", title: "Calendars", state: .needsAction, detail: "Access to calendars is restricted on this Mac.")
+        case (.reminders, .restricted):
+            return PermissionReadinessItem(id: "reminders", title: "Reminders", state: .needsAction, detail: "Access to reminders is restricted on this Mac.")
+        // Unreachable: `EventKitAccessState.init(_:)` never answers `.unavailable`, which only an
+        // unwired capability seam does. Answered rather than defaulted, as "not checked" rather than
+        // as ready, because a check that could not be made is not a check that passed.
+        case (.calendars, .unavailable):
+            return PermissionReadinessItem(id: "calendars", title: "Calendars", state: .unknown, detail: "Sonny checks this when it needs it.")
+        case (.reminders, .unavailable):
+            return PermissionReadinessItem(id: "reminders", title: "Reminders", state: .unknown, detail: "Sonny checks this when it needs it.")
         }
     }
 

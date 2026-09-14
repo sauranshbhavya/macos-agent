@@ -72,18 +72,23 @@ public struct ReadCalendarEventsCapabilityAdapter: CapabilityAdapter {
         log: @escaping (AgentPhase, String) -> Void
     ) async throws -> AgentRunResult {
         let day = try day(in: plan, context: context)
-        guard let nextDay = context.calendar.date(byAdding: .day, value: 1, to: day) else {
+        // **The start of the next day, not this day's start plus a day** (PR #244, F7). Adding a day
+        // keeps the time of day, so on a day whose midnight does not exist — `America/Santiago` on
+        // 2026-09-06 starts at 01:00 — the window ran to 01:00 the next day and listed its first hour
+        // under the wrong day.
+        guard let dayAfter = context.calendar.date(byAdding: .day, value: 1, to: day) else {
             throw CalendarDayError.unrecognisedDay(CalendarDay.pinned(day, calendar: context.calendar))
         }
+        let nextDay = context.calendar.startOfDay(for: dayAfter)
 
         var access = context.eventKit.accessState(for: .calendars)
         if access == .notDetermined {
             log(.act, "Asking macOS for access to your calendars")
             access = await context.eventKit.requestAccess(to: .calendars)
         }
-        guard access == .granted else {
+        if let refusal = access.refusal(for: .calendars) {
             log(.summarize, "No access to calendars")
-            throw EventKitAccessError.calendarsDenied
+            throw refusal
         }
 
         let spokenDay = CalendarDay.spokenName(of: day, now: context.now(), calendar: context.calendar)

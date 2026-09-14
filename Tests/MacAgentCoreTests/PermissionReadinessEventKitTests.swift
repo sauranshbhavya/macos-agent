@@ -20,7 +20,8 @@ struct PermissionReadinessEventKitTests {
             (.fullAccess, .ready, "Sonny can read your calendars."),
             (.notDetermined, .unknown, "Sonny will ask the first time you check your calendar."),
             (.denied, .needsAction, "Allow Sonny in System Settings \u{203A} Privacy & Security \u{203A} Calendars."),
-            (.restricted, .needsAction, "Allow Sonny in System Settings \u{203A} Privacy & Security \u{203A} Calendars."),
+            // Restricted is not the user's switch to turn, so it does not send them to it (PR #244, F6).
+            (.restricted, .needsAction, "Access to calendars is restricted on this Mac."),
             // Write-only cannot read, and reading is all Sonny does with a calendar.
             (.writeOnly, .needsAction, "Allow Sonny in System Settings \u{203A} Privacy & Security \u{203A} Calendars.")
         ]
@@ -38,7 +39,7 @@ struct PermissionReadinessEventKitTests {
             (.fullAccess, .ready, "Sonny can add reminders."),
             (.notDetermined, .unknown, "Sonny will ask the first time you add a reminder."),
             (.denied, .needsAction, "Allow Sonny in System Settings \u{203A} Privacy & Security \u{203A} Reminders."),
-            (.restricted, .needsAction, "Allow Sonny in System Settings \u{203A} Privacy & Security \u{203A} Reminders.")
+            (.restricted, .needsAction, "Access to reminders is restricted on this Mac.")
         ]
         for (status, state, detail) in cases {
             let item = try row("reminders", reminders: status)
@@ -63,7 +64,7 @@ struct PermissionReadinessEventKitTests {
         #expect(EventKitAccessState(.fullAccess) == .granted)
         #expect(EventKitAccessState(.notDetermined) == .notDetermined)
         #expect(EventKitAccessState(.denied) == .denied)
-        #expect(EventKitAccessState(.restricted) == .denied)
+        #expect(EventKitAccessState(.restricted) == .restricted)
         #expect(EventKitAccessState(.writeOnly) == .denied)
     }
 }
