@@ -216,8 +216,9 @@ final class AgentViewModel: ObservableObject {
     @Published private(set) var storedApprovedAppCount: Int = 0
     @Published private(set) var outputLocations: [OutputLocation] = []
     /// The skills the user added on the Skills page, newest first (SONNY-452). Loaded by
-    /// `refreshAddedSkills()` — at launch, from the pages that show it, and after every write — and
-    /// emptied rather than left stale when the file will not read, like every list above.
+    /// `refreshAddedSkills()` — at launch, from the pages that show it, after every write, and when
+    /// the Skills catalogue lands (SONNY-476) — and emptied rather than left stale when the file will
+    /// not read, like every list above.
     @Published private(set) var addedSkills: [AddedSkill] = []
     /// Runs that began and did not finish (row 13, SONNY-210), newest activity first.
     ///
@@ -670,7 +671,19 @@ final class AgentViewModel: ObservableObject {
     private let skillSelectionStore: SkillSelectionStore
     /// Every shipped pack that passed the loader's rules, in name order — what the Skills page
     /// lists. A pack the loader refused is absent here and so from every prompt.
-    let skillPackCatalog: SkillPackCatalog
+    ///
+    /// **Published, and empty in the shipping app until `loadSkillPackCatalogue(_:)` lands**
+    /// (SONNY-476). The loader validates every pack, and that cost grows with the number of packs, so
+    /// the app no longer pays it on the main thread while it launches. A fixture passes a ready
+    /// catalogue to the initializer and starts no load.
+    @Published private(set) var skillPackCatalog: SkillPackCatalog
+    /// The catalogue load that has not landed yet, or `nil` (SONNY-476).
+    ///
+    /// **This is what "nothing plans without the catalogue" reads.** Every planner this view model
+    /// makes waits on it (`plannerOnceTheSkillsCatalogueHasLoaded(for:)`), and the load clears it in
+    /// the same main-actor turn that sets the catalogue and refreshes the added skills. So a planner
+    /// sees either no load at all or a load that has finished all three.
+    private var skillPackCatalogueLoad: Task<Void, Never>?
     /// Where the planner factory reads the user's skills from, per run. Written only by
     /// `refreshAddedSkills()`, so the page and the prompt read one list.
     private let skillGuidanceSource: SkillGuidanceSource
@@ -1188,7 +1201,7 @@ final class AgentViewModel: ObservableObject {
             fileURL: ClipboardHistorySettingsStore.realFileURL()
         )
         let clipboardHistoryStore = ClipboardHistoryStore(fileURL: ClipboardHistoryStore.realFileURL())
-        return AgentViewModel(
+        let viewModel = AgentViewModel(
             routineStore: RoutineStore(fileURL: RoutineStore.realFileURL()),
             workspaceStore: WorkspaceStore(fileURL: WorkspaceStore.realFileURL()),
             snippetStore: SnippetStore(fileURL: SnippetStore.realFileURL()),
@@ -1229,10 +1242,14 @@ final class AgentViewModel: ObservableObject {
             // passed to `SonnyAccountModel` as well — one client, one session, one refresh guard.
             backendClient: backendClient,
             accountIdentity: accountIdentity,
-            // The packs the app ships, read from its own resource bundle (SONNY-452).
-            skillPackCatalog: SonnyResourceBundle.skillPackCatalog(),
             whitelist: whitelist
         )
+        // The packs the app ships, read from its own resource bundle (SONNY-452) — after the view
+        // model exists rather than as an argument to it, so the main thread only starts the load
+        // (SONNY-476). It is started here, before this returns, so no run can begin before a planner
+        // has a load to wait for.
+        viewModel.loadSkillPackCatalogue { SonnyResourceBundle.skillPackCatalog() }
+        return viewModel
     }
 
     /// **No local store on this initializer has a default, and that is enforcement rather than
@@ -1385,7 +1402,7 @@ final class AgentViewModel: ObservableObject {
         // The shipped packs (SONNY-452). Defaulted to none, which is the safe direction for the
         // same reason `accountIdentity`'s is: a fixture that inherits it has a Skills page with no
         // rows and plans with no pack, and reads nothing off the disk to get there.
-        // `atItsRealStoreLocations()` passes the bundle's.
+        // `atItsRealStoreLocations()` leaves it empty and starts `loadSkillPackCatalogue(_:)`.
         skillPackCatalog: SkillPackCatalog = .empty,
         memoryPolicyProvider: any MemoryPolicyProviding = UnmanagedMemoryPolicyProvider(),
         priorTaskContextStore: PriorTaskContextStore = PriorTaskContextStore(),
@@ -2678,9 +2695,9 @@ final class AgentViewModel: ObservableObject {
                 // is left here is the one thing the client still owns: which *run* the planner is
                 // built for — this task's id and its retention answer.
                 runner = AgentRunner(
-                    planner: makePlanner(
-                        backendTaskContext(recordingPolicy: taskRecordingPolicy),
-                        taskUsageRecorder
+                    // Waits for the Skills catalogue if it has not landed (SONNY-476).
+                    planner: plannerAfterTheSkillsCatalogue(
+                        for: backendTaskContext(recordingPolicy: taskRecordingPolicy)
                     ),
                     executor: executor,
                     logStore: logStore,
@@ -4842,6 +4859,10 @@ final class AgentViewModel: ObservableObject {
     /// matters most is the planner: someone who added Notion, quit, relaunched and asks the widget for
     /// a Notion page has opened no page, and the plan must still carry the pack.
     ///
+    /// **The packs come from the catalogue, which may not have landed at launch** (SONNY-476). Until
+    /// it does, this hands the planner no pack — and no planner is made in that window, because
+    /// every one waits for the load, which calls this again once the catalogue is set.
+    ///
     /// **Fails closed.** A file that will not read empties the list, so the planner is handed no pack
     /// rather than the last list it happened to see, and the banner says which file.
     func refreshAddedSkills() {
@@ -4852,6 +4873,78 @@ final class AgentViewModel: ObservableObject {
         skillGuidanceSource.guidance = SkillGuidance(
             addedPacks: skillPackCatalog.packs.filter { addedIDs.contains($0.id) }
         )
+    }
+
+    /// Reads the Skills catalogue off the main thread, then hands it to the Skills page and the
+    /// planner (SONNY-476).
+    ///
+    /// **Why off the main thread.** The loader checks every pack against the founders' rules — the
+    /// money rule, credentials, citations, matching — and that work grows with the number of packs.
+    /// Done inline in `atItsRealStoreLocations()` it held up the launch; here the main thread only
+    /// starts a task. Nothing about the checks moves: `load` is the whole loader, so a pack it
+    /// refuses is still refused inside the app.
+    ///
+    /// **The order after the load is the contract, in one main-actor turn**: set the catalogue, then
+    /// `refreshAddedSkills()`, then clear `skillPackCatalogueLoad`. A planner waiting on this task
+    /// resumes only after all three, so it reads guidance built from the landed catalogue.
+    ///
+    /// `load` is synchronous on purpose. It runs inside `Task.detached`, so it is this method that
+    /// keeps the work off the main thread, not how the caller wrote its closure.
+    ///
+    /// Started once, at launch. A call while a load is in flight returns that load rather than starting
+    /// a second, so the handle a planner waits on is always the one that will clear itself.
+    @discardableResult
+    func loadSkillPackCatalogue(_ load: @escaping @Sendable () -> SkillPackCatalog) -> Task<Void, Never> {
+        if let inFlight = skillPackCatalogueLoad {
+            return inFlight
+        }
+        let task = Task {
+            // `.userInitiated` because a command given at launch waits on this.
+            let catalogue = await Task.detached(priority: .userInitiated) { load() }.value
+            skillPackCatalog = catalogue
+            refreshAddedSkills()
+            skillPackCatalogueLoad = nil
+        }
+        skillPackCatalogueLoad = task
+        return task
+    }
+
+    /// What a run's log says while its planner waits for the catalogue (SONNY-476).
+    static let waitingForSkillsLogMessage = "Waiting for skills to load before planning."
+
+    /// The planner a runner is handed for a command Sonny has to plan (SONNY-476).
+    ///
+    /// **The one caller of `makePlanner`.** Both doors that plan — `performStart`'s planner branch and
+    /// `makeDelegationRunner()` — build their runner with this, so neither can make a planner before
+    /// the catalogue has landed. The delegation door is why this is a planner rather than an `await`
+    /// at the call site: `makeDelegationRunner()` is synchronous, and a run resumed at launch reaches
+    /// it with no planning of its own before that.
+    ///
+    /// `taskContext` is computed by the caller when it builds the runner, as it was before; only the
+    /// call to the factory moves to when the plan is asked for.
+    private func plannerAfterTheSkillsCatalogue(for taskContext: BackendTaskContext) -> any Planning {
+        PlannerAfterTheSkillsCatalogue { [weak self] in
+            guard let self else { throw CancellationError() }
+            return try await self.plannerOnceTheSkillsCatalogueHasLoaded(for: taskContext)
+        }
+    }
+
+    /// Waits for a catalogue load that has not landed, then makes the planner.
+    ///
+    /// **The log line and the factory call sit in one main-actor stretch with nothing between them but
+    /// the wait and its cancellation check.** That is what lets a test prove the wait by construction:
+    /// once the line is in the log, either the run is parked on the load, or — with the wait gone —
+    /// the factory has already run against guidance built before the catalogue landed.
+    ///
+    /// **A stop during the wait ends as a stop.** The load does not observe the run's cancellation, so
+    /// the check after it keeps a cancelled run from making a planner and sending a request.
+    private func plannerOnceTheSkillsCatalogueHasLoaded(for taskContext: BackendTaskContext) async throws -> any Planning {
+        if let load = skillPackCatalogueLoad {
+            logStore.append(.observe, Self.waitingForSkillsLogMessage)
+            await load.value
+            try Task.checkCancellation()
+        }
+        return makePlanner(taskContext, taskUsageRecorder)
     }
 
     /// Whether the user has added this pack. Read by the Skills page's badge and its one button.
@@ -6308,12 +6401,12 @@ final class AgentViewModel: ObservableObject {
     /// selected provider; `PlannerFactory` cannot fail, and `PlannerFactory`'s own doc says why.
     func makeDelegationRunner() -> AgentRunner {
         AgentRunner(
-            planner: makePlanner(
+            planner: plannerAfterTheSkillsCatalogue(
                 // A delegated instruction is planned under the run it belongs to — same task id,
                 // same retention answer — because it is the same task. `makeDelegationRunner`'s
-                // whole argument is that a delegated command meets what a typed one would.
-                backendTaskContext(recordingPolicy: taskRecordingPolicy),
-                taskUsageRecorder
+                // whole argument is that a delegated command meets what a typed one would, and that
+                // includes waiting for the Skills catalogue (SONNY-476).
+                for: backendTaskContext(recordingPolicy: taskRecordingPolicy)
             ),
             executor: makeExecutor(),
             logStore: logStore,
@@ -9035,6 +9128,18 @@ enum AgentStepStatus: String {
 private struct InstantOnlyFallbackPlanner: Planning {
     func plan(command: String, priorTaskContext: PriorTaskContext?) async throws -> AgentPlan {
         throw PlannerError.noPlannerRan
+    }
+}
+
+/// The planner handed to a run that has to plan, which asks for the real one only when the plan is
+/// asked for (SONNY-476) — by then the Skills catalogue has landed, or the wait for it is part of
+/// planning. `AgentViewModel.plannerAfterTheSkillsCatalogue(for:)` is the one place it is made.
+@MainActor
+private struct PlannerAfterTheSkillsCatalogue: Planning {
+    let plannerOnceLoaded: @MainActor () async throws -> any Planning
+
+    func plan(command: String, priorTaskContext: PriorTaskContext?) async throws -> AgentPlan {
+        try await plannerOnceLoaded().plan(command: command, priorTaskContext: priorTaskContext)
     }
 }
 

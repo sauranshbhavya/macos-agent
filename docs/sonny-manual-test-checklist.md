@@ -5004,6 +5004,20 @@ Signed in, gateway up, screen control allowed for the account.
 - [ ] During the Safe-mode session above, while an action approval is waiting, press ⌃⌥⎋: the session
       stops. (It still holds the key while it waits.)
 
+### Skills load after launch, and a command at launch still gets them (new 2026-09-13, SONNY-476)
+
+Sonny now reads its skill packs just after it launches instead of while it launches, so a large set
+of packs cannot slow the launch. A command given before they have loaded waits for them. Signed in,
+gateway up.
+
+- [ ] On the Skills page, **add Notion**. Quit Sonny (⌘Q). Relaunch, and **as soon as the widget
+      appears**, ask it: `create a page in Notion called wave 9 notes`. The plan uses the Notion pack:
+      the Tasks page's plan for that task names `https://www.notion.so/` as where it starts. **What
+      would be a finding:** a plan that searches the web for Notion or names no Notion URL.
+- [ ] After that relaunch, open Command Center › Skills: it lists **Docusign, Linear and Notion**, and
+      Notion still shows **Added** and **Remove**. **What would be a finding:** an empty page that stays
+      empty, or Notion showing Add.
+
 ## 8. How to report back
 
 For each real finding, give me:
