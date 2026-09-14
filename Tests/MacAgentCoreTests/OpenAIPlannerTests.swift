@@ -227,7 +227,7 @@ struct OpenAIPlannerTests {
 
         var bodies: [[[String: Any]]] = []
         for request in recorded.all {
-            bodies.append(try #require(try request.json["messages"] as? [[String: Any]]))
+            bodies.append(try #require(request.json["messages"] as? [[String: Any]]))
         }
         #expect(bodies.count == 3)
         var tags: [String] = []
