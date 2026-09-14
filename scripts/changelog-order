@@ -41,6 +41,8 @@ from __future__ import annotations
 
 import os
 import re
+import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -98,14 +100,23 @@ def _holds(cwd: str, newer: str, older: str) -> bool:
     return r.returncode == 0
 
 
-def _behind(cwd: str, older: str, newer: str) -> str:
-    r = subprocess.run(["git", "rev-list", "--count", "--first-parent", older + ".." + newer],
-                       capture_output=True, text=True, cwd=cwd)
+def _count(cwd: str, older: str, newer: str, first_parent: bool) -> int:
+    """How many commits `newer` has that `older` lacks."""
+    r = subprocess.run(["git", "rev-list", "--count"] + (["--first-parent"] if first_parent else [])
+                       + [older + ".." + newer], capture_output=True, text=True, cwd=cwd)
     if r.returncode != 0:
         raise Unmeasurable("git rev-list --count %s..%s failed: %s"
                            % (older[:8], newer[:8], r.stderr.strip()))
-    n = int(r.stdout.strip())
-    return "%d first-parent commit%s behind it" % (n, "" if n == 1 else "s")
+    return int(r.stdout.strip())
+
+
+def _commits(n: int, noun: str = "commit") -> str:
+    return "%d %s%s" % (n, noun, "" if n == 1 else "s")
+
+
+def _behind(cwd: str, older: str, newer: str) -> str:
+    return "%s behind it" % _commits(_count(cwd, older, newer, first_parent=True),
+                                     "first-parent commit")
 
 
 def resolve_mainline(cwd: str) -> Mainline:
@@ -140,10 +151,19 @@ def resolve_mainline(cwd: str) -> Mainline:
     if _holds(cwd, local, remote):
         return Mainline("main", local, "origin/main at %s is %s, so it was not read"
                         % (remote[:8], _behind(cwd, remote, local)))
+    # Diverged: local `main` holds commits `origin/main` does not, and they may be somebody's
+    # work. So the refusal says that and gives a command that only reads them, and no advice to
+    # move a ref. The old "bring local main level with origin/main", followed literally, is a
+    # reset that discards them (PR #243's review, R2). The count and the command come first
+    # because the stop hook quotes a refusal only as far as `cut -c1-200` reaches.
+    mine = _count(cwd, remote, local, first_parent=False)
+    theirs = _count(cwd, local, remote, first_parent=False)
     raise Unmeasurable(
-        "local main (%s) and origin/main (%s) have diverged — neither contains the other, so "
-        "neither is the fresher mainline. Bring local main level with origin/main, then run "
-        "this again" % (local[:8], remote[:8]))
+        "local main has %s origin/main lacks, so the two have diverged. See %s, read-only: "
+        "git log --oneline origin/main..main (local main %s, origin/main %s, which has %s local "
+        "main lacks). Nothing was measured and no ref was moved"
+        % (_commits(mine), "it" if mine == 1 else "them", local[:8], remote[:8],
+           _commits(theirs)))
 
 
 def merge_index(mainline: Mainline, cwd: str) -> dict[str, tuple[int, int]]:
@@ -408,6 +428,21 @@ def selftest() -> int:
             print("  FAIL  `check <path>` did not read the path it is given "
                   "(exit %d, named=%s)" % (proc.returncode, named))
             failures += 1
+        # The same run with findings names its mainline, above the first finding (PR #243's
+        # review, F1). This is the run the stop hook shows when it blocks, and the one where a
+        # stale mainline would show as findings, so it is where the line matters most.
+        out = proc.stdout.splitlines()
+        line_at = next((i for i, l in enumerate(out)
+                        if l.startswith("changelog-order: mainline is main at %s"
+                                        % _git(repo, "rev-parse", "main")[:8])), None)
+        finding_at = next((i for i, l in enumerate(out) if os.path.basename(bad) in l), None)
+        if proc.returncode == 2 and None not in (line_at, finding_at) and line_at < finding_at:
+            print("  ok    a run with findings prints the mainline line above them")
+        else:
+            print("  FAIL  a run with findings did not print the mainline line above them "
+                  "(exit %d, mainline line at %s, first finding at %s)\n        got: %s"
+                  % (proc.returncode, line_at, finding_at, proc.stdout.strip()))
+            failures += 1
 
         # A refusal rather than a clean zero, proved rather than asserted.
         empty = os.path.join(tmp, "empty.md")
@@ -422,7 +457,7 @@ def selftest() -> int:
             else:
                 print("  FAIL  %s — it returned an answer instead" % name)
                 failures += 1
-        ran = len(cases) + 3
+        ran = len(cases) + 4
 
         # Which mainline is read (SONNY-480). Every worktree shares one local `main`, and nothing
         # moves it when a pull request merges on GitHub, so between a merge and somebody's pull
@@ -497,6 +532,51 @@ def selftest() -> int:
             print("  FAIL  a diverged mainline did not refuse cleanly (exit %d)\n        got: %s"
                   % (proc.returncode, (proc.stdout + proc.stderr).strip()))
             failures += 1
+        # What the stop hook shows of that refusal is its output flattened to one line and cut
+        # at `cut -c1-200`. Measured in bytes, which is never more than characters, so the
+        # check holds whichever of the two that `cut` counts in. What has to survive the cut:
+        # that local `main` holds a commit `origin/main` lacks, and a command that only reads
+        # it (PR #243's review, R2).
+        quoted = (proc.stdout + proc.stderr).replace("\n", " ").replace("\t", " ")
+        quoted = quoted.encode("utf-8")[:200].decode("utf-8", "ignore")
+        ran += 1
+        wanted = ("local main has 1 commit origin/main lacks",
+                  "git log --oneline origin/main..main")
+        if all(w in quoted for w in wanted):
+            print("  ok    a diverged refusal's reason and read-only command fit the hook's "
+                  "quote")
+        else:
+            print("  FAIL  the hook's 200-byte quote of a diverged refusal lacks %s\n"
+                  "        got: %s" % ([w for w in wanted if w not in quoted], quoted))
+            failures += 1
+        # A git failure inside the ancestry check is not divergence (PR #243's review, R4). Both
+        # refuse with exit 1, so only the words tell them apart, and "diverged" would send the
+        # reader to inspect commits that are not the problem. A `git` placed first on PATH fails
+        # `merge-base` alone and hands every other subcommand to the real one, so the run gets as
+        # far as the ancestry check and no further.
+        fake_bin = os.path.join(tmp, "fake-git-bin")
+        os.makedirs(fake_bin, exist_ok=True)
+        fake_git = os.path.join(fake_bin, "git")
+        with open(fake_git, "w") as fh:
+            fh.write('#!/bin/sh\nif [ "$1" = merge-base ]; then\n'
+                     '  echo "fatal: the selftest made merge-base fail" >&2; exit 128\nfi\n'
+                     'exec %s "$@"\n' % shlex.quote(shutil.which("git") or "git"))
+        os.chmod(fake_git, 0o755)
+        _point_mainline_refs(repo, behind, tip)
+        fake_path = fake_bin + os.pathsep + os.environ.get("PATH", "")
+        proc = subprocess.run([sys.executable, os.path.abspath(__file__), "check",
+                               _write(tmp, good)], capture_output=True, text=True, cwd=repo,
+                              env=dict(os.environ, PATH=fake_path))
+        first = (proc.stderr.splitlines() or [""])[0]
+        ran += 1
+        if (proc.returncode == 1 and "git merge-base --is-ancestor" in first
+                and "the selftest made merge-base fail" in first and "diverged" not in proc.stderr):
+            print("  ok    a git failure in the ancestry check is refused as that failure")
+        else:
+            print("  FAIL  a git failure in the ancestry check was not refused as itself "
+                  "(exit %d)\n        got: %s" % (proc.returncode, proc.stderr.strip()))
+            failures += 1
+
         # A refusal that comes after the mainline resolved still names it — on the line after
         # the reason, never before it.
         _point_mainline_refs(repo, tip, None)
