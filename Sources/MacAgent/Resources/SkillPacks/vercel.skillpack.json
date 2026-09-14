@@ -8,6 +8,40 @@
   "signInURL": "https://vercel.com/login",
   "triggers": ["vercel", "vercel.com"],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Deploy a Git repository as a new project",
+      "startURL": "https://vercel.com/dashboard",
+      "steps": [
+        "Click the New Project button at the top right of the dashboard.",
+        "Pick the repository from the list your connected Git providers offer. The dropdown at the top left of the list switches to another Git namespace or provider.",
+        "On the configuration page, adjust the project's name, Framework Preset, root directory and Build Output Settings as needed.",
+        "Select Deploy."
+      ],
+      "source": "https://vercel.com/docs/git"
+    },
+    {
+      "title": "Add a custom domain to a project",
+      "startURL": "https://vercel.com/dashboard",
+      "steps": [
+        "On the dashboard, pick the project, open Settings in the sidebar, and select Domains.",
+        "Click Add Domain and enter the domain. For an apex domain such as example.com, Vercel prompts you to add the www subdomain too.",
+        "Configure the domain's DNS records with your registrar the way the dashboard shows: an A record for an apex domain, a CNAME record for a subdomain, or Vercel's nameservers.",
+        "Once Vercel has verified the domain, its status in the dashboard shows it is ready for use."
+      ],
+      "source": "https://vercel.com/docs/domains/working-with-domains/add-a-domain"
+    },
+    {
+      "title": "Roll back a production deployment",
+      "startURL": "https://vercel.com/dashboard",
+      "steps": [
+        "On the project's overview page, click Instant Rollback on the Production Deployment tile.",
+        "Select the deployment to roll back to and click Continue. On Pro and Enterprise plans, Choose another deployment lists every eligible one.",
+        "Verify the domains and subdomains that will be rolled back, then click Confirm Rollback.",
+        "Vercel then stops assigning production domains to new pushes. To undo, click Undo Rollback on the same tile, select the deployment to promote and click Confirm."
+      ],
+      "source": "https://vercel.com/docs/instant-rollback"
+    }
+  ]
 }

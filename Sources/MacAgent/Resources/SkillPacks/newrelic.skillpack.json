@@ -8,6 +8,41 @@
   "signInURL": "https://one.newrelic.com/",
   "triggers": ["new relic", "newrelic.com"],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Create a dashboard",
+      "startURL": "https://one.newrelic.com/",
+      "steps": [
+        "Go to one.newrelic.com > All capabilities > Dashboards, and select + Create a dashboard at the top-right corner of the dashboards index.",
+        "Select Create a new dashboard.",
+        "Name the dashboard, select the account it belongs to, which cannot be changed later, and select its permissions.",
+        "Press Create.",
+        "Click + Add widget to add a chart, built with the query builder, or text, images or links."
+      ],
+      "source": "https://docs.newrelic.com/docs/query-your-data/explore-query-data/dashboards/introduction-dashboards/"
+    },
+    {
+      "title": "Monitor a page's load performance",
+      "startURL": "https://one.newrelic.com/",
+      "steps": [
+        "Go to one.newrelic.com > Synthetic monitoring > Create a monitor, and choose the Page load performance tile.",
+        "Put the URL of the page to test in the URL field.",
+        "Select at least three locations the monitor runs from and a mix of Chrome and Firefox, and set how often it checks with the Period dropdown.",
+        "Once the monitor reports, its data is on the synthetics Summary page: Synthetic monitoring, then select the monitor."
+      ],
+      "source": "https://docs.newrelic.com/docs/synthetics/synthetic-monitoring/getting-started/get-started-synthetic-monitoring/"
+    },
+    {
+      "title": "Build a step monitor for a user workflow",
+      "startURL": "https://one.newrelic.com/",
+      "steps": [
+        "Go to one.newrelic.com > Synthetic monitoring > Create a monitor, and choose the User step execution tile.",
+        "Give the monitor a name, choose how often it runs, and select the browser and emulated device types and the locations it runs from.",
+        "Define the steps from the 12 prebuilt steps, for example clicking buttons to move through different pages.",
+        "Click Validate before saving the monitor, to check the steps run successfully."
+      ],
+      "source": "https://docs.newrelic.com/docs/synthetics/synthetic-monitoring/getting-started/get-started-synthetic-monitoring/"
+    }
+  ]
 }

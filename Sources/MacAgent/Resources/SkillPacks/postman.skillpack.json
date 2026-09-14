@@ -8,6 +8,38 @@
   "signInURL": "https://www.postman.com/_pm/handover/?to=https%3A%2F%2Fidentity.getpostman.com%2Flogin",
   "triggers": ["postman.com"],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Send an HTTP request",
+      "startURL": "https://www.postman.com/",
+      "steps": [
+        "Click Create new request in the workbench, click the request icon, and select HTTP as the request type. With an HTTP collection already open, Add request next to the collection in the sidebar does the same.",
+        "Enter the request URL and select the request method.",
+        "Specify any parameters, body data and headers the request needs, then click Send.",
+        "Click Save to keep the request, giving it a name and description and choosing or creating a collection for it. Its protocol cannot change once saved."
+      ],
+      "source": "https://learning.postman.com/docs/use/send-requests/create-requests/request-basics/"
+    },
+    {
+      "title": "Create a collection",
+      "startURL": "https://www.postman.com/",
+      "steps": [
+        "In the sidebar, click the Add icon and select Collection. In a new workspace, expanding Collections in the sidebar and clicking Create does the same.",
+        "Click the collection's name in the workbench to rename it, and add a description in the Overview tab.",
+        "Add API requests to the collection."
+      ],
+      "source": "https://learning.postman.com/docs/use/use-collections/create-collections/"
+    },
+    {
+      "title": "Share a request",
+      "startURL": "https://www.postman.com/",
+      "steps": [
+        "Open the request and click Share in the upper right corner.",
+        "Add users and configure their access. Optionally select an environment to include with the request.",
+        "Click Invite. Copying a link to the request is another way to share it."
+      ],
+      "source": "https://learning.postman.com/docs/use/send-requests/create-requests/request-basics/"
+    }
+  ]
 }

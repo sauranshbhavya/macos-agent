@@ -8,6 +8,37 @@
   "signInURL": "https://cloudinary.com/users/login",
   "triggers": ["cloudinary", "cloudinary.com"],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Upload files to the Media Library",
+      "startURL": "https://console.cloudinary.com/",
+      "steps": [
+        "In the Media Library, select the Folders page and navigate to the folder to upload to. Uploading from the Assets page puts files in the root folder.",
+        "Drag and drop the files or folders into the Media Library. Or click the drop-down button next to the main Upload button, keep the My Files tab selected, and click Browse to pick the files.",
+        "To upload from another source, such as a web URL or Dropbox, click the Upload button at the top-right of the Media Library to open the Upload Widget."
+      ],
+      "source": "https://cloudinary.com/documentation/dam_upload_store_assets"
+    },
+    {
+      "title": "Create a folder and move assets into it",
+      "startURL": "https://console.cloudinary.com/",
+      "steps": [
+        "In the Media Library, select the Folders page and go to where the new folder belongs.",
+        "Click the Add Folder button near the folder path breadcrumbs.",
+        "To move assets into it, select them and click Move to Folder from the (3-dots) options menu in the assets toolbar, or drag and drop them onto the folder."
+      ],
+      "source": "https://cloudinary.com/documentation/dam_folders_collections_sharing"
+    },
+    {
+      "title": "Share a folder with users",
+      "startURL": "https://console.cloudinary.com/",
+      "steps": [
+        "Select Share from the options drop-down next to the current folder path at the top of the Media Library, or from the kebab menu in the Folders grid.",
+        "Select the users or user groups to share the folder with, and the permission level for each.",
+        "They get an email notification. To adjust or remove someone's access later, click Access Details in the Share dialog box."
+      ],
+      "source": "https://cloudinary.com/documentation/dam_folders_collections_sharing"
+    }
+  ]
 }
