@@ -8,6 +8,37 @@
   "signInURL": "https://docs.google.com/spreadsheets/",
   "triggers": ["google sheets", "sheets.google.com"],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Create a spreadsheet",
+      "startURL": "https://sheets.google.com/",
+      "steps": [
+        "Open the Sheets home screen at sheets.google.com.",
+        "Click New. This creates and opens the new spreadsheet. Opening sheets.google.com/create does the same."
+      ],
+      "source": "https://support.google.com/docs/answer/6000292?hl=en&co=GENIE.Platform%3DDesktop"
+    },
+    {
+      "title": "Sort a sheet by a column",
+      "startURL": "https://sheets.google.com/",
+      "steps": [
+        "Open the spreadsheet.",
+        "At the top, right-click the letter of the column to sort by.",
+        "Click Sort sheet A to Z or Sort sheet Z to A."
+      ],
+      "source": "https://support.google.com/docs/answer/3540681?hl=en&co=GENIE.Platform%3DDesktop"
+    },
+    {
+      "title": "Insert a chart",
+      "startURL": "https://sheets.google.com/",
+      "steps": [
+        "Open the spreadsheet.",
+        "Select the cells to include in the chart.",
+        "Click Insert, then Chart.",
+        "To change the chart type, double-click the chart, click Setup on the right, and choose a type under Chart type."
+      ],
+      "source": "https://support.google.com/docs/answer/63824?hl=en&co=GENIE.Platform%3DDesktop"
+    }
+  ]
 }

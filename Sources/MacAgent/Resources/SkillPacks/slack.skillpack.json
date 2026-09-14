@@ -6,8 +6,40 @@
   "category": "communication",
   "summary": "Team messaging app.",
   "signInURL": "https://slack.com/mweb-signin-start?dest=signin",
-  "triggers": ["slack.com"],
+  "triggers": ["in slack", "slack message", "slack messages", "slack channel", "open slack", "slack.com"],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Send a message",
+      "startURL": "https://app.slack.com/",
+      "steps": [
+        "Open the channel, DM or thread to send the message to.",
+        "From the Messages tab, click the message field.",
+        "Type the message, adding any attachments, emoji, mentions or formatting.",
+        "Press Enter to send it. To send it later instead, click the arrow next to the paper plane icon."
+      ],
+      "source": "https://slack.com/help/articles/201457107-Send-and-read-messages"
+    },
+    {
+      "title": "Create a channel",
+      "startURL": "https://app.slack.com/",
+      "steps": [
+        "Click the plus sign in the sidebar.",
+        "Select Channel. On a paid plan, select Blank channel for a regular channel, or choose a template.",
+        "Enter a channel name, choose whether it is public or private, then click Create."
+      ],
+      "source": "https://slack.com/help/articles/201402297-Create-a-channel"
+    },
+    {
+      "title": "Search messages",
+      "startURL": "https://app.slack.com/",
+      "steps": [
+        "Click the search field at the top of Slack.",
+        "Type what to look for, or select a recent search. Add modifiers to narrow the results.",
+        "Select an option from the list, or press Enter to view all results. Click Filters to refine them."
+      ],
+      "source": "https://slack.com/help/articles/202528808-Search-in-Slack"
+    }
+  ]
 }

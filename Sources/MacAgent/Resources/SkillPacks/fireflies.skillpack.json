@@ -6,8 +6,41 @@
   "category": "communication",
   "summary": "AI meeting note-taker and transcription.",
   "signInURL": "https://app.fireflies.ai/login",
-  "triggers": ["fireflies.ai"],
+  "triggers": ["fireflies.ai", "fireflies ai", "fireflies notetaker"],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Get Fireflies to record a meeting",
+      "startURL": "https://app.fireflies.ai/",
+      "steps": [
+        "Turn on auto-join from the Fireflies dashboard to let it join meetings automatically.",
+        "Or add fred@fireflies.ai to the Google or Outlook calendar invite.",
+        "Or, for a meeting already under way, use the Add to live meeting button on the dashboard: enter the meeting link, set the language and click Start Capturing."
+      ],
+      "source": "https://guide.fireflies.ai/articles/9554534786-how-fireflies-joins-and-records-your-meetings-faqs"
+    },
+    {
+      "title": "Search a meeting transcript",
+      "startURL": "https://app.fireflies.ai/",
+      "steps": [
+        "In the Fireflies web app, click Meetings and open the meeting.",
+        "Type the words to find in the Search Transcript box and press Enter.",
+        "Click the relevant part of the transcript in the results; the recording plays from that point.",
+        "Close the search results to follow the transcript along with the playback."
+      ],
+      "source": "https://guide.fireflies.ai/articles/2014980251-how-to-search-within-meeting-transcripts"
+    },
+    {
+      "title": "Share a meeting recap by link",
+      "startURL": "https://app.fireflies.ai/",
+      "steps": [
+        "Click the Meetings tab in the left-hand menu, find the meeting by searching or filtering, and open it.",
+        "Click Share in the top-right corner.",
+        "In the Share window, choose who can see it from the Privacy dropdown.",
+        "Click Copy Link to share the meeting recap directly."
+      ],
+      "source": "https://guide.fireflies.ai/articles/2474667467-how-to-share-meeting-transcripts-and-summaries-with-everyone"
+    }
+  ]
 }
