@@ -107,7 +107,9 @@ struct SkillPhraseList {
 /// scoped round. The other two lists have since SONNY-479: they spelled their plurals out, and the
 /// context list missed four of them — banks, IBANs, wires and currencies — while this comment said
 /// both lists spelled theirs out. A word listed in the plural has no singular on its list (`funds`,
-/// `refunds`, `payment details`) and is matched only as written.
+/// `refunds`, the `… details` phrases), so its singular is not matched — "Update the bank detail."
+/// loads — but it is read in the plural like every listed word: "Update the banks details." is
+/// refused as `bank details`, and "Move the fundses." as `funds`.
 ///
 /// **An object is refused only beside a listed action verb.** The verb and the object need not be
 /// joined: any listed action verb anywhere in the unit is enough, so a money act whose own verb is

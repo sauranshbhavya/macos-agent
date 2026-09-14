@@ -108,7 +108,19 @@ struct SkillPackTests {
     /// pack for no product reason — the Skills suite in `MemoryCommandCenterTests` did, until it moved to
     /// `SkillPackFixtures.catalogue()`. Every Swift file under `Tests/` goes through
     /// `readsTheShippedPacks(_:)`, and so do the held samples, so the check the files meet is the check
-    /// the samples prove. A path assembled from pieces evades it.
+    /// the samples prove.
+    ///
+    /// **What it does not see** (PR #245's review): a path assembled from pieces; a read of the built
+    /// resource bundle (`Bundle(url:)` and its `resourceURL`), which is how `SonnyResourceBundle` itself
+    /// reads the packs; a call to `AgentViewModel.atItsRealStoreLocations()`, which reads them through
+    /// `SonnyResourceBundle`; and a CRLF file whose first line is a line comment, because `"\r\n"` is
+    /// one `Character`, so the file never splits and reads as one comment line. And the exemption is
+    /// the whole of this file, not its two validating tests: a test added here could pin shipped
+    /// contents and pass.
+    ///
+    /// **The `readers` assertion does not show the validating tests read the folder.** This file's own
+    /// sample lines and `shippedPacksDirectory` satisfy it on their own. What shows the read is the
+    /// validating tests' own count checks: `catalogue.packs.count == files.count` and `>= 3`.
     @Test
     func onlyTheValidatingTestsReadTheShippedPacksFolder() throws {
         let root = Self.repositoryRoot.standardizedFileURL.path + "/"
@@ -125,6 +137,8 @@ struct SkillPackTests {
 
         // The control: the walk reached this file and the suite that used to read the folder.
         #expect(scanned.isSuperset(of: ["Tests/MacAgentCoreTests/SkillPackTests.swift", "Tests/MacAgentTests/MemoryCommandCenterTests.swift"]))
+        // This file's own sample lines satisfy this on their own; the validating tests' count checks
+        // are what show they read the folder.
         #expect(readers == ["Tests/MacAgentCoreTests/SkillPackTests.swift"])
 
         #expect(Self.readsTheShippedPacks(#"    .appendingPathComponent("Sources/MacAgent/Resources/SkillPacks")"#))
