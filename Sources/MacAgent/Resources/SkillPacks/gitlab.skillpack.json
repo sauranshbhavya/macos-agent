@@ -8,6 +8,40 @@
   "signInURL": "https://gitlab.com/users/sign_in/",
   "triggers": ["gitlab", "gitlab.com"],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Create a blank project",
+      "startURL": "https://gitlab.com/",
+      "steps": [
+        "In the upper-right corner, select Create new, then New project/repository.",
+        "Select Create blank project.",
+        "Enter the project name and the project slug, which GitLab uses as the URL path, and select the visibility level. Optionally select Initialize repository with a README.",
+        "Select Create project."
+      ],
+      "source": "https://docs.gitlab.com/user/project/"
+    },
+    {
+      "title": "Create an issue in a project",
+      "startURL": "https://gitlab.com/",
+      "steps": [
+        "In the top bar, select Search or go to and find the project.",
+        "In the left sidebar, select Plan > Work items, then select New item in the upper-right corner.",
+        "From the Type dropdown list, select Issue if it is not already selected.",
+        "Complete the fields and select Create issue. The new issue opens."
+      ],
+      "source": "https://docs.gitlab.com/user/project/issues/create_issues/"
+    },
+    {
+      "title": "Create a merge request",
+      "startURL": "https://gitlab.com/",
+      "steps": [
+        "In the top bar, select Search or go to and find the project.",
+        "In the left sidebar, select Code > Merge requests, then select New merge request in the upper-right corner.",
+        "Select a source and a target branch, then select Compare branches and continue.",
+        "Complete the fields on the New merge request page, then select Create merge request."
+      ],
+      "source": "https://docs.gitlab.com/user/project/merge_requests/creating_merge_requests/"
+    }
+  ]
 }

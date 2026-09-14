@@ -8,6 +8,40 @@
   "signInURL": "https://www.metabase.com/cloud/login",
   "triggers": ["metabase", "metabase.com"],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Create a dashboard",
+      "startURL": "https://www.metabase.com/cloud/login",
+      "steps": [
+        "In the top right of the screen, click + New > Dashboard.",
+        "Give the dashboard a name and a description, and choose the collection it goes in.",
+        "Click Create. Metabase opens the new dashboard.",
+        "To put a chart on it, click the + icon in the top right while editing, and add a new question, a SQL query or an existing question."
+      ],
+      "source": "https://www.metabase.com/docs/latest/dashboards/introduction"
+    },
+    {
+      "title": "Ask a question with the query builder",
+      "startURL": "https://www.metabase.com/cloud/login",
+      "steps": [
+        "From the + New dropdown, select Question.",
+        "Pick the data to work with: a table from a database, a model, a metric or another saved question. Type to search, or browse databases and collections.",
+        "Add filters to restrict the data, for example Widgets over the last 3 weeks.",
+        "Summarize it, for example as a count of rows or the average of a column, and group the summary by a dimension if needed.",
+        "Click the Preview button to the right of a step to see the first 10 rows of results up to that step."
+      ],
+      "source": "https://www.metabase.com/docs/latest/questions/query-builder/editor"
+    },
+    {
+      "title": "Add a database connection",
+      "startURL": "https://www.metabase.com/cloud/login",
+      "steps": [
+        "Click the grid icon in the top right and select Admin.",
+        "In Admin settings, go to Databases > Add a database.",
+        "Fill out the fields for that database, which differ from one database to another, and click Save changes at the bottom."
+      ],
+      "source": "https://www.metabase.com/docs/latest/databases/connecting"
+    }
+  ]
 }

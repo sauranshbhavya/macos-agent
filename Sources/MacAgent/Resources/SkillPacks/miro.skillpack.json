@@ -6,8 +6,41 @@
   "category": "design",
   "summary": "Online whiteboard for team collaboration.",
   "signInURL": "https://miro.com/login",
-  "triggers": ["miro.com"],
+  "triggers": ["miro board", "miro boards", "in miro", "open miro", "miro.com"],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Create a board",
+      "startURL": "https://miro.com/app/dashboard/",
+      "steps": [
+        "Open your dashboard. If you are a member of several teams, choose the team to save the board to; to create it in a particular space, open that space.",
+        "Click + Create new. A menu opens.",
+        "Click Board. A new board is created. To start from a template instead, click Explore templates in that menu, pick one and click Use template.",
+        "Typing miro.new in the browser address bar also opens a new board."
+      ],
+      "source": "https://help.miro.com/hc/en-us/articles/360017571974-Create-a-Miro-board"
+    },
+    {
+      "title": "Invite people to a board",
+      "startURL": "https://miro.com/app/dashboard/",
+      "steps": [
+        "Click the Share button in the top-right corner of the board. From the dashboard, select the three dots (...) for the board, then Share.",
+        "Under the Invite tab, enter the invitees' email addresses, separated by spaces, and set their access rights.",
+        "Click Send invitations.",
+        "To share by link instead, go to Anyone with the link under the Invite tab, choose view, comment or edit access, and click Copy board link."
+      ],
+      "source": "https://help.miro.com/hc/en-us/articles/360017730813-Sharing-boards-and-inviting-collaborators"
+    },
+    {
+      "title": "Restore a deleted board",
+      "startURL": "https://miro.com/app/dashboard/",
+      "steps": [
+        "Open Trash by clicking your avatar in the upper right of the dashboard. Trash is on paid and Education plans, and a board can be restored within 90 days.",
+        "Click the three dots (...) menu next to the board and click Restore. It returns to its original owner and team.",
+        "On the Free plan, open the deleted board's link instead and click restore the board."
+      ],
+      "source": "https://help.miro.com/hc/en-us/articles/360017572614-How-to-restore-a-deleted-board"
+    }
+  ]
 }

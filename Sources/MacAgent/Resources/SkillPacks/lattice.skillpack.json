@@ -6,8 +6,42 @@
   "category": "recruiting_hr",
   "summary": "People management for performance and engagement.",
   "signInURL": "https://lattice.com/login",
-  "triggers": ["lattice.com"],
+  "triggers": ["lattice feedback", "lattice org chart", "lattice hr", "lattice.com"],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Give feedback",
+      "startURL": "https://lattice.com/login",
+      "steps": [
+        "Navigate to Home > Give or request feedback > Give Feedback, or to Feedback > Give feedback.",
+        "Under Who's the feedback about?, add the recipient's name. Public feedback can go to up to ten people at once; private feedback to one.",
+        "Under What's your feedback?, write the message. If your admin has set up company values, optionally pick one under Which values did they embody?",
+        "Choose the share setting: Public, only the recipient, the recipient and their manager, or only the recipient's manager."
+      ],
+      "source": "https://help.lattice.com/en-us/articles/15178951-give-feedback"
+    },
+    {
+      "title": "Request feedback",
+      "startURL": "https://lattice.com/login",
+      "steps": [
+        "Navigate to Home > Give or request feedback > Request feedback, or to Home > Feedback.",
+        "Under Who do you want to ask for feedback?, select employees by name, or enter an email address for someone outside the company.",
+        "Under Who's the feedback about?, select the person it concerns.",
+        "Optionally, under What would you like feedback on?, select a feedback template or write your own request in the text box.",
+        "Choose the visibility setting, then select Request feedback."
+      ],
+      "source": "https://help.lattice.com/en-us/articles/15179038-request-feedback"
+    },
+    {
+      "title": "View the company org chart",
+      "startURL": "https://lattice.com/login",
+      "steps": [
+        "Navigate to Home > View org chart, or to your company's name > Org chart.",
+        "Click a person's card to expand their line of direct reports.",
+        "Search for an employee to see their place in the chart. The chart can also be zoomed, switched between vertical and horizontal or flat and compact layouts, and exported as the current view."
+      ],
+      "source": "https://help.lattice.com/en-us/articles/15179448-view-the-company-org-chart"
+    }
+  ]
 }

@@ -6,8 +6,41 @@
   "category": "recruiting_hr",
   "summary": "Recruiting software and applicant tracking.",
   "signInURL": "https://www.workable.com/signin",
-  "triggers": ["workable.com"],
+  "triggers": ["workable ats", "workable.com"],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Create and publish a job",
+      "startURL": "https://www.workable.com/",
+      "steps": [
+        "Create the job manually in the job editor.",
+        "Type the job title, using an auto-suggested title where one fits, and select the department from the dropdown menu.",
+        "Set the job location: a city under Office location for an on-site or hybrid job, or at least a country or state under Employee location for a remote one.",
+        "Fill out the job description, requirements and benefits, check the targeting details at the bottom of the page, and click Save & continue to go on to the application form, or Save draft.",
+        "When ready, click Publish at the top right. A standard access member is prompted to send a publish request to an account admin instead."
+      ],
+      "source": "https://help.workable.com/hc/en-us/articles/115012102508-Creating-a-job-in-Workable"
+    },
+    {
+      "title": "Add a candidate to a job by hand",
+      "startURL": "https://www.workable.com/",
+      "steps": [
+        "Open one of the job's stages, for example Sourced. The candidate is added to the stage being viewed.",
+        "Click Add candidates in the upper right, then click Add manually.",
+        "Enter the information you have about the candidate in the form and click Add to Sourced. A resume can be added later by editing the candidate's profile."
+      ],
+      "source": "https://help.workable.com/hc/en-us/articles/115012662368-Add-a-candidate-with-just-a-name-or-email-address"
+    },
+    {
+      "title": "Edit a requisition",
+      "startURL": "https://www.workable.com/",
+      "steps": [
+        "Navigate to the Hiring Plan dashboard, click the three dots next to the requisition, and select Edit requisition.",
+        "Edit fields such as the associated job, the requisition owner or hiring manager, and the dates. Hiring Managers and above can edit open, pending, approved and rejected requisitions.",
+        "Some fields need re-approval when edited; Hiring Plan settings show which."
+      ],
+      "source": "https://help.workable.com/hc/en-us/articles/360034516774-How-do-I-edit-a-requisition"
+    }
+  ]
 }
