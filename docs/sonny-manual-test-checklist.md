@@ -5013,30 +5013,49 @@ run, reset both grants first: `tccutil reset Calendar com.sonny.MacAgent` and
 `tccutil reset Reminders com.sonny.MacAgent`. Weather is not part of this: it waits for the Apple
 Developer enrolment.
 
-- [ ] **Settings → Permissions** shows a **Calendars** row and a **Reminders** row, both reading
-      "Check when used": "Sonny will ask the first time you check your calendar." and "Sonny will ask
-      the first time you add a reminder."
+- [ ] **Settings → Security & Access → Permission Readiness** shows a **Calendars** row and a
+      **Reminders** row, both reading "Check when used": "Sonny will ask the first time you check your
+      calendar." and "Sonny will ask the first time you add a reminder."
 - [ ] Ask the widget: `what's on my calendar`. **Sonny does not ask you anything; macOS asks once**
       for access to your calendars, and its prompt reads "Sonny reads your calendar when you ask what's
       on it." Allow it. The result lists today's events, all-day ones first, then by time, for example
       "Today: all day Holiday, 09:00 Standup, 12:30 Lunch." — or "Nothing on your calendar today." on an
       empty day. Ask again: no prompt this time. **What would be a finding:** a Sonny approval before
       the read, a second macOS prompt, or an event missing or on the wrong day.
+- [ ] **The first read right after allowing access works** (added by PR #244's fix round). Sonny's
+      calendar store is created when Sonny launches, before any grant, and nothing has shown that a
+      store made then can read once access arrives. So, on a day that has events: reset Calendars
+      (`tccutil reset Calendar com.sonny.MacAgent`), relaunch, ask `what's on my calendar`, allow the
+      macOS prompt, and read **that first answer**. **What would be a finding:** "Nothing on your
+      calendar today." on a day with events, or any error, on that first answer — even if asking again
+      then works.
 - [ ] Ask `what do I have on Friday`: the result names that Friday ("Friday 18 September: …") and its
       events, and a day with more than five events ends "and N more".
-- [ ] Ask the widget: `remind me in 5 minutes to call the bank`. **Sonny asks first**: the approval
-      names the reminder, and its preview reads "When: <a time five or six minutes from now> today".
-      Allow it; macOS then asks once for Reminders access ("Sonny adds reminders when you ask it to
-      remind you."). Allow that too. The result reads "Added a reminder for <time> today: call the
-      bank." Open Reminders: the reminder is in your default list with that time. **Five minutes
-      later a reminder alert fires.** **What would be a finding:** no approval before the reminder,
-      a reminder at a different time from the one the approval named, or no alert.
+- [ ] Ask the widget: `remind me in 5 minutes to call the bank`. **Sonny asks first**, and the
+      approval names when the reminder is due before you press Allow: the widget's panel reads "Allow
+      access to Reminder at <a time five or six minutes from now> on <today's weekday, day and month>"
+      under a line naming "call the bank", and Command Center's panel (if it is open) shows the same
+      on its "Involves:" line. Allow it; macOS then asks once for Reminders access ("Sonny adds
+      reminders when you ask it to remind you."). Allow that too. The result reads "Added a reminder
+      for <time> today: call the bank." Open Reminders: the reminder is in your default list with the
+      time the approval named. **Five minutes later a reminder alert fires.** **What would be a
+      finding:** no approval before the reminder, an approval that names no time, a reminder at a
+      different time from the one the approval named, or no alert.
+- [ ] **The first reminder right after allowing access works** (added by PR #244's fix round, for the
+      same reason as the first read above). Reset Reminders (`tccutil reset Reminders
+      com.sonny.MacAgent`), relaunch, ask `remind me in 2 minutes to stretch`, allow Sonny's approval
+      and then the macOS prompt. **What would be a finding:** "Sonny couldn't find a Reminders list to
+      add this to.", any other error, or no reminder in Reminders, on that first request.
+- [ ] **Watch, on a Friday after 9 in the morning:** ask `remind me Friday at 9 to send the invoice`.
+      Sonny may refuse it with "That time has already passed." rather than reading it as next Friday,
+      depending on what the planner sends for the day. Note which it did; either is a result to
+      report, and a reminder set for a time that has already passed is a finding.
 - [ ] Ask `remind me to call the bank` with no time: Sonny asks when, and adds nothing until you
       answer.
 - [ ] **Refusals in plain words.** In System Settings → Privacy & Security → Calendars, turn Sonny
       off, then ask `what's on my calendar`: Sonny says "Sonny doesn't have access to your calendars.
-      Allow it in System Settings › Privacy & Security › Calendars." and the Settings row reads "Needs
-      action". Do the same for Reminders with a reminder request. Turn both back on.
+      Allow it in System Settings › Privacy & Security › Calendars." and the Permission Readiness row
+      reads "Needs action". Do the same for Reminders with a reminder request. Turn both back on.
 - [ ] Ask `teach Sonny a routine called mornings that reads my calendar`: no routine is saved, and
       Sonny says either "A routine can't read your calendar." or "Sonny can't do that yet."
 - [ ] Ask `what is the weather today`: Sonny says "Sonny can't do that yet." and nothing else.
