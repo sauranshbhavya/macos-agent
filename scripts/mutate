@@ -574,17 +574,37 @@ Layer 1 and nohup (the tee's ignore list):
   arm has to launch the harness the way it does.
 
   The report writer's pid is exported as $MUTATE_REPORT_TEE_PID, so a suite command can signal it.
-  Run this against any plan, IN THE FOREGROUND, once as-is and once against a copy with HUP taken
-  out of the tee's ignore list:
+  Paste this into bash or zsh at the repository root, on a clean tree, IN THE FOREGROUND, with
+  <plan> replaced by any plan that `scripts/mutate <plan> --check` accepts. It runs the harness
+  twice: once as shipped, once as a copy with HUP taken out of the tee's list. The copy sits in a
+  directory with this script's library and declarations beside it, the way the selftest's control
+  copy is built, because without them it dies at load. The suite command signals the report writer,
+  appends what became of it to a file, and fails — so each run stops at a red baseline and no mutant
+  is ever applied:
 
-    MUTATE_TEST_CMD='kill -HUP "$MUTATE_REPORT_TEE_PID"; sleep 1
-      ps -p "$MUTATE_REPORT_TEE_PID" >/dev/null 2>&1 && echo LAYER1-HELD || echo LAYER1-GONE
-      exit 1' scripts/mutate <plan>
+    demo="$(mktemp -d)"
+    mkdir -p "$demo/lib"
+    cp scripts/lib/battery-state.sh "$demo/lib/"
+    cp scripts/mutate-untrusted-failures "$demo/"
+    sed "/^  ( trap '' .*; exec tee -a /s/ HUP / /" scripts/mutate >"$demo/mutate"
+    chmod +x "$demo/mutate"
+    diff scripts/mutate "$demo/mutate"       # the tee's line, and nothing else
+    export LAYER1_VERDICT="$demo/verdict"
+    export MUTATE_TEST_CMD='kill -HUP "$MUTATE_REPORT_TEE_PID"; sleep 1
+      case "$(ps -p "$MUTATE_REPORT_TEE_PID" -o state= 2>/dev/null)" in
+        ""|Z*) echo LAYER1-GONE ;; *) echo LAYER1-HELD ;; esac >>"$LAYER1_VERDICT"
+      exit 1'
+    scripts/mutate <plan>
+    "$demo/mutate" <plan>
+    cat "$demo/verdict"
+    unset MUTATE_TEST_CMD LAYER1_VERDICT
 
-    sed "s/trap '' INT QUIT TERM HUP PIPE/trap '' INT QUIT TERM PIPE/" scripts/mutate > /tmp/m
-    chmod +x /tmp/m   # then the same MUTATE_TEST_CMD against /tmp/m
-
-  The shipped script prints LAYER1-HELD; the copy prints LAYER1-GONE. Measured 5 runs of 5 each way.
+  The verdict file then reads LAYER1-HELD (the shipped script) above LAYER1-GONE (the copy). Both
+  runs exit 1 on their baseline, and the copy's harness also reports that it ended at a point that
+  is not one of its exits, since it lost its report writer; the tree stays clean and the lock comes
+  off either way. A zombie counts as gone because the tee is the harness's child, not the suite's,
+  and can sit unreaped, so a bare `ps -p` could call a killed tee alive. Run as written
+  3 times on 2026-09-14 (the SONNY-367 changelog entry has the SHA and the outputs).
 
   RUN IT IN THE FOREGROUND. Under `nohup` there is nothing to demonstrate, and that is not a quirk
   of the reproduction — it is why three attempts at a selftest arm failed before SONNY-367. `nohup`
