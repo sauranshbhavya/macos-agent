@@ -489,9 +489,12 @@ struct ConsequenceRuleTests {
     }
 
     /// The defense-in-depth cell by name: a destructive escalation asks even when the tier
-    /// arithmetic left the effective tier at 2 — a state no adapter can produce today (every
-    /// escalation targets tier 3, and `effectiveTier` is a max-fold over the targets), pinned so
-    /// the day an escalation targets tier 2 it asks without anyone remembering to make it.
+    /// arithmetic left the effective tier at 2. Written before any adapter could produce that state
+    /// (`effectiveTier` is a max-fold over the targets, and every escalation targeted tier 3), so
+    /// that the day one targeted tier 2 it would ask without anyone remembering to make it — and
+    /// `create_reminder`'s `.affectsOthers` escalation now does exactly that (SONNY-453), held by
+    /// `CalendarAndReminderCapabilityTests.aReminderIsTierTwoAndAsksFirstThroughAnEscalationThatAffectsOthers`
+    /// (SONNY-489).
     @Test
     func aDestructiveEscalationAsksEvenWhenTheTierArithmeticStaysAtTierTwo() {
         let forced = CapabilityRiskAssessment(
