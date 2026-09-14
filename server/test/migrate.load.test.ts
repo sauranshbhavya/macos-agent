@@ -98,6 +98,30 @@ describe("loadMigrations", () => {
     await expect(loadMigrations(dir)).rejects.toThrow(message);
   });
 
+  // PR #250 review, R2: the two lines are read only at the head of a half — its leading blank and
+  // comment lines — because below the first statement a line can sit inside a `$$` body or a string,
+  // where Postgres stores it and the hash covers it. A marker line down there is refused, not ignored.
+  const body = "CREATE FUNCTION f() RETURNS int LANGUAGE plpgsql AS $$\nBEGIN\n";
+  const bodyEnd = "  RETURN 1;\nEND $$;";
+  it.each([
+    ["only inside a function body", `${body}-- @locks none\n-- @scans none\n${bodyEnd}\n-- @rollback\n${declared("SELECT 1;")}`],
+    ["at the head and again inside a function body", `${declared(body)}-- @locks none\n${bodyEnd}\n-- @rollback\n${declared("SELECT 1;")}`],
+    ["below a first statement, outside any body", `SELECT 1;\n-- @locks none\n-- @scans none\n-- @rollback\n${declared("SELECT 1;")}`],
+  ])("refuses a declaration %s, naming the file and the half", async (_name, text) => {
+    const dir = await withFiles({ "0005_buried.sql": text });
+    await expect(loadMigrations(dir)).rejects.toThrow(/0005_buried\.sql up half: "-- @locks none" sits below the half's first statement/);
+  });
+
+  it("reads a declaration among the head's other comments, above a function body that has comments of its own", async () => {
+    const dir = await withFiles({
+      "0006_headed.sql":
+        "-- 0006 — a title line\n--\n-- @locks none\n\n-- prose between the two\n-- @scans none\n" +
+        `${body}  -- a comment inside the body\n${bodyEnd}\n-- @rollback\n${declared("SELECT 1;")}`,
+    });
+    const [loaded] = await loadMigrations(dir);
+    expect(loaded?.id).toBe("0006_headed");
+  });
+
   it("loads the migrations that actually ship", async () => {
     // No directory argument: exercises the default path resolution, which is what `npm run
     // migrate` uses in both the local checkout and the container image.

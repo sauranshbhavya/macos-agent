@@ -219,7 +219,7 @@ COMMENT ON TABLE sonny.identity_provider_user IS
 
 -- @rollback
 -- @locks ACCESS EXCLUSIVE sonny.identity
--- @scans none
+-- @scans sonny.identity
 
 DROP TRIGGER IF EXISTS identity_close_owes_a_revocation ON sonny.identity;
 DROP FUNCTION IF EXISTS sonny.close_owes_its_own_revocation();

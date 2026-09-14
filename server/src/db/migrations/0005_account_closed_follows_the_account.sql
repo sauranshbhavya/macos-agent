@@ -1,5 +1,5 @@
 -- @locks ACCESS EXCLUSIVE sonny.identity
--- @scans sonny.identity
+-- @scans sonny.account, sonny.identity
 
 -- 0005 — `account_closed` follows the account, whichever statement moved either one
 -- (SONNY-127, PR #87 second-round F1, with F10 and F12).
@@ -85,7 +85,7 @@ UPDATE sonny.identity i
 
 -- @rollback
 -- @locks ACCESS EXCLUSIVE sonny.identity
--- @scans none
+-- @scans sonny.identity
 -- Restores 0004's two functions and its insert-only trigger verbatim. The repair pass above is not
 -- undone: putting a row back into a state the schema calls invalid is not a rollback, and 0004's
 -- own rollback removes exactly these rows anyway.

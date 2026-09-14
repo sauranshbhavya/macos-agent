@@ -299,7 +299,7 @@ ALTER TABLE sonny.identity DROP COLUMN revocation_claimed_at;
 
 -- @rollback
 -- @locks ACCESS EXCLUSIVE sonny.identity, ACCESS EXCLUSIVE sonny.identity_provider_user
--- @scans sonny.identity
+-- @scans sonny.identity, sonny.identity_provider_user
 
 DROP TRIGGER IF EXISTS identity_records_its_provider_side_user ON sonny.identity;
 DROP FUNCTION IF EXISTS sonny.record_provider_side_user();

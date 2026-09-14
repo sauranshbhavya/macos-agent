@@ -373,7 +373,7 @@ CREATE INDEX content_access_occurred_idx ON sonny.content_access (occurred_at DE
 
 -- @rollback
 -- @locks ACCESS EXCLUSIVE sonny.content_access, ACCESS EXCLUSIVE sonny.content_deletion, ACCESS EXCLUSIVE sonny.retained_content, ACCESS EXCLUSIVE sonny.training_snapshot, ACCESS EXCLUSIVE sonny.training_snapshot_member
--- @scans none
+-- @scans sonny.training_snapshot_member
 DROP INDEX IF EXISTS sonny.content_access_occurred_idx;
 DROP TABLE IF EXISTS sonny.content_access;
 DROP INDEX IF EXISTS sonny.content_deletion_account_idx;
