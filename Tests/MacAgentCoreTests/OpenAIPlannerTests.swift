@@ -341,6 +341,49 @@ struct OpenAIPlannerTests {
         #expect(unnamed.first?["text"] as? String == OpenAIPlanner.systemPrompt(toolRegistry: .default))
     }
 
+    /// **A command that names an added skill and follows up a prior task declares the tag first and the
+    /// skill after it** (PR #249's review, F5). The declaration completes the fixed rules — it says which
+    /// lines of the prior-task message are boundaries — so it sits with them, and the skill block's own
+    /// header restates that no rule above it moves. Swapping the two passed every test before this one,
+    /// because nothing sent a prior task and a named skill together.
+    @Test
+    func aFollowUpNamingAnAddedSkillDeclaresTheTagBeforeTheSkillBlock() async throws {
+        let fixture = SignedInBackendFixture()
+        let recorded = RecordedBackendRequests()
+        fixture.register { request in
+            recorded.append(request)
+            return ModelRouteFixtures.reply(
+                ModelRouteFixtures.textRouteJSON(outputText: openAppPlanJSON)
+            )
+        }
+        defer { fixture.unregister() }
+        let notion = try SkillPackFixtures.pack(id: "notion", name: "Notion", domain: "notion.so")
+        let planner = OpenAIPlanner(
+            client: fixture.client,
+            taskContext: ModelRouteFixtures.standardContext,
+            skillGuidance: SkillGuidance(addedPacks: [notion])
+        )
+        let context = PriorTaskContext(
+            command: "what's on my calendar",
+            outcome: PriorTaskOutcome(status: .completed, summary: "Today: 09:00 Standup.", provenance: .outsideAuthored),
+            createdAt: Date(timeIntervalSince1970: 2_000)
+        )
+
+        _ = try await planner.plan(command: "create a page in Notion called standup notes", priorTaskContext: context)
+
+        let messages = try #require(try recorded.only.json["messages"] as? [[String: Any]])
+        let system = try #require(messages[0]["text"] as? String)
+        let contextText = try #require(messages[1]["text"] as? String)
+        let segments = try #require(PriorTaskMessageSegments(message: contextText))
+        let boundary = try #require(UntrustedContentBoundary.Delimiters(tag: segments.tag))
+        let declaration = PriorTaskContext.segmentTagRule(boundary)
+        let skillBlock = SkillGuidance.header + "\n\n" + notion.guidance
+        #expect(system == OpenAIPlanner.systemPrompt(toolRegistry: .default) + "\n\n" + declaration + "\n\n" + skillBlock)
+        let declared = try #require(system.range(of: declaration))
+        let skill = try #require(system.range(of: SkillGuidance.header))
+        #expect(declared.upperBound <= skill.lowerBound, "the tag is declared after the skill block")
+    }
+
     /// The shipped factory reads the user's skills when it makes a planner, not when it was built —
     /// a pack added after launch is in the next request, and one removed is out of it.
     @Test
