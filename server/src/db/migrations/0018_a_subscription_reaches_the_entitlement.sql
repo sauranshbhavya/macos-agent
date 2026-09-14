@@ -1,3 +1,6 @@
+-- @locks ACCESS EXCLUSIVE sonny.entitlement
+-- @scans sonny.entitlement
+
 -- 0018 — what the payment provider says about a subscription, and where it lands (SONNY-211).
 --
 -- Spec §16.4 for the grace period, and this row's own rule: **the payment provider is the source of
@@ -142,6 +145,8 @@ CREATE INDEX billing_event_account_idx
   WHERE account_id IS NOT NULL;
 
 -- @rollback
+-- @locks ACCESS EXCLUSIVE sonny.billing_event, ACCESS EXCLUSIVE sonny.entitlement
+-- @scans none
 
 -- The state goes and the entitlement rows stay. What is lost is the grace window and the link to the
 -- provider's subscription, which means an account inside grace reverts to full capabilities until the

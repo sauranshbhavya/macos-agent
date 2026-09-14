@@ -1,3 +1,6 @@
+-- @locks SHARE ROW EXCLUSIVE sonny.identity
+-- @scans none
+
 -- 0015 — an obligation to revoke a provider-side user is created by the CLOSE and by the
 -- SUPERSESSION, and each one clears the record of the last revocation (SONNY-358).
 --
@@ -215,6 +218,8 @@ COMMENT ON TABLE sonny.identity_provider_user IS
   'triggers — never written by application code (SONNY-196, SONNY-230, SONNY-358).';
 
 -- @rollback
+-- @locks ACCESS EXCLUSIVE sonny.identity
+-- @scans none
 
 DROP TRIGGER IF EXISTS identity_close_owes_a_revocation ON sonny.identity;
 DROP FUNCTION IF EXISTS sonny.close_owes_its_own_revocation();

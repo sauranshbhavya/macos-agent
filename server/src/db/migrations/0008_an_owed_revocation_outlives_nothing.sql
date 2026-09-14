@@ -1,3 +1,6 @@
+-- @locks SHARE ROW EXCLUSIVE sonny.account, ACCESS EXCLUSIVE sonny.identity
+-- @scans none
+
 -- 0008 — an owed revocation cannot be deleted out from under itself, and a drain claims it for
 -- longer than one SELECT (SONNY-127, PR #87 fifth round, F2 and F3).
 --
@@ -90,6 +93,8 @@ CREATE OR REPLACE FUNCTION sonny.revocation_lease_seconds() RETURNS integer
 LANGUAGE sql IMMUTABLE AS $$ SELECT 300 $$;
 
 -- @rollback
+-- @locks ACCESS EXCLUSIVE sonny.account, ACCESS EXCLUSIVE sonny.identity
+-- @scans none
 DROP TRIGGER IF EXISTS account_delete_refuses_owed_revocation ON sonny.account;
 DROP FUNCTION IF EXISTS sonny.refuse_delete_while_revocation_owed();
 DROP FUNCTION IF EXISTS sonny.revocation_lease_seconds();

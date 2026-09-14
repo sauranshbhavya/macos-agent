@@ -1,3 +1,6 @@
+-- @locks none
+-- @scans none
+
 -- 0002 — accounts, identities, sign-in code issuance, and auth rate limits (SONNY-127).
 --
 -- The shape here exists to answer one question the ticket calls first-release correctness: when one
@@ -124,6 +127,8 @@ CREATE TABLE sonny.auth_rate_limit (
 );
 
 -- @rollback
+-- @locks ACCESS EXCLUSIVE sonny.account, ACCESS EXCLUSIVE sonny.auth_rate_limit, ACCESS EXCLUSIVE sonny.identity, ACCESS EXCLUSIVE sonny.sign_in_code_issue
+-- @scans none
 DROP TABLE IF EXISTS sonny.auth_rate_limit;
 DROP TABLE IF EXISTS sonny.sign_in_code_issue;
 DROP TABLE IF EXISTS sonny.identity;

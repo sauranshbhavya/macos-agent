@@ -309,8 +309,50 @@ export function migrationStates(
   }));
 }
 
+/**
+ * Wraps one half's SQL inside its transaction, and exists so the suite can measure a migration's
+ * lock profile on the path that really applies it (SONNY-370, `lock-profile.ts`).
+ *
+ * **A hook rather than a copy of the transaction in a test**, because a measurement taken over a
+ * re-implementation says nothing about this runner: were `up` ever to run a migration outside its
+ * transaction, or split it, a copied harness would keep measuring the old shape and stay green.
+ * `run` executes the half's SQL and nothing else; the ledger write comes after the observer
+ * returns, so what is measured is the migration and not the bookkeeping. The CLI never passes one.
+ */
+export type MigrationObserver = (
+  client: pg.Client,
+  migration: Migration,
+  half: "up" | "down",
+  run: () => Promise<void>,
+) => Promise<void>;
+
+/**
+ * Runs a half's SQL through the observer when there is one, and refuses an observer that returned
+ * without running it: the ledger row that follows would otherwise record a migration never applied.
+ */
+async function runHalf(
+  client: pg.Client,
+  migration: Migration,
+  half: "up" | "down",
+  observe: MigrationObserver | undefined,
+): Promise<void> {
+  let ran = false;
+  const run = async (): Promise<void> => {
+    if (ran) throw new Error(`observer ran ${migration.id}'s ${half} half twice`);
+    ran = true;
+    await client.query(half === "up" ? migration.up : migration.down);
+  };
+  if (observe === undefined) return run();
+  await observe(client, migration, half, run);
+  if (!ran) throw new Error(`observer returned without running ${migration.id}'s ${half} half`);
+}
+
 /** Applies every migration not yet recorded, oldest first. Returns the ids it applied. */
-export async function up(client: pg.Client, dir?: string): Promise<readonly string[]> {
+export async function up(
+  client: pg.Client,
+  dir?: string,
+  observe?: MigrationObserver,
+): Promise<readonly string[]> {
   const recorded = await applied(client);
   const migrations = await loadMigrations(dir);
   // Before anything is applied: a schema built by SQL that no longer exists is not a base to build
@@ -323,7 +365,7 @@ export async function up(client: pg.Client, dir?: string): Promise<readonly stri
     // than half a migration applied and unrecorded.
     await client.query("BEGIN");
     try {
-      await client.query(migration.up);
+      await runHalf(client, migration, "up", observe);
       // The hash goes in inside the same transaction as the SQL it describes, so a ledger row can
       // never exist without one, nor name a different text than the one that just ran.
       await client.query(
@@ -341,7 +383,11 @@ export async function up(client: pg.Client, dir?: string): Promise<readonly stri
 }
 
 /** Rolls back the most recently applied migration. Returns its id, or undefined if none. */
-export async function down(client: pg.Client, dir?: string): Promise<string | undefined> {
+export async function down(
+  client: pg.Client,
+  dir?: string,
+  observe?: MigrationObserver,
+): Promise<string | undefined> {
   const recorded = await applied(client);
   const migrations = await loadMigrations(dir);
   // A rollback is the half most likely to be edited after the fact, and running a `down` that was
@@ -351,7 +397,7 @@ export async function down(client: pg.Client, dir?: string): Promise<string | un
   if (!last) return undefined;
   await client.query("BEGIN");
   try {
-    await client.query(last.down);
+    await runHalf(client, last, "down", observe);
     await client.query("DELETE FROM sonny_meta.schema_migration WHERE id = $1", [last.id]);
     await client.query("COMMIT");
     return last.id;

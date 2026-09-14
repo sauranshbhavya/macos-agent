@@ -1,3 +1,6 @@
+-- @locks none
+-- @scans none
+
 -- 0011 — the key store contract §9.2's three guarantees are kept in (SONNY-300).
 --
 -- **One row per (scope, key), and it outlives the response it holds.** Two clocks run over this
@@ -101,5 +104,7 @@ CREATE INDEX idempotency_key_response_expiry_idx
   WHERE response_body IS NOT NULL;
 
 -- @rollback
+-- @locks ACCESS EXCLUSIVE sonny.idempotency_key
+-- @scans none
 DROP INDEX IF EXISTS sonny.idempotency_key_response_expiry_idx;
 DROP TABLE IF EXISTS sonny.idempotency_key;
