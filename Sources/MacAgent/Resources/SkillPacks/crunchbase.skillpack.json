@@ -8,6 +8,39 @@
   "signInURL": "https://crunchbase.com/login",
   "triggers": ["crunchbase", "crunchbase.com"],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Search for companies or people",
+      "startURL": "https://www.crunchbase.com/",
+      "steps": [
+        "Open the Advanced Search dropdown in the top global navigation bar, then select the type of search you want to build.",
+        "Refine your search using the categorized Filters at the top of the page; your results update in real time.",
+        "Customize your columns to view the specific data you're looking for, by clicking either the 3-dot menu on the right or the arrow on an existing column's header."
+      ],
+      "source": "https://support.crunchbase.com/hc/en-us/articles/115010583327-Build-an-Advanced-Search-with-Crunchbase-Pro"
+    },
+    {
+      "title": "Save a search",
+      "startURL": "https://www.crunchbase.com/",
+      "steps": [
+        "Create a search using Advanced Search filters.",
+        "Once you've created the search, click the blue Save Search icon in the upper right-hand corner.",
+        "In the modal that appears, add a name for the search, and choose its privacy settings and your email alert type and frequency.",
+        "Your saved search can later be found in My Dashboard."
+      ],
+      "source": "https://support.crunchbase.com/hc/en-us/articles/115010745608-Save-a-Search-with-Crunchbase-Pro"
+    },
+    {
+      "title": "Create a list from a search",
+      "startURL": "https://www.crunchbase.com/",
+      "steps": [
+        "Start by creating a search, then select the entries to add by checking their boxes on the left individually, or check the top box in the Name column to reveal a Select All Results button.",
+        "Click the blue Save To List button that appears.",
+        "Choose to add the results to an existing list, or select Create New List.",
+        "In the New List pop-up, name the list and update its privacy settings."
+      ],
+      "source": "https://support.crunchbase.com/hc/en-us/articles/25315654766355-Create-a-List"
+    }
+  ]
 }

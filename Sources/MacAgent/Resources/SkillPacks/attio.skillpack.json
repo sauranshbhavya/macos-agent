@@ -8,6 +8,38 @@
   "signInURL": "https://app.attio.com/",
   "triggers": ["attio", "attio.com"],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Create a record",
+      "startURL": "https://app.attio.com/",
+      "steps": [
+        "Open Quick actions by pressing Cmd+K (Mac) or Ctrl+K (Windows).",
+        "Click \"Add [object]\", for example Add Company or Add Person, to create a new record without navigating to a specific page.",
+        "Include an email for a person, or a domain for a company: this helps Attio prevent duplicates, enrich data, and link people and companies automatically."
+      ],
+      "source": "https://attio.com/help/reference/managing-your-data/records/create-and-view-records"
+    },
+    {
+      "title": "Create a list",
+      "startURL": "https://app.attio.com/",
+      "steps": [
+        "In the sidebar, select the + beside Lists.",
+        "Choose whether to start with a template, or click Start from scratch to set up your list manually.",
+        "If starting from scratch, choose the object the list will hold (you can only have one object, such as companies or people, per list) and give the list a unique name.",
+        "Select a view type to start with, either a table or a kanban view."
+      ],
+      "source": "https://attio.com/help/reference/managing-your-data/lists/create-lists"
+    },
+    {
+      "title": "Log a note on a record",
+      "startURL": "https://app.attio.com/",
+      "steps": [
+        "Open the Notes tab on the record's page and click Create note, or press N anywhere in Attio to quickly create a new note.",
+        "Write the note in the note editor.",
+        "If you want to reference a calendar event, click Link an event beneath the note title."
+      ],
+      "source": "https://attio.com/help/reference/productivity-collaborating/notes"
+    }
+  ]
 }
