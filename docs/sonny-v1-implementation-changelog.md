@@ -171,6 +171,71 @@ Next branch: feature/<name> (per roadmap above, or state the reordering and why)
 
 ## Entries
 
+### Branch: chore/signal-guard-has-a-selftest-arm
+Status: complete
+Date: 2026-09-13
+Tickets: **SONNY-367**. Layer 1 is the `trap '' INT QUIT TERM HUP PIPE` around the report writer's `tee` in `scripts/mutate` and `scripts/warnings`. It now has a SIGHUP selftest arm in both tools. The arm fires in the foreground, backgrounded, and under `nohup` both ways, and in each of those it is shown failing against a build with HUP taken out of the tee's list. Twelfth of twelve in wave 9's stack (SONNY-463), cut from `origin/chore/migration-lock-profile-is-checked` while it and the branch beneath were still empty at `78264331`; PR base `chore/migration-lock-profile-is-checked`. Discovered and filed: **SONNY-493** (Backlog): no selftest arm in either tool watches INT or QUIT, and `scripts/warnings` has none for TERM.
+Reviewed by: none yet. The PR is open for review.
+
+Spec sections covered: none. This is tooling: the harnesses behind `WORKFLOW.md` step 5's `scripts/warnings` and the founders' weekly battery.
+Files changed:
+- `scripts/mutate`:
+  - `st_run` now delegates to a new `st_run_via`, which takes the whole command line.
+  - `ST_DEFAULT_DISPOSITION_EXEC`, a perl program that puts one signal back to its default and execs the rest of its arguments.
+  - `st_copy_without_tee_ignoring`, which writes the negative-control copy and checks that it differs from this script by exactly the tee's line.
+  - The selftest's signal loop now runs TERM and HUP. Each run goes through the launcher, and each signal runs its control before the shipped check. The stand-in's watch length is filled in per use (`WATCH_LIMIT`): 3s for the shipped check, 10s for the control.
+  - `require_command perl`.
+  - `--help`'s "Demonstrating layer 1" section is renamed "Layer 1 and nohup". It now names the selftest arm and why it launches the way it does, and corrects the reading that bash resets HUP for itself.
+  - The comments that said the SIGHUP arm was deliberately absent now describe it.
+- `scripts/warnings`:
+  - Copies of the launcher and the control-copy helper.
+  - `st_signal_the_report_writer`, which starts a run through the launcher, holds it at `swift build` with a stand-in `swift` on PATH, signals the report writer and watches it, then releases the run.
+  - The SIGHUP arm and its control, where the comment saying the arm was deliberately absent used to be.
+  - `require_command perl`, and the `ST_WRITER_*` globals.
+- this entry.
+Tests:
+- **No Swift suite, `scripts/warnings` count or server suite is owed.** `git diff --name-only 78264331 fe84d582 -- Sources Tests server` prints nothing, exit 0. The control is the same command without the path list, which prints `scripts/mutate` and `scripts/warnings`. The commit carrying this entry changes only this file.
+- **`scripts/mutate selftest` → exit 0, 344 PASS lines, 0 FAIL, at `fe84d582`** (redirected to a file, exit read on the next line; `grep -c '^    PASS  '` → 344). At `78264331` it gives **332**, measured on `git archive 78264331 scripts .claude/hooks` extracted to a scratch directory and run the same way (exit 0, `grep -c FAIL` → 0). The 12 new checks are 3 per control (TERM and HUP) and 6 for the HUP arm.
+- **`scripts/warnings selftest` → exit 0, `89 checks, 0 failures`, at `fe84d582`** (its own summary line; `grep -c '^    PASS  '` → 89, and `grep -c '^    FAIL  '` → 0). It was run once, as the kickoff asked. The HUP arm and its control are 8 of those checks: the 8 lines that log prints under "a SIGHUP aimed at the report writer is ignored", matching the count the arm-only instrument prints (below).
+- **Layer 1 hand-applied and reverted in the worktree, `scripts/mutate`.** The ` HUP` was removed from the tee's line in `report_begin` (`git diff --stat -- scripts` → 1 file, 1+/1−), then `scripts/mutate selftest` was run in the foreground and again under `nohup`. Both exit 1, each with 338 PASS and 4 FAIL, the same four as the no-layer-1 variant below. Then `git checkout -- scripts/mutate`, after which `git diff --name-only -- scripts | wc -l` → 0. `scripts/warnings` was shown by its instrument copy instead of a hand-apply, since each full run of its selftest builds packages; the kickoff asked for that selftest to run once.
+- **The arm is deterministic across invocation environments, and fails with layer 1 removed. 40 runs.** Three variants of each tool were built from the working tree:
+  - **shipped**: the working tree's code, which is `fe84d582`'s (next paragraph).
+  - **no layer 1**: the tee's line with ` HUP` removed.
+  - **no launcher**: the arm's `perl -e "$ST_DEFAULT_DISPOSITION_EXEC" "$signal"` removed, so it inherits its environment.
+
+  `scripts/warnings` was run as an instrument copy: its selftest cut to setup, the HUP arm and the summary, with the arm's code untouched. Every copy was taken before two comment-only edits. Each copy was compared with the same variant regenerated from `fe84d582`; `diff … | grep -E '^[<>]' | grep -vE '^[<>] *#'` prints nothing for all six. The control is the same filter over shipped against no-layer-1, which prints the two tee lines.
+
+  Each run went through a wrapper that also recorded the environment's own HUP disposition, probed with a `sleep` child sent HUP. That probe read `ignored` in exactly the `nohup` runs and `default` in the rest.
+  - **shipped**: `scripts/mutate` 12 of 12 exit 0 with 344 PASS lines, and `scripts/warnings` 12 of 12 exit 0 with 8 checks. That is 3 runs in each of foreground, backgrounded, `nohup` foreground and `nohup` backgrounded.
+  - **no layer 1**: 8 of 8 exit 1, one run per environment per tool, `nohup` included. Each has 4 failures: the control refuses a copy that differs by 0 lines, the report writer does not survive HUP, the run does not finish normally, and its report is not whole.
+  - **no launcher**: exit 0 in the foreground and backgrounded (4 of 4), where the environment does not ignore HUP. Exit 1 under `nohup` both ways (4 of 4), each with exactly one failure: the control's report writer did not die, reported by name.
+
+  So an arm that inherits `nohup`'s environment is refused rather than passing.
+- **The launcher's premise was measured before any of it was written.** A `( trap '' <list>; exec sleep 30 )` child was sent HUP, launched the four ways, with HUP in the list and without it. Plain launch, and bash's `trap - HUP` then exec, both left the no-HUP child alive under `nohup`. Perl's reset-then-exec killed it in all four environments and left the HUP-listed child alive in all four. Under `nohup`, `trap -p HUP` printed nothing and `trap - HUP` changed nothing (bash 3.2.57). A child exec'd from python3 3.10.2 survived SIGPIPE (137 after a SIGKILL); from perl, and from bash directly, it died of it (141).
+- `npm run check:secrets` → exit 0, 768 tracked files scanned. `scripts/no-attribution tree` → exit 0, 0 of 764 tracked files. Both at `fe84d582`, each redirected to a file with its exit on the next line. Both, plus `scripts/changelog-order`, are re-run at the head this entry commits on, and reported on the PR with that SHA.
+Mutation plan: none. A plan outside `server/` runs against the flagged Swift suite, which never runs `scripts/mutate` or `scripts/warnings`. Every mutant would come back SURVIVED with no test having seen it, and the weekly battery would then file a false ticket for each one, every week. That is the reason PR #243's review accepted for `scripts/changelog-order` (its section 5, posted on that PR). The property-level measurement is the variants above: layer 1 and the launcher, each removed, each run in the four environments.
+
+Behavior added:
+- `scripts/mutate selftest` watches the report writer ignore SIGHUP, and watches it ignore SIGTERM as before. The harness starts with that signal's default put back, so the check means the same thing whether the selftest runs in the foreground, in the background or under `nohup`.
+- Before each of those checks, the same check runs against a copy with that one signal taken out of the tee's list, and the report writer there has to die. If it does not, the selftest fails with a line saying the check below cannot fail in this environment.
+- `scripts/warnings selftest` gains the same SIGHUP arm and control. The run is held at `swift build` while the report writer is signalled and watched, so the watch cannot race the build.
+- `scripts/mutate --help` names the selftest arm in its "Layer 1 and nohup" section.
+Behavior preserved (required, no blanket claims):
+- Neither tool's report writer, trap list, lock, cleanup or exit behaviour changed. Every changed line sits in the `--help` text, the selftest's globals and helpers, or `selftest` itself. The helpers include one `readonly` assignment that runs whenever the script loads and does nothing else. Checked by the hunk headers of `git diff -U0 78264331 fe84d582 -- scripts/mutate scripts/warnings`, whose old-side line numbers are `78264331`'s. In `scripts/mutate` the hunks start at 569 to 604 (inside `usage`, which begins at 378) and at 2154 onward (`st_run` at 2154, then `selftest`, which begins at 2163). In `scripts/warnings` they start at 842 onward (the selftest globals, the helpers after `st_absent`, and `selftest`). Nothing else is reached: `report_begin` sits at 312 and 159 respectively and `scripts/warnings`' `run_check` at 664, all ahead of the first hunk (`git show "${s}:scripts/<tool>" | grep -n '^report_begin() {'`, and the same for `run_check`, give the same numbers at both SHAs). `git diff --name-only 78264331 fe84d582 -- scripts/lib scripts/mutate-untrusted-failures .claude` prints nothing. The same command over `scripts` prints 2 files, which is the control.
+- Every existing `scripts/mutate` selftest check still passes: 332 at `78264331`, and the same checks plus 12 at `fe84d582`, all exit 0. `st_run` keeps its signature and output cut; its body moved into `st_run_via`, which takes the command line as arguments where `st_run` named `$SELF`.
+- The SIGTERM arm's assertions are unchanged. What changed around them is that the harness now starts through the launcher, and a control runs first.
+- `scripts/warnings`' SIGKILL arm, closed-pipe arm and everything after them are unchanged. The HUP arm sits after the check that counts two report directories, so its two extra runs cannot change that count, and the closed-pipe arm already clears the directory before it reads.
+
+Architectural decisions / pitfalls discovered (required, write "none" if true):
+- **An ignored signal is inherited, and bash cannot give it back.** Under `nohup`, SIGHUP arrives ignored and stays ignored through fork and exec. A non-interactive bash refuses to reset a signal that was ignored when it started. `trap -p HUP` prints nothing, exactly as for the default, so a bash-level check cannot see the inheritance at all. PR #168 recorded two readings, a `trap -p` reading and a probe that set the default before looking. At `78264331`, `scripts/mutate --help` explained both as bash resetting HUP for itself. It does not. The remedy is to reset from outside bash before exec: perl here, `ST_DEFAULT_DISPOSITION_EXEC` in both tools.
+- **python3 is the tempting launcher and the wrong one**: it ignores SIGPIPE at its own startup and `os.execvp` keeps that. Launching the harness through it would leak an ignored SIGPIPE into the suite, which is what `run_suite`'s `trap - PIPE` exists to prevent, and bash could not undo it for the reason above.
+- **A negative control inside the arm is what makes "deterministic" a claim the selftest re-proves, rather than one this entry makes once.** The founders' bar was an arm that fires every time, or refuses where it cannot be trusted. The launcher gives the first. The control gives the second on every run, including in environments nobody has measured.
+- **An arm that watches a report writer must hold the run still while it watches.** `scripts/mutate`'s stand-in suite does that by construction. `scripts/warnings` has no suite to stand in for, so without the hold a fast build could end the tee normally inside the watch window and read as a dead writer. The stand-in `swift` makes the arm independent of compile time.
+Known limitations / deferred scope: INT and QUIT have no arm in either tool, and TERM has none in `scripts/warnings`. Filed as **SONNY-493** (Backlog, untriaged). A non-interactive bash starts a background command with INT and QUIT ignored, the way `nohup` passes on HUP, so the same launcher and control apply: `bash -c '( exec sleep 30 ) & …'` with the child sent INT, then QUIT, then SIGKILL gives exit 137 both times (it survived), while the same child sent TERM gives 143, measured 2026-09-13 on bash 3.2.57.
+Open questions (required, write "none" if true): none
+
+Next branch: none; this is the top of wave 9's stack.
+
 ### Branch: chore/migration-lock-profile-is-checked
 Status: complete; rebased onto PR #249's final head 2026-09-16, with three recorded items taken in that round
 Date: 2026-09-14 (rebased 2026-09-16)
