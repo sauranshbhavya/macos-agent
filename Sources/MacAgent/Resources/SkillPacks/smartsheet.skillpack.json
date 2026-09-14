@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "smartsheet",
+  "name": "Smartsheet",
+  "domain": "smartsheet.com",
+  "category": "project_tracking",
+  "summary": "Spreadsheet-style work management platform.",
+  "signInURL": "https://app.smartsheet.com/b/home",
+  "triggers": ["smartsheet", "smartsheet.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

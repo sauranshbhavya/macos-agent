@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "wrike",
+  "name": "Wrike",
+  "domain": "wrike.com",
+  "category": "project_tracking",
+  "summary": "Project management platform for teams.",
+  "signInURL": "https://login.wrike.com/login/",
+  "triggers": ["wrike", "wrike.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

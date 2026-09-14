@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "read_ai",
+  "name": "Read AI",
+  "domain": "read.ai",
+  "category": "communication",
+  "summary": "AI meeting summaries and notes.",
+  "signInURL": "https://app.read.ai/analytics/signin",
+  "triggers": ["read ai", "read.ai"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

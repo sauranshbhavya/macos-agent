@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "base44",
+  "name": "Base44",
+  "domain": "base44.com",
+  "category": "ai_assistants",
+  "summary": "AI app builder.",
+  "signInURL": "https://app.base44.com/login",
+  "triggers": ["base44", "base44.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

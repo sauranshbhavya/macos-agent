@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "resend",
+  "name": "Resend",
+  "domain": "resend.com",
+  "category": "marketing_email",
+  "summary": "Email API for developers.",
+  "signInURL": "https://resend.com/login",
+  "triggers": ["resend.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

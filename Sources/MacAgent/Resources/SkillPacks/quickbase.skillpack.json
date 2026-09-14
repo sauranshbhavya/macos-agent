@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "quickbase",
+  "name": "Quickbase",
+  "domain": "quickbase.com",
+  "category": "data_databases",
+  "summary": "Low-code application platform.",
+  "signInURL": "https://login.quickbase.com/db/main?a=UniversalLink&entityId=login",
+  "triggers": ["quickbase", "quickbase.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

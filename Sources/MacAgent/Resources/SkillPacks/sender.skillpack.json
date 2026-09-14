@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "sender",
+  "name": "Sender",
+  "domain": "sender.net",
+  "category": "marketing_email",
+  "summary": "Email and SMS marketing platform.",
+  "signInURL": "https://app.sender.net/",
+  "triggers": ["sender.net"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "textmagic",
+  "name": "Textmagic",
+  "domain": "textmagic.com",
+  "category": "communication",
+  "summary": "Business text messaging service.",
+  "signInURL": "https://app.textmagic.com/login",
+  "triggers": ["textmagic", "textmagic.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

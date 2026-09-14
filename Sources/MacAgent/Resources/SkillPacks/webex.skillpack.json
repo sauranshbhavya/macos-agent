@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "webex",
+  "name": "Webex",
+  "domain": "webex.com",
+  "category": "communication",
+  "summary": "Video meetings and collaboration from Cisco.",
+  "signInURL": "https://signin.webex.com/",
+  "triggers": ["webex", "webex.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

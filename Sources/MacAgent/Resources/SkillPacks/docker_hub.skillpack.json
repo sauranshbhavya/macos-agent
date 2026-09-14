@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "docker_hub",
+  "name": "Docker Hub",
+  "domain": "hub.docker.com",
+  "category": "code_hosting",
+  "summary": "Registry for container images.",
+  "signInURL": "https://hub.docker.com/login",
+  "triggers": ["docker hub", "hub.docker.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

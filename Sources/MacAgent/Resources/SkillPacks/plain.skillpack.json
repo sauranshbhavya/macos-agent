@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "plain",
+  "name": "Plain",
+  "domain": "plain.com",
+  "category": "customer_support",
+  "summary": "Customer support platform for B2B teams.",
+  "signInURL": "https://app.plain.com/",
+  "triggers": ["plain.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "lovable",
+  "name": "Lovable",
+  "domain": "lovable.dev",
+  "category": "ai_assistants",
+  "summary": "AI app builder.",
+  "signInURL": "https://lovable.dev/login",
+  "triggers": ["lovable.dev"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

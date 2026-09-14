@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "crunchbase",
+  "name": "Crunchbase",
+  "domain": "crunchbase.com",
+  "category": "sales_crm",
+  "summary": "Database of private companies and investors.",
+  "signInURL": "https://crunchbase.com/login",
+  "triggers": ["crunchbase", "crunchbase.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

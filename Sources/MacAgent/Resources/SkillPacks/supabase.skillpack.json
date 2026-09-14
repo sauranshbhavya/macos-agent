@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "supabase",
+  "name": "Supabase",
+  "domain": "supabase.com",
+  "category": "data_databases",
+  "summary": "Postgres development platform.",
+  "signInURL": "https://app.supabase.com/login",
+  "triggers": ["supabase", "supabase.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

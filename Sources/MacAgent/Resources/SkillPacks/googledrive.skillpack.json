@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "googledrive",
+  "name": "Google Drive",
+  "domain": "drive.google.com",
+  "category": "documents_storage",
+  "summary": "Google's cloud file storage.",
+  "signInURL": "https://drive.google.com/drive/?dmr=1",
+  "triggers": ["google drive", "drive.google.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

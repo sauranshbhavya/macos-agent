@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "sendgrid",
+  "name": "SendGrid",
+  "domain": "sendgrid.com",
+  "category": "marketing_email",
+  "summary": "Email delivery service from Twilio.",
+  "signInURL": "https://login.sendgrid.com/login/identifier",
+  "triggers": ["sendgrid", "sendgrid.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

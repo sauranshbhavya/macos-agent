@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "twenty",
+  "name": "Twenty",
+  "domain": "twenty.com",
+  "category": "sales_crm",
+  "summary": "Open-source CRM.",
+  "signInURL": "https://app.twenty.com",
+  "triggers": ["twenty.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

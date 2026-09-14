@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "chatwork",
+  "name": "Chatwork",
+  "domain": "chatwork.com",
+  "category": "communication",
+  "summary": "Business chat app.",
+  "signInURL": "https://chatwork.com/login",
+  "triggers": ["chatwork", "chatwork.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

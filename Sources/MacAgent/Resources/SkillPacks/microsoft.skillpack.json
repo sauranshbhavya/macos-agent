@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "microsoft",
+  "name": "Microsoft 365",
+  "domain": "microsoft365.com",
+  "category": "it_accounts_security",
+  "summary": "Microsoft's home for Word, Excel, Outlook and other apps.",
+  "signInURL": "https://www.microsoft365.com/",
+  "triggers": ["microsoft 365", "microsoft365.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "circleci",
+  "name": "CircleCI",
+  "domain": "circleci.com",
+  "category": "code_hosting",
+  "summary": "Continuous integration and delivery platform.",
+  "signInURL": "https://app.circleci.com/login",
+  "triggers": ["circleci", "circleci.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

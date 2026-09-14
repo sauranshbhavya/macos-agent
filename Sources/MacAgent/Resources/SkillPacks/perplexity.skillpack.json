@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "perplexity",
+  "name": "Perplexity",
+  "domain": "perplexity.ai",
+  "category": "ai_assistants",
+  "summary": "AI answer engine with cited sources.",
+  "signInURL": "https://perplexity.ai/account/login",
+  "triggers": ["perplexity.ai"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

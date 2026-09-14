@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "linkedin_jobs",
+  "name": "LinkedIn Jobs and Recruiter",
+  "domain": "linkedin.com",
+  "category": "recruiting_hr",
+  "summary": "LinkedIn's job posting and recruiting tools.",
+  "signInURL": "https://www.linkedin.com/login",
+  "triggers": ["linkedin jobs", "linkedin recruiter"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

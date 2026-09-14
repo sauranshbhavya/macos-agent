@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "odoo",
+  "name": "Odoo",
+  "domain": "odoo.com",
+  "category": "sales_crm",
+  "summary": "Open-source business apps, including CRM and ERP.",
+  "signInURL": "https://www.odoo.com/web/login",
+  "triggers": ["odoo", "odoo.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

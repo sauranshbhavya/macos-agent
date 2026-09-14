@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "microsoft_forms",
+  "name": "Microsoft Forms",
+  "domain": "forms.office.com",
+  "category": "forms_surveys",
+  "summary": "Microsoft's forms, surveys and quizzes.",
+  "signInURL": "https://www.office.com/launch/forms",
+  "triggers": ["microsoft forms", "forms.office.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

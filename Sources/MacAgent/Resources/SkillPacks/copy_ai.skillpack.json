@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "copy_ai",
+  "name": "Copy.ai",
+  "domain": "copy.ai",
+  "category": "ai_assistants",
+  "summary": "AI platform for sales and marketing content.",
+  "signInURL": "https://app.copy.ai/login",
+  "triggers": ["copy.ai"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

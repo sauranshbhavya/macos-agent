@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "customerio",
+  "name": "Customer.io",
+  "domain": "customer.io",
+  "category": "marketing_email",
+  "summary": "Messaging automation platform.",
+  "signInURL": "https://fly.customer.io/login",
+  "triggers": ["customer.io"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

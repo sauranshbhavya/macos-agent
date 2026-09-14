@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "adp",
+  "name": "ADP",
+  "domain": "adp.com",
+  "category": "recruiting_hr",
+  "summary": "Payroll and HR services.",
+  "signInURL": "https://login.adp.com/welcome",
+  "triggers": ["adp", "adp.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

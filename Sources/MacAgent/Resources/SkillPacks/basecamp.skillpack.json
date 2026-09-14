@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "basecamp",
+  "name": "Basecamp",
+  "domain": "basecamp.com",
+  "category": "project_tracking",
+  "summary": "Project management and team communication tool.",
+  "signInURL": "https://basecamp.com/login",
+  "triggers": ["basecamp", "basecamp.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

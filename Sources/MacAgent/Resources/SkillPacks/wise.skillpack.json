@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "wise",
+  "name": "Wise Business",
+  "domain": "wise.com",
+  "category": "finance_billing",
+  "summary": "International business accounts from Wise.",
+  "signInURL": "https://wise.com/login",
+  "triggers": ["wise business", "wise.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

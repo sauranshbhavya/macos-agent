@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "sprout_social",
+  "name": "Sprout Social",
+  "domain": "sproutsocial.com",
+  "category": "marketing_growth",
+  "summary": "Social media management platform.",
+  "signInURL": "https://app.sproutsocial.com/login",
+  "triggers": ["sprout social", "sproutsocial.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

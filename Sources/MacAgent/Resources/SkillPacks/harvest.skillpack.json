@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "harvest",
+  "name": "Harvest",
+  "domain": "getharvest.com",
+  "category": "finance_billing",
+  "summary": "Time tracking and invoicing.",
+  "signInURL": "https://id.getharvest.com/harvest/sign_in",
+  "triggers": ["getharvest.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

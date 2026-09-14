@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "semrush",
+  "name": "Semrush",
+  "domain": "semrush.com",
+  "category": "marketing_growth",
+  "summary": "SEO and online visibility platform.",
+  "signInURL": "https://www.semrush.com/login/",
+  "triggers": ["semrush", "semrush.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

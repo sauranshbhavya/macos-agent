@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "pagerduty",
+  "name": "PagerDuty",
+  "domain": "pagerduty.com",
+  "category": "analytics_monitoring",
+  "summary": "Incident response and on-call management.",
+  "signInURL": "https://app.pagerduty.com/",
+  "triggers": ["pagerduty", "pagerduty.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

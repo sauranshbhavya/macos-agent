@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "jasper",
+  "name": "Jasper",
+  "domain": "jasper.ai",
+  "category": "ai_assistants",
+  "summary": "AI marketing content platform.",
+  "signInURL": "https://app.jasper.ai/login",
+  "triggers": ["jasper.ai"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

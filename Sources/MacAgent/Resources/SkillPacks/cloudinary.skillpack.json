@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "cloudinary",
+  "name": "Cloudinary",
+  "domain": "cloudinary.com",
+  "category": "developer_platforms",
+  "summary": "Image and video management and delivery.",
+  "signInURL": "https://cloudinary.com/users/login",
+  "triggers": ["cloudinary", "cloudinary.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

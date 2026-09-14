@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "box",
+  "name": "Box",
+  "domain": "box.com",
+  "category": "documents_storage",
+  "summary": "Cloud content management and file sharing for businesses.",
+  "signInURL": "https://account.box.com/login",
+  "triggers": ["box.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

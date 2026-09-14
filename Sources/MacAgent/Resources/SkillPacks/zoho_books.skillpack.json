@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "zoho_books",
+  "name": "Zoho Books",
+  "domain": "books.zoho.com",
+  "category": "finance_billing",
+  "summary": "Accounting software from Zoho.",
+  "signInURL": "https://accounts.zoho.com/signin?servicename=ZohoBooks&signupurl=https%3A%2F%2Fwww.zoho.com%2Fus%2Fbooks%2Fsignup%2F",
+  "triggers": ["zoho books", "books.zoho.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

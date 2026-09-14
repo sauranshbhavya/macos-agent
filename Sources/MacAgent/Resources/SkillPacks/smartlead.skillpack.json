@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "smartlead",
+  "name": "Smartlead",
+  "domain": "smartlead.ai",
+  "category": "marketing_email",
+  "summary": "Cold email outreach platform.",
+  "signInURL": "https://app.smartlead.ai/login",
+  "triggers": ["smartlead", "smartlead.ai"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "manychat",
+  "name": "Manychat",
+  "domain": "manychat.com",
+  "category": "marketing_growth",
+  "summary": "Chat automation for Instagram, WhatsApp and Messenger.",
+  "signInURL": "https://app.manychat.com/signin",
+  "triggers": ["manychat", "manychat.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

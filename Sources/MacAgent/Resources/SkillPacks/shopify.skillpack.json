@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "shopify",
+  "name": "Shopify",
+  "domain": "shopify.com",
+  "category": "websites_apps_commerce",
+  "summary": "Ecommerce platform for online stores.",
+  "signInURL": "https://accounts.shopify.com/lookup",
+  "triggers": ["shopify", "shopify.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

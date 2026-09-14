@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "jumpcloud",
+  "name": "JumpCloud",
+  "domain": "jumpcloud.com",
+  "category": "it_accounts_security",
+  "summary": "Directory, identity and device management.",
+  "signInURL": "https://console.jumpcloud.com/login/admin",
+  "triggers": ["jumpcloud", "jumpcloud.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

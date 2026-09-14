@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "xero",
+  "name": "Xero",
+  "domain": "xero.com",
+  "category": "finance_billing",
+  "summary": "Accounting software for small businesses.",
+  "signInURL": "https://login.xero.com/identity/user/login",
+  "triggers": ["xero", "xero.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

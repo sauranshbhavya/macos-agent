@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "hostinger",
+  "name": "Hostinger",
+  "domain": "hostinger.com",
+  "category": "developer_platforms",
+  "summary": "Web hosting and domain provider.",
+  "signInURL": "https://auth.hostinger.com/login",
+  "triggers": ["hostinger", "hostinger.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

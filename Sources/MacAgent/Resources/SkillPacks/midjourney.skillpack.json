@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "midjourney",
+  "name": "Midjourney",
+  "domain": "midjourney.com",
+  "category": "ai_assistants",
+  "summary": "AI image generation.",
+  "signInURL": "https://midjourney.com/login",
+  "triggers": ["midjourney", "midjourney.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

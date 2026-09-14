@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "hugging_face",
+  "name": "Hugging Face",
+  "domain": "huggingface.co",
+  "category": "code_hosting",
+  "summary": "Platform for machine learning models, datasets and demos.",
+  "signInURL": "https://huggingface.co/login",
+  "triggers": ["hugging face", "huggingface.co"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

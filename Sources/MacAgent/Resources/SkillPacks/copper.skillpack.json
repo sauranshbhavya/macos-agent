@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "copper",
+  "name": "Copper",
+  "domain": "copper.com",
+  "category": "sales_crm",
+  "summary": "CRM for Google Workspace.",
+  "signInURL": "https://app.copper.com/users/sign_in",
+  "triggers": ["copper.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

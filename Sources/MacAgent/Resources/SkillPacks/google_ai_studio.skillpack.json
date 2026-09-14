@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "google_ai_studio",
+  "name": "Google AI Studio",
+  "domain": "aistudio.google.com",
+  "category": "ai_assistants",
+  "summary": "Google's tool for prototyping with Gemini models.",
+  "signInURL": "https://aistudio.google.com/login",
+  "triggers": ["google ai studio", "aistudio.google.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

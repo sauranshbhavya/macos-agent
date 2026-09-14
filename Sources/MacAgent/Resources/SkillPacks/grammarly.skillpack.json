@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "grammarly",
+  "name": "Grammarly",
+  "domain": "grammarly.com",
+  "category": "ai_assistants",
+  "summary": "AI writing assistant.",
+  "signInURL": "https://www.grammarly.com/signin",
+  "triggers": ["grammarly", "grammarly.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

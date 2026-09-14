@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "freshdesk",
+  "name": "Freshdesk",
+  "domain": "freshdesk.com",
+  "category": "customer_support",
+  "summary": "Customer support help desk from Freshworks.",
+  "signInURL": "https://login.freshworks.com/email-login/",
+  "triggers": ["freshdesk", "freshdesk.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

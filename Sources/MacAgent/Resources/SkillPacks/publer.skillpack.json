@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "publer",
+  "name": "Publer",
+  "domain": "publer.com",
+  "category": "marketing_growth",
+  "summary": "Social media scheduling tool.",
+  "signInURL": "https://app.publer.com/login",
+  "triggers": ["publer", "publer.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "warmupinbox",
+  "name": "Warmup Inbox",
+  "domain": "warmupinbox.com",
+  "category": "marketing_email",
+  "summary": "Email warm-up service.",
+  "signInURL": "https://app.warmupinbox.com/login",
+  "triggers": ["warmup inbox", "warmupinbox.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

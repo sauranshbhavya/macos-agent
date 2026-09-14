@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "thinkific",
+  "name": "Thinkific",
+  "domain": "thinkific.com",
+  "category": "websites_apps_commerce",
+  "summary": "Online course platform.",
+  "signInURL": "https://courses.thinkific.com/onboarding/signin",
+  "triggers": ["thinkific", "thinkific.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "cognito_forms",
+  "name": "Cognito Forms",
+  "domain": "cognitoforms.com",
+  "category": "forms_surveys",
+  "summary": "Online form builder.",
+  "signInURL": "https://www.cognitoforms.com/login",
+  "triggers": ["cognito forms", "cognitoforms.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

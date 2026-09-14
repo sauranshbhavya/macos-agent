@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "square",
+  "name": "Square",
+  "domain": "squareup.com",
+  "category": "finance_billing",
+  "summary": "Payments and point of sale for businesses.",
+  "signInURL": "https://app.squareup.com/login?lang_code=en-us",
+  "triggers": ["squareup.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

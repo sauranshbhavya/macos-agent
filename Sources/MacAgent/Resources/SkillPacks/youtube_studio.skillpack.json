@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "youtube_studio",
+  "name": "YouTube Studio",
+  "domain": "studio.youtube.com",
+  "category": "marketing_growth",
+  "summary": "YouTube's dashboard for creators.",
+  "signInURL": "https://studio.youtube.com/",
+  "triggers": ["youtube studio", "studio.youtube.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

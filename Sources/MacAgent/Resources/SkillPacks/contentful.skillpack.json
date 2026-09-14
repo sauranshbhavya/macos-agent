@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "contentful",
+  "name": "Contentful",
+  "domain": "contentful.com",
+  "category": "websites_apps_commerce",
+  "summary": "Headless content management platform.",
+  "signInURL": "https://be.contentful.com/login/",
+  "triggers": ["contentful.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "clerk",
+  "name": "Clerk",
+  "domain": "clerk.com",
+  "category": "developer_platforms",
+  "summary": "User sign-in and account management for apps.",
+  "signInURL": "https://clerk.com/sign-in",
+  "triggers": ["clerk.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "salesforce",
+  "name": "Salesforce",
+  "domain": "salesforce.com",
+  "category": "sales_crm",
+  "summary": "Customer relationship management platform.",
+  "signInURL": "https://salesforce.com/login",
+  "triggers": ["salesforce", "salesforce.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

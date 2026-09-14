@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "shippo",
+  "name": "Shippo",
+  "domain": "goshippo.com",
+  "category": "websites_apps_commerce",
+  "summary": "Shipping labels and tracking for ecommerce.",
+  "signInURL": "https://apps.goshippo.com/login",
+  "triggers": ["goshippo.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

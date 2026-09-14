@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "asana",
+  "name": "Asana",
+  "domain": "asana.com",
+  "category": "project_tracking",
+  "summary": "Work management for team projects and tasks.",
+  "signInURL": "https://app.asana.com/-/login",
+  "triggers": ["asana.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

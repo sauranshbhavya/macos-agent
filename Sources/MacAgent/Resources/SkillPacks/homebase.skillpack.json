@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "homebase",
+  "name": "Homebase",
+  "domain": "joinhomebase.com",
+  "category": "scheduling",
+  "summary": "Employee scheduling and time clock for small businesses.",
+  "signInURL": "https://app.joinhomebase.com/accounts/sign-in",
+  "triggers": ["homebase", "joinhomebase.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

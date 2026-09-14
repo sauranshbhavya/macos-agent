@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "sanity",
+  "name": "Sanity",
+  "domain": "sanity.io",
+  "category": "websites_apps_commerce",
+  "summary": "Headless content platform.",
+  "signInURL": "https://www.sanity.io/entry",
+  "triggers": ["sanity.io"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

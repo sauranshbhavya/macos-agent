@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "cursor",
+  "name": "Cursor",
+  "domain": "cursor.com",
+  "category": "ai_assistants",
+  "summary": "AI code editor.",
+  "signInURL": "https://cursor.com/dashboard",
+  "triggers": ["cursor.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

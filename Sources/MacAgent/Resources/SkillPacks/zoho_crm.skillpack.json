@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "zoho_crm",
+  "name": "Zoho CRM",
+  "domain": "crm.zoho.com",
+  "category": "sales_crm",
+  "summary": "CRM software from Zoho.",
+  "signInURL": "https://accounts.zoho.com/signin?servicename=ZohoCRM&signupurl=https://www.zoho.com/crm/signup.html",
+  "triggers": ["zoho crm", "crm.zoho.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

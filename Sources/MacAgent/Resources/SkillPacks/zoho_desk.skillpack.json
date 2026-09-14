@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "zoho_desk",
+  "name": "Zoho Desk",
+  "domain": "desk.zoho.com",
+  "category": "customer_support",
+  "summary": "Help desk software from Zoho.",
+  "signInURL": "https://accounts.zoho.com/signin?servicename=ZohoDesk",
+  "triggers": ["zoho desk", "desk.zoho.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

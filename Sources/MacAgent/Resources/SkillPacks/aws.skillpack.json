@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "aws",
+  "name": "Amazon Web Services",
+  "domain": "aws.amazon.com",
+  "category": "developer_platforms",
+  "summary": "Amazon's cloud computing platform.",
+  "signInURL": "https://console.aws.amazon.com/console/home/?nc2=h_si&src=header-signin",
+  "triggers": ["amazon web services", "aws.amazon.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

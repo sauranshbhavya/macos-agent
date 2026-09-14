@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "freshbooks",
+  "name": "FreshBooks",
+  "domain": "freshbooks.com",
+  "category": "finance_billing",
+  "summary": "Accounting and invoicing for small businesses.",
+  "signInURL": "https://auth.freshbooks.com/service/auth/integrations/sign_in?_gl=1*1j9fxj9*_gcl_au*Njc2MTU5NjQ5LjE3MTYzOTkwNjk.*_ga*MTg2OTM0MzEzMy4xNjQ3OTQ3MzMy*_ga_LNDHWTHSMK*MTcxODg4MDU3NC42MTYuMC4xNzE4ODgwNTc0LjYwLjAuMA..",
+  "triggers": ["freshbooks", "freshbooks.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

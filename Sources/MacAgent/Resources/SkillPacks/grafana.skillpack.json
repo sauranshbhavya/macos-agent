@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "grafana",
+  "name": "Grafana Cloud",
+  "domain": "grafana.com",
+  "category": "analytics_monitoring",
+  "summary": "Hosted dashboards, metrics, logs and traces.",
+  "signInURL": "https://grafana.com/auth/sign-in/",
+  "triggers": ["grafana cloud", "grafana.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

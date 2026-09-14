@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "onedrive",
+  "name": "OneDrive",
+  "domain": "onedrive.live.com",
+  "category": "documents_storage",
+  "summary": "Microsoft's cloud file storage.",
+  "signInURL": "https://www.office.com/launch/onedrive",
+  "triggers": ["onedrive", "onedrive.live.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

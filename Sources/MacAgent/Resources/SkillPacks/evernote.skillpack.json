@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "evernote",
+  "name": "Evernote",
+  "domain": "evernote.com",
+  "category": "documents_storage",
+  "summary": "Note-taking app.",
+  "signInURL": "https://www.evernote.com/Login.action",
+  "triggers": ["evernote", "evernote.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

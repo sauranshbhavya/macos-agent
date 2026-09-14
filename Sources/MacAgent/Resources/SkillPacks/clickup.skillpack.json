@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "clickup",
+  "name": "ClickUp",
+  "domain": "clickup.com",
+  "category": "project_tracking",
+  "summary": "All-in-one project management platform.",
+  "signInURL": "https://app.clickup.com/login",
+  "triggers": ["clickup", "clickup.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

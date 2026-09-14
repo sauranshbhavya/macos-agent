@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "google_tag_manager",
+  "name": "Google Tag Manager",
+  "domain": "tagmanager.google.com",
+  "category": "analytics_monitoring",
+  "summary": "Google's tag management system.",
+  "signInURL": "https://tagmanager.google.com/",
+  "triggers": ["google tag manager", "tagmanager.google.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

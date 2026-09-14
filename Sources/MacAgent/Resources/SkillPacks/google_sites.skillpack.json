@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "google_sites",
+  "name": "Google Sites",
+  "domain": "sites.google.com",
+  "category": "knowledge_bases",
+  "summary": "Google's simple website builder.",
+  "signInURL": "https://sites.google.com/",
+  "triggers": ["google sites", "sites.google.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "plaud",
+  "name": "Plaud",
+  "domain": "plaud.ai",
+  "category": "ai_assistants",
+  "summary": "AI voice recorder and note-taker.",
+  "signInURL": "https://app.plaud.ai/login",
+  "triggers": ["plaud.ai"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

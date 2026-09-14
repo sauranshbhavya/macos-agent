@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "bitly",
+  "name": "Bitly",
+  "domain": "bitly.com",
+  "category": "marketing_growth",
+  "summary": "Link shortener and QR codes.",
+  "signInURL": "https://bitly.com/a/sign_in",
+  "triggers": ["bitly", "bitly.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

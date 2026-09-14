@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "coda",
+  "name": "Coda (now Superhuman Docs)",
+  "domain": "coda.io",
+  "category": "documents_storage",
+  "summary": "All-in-one documents with tables and automations.",
+  "signInURL": "https://coda.io/login",
+  "triggers": ["coda.io"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

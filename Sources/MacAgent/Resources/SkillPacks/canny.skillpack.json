@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "canny",
+  "name": "Canny",
+  "domain": "canny.io",
+  "category": "project_tracking",
+  "summary": "Customer feedback and feature request tracking.",
+  "signInURL": "https://canny.io/login",
+  "triggers": ["canny.io"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

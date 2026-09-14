@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "pylon",
+  "name": "Pylon",
+  "domain": "usepylon.com",
+  "category": "customer_support",
+  "summary": "Customer support platform for B2B companies.",
+  "signInURL": "https://app.usepylon.com/signin",
+  "triggers": ["usepylon.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "skool",
+  "name": "Skool",
+  "domain": "skool.com",
+  "category": "communication",
+  "summary": "Online community and course platform.",
+  "signInURL": "https://skool.com/login",
+  "triggers": ["skool", "skool.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

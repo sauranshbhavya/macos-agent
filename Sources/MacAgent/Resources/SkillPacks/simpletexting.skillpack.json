@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "simpletexting",
+  "name": "SimpleTexting",
+  "domain": "simpletexting.com",
+  "category": "communication",
+  "summary": "SMS marketing platform.",
+  "signInURL": "https://app.simpletexting.com/login",
+  "triggers": ["simpletexting", "simpletexting.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

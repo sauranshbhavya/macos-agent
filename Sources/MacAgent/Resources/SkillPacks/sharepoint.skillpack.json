@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "sharepoint",
+  "name": "SharePoint",
+  "domain": "sharepoint.com",
+  "category": "documents_storage",
+  "summary": "Microsoft's team sites and document libraries.",
+  "signInURL": "https://www.office.com/",
+  "triggers": ["sharepoint", "sharepoint.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

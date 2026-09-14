@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "metabase",
+  "name": "Metabase",
+  "domain": "metabase.com",
+  "category": "data_databases",
+  "summary": "Open-source business intelligence and dashboards.",
+  "signInURL": "https://www.metabase.com/cloud/login",
+  "triggers": ["metabase", "metabase.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

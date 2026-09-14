@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "google_contacts",
+  "name": "Google Contacts",
+  "domain": "contacts.google.com",
+  "category": "email_calendar",
+  "summary": "Google's address book.",
+  "signInURL": "https://contacts.google.com/",
+  "triggers": ["google contacts", "contacts.google.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

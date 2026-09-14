@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "ashby",
+  "name": "Ashby",
+  "domain": "ashbyhq.com",
+  "category": "recruiting_hr",
+  "summary": "Recruiting platform with applicant tracking.",
+  "signInURL": "https://app.ashbyhq.com/signin",
+  "triggers": ["ashby", "ashbyhq.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

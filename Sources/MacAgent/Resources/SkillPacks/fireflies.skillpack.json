@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "fireflies",
+  "name": "Fireflies.ai",
+  "domain": "fireflies.ai",
+  "category": "communication",
+  "summary": "AI meeting note-taker and transcription.",
+  "signInURL": "https://app.fireflies.ai/login",
+  "triggers": ["fireflies.ai"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "webflow",
+  "name": "Webflow",
+  "domain": "webflow.com",
+  "category": "websites_apps_commerce",
+  "summary": "Visual website builder and CMS.",
+  "signInURL": "https://webflow.com/login",
+  "triggers": ["webflow", "webflow.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

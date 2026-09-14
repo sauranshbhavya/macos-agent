@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "ecwid",
+  "name": "Ecwid",
+  "domain": "ecwid.com",
+  "category": "websites_apps_commerce",
+  "summary": "Ecommerce store builder.",
+  "signInURL": "https://my.ecwid.com/",
+  "triggers": ["ecwid", "ecwid.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}
