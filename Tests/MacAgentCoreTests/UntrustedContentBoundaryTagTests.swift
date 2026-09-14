@@ -241,8 +241,9 @@ struct UntrustedContentBoundaryTagTests {
     ///    `forOnePrompt()` out of its per-iteration loop and passed the same value every time would
     ///    still pass `theTagIsFreshForEveryPromptAndNeverReused`, which drives the builder rather
     ///    than the loop. So the population of `forOnePrompt` in `Sources/` is pinned instead: its own
-    ///    declaration, and the two default arguments. A fourth mention is a fourth minting site, and
-    ///    the runner is where one would appear.
+    ///    declaration, and the prompt builders' default arguments — two until SONNY-343 added the
+    ///    planner's `messages`, three since. A further mention is a further minting site, and a runner
+    ///    is where one would appear.
     ///
     /// **Comment-stripped, so the several doc-comment mentions of both names do not mask a real
     /// one** — and the assertion below would be vacuous without that, since this file's own prose
@@ -295,8 +296,8 @@ struct UntrustedContentBoundaryTagTests {
             ],
             """
             forOnePrompt is minted in \(minting.sorted { $0.key < $1.key }.map { "\($0.key)×\($0.value)" }) \
-            — it may appear only as its own declaration and as the two prompt builders' default \
-            arguments. A fourth site is something other than a prompt builder deciding when a tag is \
+            — it may appear only as its own declaration and as the three prompt builders' default \
+            arguments. A further site is something other than a prompt builder deciding when a tag is \
             drawn, and a tag drawn anywhere but per-prompt can be pinned across a session.
             """
         )
