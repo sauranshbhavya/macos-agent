@@ -19,6 +19,13 @@ toolchain. Whichever half a change touches, run that half's commands; a change t
 both. This paragraph exists because before `server/` landed, `swift build` really was the whole
 repository, and that assumption is now wrong in a way that produces a confidently false "done".
 
+**One command belongs to neither half and is owed by every branch: the credentials scan,
+`server/scripts/check-secrets.sh`.** It scans every tracked file (`git ls-files`), so a credential
+written under `scripts/`, `docs/`, `Sources/` or `Tests/` is its finding exactly as one under
+`server/` is. Run it from the repository root, with no `npm install`; `npm run check:secrets` in
+the server block below is the same script. `WORKFLOW.md` step 5's credentials bullet has the rule,
+and SONNY-477 has the case: `main` went red because a branch outside `server/` skipped it.
+
 ### The app half — `Sources/`, `Tests/`
 
 ```
@@ -299,7 +306,7 @@ npm install                 # once, and after any dependency change
 npm run build               # TypeScript → dist/, plus the .sql migrations beside it. The server's `swift build`.
 npm test                    # Vitest. This is the server's flagged test command.
 npm run typecheck           # types only, over src/, test/ AND vitest.config.ts
-npm run check:secrets       # refuse a credential in the repository
+npm run check:secrets       # refuse a credential anywhere in the repository; owed by EVERY branch (see above)
 ./scripts/check-secrets-selftest.sh   # prove that scanner still refuses things
 ./scripts/deploy.sh local   # build the image, run it, verify /v1/health serves that build
 ```
