@@ -141,9 +141,10 @@ fi
 #   exit 0 -> nothing to say; the hook carries on to the suite.
 #   exit 2 -> findings. Held in `changelog_block` and emitted by whichever exit this hook takes,
 #             so the suite still runs this turn rather than being displaced by the block.
-#   exit 1 -> the tool refused to measure (it cannot resolve `main`, cannot find `## Entries`,
-#             maps no entry). That is not a pass and is not a finding, so it is reported loudly
-#             and blocks nothing. Same for a missing or non-executable script.
+#   exit 1 -> the tool refused to measure (it cannot resolve `main`, finds local `main` and
+#             `origin/main` diverged, cannot find `## Entries`, maps no entry). That is not a
+#             pass and is not a finding, so it is reported loudly and blocks nothing. Same for a
+#             missing or non-executable script.
 # ---------------------------------------------------------------------------------------------
 changelog_rel="docs/sonny-v1-implementation-changelog.md"
 changelog_block=""
