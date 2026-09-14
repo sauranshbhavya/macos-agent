@@ -171,6 +171,122 @@ Next branch: feature/<name> (per roadmap above, or state the reordering and why)
 
 ## Entries
 
+### Branch: fix/skills-ready-for-the-catalogue
+Status: complete
+Date: 2026-09-13
+Tickets:
+- **SONNY-479** — the money rule's context words missed four plurals, and its doc comment said they were spelled out. All three noun lists now hold singulars and are read in the plural.
+- **SONNY-481** — the Command Center Skills tests pinned the three shipped packs. They now own a fixture catalogue, and a scan keeps any other test from reading the shipped folder.
+- **SONNY-476 is not on this branch.** It was assigned here, stopped before any code because it needs `AgentViewModel.swift`, outside this branch's fence, and moved to its own branch, `fix/skill-packs-load-after-launch`, directly above this one. That was the founders' decision C of 2026-09-13, recorded on SONNY-476 together with an added rule: nothing plans before the catalogue has loaded.
+
+This is the second branch in wave 9's stack. It was cut from `chore/tooling-reads-fresh-main-and-records-catch-up` at `65a50865` while that branch was empty, and it rebases once onto that branch's final head after PR #243's review closes.
+Reviewed by: pending — the PR's fresh review has not run.
+
+Spec sections covered: none new. This branch changes which pack wording the loader refuses, and which catalogue the tests read. It is gating work for the pack lanes, and SONNY-452's design note already covers it.
+Files changed:
+- `Sources/MacAgentCore/SkillPackContentRules.swift` — the contextual-object and money-context lookups read plurals. All three noun lists hold singulars, and a plural stays only where its list has no singular (`funds`, `refunds`, the five `… details` phrases). The doc comments on `SkillPackMoneyRule` and `SkillWords.singularCandidates(of:)` say so.
+- `Tests/MacAgentTestSupport/SkillPackFixtures.swift` (new) — `SkillPackFixtures`, moved out of `SkillPackTests.swift` and made public, and a new `catalogue()` with three packs the Command Center suite owns.
+- `Tests/MacAgentCoreTests/SkillPackTests.swift` — `aContextWordOrAContextualObjectInThePluralCountsAsItsSingularDoes`, `onlyTheValidatingTestsReadTheShippedPacksFolder`, and the fixture builder removed.
+- `Tests/MacAgentCoreTests/SkillGuidanceTests.swift` — its import only.
+- `Tests/MacAgentTests/MemoryCommandCenterTests.swift` — `SkillsCommandCenterTests.catalogue()` reads the fixture.
+- `mutation/plans/fix/skills-ready-for-the-catalogue.txt`, and this entry, with a dated correction inside `feature/skills`' entry below.
+
+(`git diff --name-only 65a50865 f6b99eb6`, six files, plus this commit's changelog.)
+Tests: **3383 in 245, exit 0, 8 known issues, at `f6b99eb6`**, twice.
+- **Without the extra pack:** `Test run with 3383 tests in 245 suites passed after 87.748 seconds with 8 known issues.`, on a clean tree.
+- **With a well-formed `asana.skillpack.json` added to `Sources/MacAgent/Resources/SkillPacks/`** (SONNY-481's acceptance): `… passed after 109.049 seconds with 8 known issues.` Before that run, `git status --porcelain` printed that one untracked file and nothing else, and the file was deleted afterwards.
+- **How each run was read:** the flagged command from `CLAUDE.md` was redirected to its own file and its exit written on the next line. `grep -cE 'recorded an issue'` and `grep -cE ' failed after'` over each log both → 0.
+- **Where the count comes from:** `main`'s 3381 in 245 (`feature/skills`' union figure) plus two tests (`git diff 65a50865 f6b99eb6 -- Tests | grep -cE '^\+\s*@Test'` → 2, and with `^-` → 0), in existing suites (`^\+\s*@Suite` → 0).
+
+**Warnings: 0 at `f6b99eb6`** (`scripts/warnings`, exit 0, header `measured at : f6b99eb6 (clean)`, every file compiled).
+
+**Carried to the head that carries this entry, not re-run.** This entry's commit changes only the changelog. Each path those figures depend on names the same object there as at `f6b99eb6`:
+
+| Path | Object at `f6b99eb6` |
+|---|---|
+| `Sources` | `8a773894` |
+| `Tests` | `96fafa2d` |
+| `Package.swift` | `fbbe36d7` |
+| `server` | `be97f308` |
+| `scripts` | `53903c8d` |
+| `mutation` | `31e68a95` |
+
+`git rev-parse "f6b99eb6:${x}" "HEAD:${x}"` prints one hash twice for each. The three checks that read every tracked file or the changelog were re-run at that head instead; the PR body carries them.
+
+Mutation plan: mutation/plans/fix/skills-ready-for-the-catalogue.txt (founder-triggered, not run on this branch). `scripts/mutate mutation/plans/fix/skills-ready-for-the-catalogue.txt --check` → exit 0, at `f6b99eb6`, each mutant `1 match`:
+- **X1**, the money context words stop reading plurals.
+- **X2**, the contextual objects stop reading plurals.
+- **R1**, the Command Center Skills suite reads the shipped folder again, so its exact rows pin today's packs. R1 was proved by hand once, because its only killer is new. Applied under `--filter 'SkillPackTests/onlyTheValidating|SkillsCommandCenterTests'` it gave `Test run with 7 tests in 2 suites failed after 0.566 seconds with 1 issue.`, the scan's `readers` holding both files. The Skills suite's own six tests passed under it. It was reverted with `git checkout --`.
+
+`feature/skills`' plan still anchors after the rule edit: `scripts/mutate mutation/plans/feature/skills.txt --check` → exit 0, thirty mutants each `1 match`, at `f6fe7853`, whose `Sources` tree is `f6b99eb6`'s (`git rev-parse f6fe7853:Sources f6b99eb6:Sources` → `8a773894…` twice).
+
+Behavior added:
+- **SONNY-479:** a pack flow naming a contextual object — a recipient, card, account, balance or amount — beside a money context word in the plural is refused exactly as with the singular. "Update the account at the banks." and "Update the balance in two currencies." no longer load.
+- **SONNY-481:** adding a well-formed pack to the shipped folder changes no test's result except the two tests that load and validate every shipped pack.
+
+Behavior preserved (required, no blanket claims):
+- **Every refusal the money rule made before still happens, and nothing it allowed is refused except the plural context words.** This was measured, not argued. A temporary test, deleted before any commit, compared the old lists and lookups (copied from `65a50865`) with the new ones on the tree committed as `9764a84f`. Its corpus was 14,720 generated texts: five verbs, each listed word and its one regular plural, four second objects and eight context phrases.
+  - 226 texts are newly refused, and every one names banks, billings or currencies.
+  - 0 texts that were refused now load.
+  - 482 are refused either way, and now report the object under its singular (`update + card` rather than `update + cards`), which is what `aMoneyObjectInThePluralIsRefusedAsItsSingularIs` already required of money objects.
+  - The probe was not committed, so this is a reading at that tree and not a command to re-run.
+  - Removing the listed plurals from `moneyObjects` cannot change a result: each removed plural's singular sits earlier in the same list and is one of its candidates, so the singular always matched first.
+- **Every existing money, credential, URL and trigger test is unchanged and green** in the runs above, including the money table in all four categories and `readingMoneyAndAnOrdinarySendOrTransferStillLoad`.
+- **The loader, its validation, the pack files and the catalogue are untouched.** `git diff --name-only 65a50865 f6b99eb6 -- Sources` names only `SkillPackContentRules.swift`.
+- **The two validating tests still read the whole shipped folder.** With the extra pack made malformed by an unknown `approval` field, `everyShippedPackLoadsAndEveryOneIsARowOfTheCommittedCatalogue` failed with `(catalogue.packs.count → 3) == (files.count → 4)`. That was on the tree then committed as `f6fe7853`.
+- **The Command Center Skills suite asserts exactly what it did before**: the same rows, buttons, searches, wipe, Memory row, memory switch and plan request. Those assertions are now true of a catalogue it builds, not of whatever ships.
+
+Architectural decisions / pitfalls discovered (required, write "none" if true):
+
+**A list that spells its plurals out has already forgotten one, so the lists hold singulars and the reader supplies plurals** (SONNY-479). `feature/skills`' second scoped round taught money objects to read plurals and left the contextual objects and the money context words spelling theirs out. Its doc comment and entry both said those two lists were complete. The context list was not: `bank`, `iban`, `wire` and `currency` had no plural beside them, while `transfer`, `payment`, `payout` and `invoice` did.
+
+The ticket offered two fixes, reading plurals in the context lookup or listing the four missing words. Listing fixes today's four and leaves the class open for the next singular someone adds. So both lookups now go through `SkillPhraseList.first(in:readingPlurals: true)`, which is the one `singularCandidates(of:)` path, and the lists hold singulars. **IBANs and wires were never live gaps**, and the new test says why: both words are money objects too, so a unit naming either is refused before its context is read. That is why the test pins banks and currencies, not all four.
+
+**Before: 4 issues.** Run against the unfixed file (`git show 65a50865:Sources/MacAgentCore/SkillPackContentRules.swift`, swapped in and restored, `cmp` clean), the test gave `Test run with 1 test in 1 suite failed after 0.037 seconds with 4 issues.`: banks and currencies loaded, and cards and amounts were refused under their listed plurals.
+
+**What plural reading costs, measured over the dictionary.** Take the regular plural of every alphabetic headword in `/usr/share/dict/words`, and apply `singularCandidates`' three suffix rules to it. A wrong singular — a candidate other than the headword — lands on a word of the committed lists this often:
+- **4** for money objects: `aches` → `ach`, `bices` → `bic`, `chargees` → `charge`, and `ones` → `on`, the `on` of "card on file";
+- **0** for contextual objects;
+- **0** for money context words.
+
+The command reads the lists out of the committed file:
+
+```
+git show f6b99eb6:Sources/MacAgentCore/SkillPackContentRules.swift | python3 -c 'import re,sys; s=sys.stdin.read(); c=lambda w:[x for x in [w[:-3]+"y" if w.endswith("ies") and len(w)>4 else "", w[:-2] if w.endswith("es") and len(w)>3 else "", w[:-1] if w.endswith("s") and not w.endswith("ss") and len(w)>2 else ""] if x]; p=lambda h:h+"es" if h.endswith(("s","x","z","ch","sh")) else (h[:-1]+"ies" if len(h)>1 and h[-1]=="y" and h[-2] not in "aeiou" else h+"s"); H=sorted({l.strip().lower() for l in open("/usr/share/dict/words") if l.strip().isalpha()}); [print(n, sorted({(p(h),x) for h in H for x in c(p(h)) if x!=h and x in V})) for n in ["moneyObjects","contextualObjects","moneyContext"] for V in [{w for q in re.findall(r"\"([^\"]+)\"", re.search(n+r" = SkillPhraseList\(\[(.*?)\]\)", s, re.S).group(1)) for w in q.split()}]]'
+```
+
+The control is the same extraction printing each list's word count: 35, 5 and 11.
+
+**The `aches` refusal is accepted, not guarded** (the ticket's second item). "Add aches to the symptom log." is refused as `add + ach`, and the doc comment names it beside the other false refusals. It can only add a refusal, and the refusal is loud in the shipped-pack test before a pack ships. No catalogue category is about health: `awk -F'\t' 'NR>1{print $4}' docs/sonny-skill-sites.tsv | sort -u | wc -l` → 22, and none of the 22 is.
+
+**A test that reads the shipped folder for a page's rows is a test the pack lanes will turn red** (SONNY-481). The enumeration of readers was `git grep -n 'Resources/SkillPacks\|SonnyResourceBundle\|shippedPacksDirectory' 65a50865 -- Tests | grep -vE ':[0-9]+: *//'`. It found two files: the two validating tests in `SkillPackTests.swift`, and `SkillsCommandCenterTests.catalogue()`, which all six of that suite's tests call. The ticket's other two pointers were classified rather than changed:
+- `SkillPackTests.swift:145` is the trigger check, a validating test whose `>= 3` control holds as packs are added.
+- `SkillSelectionStoreTests.swift:64-70` hands opaque ids to the store and reads no catalogue.
+
+**The control:** with the extra pack added and the tests unchanged, `--filter 'SkillPackTests|SkillsCommandCenterTests'` at `9764a84f` failed at exactly `:4737` (`rows("") → ["asana", "docusign", "linear", "notion"]`) and `:4613` (`["Add", "Add", "Remove", "Remove"]`).
+
+**The fixture builder moved, rather than being copied.** `SkillPackFixtures` moved into `MacAgentTestSupport`, so the Command Center suite builds its catalogue with the same JSON builder the loader's tests use, through the real `SkillPackCatalog.load(files:)`. `catalogue()` throws rather than returning a shorter list when the loader refuses a fixture. `OpenAIPlannerTests` already imported `MacAgentTestSupport` and needed no edit.
+
+**Why a scan, and what it cannot see.** Moving the suite onto a fixture fixes today's pin, and nothing stops the next test from reading the folder again. That is exactly the mutant R1: on today's three packs, the Skills suite passes whether it reads the fixture or the folder. So `onlyTheValidatingTestsReadTheShippedPacksFolder` reads every Swift file under `Tests/` and requires `SkillPackTests.swift` to be the only file naming the folder, `SonnyResourceBundle` or `shippedPacksDirectory` outside a line comment.
+- Its held samples go through the same `readsTheShippedPacks(_:)` function as the files, so the sample's path is the files' path (`CLAUDE.md`'s held-sample gotcha).
+- Its control asserts the walk reached both files that matter.
+- It cannot see a path assembled from pieces, or a block comment naming the folder, which it would flag, in the safe direction.
+
+**The loader's cost at catalogue size, measured for SONNY-476 and handed to that branch.** 470 Notion-sized packs take **282.7 ms** in `SkillPackCatalog.load(from:)`: median of 21 runs, min 276.5, max 327.1, of which the money and credential rules take 222.8 ms. Today's three shipped packs take 1.4 ms.
+- **This is the loader alone, not the launch path.** SONNY-476's decision names it that way: that branch's "before" and "after" are the main-thread time `atItsRealStoreLocations()` spends on packs, a different instrument.
+- **Instrument:** `xcrun swiftc -O -wmo` over `SkillPack.swift`, `SkillPackContentRules.swift` and `SearchTextNormalization.swift` exactly as committed at `f6fe7853` (`Sources` identical to `f6b99eb6`'s, above). A scratch `main.swift` timed `SkillPackCatalog.load(from:)` with `ContinuousClock.measure`.
+- **The packs:** 470 generated copies of the shipped `notion.skillpack.json`, 1,706 bytes each (`wc -c`), all 470 loading with 0 failures. `uptime`'s load averages were 8.06 to 8.84 with other lanes running.
+- **Why launch cannot be fixed inside this branch's files:** `atItsRealStoreLocations()` builds the catalogue on the main thread, and `AppDelegate` reads every pack at launch through `refreshAddedSkills()`. The SONNY-476 comment of 2026-09-13 has the options that were weighed.
+
+Known limitations / deferred scope:
+- **Launch-time validation cost is SONNY-476**, on `fix/skill-packs-load-after-launch` by the founders' decision C. It is not deferred by this branch: the founders moved it, and it still merges before any pack branch because the stack merges bottom-up.
+- **The money rule's own limits stand as `feature/skills`' entry lists them**, with the correction above: an unlisted verb, a contextual object with no money word, `monies`, a phrase listed only in the plural written in the singular, wording neither list names, and spellings outside first-party writing.
+- **The scan's blind spot:** a path assembled from pieces.
+
+Open questions (required, write "none" if true): none.
+
+Next branch: `fix/skill-packs-load-after-launch` (SONNY-476) and `feature/every-catalogue-site-has-a-shallow-pack` (SONNY-482), both cut at this branch's final head once it sits on branch 1's, per SONNY-463.
+
 ### Branch: chore/tooling-reads-fresh-main-and-records-catch-up
 Status: complete
 Date: 2026-09-13
@@ -445,7 +561,7 @@ Architectural decisions / pitfalls discovered (required, write "none" if true):
   - The old list's bare nouns — payee, payment details, bank details, refunds — still load on their own, deliberately, so a reading flow may name them.
 - **The second scoped round read money objects in the plural** (PR #241's round at `9d0f8942` (pre-rebase, replayed as `a3fda2e9`), granted by the founders on 2026-09-13). "Add the IBANs", "Update the account numbers", "Change the routing numbers", "Update the sort codes", "Set up direct deposits", "Update the cards on file", "Add the SWIFT codes" and "Update the card numbers" all loaded at `9d0f8942` (pre-rebase, replayed as `a3fda2e9`), each beside a refused singular, and the rule's doc comment said a money verb nobody listed "is refused once its object sits in the same unit as any listed action verb". That comment now says the object is read singular or plural, that the listed verb can be anywhere in the unit, and names the two new limits below. Each word of a unit is now tried with its singular forms when the rule looks for a money object, and `aMoneyObjectInThePluralIsRefusedAsItsSingularIs` requires each plural to fail with exactly its singular's words.
   - **The singular rule is reused, not copied, and not replaced by a list.** It moved out of `SkillPackTests.isOrdinary` into `SkillWords.singularCandidates(of:)`, and the trigger check now calls it from there, so the two readings of a plural cannot drift apart. Listing the plurals would have doubled the object list, put the plural on a different word in each phrase (`account numbers`, `cards on file`), and missed the next object someone adds in the singular.
-  - **What it costs.** A wrong candidate, such as `codes` → `cod`, can only add a match, so its errors are extra refusals, never a loss. Only money objects read plurals. The contextual objects and the money context words already spell their plurals out.
+  - **What it costs.** A wrong candidate, such as `codes` → `cod`, can only add a match, so its errors are extra refusals, never a loss. Only money objects read plurals. The contextual objects and the money context words already spell their plurals out. *(Corrected 2026-09-13 by `fix/skills-ready-for-the-catalogue`, SONNY-479: the context words did not. Banks, IBANs, wires and currencies were missing, so "Update the account at the banks." loaded. Since that branch, all three lists hold singulars and are read in the plural. Its entry has the measurement.)*
 - **The third-person "-s" forms are left off the action list on purpose.** Most of them are also plural nouns a reading flow uses: changes, transfers, charges, deposits, links, funds.
 - **What this cannot guarantee.** It is a guard on first-party data that this repository writes and reviews. It is not a proof that a pack cannot lead Sonny to move money:
   - **a listed money object whose only verb is unlisted:** "Push the funds to the vendor." and "Allocate the funds to the project." load, because nothing else in the flow is a listed action verb;
