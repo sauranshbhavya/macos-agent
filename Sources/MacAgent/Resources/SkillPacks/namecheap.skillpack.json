@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "namecheap",
+  "name": "Namecheap",
+  "domain": "namecheap.com",
+  "category": "developer_platforms",
+  "summary": "Domain registrar and web hosting provider.",
+  "signInURL": "https://www.namecheap.com/myaccount/login/",
+  "triggers": ["namecheap", "namecheap.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

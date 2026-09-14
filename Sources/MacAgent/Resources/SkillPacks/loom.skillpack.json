@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "loom",
+  "name": "Loom",
+  "domain": "loom.com",
+  "category": "communication",
+  "summary": "Screen recording and video messaging.",
+  "signInURL": "https://www.loom.com/login",
+  "triggers": ["loom.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

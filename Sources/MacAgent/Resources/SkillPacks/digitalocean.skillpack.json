@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "digitalocean",
+  "name": "DigitalOcean",
+  "domain": "digitalocean.com",
+  "category": "developer_platforms",
+  "summary": "Cloud hosting for developers.",
+  "signInURL": "https://cloud.digitalocean.com/login",
+  "triggers": ["digitalocean", "digitalocean.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

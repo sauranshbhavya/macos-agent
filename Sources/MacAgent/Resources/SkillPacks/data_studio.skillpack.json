@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "data_studio",
+  "name": "Data Studio (formerly Looker Studio)",
+  "domain": "datastudio.google.com",
+  "category": "analytics_monitoring",
+  "summary": "Google's reports and dashboards.",
+  "signInURL": "https://datastudio.google.com?requirelogin=1",
+  "triggers": ["datastudio.google.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

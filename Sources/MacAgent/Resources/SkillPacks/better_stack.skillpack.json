@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "better_stack",
+  "name": "Better Stack",
+  "domain": "betterstack.com",
+  "category": "analytics_monitoring",
+  "summary": "Uptime monitoring, logs and status pages.",
+  "signInURL": "https://betterstack.com/users/sign-in",
+  "triggers": ["better stack", "betterstack.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

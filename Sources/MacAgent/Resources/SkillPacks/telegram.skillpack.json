@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "telegram",
+  "name": "Telegram",
+  "domain": "telegram.org",
+  "category": "communication",
+  "summary": "Messaging app.",
+  "signInURL": "https://web.telegram.org",
+  "triggers": ["telegram.org"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

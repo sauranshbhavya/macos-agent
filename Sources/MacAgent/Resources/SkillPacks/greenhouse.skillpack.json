@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "greenhouse",
+  "name": "Greenhouse",
+  "domain": "greenhouse.com",
+  "category": "recruiting_hr",
+  "summary": "Hiring software and applicant tracking.",
+  "signInURL": "https://app.greenhouse.io/users/sign_in",
+  "triggers": ["greenhouse.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

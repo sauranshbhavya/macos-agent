@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "gamma",
+  "name": "Gamma",
+  "domain": "gamma.app",
+  "category": "design",
+  "summary": "AI tool for presentations, documents and websites.",
+  "signInURL": "https://gamma.app/signin",
+  "triggers": ["gamma.app"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

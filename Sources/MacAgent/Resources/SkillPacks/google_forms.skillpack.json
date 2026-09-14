@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "google_forms",
+  "name": "Google Forms",
+  "domain": "forms.google.com",
+  "category": "forms_surveys",
+  "summary": "Google's online forms and quizzes.",
+  "signInURL": "https://docs.google.com/forms/",
+  "triggers": ["google forms", "forms.google.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

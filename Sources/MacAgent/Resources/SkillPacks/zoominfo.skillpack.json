@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "zoominfo",
+  "name": "ZoomInfo",
+  "domain": "zoominfo.com",
+  "category": "sales_crm",
+  "summary": "B2B contact and company data platform.",
+  "signInURL": "https://login.zoominfo.com/",
+  "triggers": ["zoominfo", "zoominfo.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "teamtailor",
+  "name": "Teamtailor",
+  "domain": "teamtailor.com",
+  "category": "recruiting_hr",
+  "summary": "Applicant tracking system with career sites.",
+  "signInURL": "https://app.teamtailor.com/login",
+  "triggers": ["teamtailor", "teamtailor.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

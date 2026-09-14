@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "linkedin",
+  "name": "LinkedIn Pages",
+  "domain": "linkedin.com",
+  "category": "marketing_growth",
+  "summary": "LinkedIn's company pages.",
+  "signInURL": "https://www.linkedin.com/login",
+  "triggers": ["linkedin pages"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

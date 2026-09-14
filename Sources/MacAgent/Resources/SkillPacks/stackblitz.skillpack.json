@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "stackblitz",
+  "name": "StackBlitz",
+  "domain": "stackblitz.com",
+  "category": "code_hosting",
+  "summary": "Browser-based development environment for web apps.",
+  "signInURL": "https://app.stackblitz.com/login",
+  "triggers": ["stackblitz", "stackblitz.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

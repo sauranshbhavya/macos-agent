@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "anthropic_console",
+  "name": "Claude Platform (formerly Anthropic Console)",
+  "domain": "console.anthropic.com",
+  "category": "developer_platforms",
+  "summary": "Anthropic's developer platform for the Claude API.",
+  "signInURL": "https://platform.claude.com/login",
+  "triggers": ["console.anthropic.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "clay",
+  "name": "Clay",
+  "domain": "clay.com",
+  "category": "sales_crm",
+  "summary": "Data enrichment and outbound sales platform.",
+  "signInURL": "https://app.clay.com/login",
+  "triggers": ["clay.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

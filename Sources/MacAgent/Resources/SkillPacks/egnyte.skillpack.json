@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "egnyte",
+  "name": "Egnyte",
+  "domain": "egnyte.com",
+  "category": "documents_storage",
+  "summary": "Cloud file sharing and content governance for businesses.",
+  "signInURL": "https://www.egnyte.com/login",
+  "triggers": ["egnyte", "egnyte.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

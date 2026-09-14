@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "streak",
+  "name": "Streak",
+  "domain": "streak.com",
+  "category": "sales_crm",
+  "summary": "CRM inside Gmail.",
+  "signInURL": null,
+  "triggers": ["streak.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

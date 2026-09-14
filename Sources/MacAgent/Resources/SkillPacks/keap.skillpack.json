@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "keap",
+  "name": "Keap",
+  "domain": "keap.com",
+  "category": "sales_crm",
+  "summary": "CRM and marketing automation for small businesses.",
+  "signInURL": "https://keap.com/login",
+  "triggers": ["keap", "keap.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "highlevel",
+  "name": "HighLevel",
+  "domain": "gohighlevel.com",
+  "category": "sales_crm",
+  "summary": "All-in-one marketing and CRM platform for agencies.",
+  "signInURL": "https://app.gohighlevel.com/",
+  "triggers": ["highlevel", "gohighlevel.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

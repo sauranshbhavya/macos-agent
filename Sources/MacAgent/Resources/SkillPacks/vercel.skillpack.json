@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "vercel",
+  "name": "Vercel",
+  "domain": "vercel.com",
+  "category": "developer_platforms",
+  "summary": "Cloud platform for deploying web apps.",
+  "signInURL": "https://vercel.com/login",
+  "triggers": ["vercel", "vercel.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

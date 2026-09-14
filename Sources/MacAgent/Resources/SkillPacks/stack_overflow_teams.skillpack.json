@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "stack_overflow_teams",
+  "name": "Stack Overflow for Teams",
+  "domain": "stackoverflow.co",
+  "category": "knowledge_bases",
+  "summary": "Private question-and-answer knowledge base for teams.",
+  "signInURL": "https://stackoverflowteams.com/users/login",
+  "triggers": ["stack overflow for teams", "stackoverflow.co"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

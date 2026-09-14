@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "pinterest",
+  "name": "Pinterest",
+  "domain": "pinterest.com",
+  "category": "marketing_growth",
+  "summary": "Visual discovery and bookmarking platform.",
+  "signInURL": "https://pinterest.com/login",
+  "triggers": ["pinterest", "pinterest.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

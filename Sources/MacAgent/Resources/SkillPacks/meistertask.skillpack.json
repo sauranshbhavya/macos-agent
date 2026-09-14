@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "meistertask",
+  "name": "MeisterTask",
+  "domain": "meistertask.com",
+  "category": "project_tracking",
+  "summary": "Kanban-style task management.",
+  "signInURL": "https://accounts.meister.co/login",
+  "triggers": ["meistertask", "meistertask.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

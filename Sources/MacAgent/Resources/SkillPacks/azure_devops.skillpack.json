@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "azure_devops",
+  "name": "Azure DevOps",
+  "domain": "dev.azure.com",
+  "category": "code_hosting",
+  "summary": "Microsoft's repositories, pipelines and boards for software teams.",
+  "signInURL": "https://dev.azure.com/login",
+  "triggers": ["azure devops", "dev.azure.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "native_calendar",
+  "name": "Calendar (macOS Calendar, with iCloud Calendar on the web)",
+  "domain": "icloud.com",
+  "category": "email_calendar",
+  "summary": "Apple's calendar app, with iCloud Calendar on the web.",
+  "signInURL": "https://www.icloud.com/calendar/",
+  "triggers": ["icloud calendar"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

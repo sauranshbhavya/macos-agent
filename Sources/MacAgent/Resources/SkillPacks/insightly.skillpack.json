@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "insightly",
+  "name": "Insightly",
+  "domain": "insightly.com",
+  "category": "sales_crm",
+  "summary": "CRM and project management.",
+  "signInURL": "https://login.insightly.com/User/Login?ReturnUrl=%2F",
+  "triggers": ["insightly", "insightly.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

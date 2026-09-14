@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "airwallex",
+  "name": "Airwallex",
+  "domain": "airwallex.com",
+  "category": "finance_billing",
+  "summary": "Global business accounts and payments.",
+  "signInURL": "https://www.airwallex.com/app/login?region=us",
+  "triggers": ["airwallex", "airwallex.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

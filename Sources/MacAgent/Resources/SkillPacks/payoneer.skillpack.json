@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "payoneer",
+  "name": "Payoneer",
+  "domain": "payoneer.com",
+  "category": "finance_billing",
+  "summary": "Cross-border payments for businesses.",
+  "signInURL": "https://myaccount.payoneer.com/",
+  "triggers": ["payoneer", "payoneer.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

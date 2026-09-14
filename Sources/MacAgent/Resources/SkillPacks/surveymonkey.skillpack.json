@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "surveymonkey",
+  "name": "SurveyMonkey",
+  "domain": "surveymonkey.com",
+  "category": "forms_surveys",
+  "summary": "Online survey platform.",
+  "signInURL": "https://www.surveymonkey.com/login/",
+  "triggers": ["surveymonkey", "surveymonkey.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

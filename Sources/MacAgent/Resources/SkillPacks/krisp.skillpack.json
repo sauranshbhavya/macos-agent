@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "krisp",
+  "name": "Krisp",
+  "domain": "krisp.ai",
+  "category": "communication",
+  "summary": "AI noise cancellation and meeting notes.",
+  "signInURL": "https://app.krisp.ai/login",
+  "triggers": ["krisp", "krisp.ai"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

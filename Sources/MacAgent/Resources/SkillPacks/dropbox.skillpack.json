@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "dropbox",
+  "name": "Dropbox",
+  "domain": "dropbox.com",
+  "category": "documents_storage",
+  "summary": "Cloud file storage and sharing.",
+  "signInURL": "https://www.dropbox.com/login",
+  "triggers": ["dropbox", "dropbox.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

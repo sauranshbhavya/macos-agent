@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "formsite",
+  "name": "Formsite",
+  "domain": "formsite.com",
+  "category": "forms_surveys",
+  "summary": "Online form and survey builder.",
+  "signInURL": "https://fs1.formsite.com/form_app/FormSite?FormId=LoadLogin&Auto=",
+  "triggers": ["formsite", "formsite.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

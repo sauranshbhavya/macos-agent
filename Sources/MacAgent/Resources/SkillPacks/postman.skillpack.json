@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "postman",
+  "name": "Postman",
+  "domain": "postman.com",
+  "category": "developer_platforms",
+  "summary": "API development and testing platform.",
+  "signInURL": "https://www.postman.com/_pm/handover/?to=https%3A%2F%2Fidentity.getpostman.com%2Flogin",
+  "triggers": ["postman.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

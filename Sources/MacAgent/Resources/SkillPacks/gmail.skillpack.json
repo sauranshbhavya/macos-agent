@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "gmail",
+  "name": "Gmail",
+  "domain": "mail.google.com",
+  "category": "email_calendar",
+  "summary": "Google's email service.",
+  "signInURL": "https://mail.google.com/",
+  "triggers": ["gmail", "mail.google.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

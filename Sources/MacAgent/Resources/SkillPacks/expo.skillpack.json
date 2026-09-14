@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "expo",
+  "name": "Expo",
+  "domain": "expo.dev",
+  "category": "developer_platforms",
+  "summary": "Platform for building React Native apps.",
+  "signInURL": "https://expo.dev/login",
+  "triggers": ["expo.dev"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "kajabi",
+  "name": "Kajabi",
+  "domain": "kajabi.com",
+  "category": "websites_apps_commerce",
+  "summary": "Platform for online courses and memberships.",
+  "signInURL": "https://id.kajabi.com/u/login",
+  "triggers": ["kajabi", "kajabi.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

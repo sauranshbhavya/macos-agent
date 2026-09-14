@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "launchdarkly",
+  "name": "LaunchDarkly",
+  "domain": "launchdarkly.com",
+  "category": "developer_platforms",
+  "summary": "Feature flag and experimentation platform.",
+  "signInURL": "https://app.launchdarkly.com/login",
+  "triggers": ["launchdarkly", "launchdarkly.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

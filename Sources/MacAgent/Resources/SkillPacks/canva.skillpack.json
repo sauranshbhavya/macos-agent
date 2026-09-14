@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "canva",
+  "name": "Canva",
+  "domain": "canva.com",
+  "category": "design",
+  "summary": "Online graphic design tool.",
+  "signInURL": "https://www.canva.com/login/",
+  "triggers": ["canva", "canva.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

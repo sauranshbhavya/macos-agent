@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "okta",
+  "name": "Okta",
+  "domain": "okta.com",
+  "category": "it_accounts_security",
+  "summary": "Identity and access management.",
+  "signInURL": "https://login.okta.com/",
+  "triggers": ["okta", "okta.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

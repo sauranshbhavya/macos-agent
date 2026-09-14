@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "replit",
+  "name": "Replit",
+  "domain": "replit.com",
+  "category": "code_hosting",
+  "summary": "Browser-based coding and app building platform.",
+  "signInURL": "https://replit.com/login",
+  "triggers": ["replit", "replit.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

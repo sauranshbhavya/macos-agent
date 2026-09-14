@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "contactout",
+  "name": "ContactOut",
+  "domain": "contactout.com",
+  "category": "sales_crm",
+  "summary": "Email and phone finder for recruiters and sales teams.",
+  "signInURL": "https://contactout.com/login",
+  "triggers": ["contactout", "contactout.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

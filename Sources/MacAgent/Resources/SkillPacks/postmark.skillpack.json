@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "postmark",
+  "name": "Postmark",
+  "domain": "postmarkapp.com",
+  "category": "marketing_email",
+  "summary": "Transactional email delivery service.",
+  "signInURL": "https://account.postmarkapp.com/login",
+  "triggers": ["postmarkapp.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

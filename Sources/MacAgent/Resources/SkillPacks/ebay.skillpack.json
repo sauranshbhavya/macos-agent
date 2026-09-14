@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "ebay",
+  "name": "eBay",
+  "domain": "ebay.com",
+  "category": "websites_apps_commerce",
+  "summary": "Online marketplace.",
+  "signInURL": "https://signin.ebay.com/",
+  "triggers": ["ebay", "ebay.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

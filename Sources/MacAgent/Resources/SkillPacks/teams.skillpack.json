@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "teams",
+  "name": "Microsoft Teams",
+  "domain": "teams.microsoft.com",
+  "category": "communication",
+  "summary": "Microsoft's chat, meetings and calling for work.",
+  "signInURL": "https://teams.microsoft.com",
+  "triggers": ["microsoft teams", "teams.microsoft.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "dext",
+  "name": "Dext",
+  "domain": "dext.com",
+  "category": "finance_billing",
+  "summary": "Bookkeeping automation for receipts and invoices.",
+  "signInURL": "https://app.dext.com/login/",
+  "triggers": ["dext", "dext.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

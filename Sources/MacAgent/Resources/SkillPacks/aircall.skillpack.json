@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "aircall",
+  "name": "Aircall",
+  "domain": "aircall.io",
+  "category": "communication",
+  "summary": "Cloud phone system for businesses.",
+  "signInURL": "https://aircall.io/login",
+  "triggers": ["aircall", "aircall.io"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "jotform",
+  "name": "Jotform",
+  "domain": "jotform.com",
+  "category": "forms_surveys",
+  "summary": "Online form builder.",
+  "signInURL": "https://www.jotform.com/login/",
+  "triggers": ["jotform", "jotform.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

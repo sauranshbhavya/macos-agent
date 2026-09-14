@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "getresponse",
+  "name": "GetResponse",
+  "domain": "getresponse.com",
+  "category": "marketing_email",
+  "summary": "Email marketing and automation platform.",
+  "signInURL": "https://app.getresponse.com/login?lang=en",
+  "triggers": ["getresponse", "getresponse.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

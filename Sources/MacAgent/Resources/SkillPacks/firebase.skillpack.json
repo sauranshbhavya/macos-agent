@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "firebase",
+  "name": "Firebase",
+  "domain": "firebase.google.com",
+  "category": "developer_platforms",
+  "summary": "Google's app development platform.",
+  "signInURL": "https://console.firebase.google.com/",
+  "triggers": ["firebase", "firebase.google.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

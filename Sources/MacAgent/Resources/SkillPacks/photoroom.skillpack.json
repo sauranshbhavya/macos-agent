@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "photoroom",
+  "name": "Photoroom",
+  "domain": "photoroom.com",
+  "category": "design",
+  "summary": "AI photo editor for product images.",
+  "signInURL": "https://app.photoroom.com",
+  "triggers": ["photoroom", "photoroom.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

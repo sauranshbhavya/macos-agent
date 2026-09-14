@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "microsoft_copilot",
+  "name": "Microsoft Copilot",
+  "domain": "copilot.microsoft.com",
+  "category": "ai_assistants",
+  "summary": "Microsoft's AI assistant.",
+  "signInURL": "https://login.microsoft.com/",
+  "triggers": ["microsoft copilot", "copilot.microsoft.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

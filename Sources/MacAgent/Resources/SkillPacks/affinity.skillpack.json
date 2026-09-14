@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "affinity",
+  "name": "Affinity",
+  "domain": "affinity.co",
+  "category": "sales_crm",
+  "summary": "Relationship intelligence CRM for dealmaking firms.",
+  "signInURL": "https://affinity.co/auth/signin",
+  "triggers": ["affinity.co"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

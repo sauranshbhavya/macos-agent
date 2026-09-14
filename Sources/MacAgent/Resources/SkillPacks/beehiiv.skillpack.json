@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "beehiiv",
+  "name": "beehiiv",
+  "domain": "beehiiv.com",
+  "category": "marketing_email",
+  "summary": "Newsletter platform.",
+  "signInURL": "https://app.beehiiv.com/login",
+  "triggers": ["beehiiv", "beehiiv.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

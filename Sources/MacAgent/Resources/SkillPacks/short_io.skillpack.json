@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "short_io",
+  "name": "Short.io",
+  "domain": "short.io",
+  "category": "marketing_growth",
+  "summary": "Branded link shortener.",
+  "signInURL": "https://app.short.io/public/login",
+  "triggers": ["short.io"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

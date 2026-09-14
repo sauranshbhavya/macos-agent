@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "navan",
+  "name": "Navan",
+  "domain": "navan.com",
+  "category": "finance_billing",
+  "summary": "Business travel and expense management.",
+  "signInURL": "https://app.navan.com/",
+  "triggers": ["navan", "navan.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

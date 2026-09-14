@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "clicksend",
+  "name": "ClickSend",
+  "domain": "clicksend.com",
+  "category": "communication",
+  "summary": "SMS and messaging platform for businesses.",
+  "signInURL": "https://dashboard.clicksend.com/login",
+  "triggers": ["clicksend", "clicksend.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

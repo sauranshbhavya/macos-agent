@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "apollo",
+  "name": "Apollo.io",
+  "domain": "apollo.io",
+  "category": "sales_crm",
+  "summary": "Sales intelligence and engagement platform.",
+  "signInURL": "https://app.apollo.io/#/login",
+  "triggers": ["apollo.io"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

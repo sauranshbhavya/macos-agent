@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "wix",
+  "name": "Wix",
+  "domain": "wix.com",
+  "category": "websites_apps_commerce",
+  "summary": "Website builder.",
+  "signInURL": "https://wix.com/login",
+  "triggers": ["wix", "wix.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

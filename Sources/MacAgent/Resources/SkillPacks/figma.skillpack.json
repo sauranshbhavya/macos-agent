@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "figma",
+  "name": "Figma",
+  "domain": "figma.com",
+  "category": "design",
+  "summary": "Collaborative interface design tool.",
+  "signInURL": "https://www.figma.com/login",
+  "triggers": ["figma", "figma.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

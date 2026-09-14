@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "alchemer",
+  "name": "Alchemer",
+  "domain": "alchemer.com",
+  "category": "forms_surveys",
+  "summary": "Online survey software.",
+  "signInURL": "https://app.alchemer.com/login",
+  "triggers": ["alchemer", "alchemer.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

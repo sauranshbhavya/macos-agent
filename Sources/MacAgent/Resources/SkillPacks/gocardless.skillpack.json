@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "gocardless",
+  "name": "GoCardless",
+  "domain": "gocardless.com",
+  "category": "finance_billing",
+  "summary": "Recurring bank payments platform.",
+  "signInURL": "https://manage.gocardless.com/sign-in",
+  "triggers": ["gocardless", "gocardless.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "mailgun",
+  "name": "Mailgun",
+  "domain": "mailgun.com",
+  "category": "marketing_email",
+  "summary": "Email API and delivery service.",
+  "signInURL": "https://login.mailgun.com/login/",
+  "triggers": ["mailgun", "mailgun.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

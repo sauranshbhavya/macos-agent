@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "google_slides",
+  "name": "Google Slides",
+  "domain": "slides.google.com",
+  "category": "documents_storage",
+  "summary": "Google's online presentations.",
+  "signInURL": "https://docs.google.com/presentation/",
+  "triggers": ["google slides", "slides.google.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

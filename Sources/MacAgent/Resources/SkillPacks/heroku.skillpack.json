@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "heroku",
+  "name": "Heroku",
+  "domain": "heroku.com",
+  "category": "developer_platforms",
+  "summary": "Cloud platform for running apps.",
+  "signInURL": "https://id.heroku.com/login",
+  "triggers": ["heroku", "heroku.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

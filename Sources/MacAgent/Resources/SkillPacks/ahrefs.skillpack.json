@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "ahrefs",
+  "name": "Ahrefs",
+  "domain": "ahrefs.com",
+  "category": "marketing_growth",
+  "summary": "SEO tools for backlinks and keywords.",
+  "signInURL": "https://app.ahrefs.com/user/login",
+  "triggers": ["ahrefs", "ahrefs.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

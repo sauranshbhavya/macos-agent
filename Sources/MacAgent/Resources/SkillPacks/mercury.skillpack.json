@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "mercury",
+  "name": "Mercury",
+  "domain": "mercury.com",
+  "category": "finance_billing",
+  "summary": "Banking for startups.",
+  "signInURL": "https://app.mercury.com/login",
+  "triggers": ["mercury.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

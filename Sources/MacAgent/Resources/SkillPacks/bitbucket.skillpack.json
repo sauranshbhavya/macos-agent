@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "bitbucket",
+  "name": "Bitbucket",
+  "domain": "bitbucket.org",
+  "category": "code_hosting",
+  "summary": "Git code hosting from Atlassian.",
+  "signInURL": "https://id.atlassian.com/login?continue=https%3A%2F%2Fwww.atlassian.com%2Fgateway%2Fapi%2Fstart%2Fauthredirect&application=wac--ic",
+  "triggers": ["bitbucket", "bitbucket.org"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

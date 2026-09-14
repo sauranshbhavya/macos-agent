@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "callrail",
+  "name": "CallRail",
+  "domain": "callrail.com",
+  "category": "communication",
+  "summary": "Call tracking and marketing analytics.",
+  "signInURL": "https://callrail.com/login",
+  "triggers": ["callrail", "callrail.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

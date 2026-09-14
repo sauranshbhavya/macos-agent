@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "googledocs",
+  "name": "Google Docs",
+  "domain": "docs.google.com",
+  "category": "documents_storage",
+  "summary": "Google's online documents.",
+  "signInURL": "https://docs.google.com/",
+  "triggers": ["google docs", "docs.google.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

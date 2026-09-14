@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "posthog",
+  "name": "PostHog",
+  "domain": "posthog.com",
+  "category": "analytics_monitoring",
+  "summary": "Product analytics, session replay and feature flags.",
+  "signInURL": "https://app.posthog.com/login",
+  "triggers": ["posthog", "posthog.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

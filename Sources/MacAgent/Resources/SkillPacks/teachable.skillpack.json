@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "teachable",
+  "name": "Teachable",
+  "domain": "teachable.com",
+  "category": "websites_apps_commerce",
+  "summary": "Online course platform.",
+  "signInURL": "https://sso.teachable.com/secure/teachable_accounts/sign_in",
+  "triggers": ["teachable.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

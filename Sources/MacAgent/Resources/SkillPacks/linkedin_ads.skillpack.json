@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "linkedin_ads",
+  "name": "LinkedIn Campaign Manager",
+  "domain": "linkedin.com",
+  "category": "marketing_growth",
+  "summary": "LinkedIn's advertising platform.",
+  "signInURL": "https://www.linkedin.com/login",
+  "triggers": ["linkedin campaign manager"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

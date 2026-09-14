@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "openrouter",
+  "name": "OpenRouter",
+  "domain": "openrouter.ai",
+  "category": "developer_platforms",
+  "summary": "One API for many AI models.",
+  "signInURL": "https://openrouter.ai/sign-in",
+  "triggers": ["openrouter", "openrouter.ai"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

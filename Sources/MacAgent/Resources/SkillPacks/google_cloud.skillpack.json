@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "google_cloud",
+  "name": "Google Cloud",
+  "domain": "cloud.google.com",
+  "category": "developer_platforms",
+  "summary": "Google's cloud computing platform.",
+  "signInURL": "https://console.cloud.google.com/",
+  "triggers": ["google cloud", "cloud.google.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

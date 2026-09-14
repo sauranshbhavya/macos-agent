@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "frame_io",
+  "name": "Frame.io",
+  "domain": "frame.io",
+  "category": "design",
+  "summary": "Video review and collaboration platform from Adobe.",
+  "signInURL": "https://app.frame.io",
+  "triggers": ["frame.io"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

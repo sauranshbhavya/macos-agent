@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "lemlist",
+  "name": "lemlist",
+  "domain": "lemlist.com",
+  "category": "marketing_email",
+  "summary": "Cold email outreach platform.",
+  "signInURL": "https://app.lemlist.com/login",
+  "triggers": ["lemlist", "lemlist.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "quo",
+  "name": "Quo (formerly OpenPhone)",
+  "domain": "quo.com",
+  "category": "communication",
+  "summary": "Business phone system.",
+  "signInURL": "https://my.quo.com/login",
+  "triggers": ["openphone", "quo.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

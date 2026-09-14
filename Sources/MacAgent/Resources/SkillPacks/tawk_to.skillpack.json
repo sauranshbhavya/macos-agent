@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "tawk_to",
+  "name": "tawk.to",
+  "domain": "tawk.to",
+  "category": "customer_support",
+  "summary": "Free live chat for websites.",
+  "signInURL": "https://dashboard.tawk.to/login",
+  "triggers": ["tawk.to"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

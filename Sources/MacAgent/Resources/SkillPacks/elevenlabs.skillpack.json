@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "elevenlabs",
+  "name": "ElevenLabs",
+  "domain": "elevenlabs.io",
+  "category": "ai_assistants",
+  "summary": "AI voice and audio generation.",
+  "signInURL": "https://elevenlabs.io/app/sign-in",
+  "triggers": ["elevenlabs", "elevenlabs.io"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

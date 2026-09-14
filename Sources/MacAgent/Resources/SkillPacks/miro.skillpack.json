@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "miro",
+  "name": "Miro",
+  "domain": "miro.com",
+  "category": "design",
+  "summary": "Online whiteboard for team collaboration.",
+  "signInURL": "https://miro.com/login",
+  "triggers": ["miro.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

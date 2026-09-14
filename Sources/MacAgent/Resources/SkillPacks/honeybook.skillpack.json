@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "honeybook",
+  "name": "HoneyBook",
+  "domain": "honeybook.com",
+  "category": "sales_crm",
+  "summary": "Client management platform for independent businesses.",
+  "signInURL": "https://app.honeybook.com/app/login",
+  "triggers": ["honeybook", "honeybook.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

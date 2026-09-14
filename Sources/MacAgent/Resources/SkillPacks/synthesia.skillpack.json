@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "synthesia",
+  "name": "Synthesia",
+  "domain": "synthesia.io",
+  "category": "ai_assistants",
+  "summary": "AI video generation with avatars.",
+  "signInURL": "https://app.synthesia.io/welcome",
+  "triggers": ["synthesia", "synthesia.io"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

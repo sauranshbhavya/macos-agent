@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "microsoft_lists",
+  "name": "Microsoft Lists",
+  "domain": "lists.live.com",
+  "category": "project_tracking",
+  "summary": "Microsoft's app for tracking information in lists.",
+  "signInURL": "https://www.microsoft365.com/",
+  "triggers": ["microsoft lists", "lists.live.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

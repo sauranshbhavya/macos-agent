@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "pdl",
+  "name": "People Data Labs",
+  "domain": "peopledatalabs.com",
+  "category": "sales_crm",
+  "summary": "People and company data for developers.",
+  "signInURL": "https://peopledatalabs.com/login",
+  "triggers": ["people data labs", "peopledatalabs.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

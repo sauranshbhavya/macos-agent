@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "ramp",
+  "name": "Ramp",
+  "domain": "ramp.com",
+  "category": "finance_billing",
+  "summary": "Corporate cards and spend management.",
+  "signInURL": "https://app.ramp.com/sign-in",
+  "triggers": ["ramp.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "paypal",
+  "name": "PayPal",
+  "domain": "paypal.com",
+  "category": "finance_billing",
+  "summary": "Online payments service.",
+  "signInURL": "https://www.paypal.com/signin",
+  "triggers": ["paypal", "paypal.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

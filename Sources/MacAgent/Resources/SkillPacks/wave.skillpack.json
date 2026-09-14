@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "wave",
+  "name": "Wave",
+  "domain": "waveapps.com",
+  "category": "finance_billing",
+  "summary": "Accounting and invoicing for small businesses.",
+  "signInURL": "https://www.waveapps.com/login",
+  "triggers": ["waveapps.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "close",
+  "name": "Close",
+  "domain": "close.com",
+  "category": "sales_crm",
+  "summary": "CRM for inside sales teams.",
+  "signInURL": "https://app.close.com/login/",
+  "triggers": ["close.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

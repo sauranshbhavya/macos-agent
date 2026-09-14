@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "attio",
+  "name": "Attio",
+  "domain": "attio.com",
+  "category": "sales_crm",
+  "summary": "Customizable CRM.",
+  "signInURL": "https://app.attio.com/",
+  "triggers": ["attio", "attio.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

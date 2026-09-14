@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "deepl",
+  "name": "DeepL",
+  "domain": "deepl.com",
+  "category": "ai_assistants",
+  "summary": "AI translation and writing tool.",
+  "signInURL": "https://app.deepl.com/login",
+  "triggers": ["deepl", "deepl.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

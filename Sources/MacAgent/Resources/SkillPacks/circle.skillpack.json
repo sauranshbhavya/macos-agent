@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "circle",
+  "name": "Circle",
+  "domain": "circle.so",
+  "category": "communication",
+  "summary": "Community platform for creators and brands.",
+  "signInURL": "https://login.circle.so/sign_in",
+  "triggers": ["circle.so"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

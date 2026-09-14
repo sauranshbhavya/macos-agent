@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "hubspot",
+  "name": "HubSpot",
+  "domain": "hubspot.com",
+  "category": "sales_crm",
+  "summary": "CRM platform for marketing, sales and service.",
+  "signInURL": "https://app.hubspot.com/login",
+  "triggers": ["hubspot", "hubspot.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "zapier",
+  "name": "Zapier",
+  "domain": "zapier.com",
+  "category": "automation",
+  "summary": "Automation platform that connects web apps.",
+  "signInURL": "https://zapier.com/app/login",
+  "triggers": ["zapier", "zapier.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

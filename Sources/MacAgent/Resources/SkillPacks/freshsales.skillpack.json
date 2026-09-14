@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "freshsales",
+  "name": "Freshsales",
+  "domain": "freshworks.com",
+  "category": "sales_crm",
+  "summary": "Sales CRM from Freshworks.",
+  "signInURL": "https://login.freshworks.com/email-login/",
+  "triggers": ["freshsales"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

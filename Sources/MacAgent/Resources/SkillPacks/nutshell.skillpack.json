@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "nutshell",
+  "name": "Nutshell",
+  "domain": "nutshell.com",
+  "category": "sales_crm",
+  "summary": "CRM and email marketing for small businesses.",
+  "signInURL": "https://app.nutshell.com/",
+  "triggers": ["nutshell.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

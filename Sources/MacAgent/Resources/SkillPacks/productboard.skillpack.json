@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "productboard",
+  "name": "Productboard",
+  "domain": "productboard.com",
+  "category": "project_tracking",
+  "summary": "Product management platform for feedback and roadmaps.",
+  "signInURL": "https://app.productboard.com/",
+  "triggers": ["productboard", "productboard.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

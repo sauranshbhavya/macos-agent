@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "constant_contact",
+  "name": "Constant Contact",
+  "domain": "constantcontact.com",
+  "category": "marketing_email",
+  "summary": "Email marketing for small businesses.",
+  "signInURL": "https://go.constantcontact.com/login",
+  "triggers": ["constant contact", "constantcontact.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

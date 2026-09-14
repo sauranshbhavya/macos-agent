@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "livestorm",
+  "name": "Livestorm",
+  "domain": "livestorm.co",
+  "category": "communication",
+  "summary": "Webinar and virtual event platform.",
+  "signInURL": "https://app.livestorm.co/#/login",
+  "triggers": ["livestorm", "livestorm.co"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

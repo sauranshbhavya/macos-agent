@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "google_search_console",
+  "name": "Google Search Console",
+  "domain": "search.google.com",
+  "category": "marketing_growth",
+  "summary": "Google's tool for a site's search performance.",
+  "signInURL": "https://accounts.google.com/ServiceLogin?continue=https%3A%2F%2Fsearch.google.com%2Fsearch-console",
+  "triggers": ["google search console", "search.google.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

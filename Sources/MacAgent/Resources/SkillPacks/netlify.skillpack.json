@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "netlify",
+  "name": "Netlify",
+  "domain": "netlify.com",
+  "category": "developer_platforms",
+  "summary": "Platform for building and deploying websites.",
+  "signInURL": "https://app.netlify.com/login",
+  "triggers": ["netlify", "netlify.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

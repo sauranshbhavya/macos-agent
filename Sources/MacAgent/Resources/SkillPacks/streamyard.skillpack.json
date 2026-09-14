@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "streamyard",
+  "name": "StreamYard",
+  "domain": "streamyard.com",
+  "category": "communication",
+  "summary": "Browser-based live streaming studio.",
+  "signInURL": "https://streamyard.com/login",
+  "triggers": ["streamyard", "streamyard.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}
