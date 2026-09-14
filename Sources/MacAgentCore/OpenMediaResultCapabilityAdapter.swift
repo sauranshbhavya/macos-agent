@@ -78,7 +78,10 @@ public struct OpenMediaResultCapabilityAdapter: CapabilityAdapter {
             )
         }
         log(.summarize, summary)
-        return AgentRunResult(plan: plan, previews: previews, summary: summary)
+        // Every playback sentence quotes what the provider returned — a catalogue's track and artist
+        // names, which whoever published the track wrote, or the provider's own failure detail
+        // (SONNY-491).
+        return AgentRunResult(plan: plan, previews: previews, summary: summary, summaryProvenance: .outsideAuthored)
     }
 
     private struct MediaSpec {

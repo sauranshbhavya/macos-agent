@@ -182,6 +182,9 @@ struct ItemJobTests {
         #expect(result.itemJobFailures.first?.item == root.appendingPathComponent("b.pdf").path)
         #expect(result.summary.contains("2 of 3 files"))
         #expect(result.summary.contains("b.pdf"))
+        // The sentence names a file read off the disk, which whoever saved it named (SONNY-491; PR
+        // #249's review, F4). Its control is the job below, in which nothing fails.
+        #expect(result.summaryProvenance == .outsideAuthored)
     }
 
     /// The control for the assertion above, and the one that makes "two failures were recorded" mean
@@ -202,6 +205,8 @@ struct ItemJobTests {
         #expect(invoker.inputs.count == 3)
         #expect(result.itemJobFailures.isEmpty)
         #expect(result.summary == "Worked through all 3 files.")
+        // Nothing failed, so nothing is named, and the sentence is Sonny's alone (SONNY-491).
+        #expect(result.summaryProvenance == .codeAuthored)
     }
 
     /// **A stop is not a failed item.** Swallowing a cancellation the way an item failure is

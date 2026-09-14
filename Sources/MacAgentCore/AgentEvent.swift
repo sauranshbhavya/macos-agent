@@ -136,6 +136,12 @@ public struct AgentRunResult: Equatable, Sendable {
     /// enumeration and `theOnlyModelAuthoredRunSummaryIsTheVisionSessions` all point at the same
     /// list.
     ///
+    /// **Since SONNY-491 a wrong default here is a wrong sentence, never a trusted result.** The
+    /// prior-task block puts every result in its untrusted segment whatever this says, and reads this
+    /// only to tell the planner who wrote that text. The adapters whose summaries quote text someone
+    /// outside Sonny wrote declare `.outsideAuthored`; the list is SONNY-491's enumeration, and
+    /// `RunSummaryProvenanceTests.theOutsideAuthoredSummariesAreTheOnesTheEnumerationFound` holds it.
+    ///
     /// **That scan is a backstop, not the guard** (SONNY-200). It is textual, and a list of
     /// property spellings kept missing shapes — most recently `executeChain`'s own accumulator,
     /// `var summaryProvenance: StoredTaskResult.Provenance = .codeAuthored`, whose type annotation

@@ -56,7 +56,10 @@ public struct FinderSelectionCapabilityAdapter: CapabilityAdapter {
         return AgentRunResult(
             plan: plan,
             previews: previews,
-            summary: FinderSelectionSummary.sentence(naming: selection.map(\.name))
+            summary: FinderSelectionSummary.sentence(naming: selection.map(\.name)),
+            // A file's name is written by whoever saved it — a download, an attachment, a colleague's
+            // share — and this sentence quotes those names (SONNY-491).
+            summaryProvenance: .outsideAuthored
         )
     }
 
