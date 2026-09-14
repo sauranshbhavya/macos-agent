@@ -8,6 +8,38 @@
   "signInURL": "https://drive.google.com/drive/?dmr=1",
   "triggers": ["google drive", "drive.google.com"],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Upload files or a folder",
+      "startURL": "https://drive.google.com/",
+      "steps": [
+        "Go to drive.google.com.",
+        "At the top left, click New, then File upload or Folder upload.",
+        "Choose the file or folder to upload. Dragging files into an open Drive folder uploads them too."
+      ],
+      "source": "https://support.google.com/drive/answer/2424368?hl=en&co=GENIE.Platform%3DDesktop"
+    },
+    {
+      "title": "Create a folder or move a file into one",
+      "startURL": "https://drive.google.com/",
+      "steps": [
+        "To create a folder: on the left, click New, then Folder. Enter a name and click Create.",
+        "To move a file: right-click it and click Organize, then Move.",
+        "Select or create the folder, then click Move."
+      ],
+      "source": "https://support.google.com/drive/answer/2375091?hl=en&co=GENIE.Platform%3DDesktop"
+    },
+    {
+      "title": "Share a file",
+      "startURL": "https://drive.google.com/",
+      "steps": [
+        "Go to Google Drive and select the file to share, then click Share.",
+        "Enter the email address to share with.",
+        "Choose how they can use the file: Viewer, Commenter or Editor.",
+        "Click Send or Share. Each email address gets an email."
+      ],
+      "source": "https://support.google.com/docs/answer/2494822?hl=en&co=GENIE.Platform%3DDesktop"
+    }
+  ]
 }

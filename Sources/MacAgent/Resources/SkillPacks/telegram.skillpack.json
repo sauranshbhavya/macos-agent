@@ -6,8 +6,35 @@
   "category": "communication",
   "summary": "Messaging app.",
   "signInURL": "https://web.telegram.org",
-  "triggers": ["telegram.org"],
+  "triggers": ["in telegram", "telegram message", "telegram chat", "telegram.org"],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Create a group",
+      "startURL": "https://web.telegram.org/",
+      "steps": [
+        "In Telegram Desktop, click the menu button in the top left corner, then New Group. On Android, tap the round pencil icon in the chat list, then New Group."
+      ],
+      "source": "https://telegram.org/faq"
+    },
+    {
+      "title": "Create a chat folder",
+      "startURL": "https://web.telegram.org/",
+      "steps": [
+        "Go to Settings, then Chat Folders. This works in any Telegram app.",
+        "Pick the chats to include, and give the folder a name."
+      ],
+      "source": "https://telegram.org/tour/chat-folders"
+    },
+    {
+      "title": "Share a chat folder",
+      "startURL": "https://web.telegram.org/",
+      "steps": [
+        "Long press the folder name in the chat list and select Share, or open the folder in Settings, then Chat Folders.",
+        "Choose which of the folder's chats the invite link makes available, then share the link."
+      ],
+      "source": "https://telegram.org/tour/chat-folders"
+    }
+  ]
 }

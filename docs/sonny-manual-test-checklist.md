@@ -5050,6 +5050,29 @@ it, now that the packs arrive after launch.
       Notion still shows **Added** and **Remove**. **What would be a finding:** an empty page that stays
       empty, or Notion showing Add.
 
+### Skill packs with task flows for documents, projects and communication sites (new 2026-09-14, SONNY-484)
+
+26 more skill packs now carry task flows, each step taken from the site's own public help page: Box,
+Cal.com, Calendar (the iCloud Calendar row), Calendly, Canny, ClickUp, Coda, Dropbox, Fireflies.ai,
+Gmail, Google Docs, Google Drive, Google Sheets, Microsoft Lists, Microsoft Outlook, Microsoft Teams,
+OneDrive, Outlook Calendar, PandaDoc, Productboard, Slack, SurveyMonkey, Telegram, Trello, Typeform and
+Wrike. Jira,
+Confluence and SharePoint still carry only the facts about the site. SONNY-482's section above says
+the other 471 packs carry only facts; with this branch in, these 26 carry flows as well, and that is
+not a finding. Slack and Telegram also answer to more phrases now, such as `in slack` and
+`telegram message`. Signed in, gateway up.
+
+- [ ] On the Skills page, **add Google Docs**. Ask the widget: `create a document in google docs called
+      wave 9 notes`. The Tasks page's plan for that task names `https://docs.google.com/document/` as
+      where it starts. **What would be a finding:** a plan that searches the web for Google Docs, or
+      names no Google Docs URL.
+- [ ] **Add Slack.** Ask the widget: `post good morning in slack in the general channel`. The plan uses
+      the Slack pack: it names `https://app.slack.com/` as where it starts. **What would be a finding:**
+      a plan with no Slack URL. (Before this branch, only `slack.com` brought the Slack pack in, so this
+      command did not.)
+- [ ] **Remove Google Docs and Slack**, then ask the Google Docs command again: Sonny plans it the
+      ordinary way, with nothing from the pack.
+
 ## 8. How to report back
 
 For each real finding, give me:

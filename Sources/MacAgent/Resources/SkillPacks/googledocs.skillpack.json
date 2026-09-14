@@ -8,6 +8,39 @@
   "signInURL": "https://docs.google.com/",
   "triggers": ["google docs", "docs.google.com"],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Create a document",
+      "startURL": "https://docs.google.com/document/",
+      "steps": [
+        "Open the Google Docs home screen.",
+        "Click Create, the plus button."
+      ],
+      "source": "https://support.google.com/docs/answer/49114?hl=en&co=GENIE.Platform%3DDesktop"
+    },
+    {
+      "title": "Find and replace text",
+      "startURL": "https://docs.google.com/document/",
+      "steps": [
+        "Open the document. To only search it, press cmd/ctrl + F.",
+        "Click Edit, then Find and replace.",
+        "Next to Find, type the word to find. To replace it, type the new word next to Replace with.",
+        "Click Next to go to the next time the word is used, or Prev to go back.",
+        "Click Replace to replace the highlighted word, or Replace all to replace it everywhere."
+      ],
+      "source": "https://support.google.com/docs/answer/62754?hl=en&co=GENIE.Platform%3DDesktop"
+    },
+    {
+      "title": "Add a comment",
+      "startURL": "https://docs.google.com/document/",
+      "steps": [
+        "Open the document.",
+        "Highlight the text to comment on.",
+        "In the toolbar, click Add comment.",
+        "Type the comment, then click Comment."
+      ],
+      "source": "https://support.google.com/docs/answer/65129?hl=en&co=GENIE.Platform%3DDesktop"
+    }
+  ]
 }
