@@ -31,9 +31,10 @@ git log --first-parent --merges --format='%h %cI %s' 65a50865 | grep 'from saura
 GitHub's own `mergedAt` for the two PRs gives the same two instants in UTC. **How the second move
 happened, and when inside that window, is not established**. `gh api users/exploringthroughbuilding`
 answers 404 (read 2026-09-13). The repository's events API holds only the latest 300 events: read at
-2026-09-13T23:04Z, `gh api --paginate 'repos/{owner}/{repo}/events?per_page=100'` reached back to
-2026-09-07T20:23:40Z, and a review reading the same day, later, reached back only to
-2026-09-08T21:24:05Z. That window moves forward as events arrive, so a later reading starts later
+2026-09-13T23:04:40Z, `gh api --paginate 'repos/{owner}/{repo}/events?per_page=100'` reached back to
+2026-09-07T20:23:40Z, and read by PR #243's review at 2026-09-14T00:36:04Z it reached back only to
+2026-09-08T21:24:05Z (each time is the modification time of the file that reading was saved to).
+That window moves forward as events arrive, so a later reading starts later
 still and can never reach 2026-09-02 or 2026-09-03. Nothing reachable from here says whether the
 repository was transferred or its organisation renamed. A merge subject records the namespace that was current when the PR merged, not the one
 current now, so all 116 on `main` today still read `from sauranshbhardwaj/...`
