@@ -1,44 +1,60 @@
-# SONNY-370 — every migration half declares its lock profile (-- @locks, -- @scans), the runner refuses
-# a half with no declaration at load (founders' option B, 2026-09-14), and the database suite measures
-# every half through the runner's own up and down — pg_locks and the per-transaction scan counter,
-# read inside the half's transaction — failing on any half whose declaration differs. The two cases the
-# ticket was filed for are held as tests: PR #171's first 0017, a scan of sonny.sign_in_code_issue under
-# ACCESS EXCLUSIVE, and PR #169's unconditional ledger ALTER on the runner's read path.
+# SONNY-370 — every migration half declares its lock profile (-- @locks, -- @scans) at its head, the
+# runner refuses a half with no declaration at load (founders' option B, 2026-09-14), and the database
+# suite measures every half through the runner's own up and down — pg_locks, and a scan line that is the
+# union of the per-transaction scan counter (table and indexes, the snapshot's and the catalog's) and the
+# weak relation locks the half holds — from empty tables and again with rows seeded, failing on any half
+# whose declaration differs. The two cases the ticket was filed for are held as tests: PR #171's first
+# 0017, a scan of sonny.sign_in_code_issue under ACCESS EXCLUSIVE, and PR #169's unconditional ledger
+# ALTER on the runner's read path. M5 to M7 are PR #250's fix round (review F1 and F3).
 #
 # SERVER HALF, DATABASE SUITE. Every path below is under server/, so scripts/mutate-all runs this plan
 # against `cd server && npx vitest run`, and only with DATABASE_URL set (WORKFLOW.md's weekly battery
-# starts the database). M2's killers need no database; M1, M3 and M4's all live in
-# migration-lock-profile.db.test.ts and skip without one, so without a database those three would read
-# as survivors nobody tested.
+# starts the database). M2's killers need no database; every other mutant's live in
+# migration-lock-profile.db.test.ts and skip without one, so without a database those would read as
+# survivors nobody tested.
 #
 # Not run on this branch (founder-triggered batteries, 2026-09-10): only `scripts/mutate <plan> --check`
-# was run. The killers below are the tests each mutant was written against, not a measurement — with
-# one exception, M3's shape, which was applied by hand on the branch before this plan existed (the
-# changelog entry carries that run and its SHA).
+# was run as a battery. The killers below are the tests each mutant was written against. Five were also
+# applied by hand, one at a time, and restored byte for byte: M3's shape before this plan existed, and
+# M1, M5, M6 and M7 in PR #250's fix round, each killed on assertions with no error-shaped failure (the
+# changelog entry carries those runs and their SHAs). **A mutant that breaks the SQL it edits is not a
+# kill**: the review's own M5 deleted two UNION ALL branches and left three bind parameters for a query
+# that now named one, so every measured half died on "bind message supplies 3 parameters" before any
+# assertion ran. M5 below keeps the query whole and changes what is counted.
 #
 # Intended killers:
-#   M1 — migration-lock-profile.db.test.ts: "refuses PR #171's first 0017: a scan of the sign-in table
-#        under ACCESS EXCLUSIVE", "measures the shipped 0017 as holding ACCESS EXCLUSIVE across its index
-#        build", and "finds each half's declaration true, or prints the lines that would be" (every
-#        half declaring a scan, 0017's up among them, then disagrees).
+#   M1 — migration-lock-profile.db.test.ts, six (measured by hand at 5bdb73dc): the declarations test on
+#        both passes, the shipped-0017 test, the five-halves test, the index-scan test and the PR #171
+#        test ("measures PR #171's first 0017 as a scan of the sign-in table under ACCESS EXCLUSIVE, …").
 #   M2 — migrate.load.test.ts: "refuses a migration with an up half that declares nothing, naming the
 #        file and the half" and the same for a down half. The missing-@locks and missing-@scans cases
 #        survive this mutant by design: the parser refuses a half-present declaration on its own, and
 #        this mutant leaves the parser's call in place.
 #   M3 — migration-lock-profile.db.test.ts: "holds no blocking lock on the runner's read path: status,
 #        and up with nothing pending".
-#   M4 — migration-lock-profile.db.test.ts: "finds each half's declaration true, or prints the lines
-#        that would be", "measures 0016 as the harmless shape: ACCESS EXCLUSIVE, and nothing scanned",
-#        the shipped-0017 test, the PR #171 test, the PR #169 control, and — in the direction that
-#        matters most — nothing else: the read-path test's expected [] would PASS under this mutant,
-#        which is why it is not listed and why the PR #169 control exists beside it.
+#   M4 — migration-lock-profile.db.test.ts: the declarations test on both passes, "measures 0016 as the
+#        harmless shape: ACCESS EXCLUSIVE, and nothing scanned", the shipped-0017 test, the PR #171 test,
+#        the PR #169 control, and — in the direction that matters most — nothing else: the read-path
+#        test's expected [] would PASS under this mutant, which is why it is not listed and why the
+#        PR #169 control exists beside it. Since the fix round the same line feeds the scan line's weak
+#        locks too, so the five-halves test joins them.
+#   M5 — "counts an index scan against its table, and still counts it after the half drops that index",
+#        alone (measured by hand at 5bdb73dc): every other scan in the suite is a table's own or is
+#        covered by a weak lock, which is why this test reads the counter half by itself.
+#   M6 — the declarations test on both passes and the five-halves test (measured by hand at 5bdb73dc):
+#        without the weak-lock half the scan line is the counter alone, which is the shape F1 found.
+#   M7 — the same index-scan test alone (measured by hand at 5bdb73dc), on its scan-then-drop half: the
+#        catalog as it stands still has a live index's scans, and only the snapshot has a dropped one's.
 
 >>> mutant M1 the scan check dropped: every half measures as scanning nothing, so a backfill under ACCESS EXCLUSIVE reads as 0016's shape
 >>> file server/src/db/lock-profile.ts
 >>> from
-  return { locks: await blockingLocksHeld(client, snapshot), scans: await tablesScannedSince(client, snapshot) };
+  const scans = new Set([
+    ...(await tablesScannedSince(client, snapshot)),
+    ...(await tablesLockedForReading(client, snapshot)),
+  ]);
 >>> to
-  return { locks: await blockingLocksHeld(client, snapshot), scans: [] };
+  const scans = new Set<string>();
 >>> end
 
 >>> mutant M2 a missing declaration accepted at load: the parser still runs, so only a half that declares nothing at all gets through
@@ -66,4 +82,27 @@
       WHERE pid = pg_backend_pid() AND locktype = 'relation' AND granted`,
 >>> to
       WHERE pid <> pg_backend_pid() AND locktype = 'relation' AND granted`,
+>>> end
+
+>>> mutant M5 index scans never counted against their table: the query still reads every index's count, and only a table's own scans are credited
+>>> file server/src/db/lock-profile.ts
+>>> from
+    if (Number(row.scans) > before && table !== undefined && ROW_KINDS.has(table.kind)) scanned.add(table.name);
+>>> to
+    if (row.oid === row.table_oid && Number(row.scans) > before && table !== undefined && ROW_KINDS.has(table.kind)) scanned.add(table.name);
+>>> end
+
+>>> mutant M6 the weak-lock half of the scan line dropped: the scan counter alone, which on empty tables misses a join's second table
+>>> file server/src/db/lock-profile.ts
+>>> from
+    ...(await tablesLockedForReading(client, snapshot)),
+>>> to
+>>> end
+
+>>> mutant M7 the snapshot's indexes not read: an index the half scanned and then dropped has left pg_index, and its scan is lost
+>>> file server/src/db/lock-profile.ts
+>>> from
+    else { indexes.push(oid); indexTables.push(relation.tableOid); }
+>>> to
+    else { /* the snapshot's indexes are not read */ }
 >>> end
