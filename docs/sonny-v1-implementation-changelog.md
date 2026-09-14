@@ -171,6 +171,92 @@ Next branch: feature/<name> (per roadmap above, or state the reordering and why)
 
 ## Entries
 
+### Branch: chore/migration-lock-profile-is-checked
+Status: complete
+Date: 2026-09-14
+Tickets: **SONNY-370**. Every migration half now states what it locks and what it scans. The runner refuses a half that does not, and the database suite measures every half and fails on any statement that is not true. The README's lock paragraph no longer promises microseconds. The founders chose option B on 2026-09-14: the runner refuses an undeclared half at load. Option C, `status` printing pending profiles, was declined. Discovered and filed: **SONNY-495**, a runner mode that applies a migration outside a transaction, which is what `CREATE INDEX CONCURRENTLY` and a batched backfill need. Not built here.
+Reviewed by: none yet at the time of writing. The PR is opened with this entry and a fresh review follows under `WORKFLOW.md` step 7.
+
+Spec sections covered: none. This is gateway operations tooling, and SONNY-370 is its contract.
+Files changed:
+- `server/src/db/lock-profile.ts` (new). It defines:
+  - `BLOCKING_MODES`, the four modes that conflict with ordinary traffic.
+  - `declaredLockProfile`, the parser. It returns undefined only when a half declares nothing, and refuses a declaration that is present but unreadable.
+  - `formatLockProfile` and `sameLockProfile`.
+  - `relationSnapshot`, `blockingLocksHeld`, `tablesScannedSince` and `measuredLockProfile`, the measurement. The snapshot refuses to run when `track_counts` is off.
+- `server/src/db/migrate.ts`:
+  - `MigrationObserver` and `runHalf`. `up` and `down` take an optional observer that wraps each half's SQL, and an observer that returns without running the SQL is refused.
+  - `refuseUndeclaredLockProfile`, called by `loadMigrations` on both halves (option B).
+- All 23 files under `server/src/db/migrations/` — **comment lines only**. The two declaration lines open the up half, and two more follow the `-- @rollback` marker for the down half. Every line was written from a measurement, not by hand, and no content hash moved (below).
+- `server/test/migration-lock-profile.test.ts` (new) — the parser: what reads and what is refused.
+- `server/test/migration-lock-profile.db.test.ts` (new):
+  - Every half is measured up and down through the real runner and must match its declaration.
+  - 0016 and the shipped 0017 are pinned.
+  - PR #171's first 0017 is a fixture.
+  - The runner's read path must hold no blocking lock, with PR #169's ledger SQL as the control.
+- `server/test/migrate.load.test.ts` — a fixture carrying both lines loads, and four refusals are pinned: a missing `@locks`, a missing `@scans`, and an up or a down half that declares nothing. Existing fixtures gained the lines.
+- `server/test/migrate.db.test.ts` — the failing-migration fixture gained the lines, and its rejection is now matched on the rolled-back wording (pitfall below).
+- `server/test/migration-content-hash.db.test.ts` — the `file()` helper writes the lines into both halves.
+- `server/test/schema.test.ts` — `migration-lock-profile.db.test.ts` added to the runner exemption list.
+- `server/README.md` — the lock paragraph is corrected, and a new section, *Every migration declares its lock profile, and the suite measures it*, is added.
+- `mutation/plans/chore/migration-lock-profile-is-checked.txt` (new).
+
+Tests, all measured at `122ce1ad`, the last commit touching `server/`. The two commits above it touch only `mutation/plans/` and this file, and `git diff --stat 122ce1ad <head> -- server` prints nothing at the head that merges. Each exit was read from a file, and every database run used a freshly created `sonny-gw-db-lane-370` (`-p 0:5432`), removed afterwards.
+- `npm run build` exits 0; `npm run typecheck` exits 0.
+- `npm test` exits 0: `Test Files  34 passed | 26 skipped (60)`, `Tests  929 passed | 478 skipped (1407)`. The skips are the database files without `DATABASE_URL`.
+- `npm run test:db` exits 0: `Test Files  60 passed (60)`, `Tests  1407 passed (1407)`.
+- The new and changed tests shown to run: `npx vitest run --reporter=verbose test/migrate.load.test.ts test/migration-lock-profile.test.ts test/migration-lock-profile.db.test.ts test/migrate.db.test.ts test/migration-content-hash.db.test.ts` with `DATABASE_URL` exits 0 with `Tests  61 passed (61)`, and no line of that log is marked skipped or failed.
+- **No applied migration's hash moved, measured with each tree's own loader.** Under option B the head's loader refuses the cut point's undeclared files, so a single loader cannot read both sides. The cut point's runner was built from `git archive 78264331 server` in a scratch directory and read its own files; the head's runner, built at `122ce1ad`, read its own. Result: `base 23 head 23 same 23 differ 0`. `git diff --quiet 78264331 122ce1ad -- server/src/db/migration-hash.ts` exits 0, so both runners hash the same way. Two controls fired: every file's up and down text differs between the trees (true), and appending `SELECT 1;` to a half moves its hash (true). The probe was a scratch script and is not committed.
+- **The PR #169 case, by hand, before the plan existed.** On the tree committed as `65243999` (before option B), with `if (rowCount === 0) {` in `applied()` made unconditional, `npx vitest run test/migration-lock-profile.db.test.ts` gave `Tests  1 failed | 6 passed (7)`. The one failure was "holds no blocking lock on the runner's read path". The change was reverted by hand.
+Mutation plan: `mutation/plans/chore/migration-lock-profile-is-checked.txt` (founder-triggered, not run on this branch). Four server-half mutants:
+- M1 drops the scan check.
+- M2 accepts a half with no declaration at load.
+- M3 restores PR #169's unconditional ledger `ALTER`.
+- M4 reads `pg_locks` for every backend except the migration's own.
+
+M1, M3 and M4 need `DATABASE_URL`. `scripts/mutate mutation/plans/chore/migration-lock-profile-is-checked.txt --check` exits 0 at `7b437590`, every mutant matching exactly once.
+
+Behavior added:
+- **Each migration half declares its lock profile in two comment lines.** `-- @locks` names every relation that existed before the migration and on which the half holds a lock ordinary traffic waits for. `ACCESS EXCLUSIVE` stalls reads; `SHARE`, `SHARE ROW EXCLUSIVE` and `EXCLUSIVE` stall writes. The strongest mode per relation is named, and a lock on an index is reported against its table. `-- @scans` names every pre-existing table the half reads through. Either line may say `none`. **A table on both lines is the stall that grows with the table.**
+- **The runner refuses, at load and on every command, a half missing either line**, naming the file and the half. It is the same shape as the `-- @rollback` refusal. A declaration that is present but unreadable is refused by the parser with the same naming.
+- **The database suite measures every half and fails on any difference.** The failure prints the two lines that would be true. The measurement runs inside the half's own transaction, through the observer `up` and `down` take, so what is measured is how the runner really applies the migration.
+- **The runner's read path is held to no blocking lock.** `status`, and `up` with nothing pending, are each run inside a transaction and their held locks read afterwards.
+
+Behavior preserved (required, no blanket claims):
+- `npm run migrate -- up`, `down` and `status` against the shipped migrations behave as before. Every shipped half declares, so none is refused, and `status` output is unchanged (option C declined). The CLI passes no observer, so `runHalf` runs each half's SQL exactly as `client.query(migration.up)` did.
+- Every environment's ledger still matches: no content hash moved (above). An environment that applied any of the 23 before this branch reports each of them exactly as before — `applied`, or `unverified` for a row older than the hash column — and never `CHANGED`.
+- The rollback refusal still fires first for a file with no `-- @rollback`. The two rollback tests in `migrate.load.test.ts` pass unchanged.
+- The transaction per migration and the half-failed rollback. `migrate.db.test.ts`'s failing-migration test now asserts the rolled-back wording and still passes.
+- The content-hash guard's whole suite, `migration-content-hash.db.test.ts`, 18 tests, through a helper whose only change is the declaration lines. Comments are outside the hash, so every before-and-after comparison is the same comparison.
+- The schema guard: `schema.test.ts` passes with one exemption entry added, for a file whose name says migrations.
+
+Architectural decisions / pitfalls discovered (required, write "none" if true):
+- **Declaration plus measurement, rather than a "metadata-only" rule, and the constraint forced it.** The ticket named three options. A rule that migrations must be metadata-only would refuse the shipped 0017, which measures as `-- @locks ACCESS EXCLUSIVE sonny.sign_in_code_issue` / `-- @scans sonny.sign_in_code_issue` because its index build runs under the lock its `ADD COLUMN` took. Applied SQL may not change, so that rule cannot be adopted. What remains is declaring the profile (the ticket's option 2) and holding the declaration true by measurement (option 3).
+- **The lock mode decides whether traffic stalls; the transaction decides how long.** This is SONNY-370's 2026-08-30 correction, and it is why a profile has two lines. A lock alone costs only the wait for it. A scan under that lock costs a full pass over the table.
+- **Measured from the database, never read off the SQL.** Keywords fail in both directions: `DROP INDEX` takes `ACCESS EXCLUSIVE` with no `ALTER TABLE`, and the ledger's `ADD COLUMN IF NOT EXISTS` took it while changing nothing. Locks come from `pg_locks WHERE pid = pg_backend_pid()`, read before COMMIT, where every relation lock the transaction took is still held.
+- **A scan counter, not a timing, and not rows.** `pg_stat_get_xact_numscans` counts a scan when it starts, so it answers on an empty table with no seeding. Measured on Postgres 17.11 in this lane's container on 2026-09-13, in one transaction per statement against an empty table with a primary key and one index:
+  - At least one scan: `CREATE INDEX`, an `UPDATE … FROM` backfill, `SET NOT NULL`, `ADD CONSTRAINT … CHECK` and `DELETE … WHERE id = …`.
+  - Three scans: `ALTER COLUMN … TYPE` and a volatile `DEFAULT`.
+  - None: `ADD COLUMN … NOT NULL DEFAULT 1`, `DROP INDEX`, `COMMENT ON COLUMN` and `INSERT … VALUES`.
+
+  The count is read as a delta from the start of the same transaction, because a backend flushes it only outside one. A timing would be a wall-clock bet in a suite. Row counts would need every table of every starting schema seeded.
+- **The measurement goes through the runner, not a copy of its transaction.** A harness that re-implemented `BEGIN; sql; COMMIT` would keep measuring that shape if the runner ever stopped applying a migration in one transaction, and stay green. That is `CLAUDE.md`'s gotcha about a held sample entering downstream of the mechanism it holds. The observer costs one optional parameter, which the CLI never passes.
+- **The README's "metadata-only, so microseconds" was false for four of the five migrations it named.** 0004 and 0005 each backfill `sonny.identity` with an `UPDATE`, and 0006 and 0014 each build an index over it, all under the `ACCESS EXCLUSIVE` their `ALTER` took. Only 0008 is metadata-only. That table is read on every authenticated request. The migrations have been harmless only because every one ran against an empty table, and a fresh environment's first deploy applies them the same way. The count of up halves declaring `ACCESS EXCLUSIVE` on `sonny.identity`: `for f in server/src/db/migrations/*.sql; do head -n1 "$f"; done | grep -cE 'ACCESS EXCLUSIVE sonny\.identity(,|$)'` gives 5 at `122ce1ad`. Without `(,|$)` it gives 6, the sixth being 0016's `sonny.identity_provider_user`. `head -q` does not exist on macOS; the loop is the form that works, and the `-q` form printed three silent zeros while this entry was being counted.
+- **Pitfall: option B can turn a fixture's rejection into a false pass.** `migrate.db.test.ts` asserted `up(client, dir)` rejects with `/0001_half_fails/`, then that neither the table nor the ledger row exists. Under B, an undeclared fixture is rejected at load with a message that also names the file, and every later assertion holds about a migration that never ran. This was measured on the tree committed as `122ce1ad`, with that fixture's four declaration lines removed. With the old regex, `npx vitest run test/migrate.db.test.ts -t 'rolls a failing migration back'` gave `Tests  1 passed | 8 skipped (9)`. With `/migration 0001_half_fails failed and was rolled back/` it gave `1 failed`, on the declaration message. So the assertion now names the runner's rolled-back wording, which only a migration that ran produces. **Any future refusal added to `loadMigrations` has the same reach: check every test that expects a rejection naming a file.**
+- **A lock held on a sequence is reported, as any pre-existing relation's is.** `0017`'s down half declares `ACCESS EXCLUSIVE sonny.sign_in_code_issue_issue_seq_seq`, taken when the rollback drops the identity column and its sequence with it. Which traffic that sequence lock stalls was not measured on this branch; the instrument reports it because it is a lock on a relation that existed before the half ran, and it does not special-case relation kinds other than indexes.
+
+Known limitations / deferred scope:
+- **The runner cannot tell a true declaration from a wrong one.** A present, wrong declaration is caught only by `npm run test:db` being run on the branch that adds it.
+- **Shapes, not durations.** A table on both lines means the stall lasts as long as that table is big. How long that is, the data an environment holds decides, and the check makes no claim about it.
+- **A scan is not always proportional.** `DELETE … WHERE id = …` counts as a scan, so the check errs toward declaring too much.
+- **Only relation locks.** A stall that holds no lock, such as a `pg_sleep` under `ACCESS EXCLUSIVE`, declares the lock, no scan, and waits anyway.
+- **The escapes remain unavailable.** `CREATE INDEX CONCURRENTLY` and a batched backfill need a migration outside a transaction; that is filed above and not built.
+- **The `lock_timeout` decision recorded in `server/README.md` is still owed before SONNY-126's first remote deploy.** It was never this ticket's.
+
+Open questions (required, write "none" if true): none. The one this branch raised — whether the runner refuses an undeclared half — was answered by the founders on 2026-09-14 (option B).
+
+Next branch: `chore/signal-guard-has-a-selftest-arm` (SONNY-367), directly above this one in wave 9's stack (SONNY-463).
+
 ### Branch: fix/outside-text-reaches-the-planner-as-untrusted
 Status: complete; PR #249's first fix round is done, the branch is rebased onto PR #244's final head, and a scoped delta pass by review-249 is owed
 Date: 2026-09-13 (rebased 2026-09-16)
