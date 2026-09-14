@@ -180,7 +180,7 @@ Tickets:
 - **SONNY-476 is not on this branch.** It was assigned here, stopped before any code because it needs `AgentViewModel.swift`, outside this branch's fence, and moved to its own branch, `fix/skill-packs-load-after-launch`, directly above this one. That was the founders' decision C of 2026-09-13, recorded on SONNY-476 together with an added rule: nothing plans before the catalogue has loaded.
 
 This is the second branch in wave 9's stack. It was cut from `chore/tooling-reads-fresh-main-and-records-catch-up` at `65a50865` while that branch was empty, and it rebases once onto that branch's final head after PR #243's review closes.
-Reviewed by: pending — the PR's fresh review has not run.
+Reviewed by: PR #245's fresh review at `7421d0ae` (posted on the PR, 2026-09-13), with nothing blocking. It raised one Low finding, F1: a claim in this entry that no refusal was lost, which is false for invented words. It also recorded three residuals — R-a, what the scan cannot see; R-b, what its `readers` assertion shows; R-c, the plan's header — and offered one mutant, X3. The coordinator routed all of it to one records round on this branch (SONNY-479). That round is `a1718d4f` (comment lines in code, and the plan) plus the docs commit carrying this entry, and the coordinator verifies it directly.
 
 Spec sections covered: none new. This branch changes which pack wording the loader refuses, and which catalogue the tests read. It is gating work for the pack lanes, and SONNY-452's design note already covers it.
 Files changed:
@@ -192,45 +192,58 @@ Files changed:
 - `mutation/plans/fix/skills-ready-for-the-catalogue.txt`, and this entry, with a dated correction inside `feature/skills`' entry below.
 
 (`git diff --name-only 65a50865 f6b99eb6`, six files, plus this commit's changelog.)
-Tests: **3383 in 245, exit 0, 8 known issues, at `f6b99eb6`**, twice.
-- **Without the extra pack:** `Test run with 3383 tests in 245 suites passed after 87.748 seconds with 8 known issues.`, on a clean tree.
-- **With a well-formed `asana.skillpack.json` added to `Sources/MacAgent/Resources/SkillPacks/`** (SONNY-481's acceptance): `… passed after 109.049 seconds with 8 known issues.` Before that run, `git status --porcelain` printed that one untracked file and nothing else, and the file was deleted afterwards.
-- **How each run was read:** the flagged command from `CLAUDE.md` was redirected to its own file and its exit written on the next line. `grep -cE 'recorded an issue'` and `grep -cE ' failed after'` over each log both → 0.
-- **Where the count comes from:** `main`'s 3381 in 245 (`feature/skills`' union figure) plus two tests (`git diff 65a50865 f6b99eb6 -- Tests | grep -cE '^\+\s*@Test'` → 2, and with `^-` → 0), in existing suites (`^\+\s*@Suite` → 0).
+Tests: **3383 in 245, exit 0, 8 known issues, at `a1718d4f`**, on a clean tree.
+- **The run:** `Test run with 3383 tests in 245 suites passed after 107.608 seconds with 8 known issues.` The flagged command from `CLAUDE.md` was redirected to its own file and its exit written on the next line. Over the log, `grep -cE 'recorded an issue'` → 0, `grep -cE ' failed after'` → 0 and `grep -cE 'recorded a known issue'` → 8.
+- **Where the count comes from:** `main`'s 3381 in 245 (`feature/skills`' union figure) plus two tests in existing suites. `git diff 65a50865 a1718d4f -- Tests | grep -cE '^\+\s*@Test'` → 2, the same with `^-` → 0, and `^\+\s*@Suite` → 0.
+- **Why it was re-run rather than carried.** PR #245's round (`a1718d4f`) changed comment lines only in `Sources/` and `Tests/`. The proof is the command `git diff -U0 7421d0ae a1718d4f -- Sources`, with added and removed lines kept and header and `//` lines dropped (`grep -E '^[+-]' | grep -vE '^(\+\+\+ |--- )' | grep -vE '^[+-][[:space:]]*//'`). It keeps 0 of 4 changed lines, and the same over `Tests` keeps 0 of 16. That filter was first shown to keep an executable line: a synthetic diff's `+        if let object = …` line, and 25 lines of the real code diff `65a50865..9764a84f`. But a comment still moves the tree, so the suite was run again.
+- **SONNY-481's acceptance was measured at `f6b99eb6`**, an ancestor of this head. Since then `Sources/` and `Tests/` have moved by comment lines only (above), and the run was not repeated at `a1718d4f`.
+  - Without the extra pack: `… 3383 tests in 245 suites passed after 87.748 seconds with 8 known issues.`
+  - With a well-formed `asana.skillpack.json` added to `Sources/MacAgent/Resources/SkillPacks/`: `… passed after 109.049 seconds with 8 known issues.` Before that run, `git status --porcelain` printed that one untracked file and nothing else, and the file was deleted afterwards.
+  - Both exited 0, with 0 issue lines.
 
-**Warnings: 0 at `f6b99eb6`** (`scripts/warnings`, exit 0, header `measured at : f6b99eb6 (clean)`, every file compiled).
+**Warnings: 0 at `a1718d4f`** (`scripts/warnings`, exit 0, header `measured at : a1718d4f (clean)`, every file compiled).
 
-**Carried to the head that carries this entry, not re-run.** This entry's commit changes only the changelog. Each path those figures depend on names the same object there as at `f6b99eb6`:
+**Carried from `a1718d4f` to the head that carries this entry, not re-run.** This entry's commit changes only the changelog. Each path the suite, warnings and plan figures depend on names the same object at both:
 
-| Path | Object at `f6b99eb6` |
+| Path | Object at `a1718d4f` |
 |---|---|
-| `Sources` | `8a773894` |
-| `Tests` | `96fafa2d` |
+| `Sources` | `808f36e8` |
+| `Tests` | `1b6bf3be` |
 | `Package.swift` | `fbbe36d7` |
 | `server` | `be97f308` |
 | `scripts` | `53903c8d` |
-| `mutation` | `31e68a95` |
+| `mutation` | `1c84e8a2` |
 
-`git rev-parse "f6b99eb6:${x}" "HEAD:${x}"` prints one hash twice for each. The three checks that read every tracked file or the changelog were re-run at that head instead; the PR body carries them.
+`git rev-parse "a1718d4f:${x}" "HEAD:${x}"` prints one hash twice for each. `scripts/changelog-order`, `scripts/no-attribution tree` and `npm run check:secrets` read the changelog or every tracked file, so they were re-run at that head instead.
 
-Mutation plan: mutation/plans/fix/skills-ready-for-the-catalogue.txt (founder-triggered, not run on this branch). `scripts/mutate mutation/plans/fix/skills-ready-for-the-catalogue.txt --check` → exit 0, at `f6b99eb6`, each mutant `1 match`:
+Mutation plan: mutation/plans/fix/skills-ready-for-the-catalogue.txt (founder-triggered, not run on this branch). `scripts/mutate mutation/plans/fix/skills-ready-for-the-catalogue.txt --check` → exit 0 at `a1718d4f`, all four mutants each `1 match`:
 - **X1**, the money context words stop reading plurals.
 - **X2**, the contextual objects stop reading plurals.
-- **R1**, the Command Center Skills suite reads the shipped folder again, so its exact rows pin today's packs. R1 was proved by hand once, because its only killer is new. Applied under `--filter 'SkillPackTests/onlyTheValidating|SkillsCommandCenterTests'` it gave `Test run with 7 tests in 2 suites failed after 0.566 seconds with 1 issue.`, the scan's `readers` holding both files. The Skills suite's own six tests passed under it. It was reverted with `git checkout --`.
+- **X3**, the plural lookup reads only a word's first two singular candidates. This is PR #245's review's mutant, and the plan gained it in that round. It guards the part of SONNY-479 that dropping `invoices` and `balances` from the lists relies on: every candidate is kept, and `invoices` needs its third.
+  - Proved by hand at `a1718d4f`, under `--filter 'SkillPackTests/aContextWordOrAContextualObjectInThePluralCountsAsItsSingularDoes'`: exit 1, `Test run with 1 test in 1 suite failed after 0.027 seconds with 1 issue.`, the issue naming `Update the account on the invoices. → nil` against `update + account`.
+  - Reverted with `git checkout --`. Afterwards `git diff` printed 0 bytes, `git status --porcelain` 0 lines, and `git hash-object` on the file equalled `git rev-parse HEAD:Sources/MacAgentCore/SkillPackContentRules.swift` (`df5b2d2f…`).
+- **R1**, the Command Center Skills suite reads the shipped folder again, so its exact rows pin today's packs.
+  - Proved by hand once on the tree then committed as `f6b99eb6`, because its only killer is new. Applied under `--filter 'SkillPackTests/onlyTheValidating|SkillsCommandCenterTests'` it gave `Test run with 7 tests in 2 suites failed after 0.566 seconds with 1 issue.`, the scan's `readers` holding both files.
+  - The Skills suite's own six tests passed under it. It was reverted with `git checkout --`.
 
-`feature/skills`' plan still anchors after the rule edit: `scripts/mutate mutation/plans/feature/skills.txt --check` → exit 0, thirty mutants each `1 match`, at `f6fe7853`, whose `Sources` tree is `f6b99eb6`'s (`git rev-parse f6fe7853:Sources f6b99eb6:Sources` → `8a773894…` twice).
+`feature/skills`' plan still anchors: `scripts/mutate mutation/plans/feature/skills.txt --check` → exit 0 at `a1718d4f`, thirty mutants each `1 match`.
 
 Behavior added:
 - **SONNY-479:** a pack flow naming a contextual object — a recipient, card, account, balance or amount — beside a money context word in the plural is refused exactly as with the singular. "Update the account at the banks." and "Update the balance in two currencies." no longer load.
 - **SONNY-481:** adding a well-formed pack to the shipped folder changes no test's result except the two tests that load and validate every shipped pack.
 
 Behavior preserved (required, no blanket claims):
-- **Every refusal the money rule made before still happens, and nothing it allowed is refused except the plural context words.** This was measured, not argued. A temporary test, deleted before any commit, compared the old lists and lookups (copied from `65a50865`) with the new ones on the tree committed as `9764a84f`. Its corpus was 14,720 generated texts: five verbs, each listed word and its one regular plural, four second objects and eight context phrases.
+- **For every English word, every refusal the money rule made before still happens, and nothing it allowed is refused except the plural context words.** (This said "every refusal" without the qualifier until PR #245's review, F1; the exception is below.) This was measured, not argued. A temporary test, deleted before any commit, compared the old lists and lookups (copied from `65a50865`) with the new ones on the tree committed as `9764a84f`. Its corpus was 14,720 generated texts: five verbs, each listed word and its one regular plural, four second objects and eight context phrases.
   - 226 texts are newly refused, and every one names banks, billings or currencies.
   - 0 texts that were refused now load.
   - 482 are refused either way, and now report the object under its singular (`update + card` rather than `update + cards`), which is what `aMoneyObjectInThePluralIsRefusedAsItsSingularIs` already required of money objects.
+  - That corpus never added `-es` to a removed plural, which is why it could not see F1's exception below.
   - The probe was not committed, so this is a reading at that tree and not a command to re-run.
-  - Removing the listed plurals from `moneyObjects` cannot change a result: each removed plural's singular sits earlier in the same list and is one of its candidates, so the singular always matched first.
+  - **Removing the listed plurals from `moneyObjects` changes a result only for a removed plural followed by `-es`, which no English word is.** (Narrowed by PR #245's review, F1: this said it "cannot change a result".)
+    - **Why the argument holds for every other word.** A removed plural is a candidate of a text word in only two ways: the word is that plural, or the word is that plural plus `-es`. When the word is the plural, its singular is a candidate too, and the singular sits earlier in the list, so it matches first.
+    - **The exception.** Plural plus `-es` gives candidates that include the plural but not its singular. `singularCandidates(of: "paymentses")` → `[paymentses, payments, paymentse]`. So "Add the paymentses." was refused as `add + payments` and now loads, and so does "Update the chargeses.".
+    - **Checked here with an optimized build of the rules file at `7421d0ae`**, whose code lines `a1718d4f` did not change (the comment-only proof under Tests): "Add the paymentses." and "Update the chargeses." both load. The review found the affected set is exactly the 13 removed plurals with `-es` added.
+    - **Across the dictionary, the review found 0 refusals lost.** It took every alphabetic headword in `/usr/share/dict/words` plus its regular plural, 467,292 words, and put each into three texts, 1,401,876 in all. Through both rules (built at `65a50865` and at `7421d0ae`), 0 were refused before and load now. 3 are newly refused — banks, billings and currencies. Those are the review's figures.
 - **Every existing money, credential, URL and trigger test is unchanged and green** in the runs above, including the money table in all four categories and `readingMoneyAndAnOrdinarySendOrTransferStillLoad`.
 - **The loader, its validation, the pack files and the catalogue are untouched.** `git diff --name-only 65a50865 f6b99eb6 -- Sources` names only `SkillPackContentRules.swift`.
 - **The two validating tests still read the whole shipped folder.** With the extra pack made malformed by an unknown `approval` field, `everyShippedPackLoadsAndEveryOneIsARowOfTheCommittedCatalogue` failed with `(catalogue.packs.count → 3) == (files.count → 4)`. That was on the tree then committed as `f6fe7853`.
@@ -270,7 +283,14 @@ The control is the same extraction printing each list's word count: 35, 5 and 11
 **Why a scan, and what it cannot see.** Moving the suite onto a fixture fixes today's pin, and nothing stops the next test from reading the folder again. That is exactly the mutant R1: on today's three packs, the Skills suite passes whether it reads the fixture or the folder. So `onlyTheValidatingTestsReadTheShippedPacksFolder` reads every Swift file under `Tests/` and requires `SkillPackTests.swift` to be the only file naming the folder, `SonnyResourceBundle` or `shippedPacksDirectory` outside a line comment.
 - Its held samples go through the same `readsTheShippedPacks(_:)` function as the files, so the sample's path is the files' path (`CLAUDE.md`'s held-sample gotcha).
 - Its control asserts the walk reached both files that matter.
-- It cannot see a path assembled from pieces, or a block comment naming the folder, which it would flag, in the safe direction.
+- **Its `readers == ["…SkillPackTests.swift"]` assertion does not show the validating tests read the folder** (PR #245's review, R-b). That file's own sample lines and `shippedPacksDirectory` satisfy it on their own. What shows the read is the validating tests' own count checks, `catalogue.packs.count == files.count` and `files.count >= 3`, and the malformed-pack control under Behavior preserved. The test's doc comment and the line above that assertion now say so.
+- **What it cannot see** (PR #245's review, R-a, for all but the first):
+  - a path assembled from pieces;
+  - a read of the built resource bundle (`Bundle(url:)` and its `resourceURL`), which is how `SonnyResourceBundle.skillPackCatalog()` itself reads the packs and names none of the three tokens;
+  - a call to `AgentViewModel.atItsRealStoreLocations()`, which reads the packs through `SonnyResourceBundle`;
+  - a CRLF file whose first line is a line comment. `"\r\n"` is one Swift `Character`, so `split(separator: "\n")` never splits the file, and it reads as one comment line (`git ls-files -z Tests Sources | xargs -0 grep -lI $'\r' | wc -l` → 0 today, per the review);
+  - a pinning test added inside `SkillPackTests.swift`, since the exemption is that whole file, not its two validating tests.
+- **Where it errs in the safe direction:** a line inside a block comment that names the folder, or a code line with a trailing `//` comment, is flagged.
 
 **The loader's cost at catalogue size, measured for SONNY-476 and handed to that branch.** 470 Notion-sized packs take **282.7 ms** in `SkillPackCatalog.load(from:)`: median of 21 runs, min 276.5, max 327.1, of which the money and credential rules take 222.8 ms. Today's three shipped packs take 1.4 ms.
 - **This is the loader alone, not the launch path.** SONNY-476's decision names it that way: that branch's "before" and "after" are the main-thread time `atItsRealStoreLocations()` spends on packs, a different instrument.
@@ -281,7 +301,7 @@ The control is the same extraction printing each list's word count: 35, 5 and 11
 Known limitations / deferred scope:
 - **Launch-time validation cost is SONNY-476**, on `fix/skill-packs-load-after-launch` by the founders' decision C. It is not deferred by this branch: the founders moved it, and it still merges before any pack branch because the stack merges bottom-up.
 - **The money rule's own limits stand as `feature/skills`' entry lists them**, with the correction above: an unlisted verb, a contextual object with no money word, `monies`, a phrase listed only in the plural written in the singular, wording neither list names, and spellings outside first-party writing.
-- **The scan's blind spot:** a path assembled from pieces.
+- **The scan's blind spots:** a path assembled from pieces, a read of the built resource bundle, a call to `atItsRealStoreLocations()`, a CRLF file whose first line is a line comment, and a pinning test inside `SkillPackTests.swift` itself. None of them evades anything today.
 
 Open questions (required, write "none" if true): none.
 
