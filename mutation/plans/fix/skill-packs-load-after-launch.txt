@@ -1,0 +1,138 @@
+# SONNY-476 — the Skills catalogue loads after launch, and nothing plans without it. Each mutant
+# breaks one property the branch claims. Swift half only.
+#
+# The killers live in SkillsCommandCenterTests (Tests/MacAgentTests/MemoryCommandCenterTests.swift).
+# L8 to L11 were added or re-anchored in PR #246's fix round. L10 and L11 make a wait never end, so
+# their killers wait under a backstop and record a second issue in undeclared wording once the wait
+# is stuck (CLAUDE.md's SONNY-259 rule); each of those two kills takes the backstop's thirty seconds.
+
+>>> mutant L1 the load runs on the main thread again, inside the task
+>>> file Sources/MacAgent/AgentViewModel.swift
+>>> from
+            let catalogue = await Task.detached(priority: .userInitiated) { load() }.value
+>>> to
+            let catalogue = load()
+>>> end
+
+>>> mutant L2 the shipping construction reads the catalogue inline again and starts no load
+>>> file Sources/MacAgent/AgentViewModel.swift
+>>> from
+            accountIdentity: accountIdentity,
+            whitelist: whitelist
+        )
+        // The packs the app ships, read from its own resource bundle (SONNY-452) — after the view
+        // model exists rather than as an argument to it, so the main thread only starts the load
+        // (SONNY-476). It is started here, before this returns, so no run can begin before a planner
+        // has a load to wait for.
+        viewModel.loadSkillPackCatalogue { SonnyResourceBundle.skillPackCatalog() }
+        return viewModel
+>>> to
+            accountIdentity: accountIdentity,
+            skillPackCatalog: SonnyResourceBundle.skillPackCatalog(),
+            whitelist: whitelist
+        )
+        return viewModel
+>>> end
+
+>>> mutant L3 a plan skips the wait for a load still in flight
+>>> file Sources/MacAgent/AgentViewModel.swift
+>>> from
+            await Self.waitUntilLandedOrStopped(load)
+            try Task.checkCancellation()
+>>> to
+            try Task.checkCancellation()
+>>> end
+
+>>> mutant L4 a typed command's planner is made at once, without the wait
+>>> file Sources/MacAgent/AgentViewModel.swift
+>>> from
+                    planner: plannerAfterTheSkillsCatalogue(
+                        for: backendTaskContext(recordingPolicy: taskRecordingPolicy)
+                    ),
+>>> to
+                    planner: makePlanner(
+                        backendTaskContext(recordingPolicy: taskRecordingPolicy),
+                        taskUsageRecorder
+                    ),
+>>> end
+
+>>> mutant L5 a delegated instruction's planner is made at once, without the wait
+>>> file Sources/MacAgent/AgentViewModel.swift
+>>> from
+            planner: plannerAfterTheSkillsCatalogue(
+                // A delegated instruction is planned under the run it belongs to — same task id,
+                // same retention answer — because it is the same task. `makeDelegationRunner`'s
+                // whole argument is that a delegated command meets what a typed one would, and that
+                // includes waiting for the Skills catalogue (SONNY-476).
+                for: backendTaskContext(recordingPolicy: taskRecordingPolicy)
+            ),
+>>> to
+            planner: makePlanner(
+                backendTaskContext(recordingPolicy: taskRecordingPolicy),
+                taskUsageRecorder
+            ),
+>>> end
+
+>>> mutant L6 the added skills are not refreshed after the load, so the planner keeps the launch's empty guidance
+>>> file Sources/MacAgent/AgentViewModel.swift
+>>> from
+            skillPackCatalog = catalogue
+            refreshAddedSkills()
+            skillPackCatalogueLoad = nil
+>>> to
+            skillPackCatalog = catalogue
+            skillPackCatalogueLoad = nil
+>>> end
+
+>>> mutant L7 the load's handle never clears, so every later plan waits and logs it
+>>> file Sources/MacAgent/AgentViewModel.swift
+>>> from
+            refreshAddedSkills()
+            skillPackCatalogueLoad = nil
+        }
+>>> to
+            refreshAddedSkills()
+        }
+>>> end
+
+>>> mutant L8 a stop that ends the wait is not checked, so a stopped run makes its planner
+>>> file Sources/MacAgent/AgentViewModel.swift
+>>> from
+            await Self.waitUntilLandedOrStopped(load)
+            try Task.checkCancellation()
+>>> to
+            await Self.waitUntilLandedOrStopped(load)
+>>> end
+
+>>> mutant L9 the shipping construction reads the catalogue on the main thread and hands the load a finished value
+>>> file Sources/MacAgent/AgentViewModel.swift
+>>> from
+        viewModel.loadSkillPackCatalogue { SonnyResourceBundle.skillPackCatalog() }
+>>> to
+        let shippedPacks = SonnyResourceBundle.skillPackCatalog()
+        viewModel.loadSkillPackCatalogue { shippedPacks }
+>>> end
+
+>>> mutant L10 the wait ignores a stop again and ends only when the load lands
+>>> file Sources/MacAgent/AgentViewModel.swift
+>>> from
+        let (untilLanded, landed) = AsyncStream.makeStream(of: Never.self)
+        Task {
+            await load.value
+            landed.finish()
+        }
+        for await _ in untilLanded {}
+>>> to
+        await load.value
+>>> end
+
+>>> mutant L11 the wait never ends when the load lands, only when the waiter is stopped
+>>> file Sources/MacAgent/AgentViewModel.swift
+>>> from
+        Task {
+            await load.value
+            landed.finish()
+        }
+>>> to
+        _ = landed
+>>> end
