@@ -243,10 +243,20 @@ public struct WebResearchMarkdownCapabilityAdapter: CapabilityAdapter {
         log(.summarize, "Saved web research Markdown")
 
         let summary = summary(for: spec, sourceCount: pages.count, skippedSources: skippedSources)
+        // **Outside-authored only when the sentence names a URL a search provider chose** (SONNY-491):
+        // a search's skipped sources are results someone else published. Named URLs the user or the
+        // plan supplied, and a search with nothing skipped, quote nothing from outside.
+        let summaryProvenance: StoredTaskResult.Provenance
+        if case .search = spec.input, !skippedSources.isEmpty {
+            summaryProvenance = .outsideAuthored
+        } else {
+            summaryProvenance = .codeAuthored
+        }
         return AgentRunResult(
             plan: resolvedPlan,
             previews: previews,
             summary: summary,
+            summaryProvenance: summaryProvenance,
             suggestions: suggestions(for: spec.outputURL)
         )
     }

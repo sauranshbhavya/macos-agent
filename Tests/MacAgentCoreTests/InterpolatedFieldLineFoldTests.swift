@@ -1,4 +1,5 @@
 import Foundation
+import MacAgentTestSupport
 import Testing
 @testable import MacAgentCore
 
@@ -680,8 +681,10 @@ struct InterpolatedFieldLineFoldTests {
                 ),
                 createdAt: Date(timeIntervalSince1970: 0)
             )
-            let lines = scalarLines(of: context.plannerContextText)
-            #expect(lines.count == 8, "\(lineBreak.name) made the block \(lines.count) lines")
+            let lines = scalarLines(of: context.plannerContextText(delimiters: fixedTagBoundary))
+            // Nine trusted lines and, since SONNY-491 moved the result out of the trusted block, three
+            // observed ones: its opening marker, `Result:`, its closing marker.
+            #expect(lines.count == 12, "\(lineBreak.name) made the message \(lines.count) lines")
             #expect(
                 lines.filter { hasScalarPrefix($0, "Previous command:") }.count == 1,
                 "\(lineBreak.name) forged a Previous command: line"

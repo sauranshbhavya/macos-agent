@@ -288,7 +288,10 @@ struct UntrustedContentBoundaryTagTests {
             minting == [
                 "UntrustedContentBoundary.swift": 1,
                 "VisionSessionPromptBuilder.swift": 1,
-                "WebResearchSynthesizer.swift": 1
+                "WebResearchSynthesizer.swift": 1,
+                // The planner's `messages` default argument (SONNY-343): drawn once per request,
+                // after the prior task's record exists — the same per-prompt shape as the two above.
+                "OpenAIPlanner.swift": 1
             ],
             """
             forOnePrompt is minted in \(minting.sorted { $0.key < $1.key }.map { "\($0.key)×\($0.value)" }) \
@@ -387,6 +390,16 @@ struct UntrustedContentBoundaryTagTests {
             delimiters: boundary
         )
         #expect(prompt.contains(boundary.segmentTagRule))
+
+        // The planner's prior-task message is the third prompt that wraps content (SONNY-343), and
+        // its system message declares that message's four markers under the same tag.
+        let plannerSystem = OpenAIPlanner.systemPrompt(
+            command: "remind me before the standup",
+            skillGuidance: .none,
+            priorTaskDelimiters: boundary
+        )
+        #expect(plannerSystem.hasSuffix("\n\n" + PriorTaskContext.segmentTagRule(boundary)), "the planner dropped the tag rule")
+
         // The rule's own line still opens no segment once it is inside the prompt.
         let ruleLines = scalarLines(of: prompt).filter { $0.contains(boundary.tag) && !$0.hasPrefix("UNTRUSTED") && !$0.hasPrefix("TRUSTED") }
         #expect(ruleLines.count == 1, "\(ruleLines.count) non-boundary lines carry the tag")

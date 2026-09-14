@@ -314,7 +314,7 @@ struct UntrustedContentBoundaryScalarMatchingTests {
                 ),
                 createdAt: Date(timeIntervalSince1970: 0)
             )
-            let text = context.plannerContextText
+            let text = context.plannerContextText(delimiters: fixedTagBoundary)
             let closing = scalarLines(of: text).filter { hasScalarPrefix($0, closingDelimiter) }.count
             #expect(closing == 1, "\(forgery.label): \(closing) closing lines")
 
@@ -336,7 +336,7 @@ struct UntrustedContentBoundaryScalarMatchingTests {
                 outcome: PriorTaskOutcome(status: .completed, summary: forged),
                 createdAt: Date(timeIntervalSince1970: 0)
             )
-            let text = context.plannerContextText
+            let text = context.plannerContextText(delimiters: fixedTagBoundary)
             let bare = scalarOccurrences(of: delimiter, in: text)
             let bracketed = scalarOccurrences(of: "[escaped prior-task delimiter: \(delimiter)]", in: text)
             #expect(bare - bracketed == 1, "\(delimiter): \(bare) occurrences, \(bracketed) escaped")
@@ -368,7 +368,7 @@ struct UntrustedContentBoundaryScalarMatchingTests {
                 ),
                 createdAt: Date(timeIntervalSince1970: 0)
             )
-            let lines = scalarLines(of: context.plannerContextText)
+            let lines = scalarLines(of: context.plannerContextText(delimiters: fixedTagBoundary))
             let commandLines = lines.filter { hasScalarPrefix($0, "Previous command:") }.count
             #expect(commandLines == 1, "\(label): \(commandLines) command lines")
         }

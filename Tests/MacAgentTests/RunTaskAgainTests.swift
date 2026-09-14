@@ -308,7 +308,7 @@ final class RunAgainRecordingPlanner: Planning, @unchecked Sendable {
 
     func plan(command: String, priorTaskContext: PriorTaskContext?) async throws -> AgentPlan {
         commands.append(command)
-        contextTexts.append(priorTaskContext?.plannerContextText)
+        contextTexts.append(priorTaskContext?.plannerContextText(delimiters: .forOnePrompt()))
         return AgentPlan(
             summary: Self.planSummary,
             requiresConfirmation: false,

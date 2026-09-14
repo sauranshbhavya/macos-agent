@@ -185,10 +185,66 @@ struct OpenAIPlannerTests {
         let messages = try #require(try recorded.only.json["messages"] as? [[String: Any]])
         #expect(messages.count == 3)
         #expect(messages.map { $0["role"] as? String } == ["system", "user", "user"])
-        #expect(messages[1]["text"] as? String == context.plannerContextText)
-        #expect((messages[1]["text"] as? String)?.contains("TRUSTED_PRIOR_TASK_CONTEXT_BEGIN") == true)
-        #expect((messages[1]["text"] as? String)?.contains("MacAgentDemo") == true)
+        let contextText = try #require(messages[1]["text"] as? String)
+        let segments = try #require(PriorTaskMessageSegments(message: contextText))
+        let boundary = try #require(UntrustedContentBoundary.Delimiters(tag: segments.tag))
+        // The message is the context rendered under the request's own tag, byte for byte.
+        #expect(contextText == context.plannerContextText(delimiters: boundary))
+        #expect(segments.boundariesAreIntact)
+        #expect(segments.observedOccurrences(of: "MacAgentDemo") > 0)
         #expect(messages[2]["text"] as? String == "use ~/Documents/MacAgentDocs instead")
+    }
+
+    /// **SONNY-343: the tag is declared in the system message, after the fixed prompt, and the fixed
+    /// prompt does not move.** The declaration names the four markers under the same tag the prior-task
+    /// message wears — a declaration naming one tag over a message wearing another would declare a
+    /// boundary that does not exist and leave the real one undeclared.
+    ///
+    /// The prefix half is what SONNY-343 asked to be priced: the fixed prompt is the largest static
+    /// block the product sends, and it stays byte for byte the start of every system message, so a
+    /// per-request tag costs a cached prefix nothing.
+    @Test
+    func thePriorTaskTagIsDeclaredAfterTheFixedPromptAndTheFixedPromptIsUnchanged() async throws {
+        let fixture = SignedInBackendFixture()
+        let recorded = RecordedBackendRequests()
+        fixture.register { request in
+            recorded.append(request)
+            return ModelRouteFixtures.reply(
+                ModelRouteFixtures.textRouteJSON(outputText: openAppPlanJSON)
+            )
+        }
+        defer { fixture.unregister() }
+
+        let context = PriorTaskContext(
+            command: "what's on my calendar",
+            outcome: PriorTaskOutcome(status: .completed, summary: "Today: 09:00 Standup.", provenance: .outsideAuthored),
+            createdAt: Date(timeIntervalSince1970: 2_000)
+        )
+        let planner = Self.planner(fixture)
+        _ = try await planner.plan(command: "remind me ten minutes before the standup", priorTaskContext: context)
+        _ = try await planner.plan(command: "remind me ten minutes before the standup", priorTaskContext: context)
+        _ = try await planner.plan(command: "Open Safari")
+
+        var bodies: [[[String: Any]]] = []
+        for request in recorded.all {
+            bodies.append(try #require(try request.json["messages"] as? [[String: Any]]))
+        }
+        #expect(bodies.count == 3)
+        var tags: [String] = []
+        for messages in bodies.prefix(2) {
+            let system = try #require(messages[0]["text"] as? String)
+            let contextText = try #require(messages[1]["text"] as? String)
+            let segments = try #require(PriorTaskMessageSegments(message: contextText))
+            let boundary = try #require(UntrustedContentBoundary.Delimiters(tag: segments.tag))
+            let fixed = OpenAIPlanner.systemPrompt(toolRegistry: .default)
+            #expect(system == fixed + "\n\n" + PriorTaskContext.segmentTagRule(boundary))
+            #expect(system.hasPrefix(fixed))
+            tags.append(segments.tag)
+        }
+        // A fresh tag per request, never pinned across them.
+        #expect(tags.count == 2 && tags[0] != tags[1], "tags: \(tags)")
+        // A request with no prior task declares nothing, because it has no segment to declare.
+        #expect(bodies[2][0]["text"] as? String == OpenAIPlanner.systemPrompt(toolRegistry: .default))
     }
 
     @Test
@@ -219,12 +275,12 @@ struct OpenAIPlannerTests {
         let messages = try #require(try recorded.only.json["messages"] as? [[String: Any]])
         #expect(messages.count == 3)
         let contextText = try #require(messages[1]["text"] as? String)
-        #expect(contextText.contains("Previous command: find the 3 largest files in ~/Desktop/SomeFolder"))
+        let segments = try #require(PriorTaskMessageSegments(message: contextText))
+        #expect(segments.trustedLines.contains("Previous command: find the 3 largest files in ~/Desktop/SomeFolder"))
         // Reworded by SONNY-150 to state the fact without a cause — see `PriorTaskContext`.
-        #expect(contextText.contains("Previous plan summary: - not recorded"))
-        #expect(contextText.contains(
-            "Previous outcome: failed - The folder ~/Desktop/SomeFolder could not be scanned."
-        ))
+        #expect(segments.trustedLines.contains("Previous plan summary: - not recorded"))
+        #expect(segments.trustedLines.contains("Previous outcome: failed"))
+        #expect(segments.observedLines == ["Result: The folder ~/Desktop/SomeFolder could not be scanned."])
         #expect(messages[2]["text"] as? String == "use ~/Documents instead")
     }
 
@@ -662,7 +718,7 @@ struct OpenAIPlannerTests {
 
 /// The plan the stub answers with. File-level rather than a member, because the suite is
 /// `@MainActor` and the stub handlers are `@Sendable` closures that run on URLSession's threads.
-private let openAppPlanJSON = #"{"summary":"Open Safari.","requiresConfirmation":false,"steps":[{"id":"open","operation":"open_app","description":"Open Safari.","inputPath":null,"outputPath":null,"count":null,"targetURL":null,"appName":"Safari","question":null,"mediaProvider":null,"mediaTitle":null,"mediaArtist":null,"contextSource":null,"routineName":null,"routineSteps":null,"workspaceName":null,"workspaceApps":null,"workspaceURLs":null,"sourceURLs":null,"searchQuery":null,"draftTitle":null,"draftContent":null,"shortcutName":null,"shortcutInput":null}]}"#
+let openAppPlanJSON = #"{"summary":"Open Safari.","requiresConfirmation":false,"steps":[{"id":"open","operation":"open_app","description":"Open Safari.","inputPath":null,"outputPath":null,"count":null,"targetURL":null,"appName":"Safari","question":null,"mediaProvider":null,"mediaTitle":null,"mediaArtist":null,"contextSource":null,"routineName":null,"routineSteps":null,"workspaceName":null,"workspaceApps":null,"workspaceURLs":null,"sourceURLs":null,"searchQuery":null,"draftTitle":null,"draftContent":null,"shortcutName":null,"shortcutInput":null}]}"#
 
 /// The shipping app's planner factory (SONNY-132), migrated from
 /// `PlannerProviderRegistryTests.shippedRegistryOffersOpenAIAsDefaultWithCerebrasAsTheAlternate`.
