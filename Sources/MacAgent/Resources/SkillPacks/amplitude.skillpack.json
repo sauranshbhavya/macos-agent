@@ -6,7 +6,7 @@
   "category": "analytics_monitoring",
   "summary": "Product analytics platform.",
   "signInURL": "https://app.amplitude.com/login",
-  "triggers": ["amplitude analytics", "amplitude dashboard", "amplitude chart", "amplitude cohort", "open amplitude", "amplitude.com"],
+  "triggers": ["amplitude analytics", "amplitude dashboard", "amplitude cohort", "open amplitude", "amplitude.com"],
   "sections": [],
   "depth": "deep",
   "flows": [
@@ -35,7 +35,7 @@
       "title": "Add events to a chart",
       "startURL": "https://app.amplitude.com/",
       "steps": [
-        "In the chart's Events module, at the top left, click Add Event or Metric. Amplitude lists the available events, and a chart can hold up to 10.",
+        "In the chart's Events module, click Add Event or Metric. Amplitude lists the available events, and a chart can hold up to 10.",
         "Search for the event. If the exact name is unknown, change the operator to *(glob match) and use a wildcard such as *chart*.",
         "To narrow an event, add a Filter by condition on an event or user property. To break the results out by a property, use Group-by instead."
       ],

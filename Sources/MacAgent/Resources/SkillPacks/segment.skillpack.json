@@ -28,7 +28,7 @@
         "From the workspace, click Add destination. It is on the Connections home page, the Destinations list and each Source overview page.",
         "Search for the destination in the Catalog and click its tile, then click Configure on the summary page.",
         "Choose which source sends data to it, and click Confirm source.",
-        "In the Connection Settings, fill in the required fields. If needed, click the toggle to enable the destination so it starts receiving data."
+        "In the Connection Settings that appear, enter any required fields. Segment's page says these might be a key or token issued by the destination tool, an account ID, or a prompt to log in to that tool. If needed, click the toggle to enable the destination so it starts receiving data."
       ],
       "source": "https://www.twilio.com/docs/segment/getting-started/05-data-to-destinations"
     },

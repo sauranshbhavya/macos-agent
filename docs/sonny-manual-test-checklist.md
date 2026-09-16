@@ -5052,9 +5052,11 @@ it, now that the packs arrive after launch.
 
 ### Developer, data, design and people sites carry task flows (new 2026-09-14, SONNY-485)
 
-Thirty more packs now carry task flows, each step taken from the site's own help page: GitHub, GitLab,
-Figma, Miro, Vercel, Cloudflare, Sentry, Datadog, Airtable, Supabase, Greenhouse, Lattice and the rest
-of the developer, analytics, data, design, account and hiring sites the founders named. These rows use
+Twenty-eight more packs now carry task flows, each step taken from the site's own help page: GitHub,
+GitLab, Figma, Miro, Vercel, Cloudflare, Sentry, Datadog, Airtable, Supabase, Greenhouse and the rest
+of the developer, analytics, data, design, account and hiring sites the founders named. Lattice and
+Metabase stay as they were, with no flows, because a person's own Lattice or Metabase does not live on
+the address the pack starts from (review-253's finding 1, founders' decision A). These rows use
 two of them in a real command. Signed in, gateway up. Nothing here needs you to finish the task: stop
 at the first approval Sonny asks for.
 

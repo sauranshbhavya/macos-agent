@@ -6,7 +6,7 @@
   "category": "design",
   "summary": "Online whiteboard for team collaboration.",
   "signInURL": "https://miro.com/login",
-  "triggers": ["miro board", "miro boards", "in miro", "open miro", "miro.com"],
+  "triggers": ["miro board", "miro boards", "open miro", "miro.com"],
   "sections": [],
   "depth": "deep",
   "flows": [

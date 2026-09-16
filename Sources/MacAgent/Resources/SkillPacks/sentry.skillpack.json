@@ -6,7 +6,7 @@
   "category": "analytics_monitoring",
   "summary": "Error tracking and performance monitoring.",
   "signInURL": "https://sentry.io/auth/login/",
-  "triggers": ["sentry issue", "sentry issues", "sentry alert", "sentry project", "open sentry", "sentry.io"],
+  "triggers": ["sentry issue", "sentry issues", "sentry project", "sentry.io"],
   "sections": [],
   "depth": "deep",
   "flows": [
