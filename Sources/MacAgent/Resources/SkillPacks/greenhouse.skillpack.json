@@ -14,7 +14,7 @@
       "title": "Create a job",
       "startURL": "https://www.greenhouse.com/",
       "steps": [
-        "Open Greenhouse's sign-in page, https://app.greenhouse.io/users/sign_in, and sign in to Greenhouse Recruiting.",
+        "The steps below are in Greenhouse Recruiting, which a signed-in person reaches at https://app.greenhouse.io/users/sign_in.",
         "In Greenhouse Recruiting, click the Add button at the top of the page and select Create a Job from the drop-down menu.",
         "Select Copy an Existing Job, Sample Job or Blank Job.",
         "Complete the steps of the job setup flow, then click Finish. The job's dashboard opens.",
@@ -26,7 +26,7 @@
       "title": "Add a candidate",
       "startURL": "https://www.greenhouse.com/",
       "steps": [
-        "Open Greenhouse's sign-in page, https://app.greenhouse.io/users/sign_in, and sign in to Greenhouse Recruiting.",
+        "The steps below are in Greenhouse Recruiting, which a signed-in person reaches at https://app.greenhouse.io/users/sign_in.",
         "In Greenhouse Recruiting, hover over Add at the top of the page and click Add a Candidate.",
         "Select the Job for the candidate and, if needed, the Initial Stage.",
         "Enter the candidate's information; required fields are marked with an asterisk. Dragging their resume into the top left corner fills in some fields automatically.",
@@ -38,7 +38,7 @@
       "title": "Add a prospect",
       "startURL": "https://www.greenhouse.com/",
       "steps": [
-        "Open Greenhouse's sign-in page, https://app.greenhouse.io/users/sign_in, and sign in to Greenhouse Recruiting.",
+        "The steps below are in Greenhouse Recruiting, which a signed-in person reaches at https://app.greenhouse.io/users/sign_in.",
         "In Greenhouse Recruiting, hover over Add at the top of the page and click Add a Candidate.",
         "Select the Prospect tab at the top of the page. A prospect has not applied, and can be added to several jobs, departments or offices.",
         "Fill in the details the same way as for a candidate, then click Add this candidate."
