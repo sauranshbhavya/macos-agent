@@ -96,33 +96,46 @@ public enum CalendarDay {
         }
     }
 
-    /// A time and a date with no word relative to today: `15:06 on Sunday 13 September`.
+    /// A time and a date with no word relative to today, year included:
+    /// `15:06 on Sunday, 13 September 2026`.
     ///
     /// **What an approval panel says, and why it is not `spokenName`.** An approval is assessed again
     /// at every gate, and "today" read before midnight is "yesterday" after it, so a panel line built
     /// from a relative word would read differently at two gates of one run. This reads the same at
     /// every gate for a pinned instant.
+    ///
+    /// **Why the year is on it** (PR #244's rebase round, from the scoped pass's note that a reminder
+    /// may be a year ahead). A reminder's day may be written as `YYYY-MM-DD` in any year:
+    /// `startOfDay(named:)` refuses an impossible date and nothing bounds a dated day to the year
+    /// ahead, the way `ReminderDue.maxMinutesFromNow` bounds minutes. So a planner that writes
+    /// `2027-09-13` for this Sunday pins a reminder a year out, and without the year the panel reads
+    /// "Monday, 13 September" — a different weekday as the only trace, on the one surface that exists
+    /// so the user can see what the model got wrong. The year is the part of a date a model guesses
+    /// (this file's header) and the part the panel could not otherwise show. `dayName(of:calendar:)`
+    /// stays without it: the read's "Calendar for …" line and a result's "on Friday 18 September"
+    /// name a day the user asked for by phrase, and a read asks nothing.
     public static func absoluteName(of date: Date, calendar: Calendar) -> String {
-        "\(clockTime(of: date, calendar: calendar)) on \(dayName(of: date, calendar: calendar))"
+        "\(clockTime(of: date, calendar: calendar)) on \(localized(date, template: "EEEEdMMMMy", calendar: calendar))"
     }
 
-    /// A date with no word relative to today: `Sunday 13 September`.
+    /// A date with no word relative to today and no year: `Sunday 13 September`.
     public static func dayName(of date: Date, calendar: Calendar) -> String {
-        let formatter = DateFormatter()
-        formatter.calendar = calendar
-        formatter.locale = calendar.locale ?? Locale.current
-        formatter.timeZone = calendar.timeZone
-        formatter.setLocalizedDateFormatFromTemplate("EEEEdMMMM")
-        return formatter.string(from: date)
+        localized(date, template: "EEEEdMMMM", calendar: calendar)
     }
 
     /// A clock time in the calendar's own locale, as a list line or a reminder sentence shows it.
     public static func clockTime(of date: Date, calendar: Calendar) -> String {
+        localized(date, template: "jmm", calendar: calendar)
+    }
+
+    /// `date` spelled the way the calendar's own locale spells `template`'s fields, in the calendar's
+    /// zone — the one formatter the three spellings above share.
+    private static func localized(_ date: Date, template: String, calendar: Calendar) -> String {
         let formatter = DateFormatter()
         formatter.calendar = calendar
         formatter.locale = calendar.locale ?? Locale.current
         formatter.timeZone = calendar.timeZone
-        formatter.setLocalizedDateFormatFromTemplate("jmm")
+        formatter.setLocalizedDateFormatFromTemplate(template)
         return formatter.string(from: date)
     }
 

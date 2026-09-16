@@ -136,7 +136,7 @@ struct CalendarAndReminderCapabilityTests {
         #expect(request.requirement == .explicitApproval)
         #expect(request.approvalCopy.riskReason == "This adds a reminder to your Reminders.")
         #expect(request.approvalCopy.undoDescription == "Delete the reminder in Reminders if needed.")
-        #expect(request.approvalCopy.involvedResource == "Reminder at 15:06 on Sunday 13 September")
+        #expect(request.approvalCopy.involvedResource == "Reminder at 15:06 on Sunday, 13 September 2026")
         #expect(request.approvalCopy.dataLeavesDevice == false)
 
         // Nothing is added without the answer.
@@ -409,9 +409,9 @@ struct CalendarAndReminderCapabilityTests {
         let prepared = try runner.prepare(plan: Self.reminderPlan(minutes: 5))
 
         let first = try runner.approvalRequest(for: prepared, scope: .unscoped, context: normal)
-        #expect(first.approvalCopy.involvedResource == "Reminder at 00:04 on Monday 14 September")
-        #expect(first.approvalCopy.lines.contains("Involves: Reminder at 00:04 on Monday 14 September"))
-        #expect(first.approvalCopy.safeModeLines.contains("Involves: Reminder at 00:04 on Monday 14 September"))
+        #expect(first.approvalCopy.involvedResource == "Reminder at 00:04 on Monday, 14 September 2026")
+        #expect(first.approvalCopy.lines.contains("Involves: Reminder at 00:04 on Monday, 14 September 2026"))
+        #expect(first.approvalCopy.safeModeLines.contains("Involves: Reminder at 00:04 on Monday, 14 September 2026"))
 
         clock.now = Self.date(2026, 9, 14, 0, 2)
         let later = try runner.approvalRequest(for: prepared, scope: .unscoped, context: normal)
@@ -420,6 +420,24 @@ struct CalendarAndReminderCapabilityTests {
 
         _ = try await runner.execute(prepared, approvalDecision: .approved(answering: first), scope: .unscoped, context: normal)
         #expect(eventKit.addedReminders.map(\.dueDate) == [Self.date(2026, 9, 14, 0, 4)])
+    }
+
+    /// A dated day is accepted in any year — `CalendarDay.startOfDay(named:)` refuses only an
+    /// impossible date, and nothing bounds a dated day the way `ReminderDue.maxMinutesFromNow` bounds
+    /// minutes — so a planner that writes `2027-09-13` for this Sunday pins a reminder a year out, and
+    /// without the year the line would read "Monday, 13 September", a different weekday as the only
+    /// trace. The line carries the year (PR #244's rebase round), and the reminder is added on that
+    /// day of that year.
+    @Test
+    func aReminderDatedInAnotherYearNamesThatYearOnTheApproval() async throws {
+        let eventKit = RecordingEventKitStore()
+        let runner = runner(eventKit: eventKit, clock: Clock())
+        let prepared = try runner.prepare(plan: Self.reminderPlan(time: "09:00", day: "2027-09-13"))
+        let request = try runner.approvalRequest(for: prepared, scope: .unscoped, context: normal)
+        #expect(request.approvalCopy.involvedResource == "Reminder at 09:00 on Monday, 13 September 2027")
+
+        _ = try await runner.execute(prepared, approvalDecision: .approved(answering: request), scope: .unscoped, context: normal)
+        #expect(eventKit.addedReminders.map(\.dueDate) == [Self.date(2027, 9, 13, 9)])
     }
 
     /// A step the planner sends cannot carry the pin: the key is not one the decoder accepts, at any

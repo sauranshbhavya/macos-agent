@@ -53,7 +53,7 @@ struct ReminderApprovalPanelTests {
         let request = try Self.request()
         for safeMode in [false, true] {
             let lines = AgentActivityPresentation.approvalDisclosureLines(for: request, safeMode: safeMode)
-            #expect(lines.contains("Involves: Reminder at 17:00 on Sunday 13 September"), "safe mode \(safeMode): \(lines)")
+            #expect(lines.contains("Involves: Reminder at 17:00 on Sunday, 13 September 2026"), "safe mode \(safeMode): \(lines)")
         }
     }
 
@@ -68,7 +68,7 @@ struct ReminderApprovalPanelTests {
         #expect(rest.contains("Text(request.approvalCopy.involvedResource)"))
 
         let request = try Self.request()
-        #expect("Allow access to " + request.approvalCopy.involvedResource == "Allow access to Reminder at 17:00 on Sunday 13 September")
+        #expect("Allow access to " + request.approvalCopy.involvedResource == "Allow access to Reminder at 17:00 on Sunday, 13 September 2026")
     }
 }
 

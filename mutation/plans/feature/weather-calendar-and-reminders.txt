@@ -5,7 +5,8 @@
 # a routine may carry neither and a job may not repeat a reminder; the time approved is the time set.
 # Killers are named per mutant from the tests written against that property. No battery has run this
 # plan — it is the committed plan the founders' weekly battery measures (WORKFLOW step 5); K21 to K25
-# were applied once each by hand in PR #244's fix round, as recorded above them.
+# were applied once each by hand in PR #244's fix round, and K29 once in its rebase round, as recorded
+# beneath each.
 
 >>> mutant K1 the reminder's escalation advisory: a tier-2 reminder runs without asking
 >>> file Sources/MacAgentCore/CreateReminderCapabilityAdapter.swift
@@ -322,3 +323,14 @@
             } catch ReminderDueError.twoTimes, ReminderDueError.unrecognisedTime {
 >>> end
 # Killer: aReminderMissingItsTimeItsTitleOrAReadableDayAsks (the zero and negative rows).
+
+>>> mutant K29 the approval line loses the year
+>>> file Sources/MacAgentCore/CalendarDay.swift
+>>> from
+        "\(clockTime(of: date, calendar: calendar)) on \(localized(date, template: "EEEEdMMMMy", calendar: calendar))"
+>>> to
+        "\(clockTime(of: date, calendar: calendar)) on \(localized(date, template: "EEEEdMMMM", calendar: calendar))"
+>>> end
+# Killers: aReminderDatedInAnotherYearNamesThatYearOnTheApproval (the year is the whole point of it),
+# theApprovalNamesThePinnedTimeTheSameAtEveryGateAndReArmsNothing,
+# aReminderIsTierTwoAndAsksFirstThroughAnEscalationThatAffectsOthers and ReminderApprovalPanelTests' two tests.

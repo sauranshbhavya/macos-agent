@@ -1826,9 +1826,11 @@ public final class AgentActionExecutor {
             // **This line and not the escalation's reason**, because consent is matched to reasons
             // and never to this, so a line built here cannot re-arm an approval. It reads the same
             // at every gate: it formats the pinned instant, and with an absolute date — "today"
-            // formatted before midnight would read "yesterday" at a gate after it. The title is
-            // already on the panel in the reason, so it is not repeated here. A step the resolve
-            // phase has not pinned names no time rather than inventing one.
+            // formatted before midnight would read "yesterday" at a gate after it — carrying the
+            // year, because a dated day is accepted in any year and the year is the part a model
+            // guesses (`CalendarDay.absoluteName` says why). The title is already on the panel in
+            // the reason, so it is not repeated here. A step the resolve phase has not pinned names
+            // no time rather than inventing one.
             if step.operation == .createReminder {
                 if let due = step.resolvedReminderDueDate {
                     resources.append("Reminder at \(CalendarDay.absoluteName(of: due, calendar: calendar))")
