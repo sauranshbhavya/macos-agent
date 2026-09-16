@@ -38,6 +38,16 @@ struct SkillPackTests {
     /// (review-247's R4, SONNY-492). That test looks each pack up among the rows, and its count check
     /// compares the files with the packs they load, so a row whose pack file is missing passes it:
     /// both counts drop by one and nothing looks the row up. The deep-pack lanes rewrite these files.
+    ///
+    /// **A count of 2 cannot occur, and that is the loader rather than this test** (PR #251's review,
+    /// R2). `SkillPackCatalog.load(files:)` refuses *every* file claiming an id another file claims —
+    /// `duplicateIDsAreAllRefusedAndOneBadFileCostsOnlyItself` holds that — so a pack file copied
+    /// under a second name leaves its row with no pack at all, and this test's message reads "0 loaded
+    /// packs" for what is really a duplicate. The review measured exactly that. `== 1` is written
+    /// because one pack per row is the property, not because 2 is reachable. A duplicated catalogue
+    /// *row* is a different thing and is not this test's job:
+    /// `theCommittedCatalogueIsTheListTheFoundersDecided` fails on it, while this loop would find that
+    /// row's one pack twice over and pass.
     @Test
     func everyCatalogueRowHasExactlyOnePack() throws {
         let rows = try Self.catalogueRows()
@@ -674,8 +684,8 @@ struct SkillPackTests {
     /// since a `Set` literal refuses one.
     ///
     /// `luma` is here by ruling rather than by gap (SONNY-492): it is the word video and photo editors
-    /// use for brightness, as in a luma key or a luma matte, and it is also another company's usual
-    /// name, Luma AI. So a command about either would bring in the Luma events pack.
+    /// use for brightness, as in a luma key or a luma matte, so a command about editing would bring in
+    /// the Luma events pack.
     static let modernWords: Set<String> = [
         "email", "inbox", "app", "website", "online", "offline", "download", "logout", "signup", "dm",
         "sms", "blog", "podcast", "webinar", "emoji", "hashtag", "username", "wifi", "laptop",
@@ -685,11 +695,16 @@ struct SkillPackTests {
     ]
 
     /// Ordinary words the system list does not spell at all, though nothing about them is modern
-    /// (SONNY-492). `grep -xc box /usr/share/dict/words` → 0, and the same for `boxes`, while `cat`,
-    /// `dog`, `fox`, `tax` and `mix` each answer 1 (macOS 26.6.2). So the gaps are scattered rather
-    /// than a broken list, and no rule predicts one. `podia` is the plural of `podium`, which the list
-    /// does spell, and no suffix rule reaches it. Both were found by a person reading every shipped
-    /// one-word trigger, not by this check.
+    /// (SONNY-492). `grep -ixc box /usr/share/dict/words` → 0, and the same for `boxes`, while `cat`
+    /// answers 2, and `dog`, `fox`, `tax` and `mix` answer 1 each (macOS 26.6.2). So the gaps are
+    /// scattered rather than a broken list, and no rule predicts one. `podia` is the plural of
+    /// `podium`, which the list does spell, and no suffix rule reaches it. Both were found by a person
+    /// reading every shipped one-word trigger, not by this check.
+    ///
+    /// The search is case-insensitive because `ordinaryWords()` lowercases the list, so a capitalised
+    /// `Box` in it would already refuse this word (PR #251's review, R1). The two searches differ on
+    /// this file — `grep -xc cat` → 1 against `grep -ixc cat` → 2 — so which one a figure came from
+    /// has to be said.
     static let ordinaryWordsTheSystemListLacks: Set<String> = ["box", "podia"]
 
     /// Whether `word` or one of its singular forms is ordinary. The forms come from

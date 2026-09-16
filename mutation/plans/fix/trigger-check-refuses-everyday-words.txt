@@ -6,6 +6,13 @@
 # (Tests/MacAgentCoreTests/SkillPackTests.swift). No shipped pack uses any of these words alone as a
 # trigger, so everyShippedTriggerIsDistinctiveOrAnchoredToItsSite is not expected among the killers.
 #
+# W7 is PR #251's review, F1: none of W1 to W6 separates the plural path, because every mutant that
+# makes "boxes" allowed makes "box" allowed too. W7 reads the new list for the word as written and not
+# for its singular forms, so "box" stays refused and "boxes" does not. Its expected killer is the one
+# sample, ("boxes", "Box"), in the same test — which is what would notice if that sample were ever
+# deleted. W6's one-line `from` block sits inside W7's three-line one; each mutant is applied to an
+# unmutated tree, so both still match exactly once (`--check`, at the head this plan was written at).
+#
 # C1 is the completeness test's mutant. It is not "the completeness test's assertion removed": a
 # mutant of a test's own assertion survives on every tree where the property holds, which is every
 # tree a battery runs on, so it would be a survivor every week and measure nothing. C1 instead
@@ -70,4 +77,16 @@
             .sorted { $0.lastPathComponent < $1.lastPathComponent }
             .dropLast()
             .map { $0 }
+>>> end
+
+>>> mutant W7 the new list is read for the word as written but not for its singular forms
+>>> file Tests/MacAgentCoreTests/SkillPackTests.swift
+>>> from
+        SkillWords.singularCandidates(of: word).contains {
+            ordinary.contains($0) || modernWords.contains($0) || ordinaryWordsTheSystemListLacks.contains($0)
+        }
+>>> to
+        ordinaryWordsTheSystemListLacks.contains(word) || SkillWords.singularCandidates(of: word).contains {
+            ordinary.contains($0) || modernWords.contains($0)
+        }
 >>> end
