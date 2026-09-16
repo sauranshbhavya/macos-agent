@@ -6,7 +6,7 @@
   "category": "marketing_growth",
   "summary": "Meta's tool for Facebook and Instagram ads.",
   "signInURL": "https://adsmanager.facebook.com/adsmanager/",
-  "triggers": ["meta ads manager", "facebook ads manager", "facebook ads", "instagram ads", "adsmanager.facebook.com"],
+  "triggers": ["meta ads manager", "facebook ads manager", "facebook ads", "adsmanager.facebook.com"],
   "sections": [],
   "depth": "deep",
   "flows": [
