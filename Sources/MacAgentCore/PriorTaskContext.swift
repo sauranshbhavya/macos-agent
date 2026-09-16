@@ -184,16 +184,18 @@ public struct PriorTaskContext: Codable, Equatable, Sendable {
     /// stranger can write — each step's operation, the outcome's status and the capture time — and
     /// everything else goes to the observed segment **whatever its provenance**.
     ///
+    /// Provenance is still read: the trusted block says in Sonny's words who wrote the result, which
+    /// is the one fact about that text the planner cannot learn from the text itself.
+    ///
     /// **The command is the one exception to "no model and no stranger", and it is not always typed**
-    /// (PR #249's review, F2). On most paths it is what the user typed or said. Four paths build it in
-    /// code around a value the user did not type: "Run my <name> routine" from the routine card and
-    /// from a scheduled run's history row, "Open my <name> workspace", and the workspace sheet's edit
-    /// sentence, which can name an installed app by the display name its maker wrote. A routine's or
-    /// a workspace's name comes from a planner's `save_routine` or `create_workspace` step. That is
-    /// not a new route — the same sentence is already the *current* command when the card is pressed
-    /// — and it belongs to SONNY-494, which covers model-written text in the command position. Provenance is still read: the
-    /// trusted block says in Sonny's words who wrote the result, which is the one fact about that text
-    /// the planner cannot learn from the text itself.
+    /// (PR #249's review, F2). On most paths it is what the user typed or said. Three sentence shapes
+    /// are built in code around a value the user did not type: "Run my <name> routine", from the
+    /// routine card and from a scheduled run's history row; "Open my <name> workspace"; and the
+    /// workspace sheet's edit sentence, which can name an installed app by the display name its maker
+    /// wrote. A routine's or a workspace's name comes from a planner's `save_routine` or
+    /// `create_workspace` step. That is not a new route — the same sentence is already the *current*
+    /// command when the card is pressed — and it belongs to SONNY-494, which covers model-written text
+    /// in the command position.
     ///
     /// **Nothing a planner used is withheld.** SONNY-490 keeps a calendar read's titles and times in
     /// the next command's context, and they are here — as data the system prompt lets the planner use

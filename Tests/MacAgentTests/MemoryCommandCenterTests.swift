@@ -4722,10 +4722,13 @@ struct SkillsCommandCenterTests {
             !viewModel.isRunning && !viewModel.isAwaitingApproval
         }
 
+        // The shared reader for the system messages (`planSystemPrompts`), and the plan requests'
+        // whole message arrays beside it, because the second run's prior-task message is what says
+        // which tag its system message must declare (SONNY-343).
+        let systems = Self.planSystemPrompts(requests)
         let plans = requests.all
             .filter { $0.path == "/v1/plan" }
             .compactMap { $0.json["messages"] as? [[String: Any]] }
-        let systems = plans.map { $0.first?["text"] as? String }
         #expect(systems.count == 2)
         let withNotion = try #require(systems.first ?? nil)
         #expect(withNotion.hasSuffix(SkillGuidance.header + "\n\n" + notion.guidance))
