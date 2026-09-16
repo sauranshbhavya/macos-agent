@@ -5037,7 +5037,7 @@ Developer enrolment.
       year>" under a line naming "call the bank", and Command Center's panel (if it is open) shows the
       same on its "Involves:" line. The widget keeps that line to one line and, in this Mac's locale,
       cuts its end short after the weekday or the month (measured in PR #244's rebase round, which
-      added the year; the widget's own discovery ticket, filed from that round, owns it): Command
+      added the year; SONNY-499 owns it): Command
       Center's line is whole, and a cut-off tail on the widget is that ticket's finding, not this
       row's. Allow it; macOS then asks once for Reminders access ("Sonny adds
       reminders when you ask it to remind you."). Allow that too. The result reads "Added a reminder

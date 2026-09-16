@@ -333,4 +333,5 @@
 >>> end
 # Killers: aReminderDatedInAnotherYearNamesThatYearOnTheApproval (the year is the whole point of it),
 # theApprovalNamesThePinnedTimeTheSameAtEveryGateAndReArmsNothing,
-# aReminderIsTierTwoAndAsksFirstThroughAnEscalationThatAffectsOthers and ReminderApprovalPanelTests' two tests.
+# aReminderIsTierTwoAndAsksFirstThroughAnEscalationThatAffectsOthers and ReminderApprovalPanelTests' two tests
+# (hand-applied at 65a0b6b1: 5 tests in 2 suites, 8 issues, exit 1; review-244 reproduced that at b5d92b21).
