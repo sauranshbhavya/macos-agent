@@ -312,10 +312,18 @@ public struct RiskApprovalConsent: Codable, Equatable, Sendable {
         /// opens a second way for the two cases to disagree — a fresh tier-2 assessment naming a
         /// reason the prompt did not — and it is not reachable today, because that reason names only
         /// the reminder's title, which the prepared plan fixes, and the only runs holding a standing
-        /// grant may not carry the step. Counted at `713bdc3f`:
-        /// `git grep -n 'CapabilityRiskEscalation(' 713bdc3f -- Sources | grep -vE ':[0-9]+: *//' | wc -l`
-        /// → 14, and `git grep -n -A4 'CapabilityRiskEscalation(' 713bdc3f -- Sources | grep -c 'toTier: .tier3'`
-        /// → 13; the fourteenth is the reminder's `.tier2` (SONNY-489).
+        /// grant may not carry the step. Counted at `05fca35b`:
+        /// `git grep -n 'CapabilityRiskEscalation(' 05fca35b -- Sources | grep -vE ':[0-9]+: *//' | wc -l`
+        /// → 14, and `git grep -n -A4 'CapabilityRiskEscalation(' 05fca35b -- Sources | grep -vE '[:-][0-9]+[:-][[:space:]]*//' | grep -c 'toTier: .tier3'`
+        /// → 13; the fourteenth is the reminder's `.tier2` (SONNY-489). **The middle stage of that
+        /// second command drops comment lines, and it is load-bearing rather than tidy**: this
+        /// comment sits inside the population it counts, and the citation itself puts
+        /// `toTier: .tier3` on a line within four of a `CapabilityRiskEscalation(`, so the same
+        /// command with that stage removed answers 14 at `05fca35b` — the extra hit is this
+        /// citation — and 13 at `713bdc3f`, where it did not yet exist; every further comment line
+        /// naming both strings, this paragraph included, raises the unstaged number by one and the
+        /// staged one by none. That is `CLAUDE.md`'s self-matching citation (the ninth defect in its
+        /// list), found by PR #244's scoped pass; the control is the two numbers disagreeing.
         ///
         /// **Why no `defaultTier` reaches tier 3.** Swept at `fcccab5` — and first at `042f74e`,
         /// before this branch rebased onto row F, which edited several of the files counted here and
@@ -516,11 +524,16 @@ public struct CapabilityRiskEscalation: Codable, Equatable, Sendable {
         /// Reaches someone other than the user: send, post, share, publish, purchase. It was armed
         /// ahead of use so that vision actions would classify into a class that already asks, and
         /// it is carried now by two sources: a vision session's per-action escalation, when
-        /// `VisionConsequenceClassifier` reads a send/post/share control, and `create_reminder`'s
-        /// plan escalation, because the default Reminders list may be shared and EventKit cannot say
-        /// whether it is (SONNY-453; the founders chose this class for it on 2026-09-13). It said
-        /// "armed but empty today — no construction site carries this class yet" until SONNY-489,
-        /// already untrue of the vision classifier by then.
+        /// `VisionConsequenceClassifier` reads a click on a control whose label carries one of its
+        /// `affectsOthersLabelWords` (send, post, share, submit, buy, invite and the rest of that
+        /// set), a Return keypress, or typed text ending in a newline — the last two because a
+        /// composed message is sent by Return, with no button and no label anywhere in sight — and
+        /// `create_reminder`'s plan escalation, because the default Reminders list may be shared and
+        /// EventKit cannot say whether it is (SONNY-453; the founders chose this class for it on
+        /// 2026-09-13). It said "armed but empty today — no construction site carries this class
+        /// yet" until SONNY-489, already untrue of the vision classifier by then, and then named
+        /// only the send/post/share control until PR #244's scoped pass read the classifier's other
+        /// two arms.
         case affectsOthers = "affects_others"
         /// A fact worth telling the user, not a consent worth interrupting them for: an
         /// out-of-scope resource, a workspace-entry removal, a whitelist-root widening. Advisory
