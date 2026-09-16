@@ -5033,9 +5033,13 @@ Developer enrolment.
       events, and a day with more than five events ends "and N more".
 - [ ] Ask the widget: `remind me in 5 minutes to call the bank`. **Sonny asks first**, and the
       approval names when the reminder is due before you press Allow: the widget's panel reads "Allow
-      access to Reminder at <a time five or six minutes from now> on <today's weekday, day and month>"
-      under a line naming "call the bank", and Command Center's panel (if it is open) shows the same
-      on its "Involves:" line. Allow it; macOS then asks once for Reminders access ("Sonny adds
+      access to Reminder at <a time five or six minutes from now> on <today's weekday, day, month and
+      year>" under a line naming "call the bank", and Command Center's panel (if it is open) shows the
+      same on its "Involves:" line. The widget keeps that line to one line and, in this Mac's locale,
+      cuts its end short after the weekday or the month (measured in PR #244's rebase round, which
+      added the year; the widget's own discovery ticket, filed from that round, owns it): Command
+      Center's line is whole, and a cut-off tail on the widget is that ticket's finding, not this
+      row's. Allow it; macOS then asks once for Reminders access ("Sonny adds
       reminders when you ask it to remind you."). Allow that too. The result reads "Added a reminder
       for <time> today: call the bank." Open Reminders: the reminder is in your default list with the
       time the approval named. **Five minutes later a reminder alert fires.** **What would be a
