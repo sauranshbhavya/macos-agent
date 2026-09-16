@@ -16,7 +16,7 @@
       "steps": [
         "Go to Broadcasts and click Create Broadcast, then pick One-time send.",
         "Set up your message Content, choosing a channel (email, in-app, push, SMS, or webhook) and writing the message.",
-        "In the Recipients step, choose who gets the message: profiles matching conditions (a segment, attribute, or message condition) or everyone in your workspace.",
+        "In the Recipients step, choose who gets the message: People matching conditions — a segment, attribute or message condition — or Everyone in your workspace.",
         "Schedule your message to send immediately or at a future date and time, and set a Goal to track its success.",
         "Go to the Review tab, check your settings, and click Send or Schedule to activate the message."
       ],
@@ -26,11 +26,11 @@
       "title": "Import people from a CSV",
       "startURL": "https://fly.customer.io/",
       "steps": [
-        "Go to Profiles, click Add Profiles, then scroll to the bottom of the modal and click CSV or Google Sheets.",
-        "Select Profiles, then choose the CSV file or Google Sheet you want to import.",
-        "Set a Name and Description for the import, choose whether to add new profiles and whether to update existing ones, then click Next.",
+        "Go to People, click Add people, then scroll to the bottom of the modal and click CSV or Google Sheets.",
+        "Select People, then choose the CSV file or Google Sheet you want to import.",
+        "Set a Name and Description for the import, choose whether to add new people and whether to update existing ones, then click Next.",
         "Map the columns in your CSV to attributes in Customer.io and click Next.",
-        "Review the import for errors and warnings, then click Complete import to begin importing profiles."
+        "Review the import for errors and warnings, then click Complete import to begin importing people."
       ],
       "source": "https://docs.customer.io/messaging/profiles/uploading-profiles/"
     },
@@ -41,7 +41,7 @@
         "Go to Segments and click Create Segment.",
         "Enter a Name and Description for the segment to help you find it later.",
         "Choose Manual to create the segment.",
-        "Add profiles to the segment using a CSV upload, a workflow action in an automation, or from a profile's own page."
+        "Add people to the segment from there: by CSV, by a workflow action in an automation, or from the segment tab on a person's profile."
       ],
       "source": "https://docs.customer.io/messaging/segmentation/manual-segments/"
     }

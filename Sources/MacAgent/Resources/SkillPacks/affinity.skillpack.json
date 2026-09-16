@@ -37,7 +37,7 @@
       "steps": [
         "Click + Add New on the bottom-left of the global navigation sidebar, or, from a contact's profile page, click the dropdown arrow and click Log Interaction.",
         "Choose an interaction type — Meeting, Call, or Message — and specify the date and time it took place.",
-        "Add the people you interacted with in the Participants field, and add any other people, organizations, or opportunities discussed in the Add note to field.",
+        "Add the people you interacted with in the Participants field, and add any other people, organizations, or opportunities discussed in the Add note to field. At least one participant must be an external contact, someone outside your team, or Publish shows an error.",
         "Write your note, then click Publish."
       ],
       "source": "https://support.affinity.co/s/article/How-to-log-interactions-into-Affinity"

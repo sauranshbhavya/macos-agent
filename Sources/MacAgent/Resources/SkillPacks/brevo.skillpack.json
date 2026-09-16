@@ -25,11 +25,12 @@
       "title": "Import contacts",
       "startURL": "https://app.brevo.com/",
       "steps": [
-        "Go to CRM > Contacts and click Import contacts.",
-        "Make sure the Contacts card is selected and click Continue.",
-        "Choose to upload a file or copy and paste your contact data, then confirm it.",
-        "Map your data to the matching attributes in your Brevo account, then click Confirm mapping.",
-        "Choose the list or lists the contacts belong to, then click Confirm your import to start the import."
+        "Go to CRM > Contacts and click Import contacts. Make sure the Contacts card is selected and click Continue.",
+        "Choose to upload a file or copy and paste the contact data, then click Confirm your file and Check the data to see a preview of the contacts and attributes to be imported.",
+        "Map the data to the matching attributes in the Brevo account, then click Confirm mapping.",
+        "On Select a list, choose the list or lists the contacts are added to, then click Confirm your list.",
+        "On Finalize your import, leave every setting off unless the user asked for it. Brevo warns that these settings may irreversibly overwrite existing data or blocklist the imported contacts: updating the attributes of existing contacts, importing empty fields that erase existing attribute data, and the blocklist toggles for Email, SMS and WhatsApp.",
+        "Check the I confirm that my new import adheres to these conditions box only when every contact has explicitly consented to receive these messages, then click Confirm your import."
       ],
       "source": "https://help.brevo.com/hc/en-us/articles/115000719584-Import-your-contacts-to-Brevo"
     },

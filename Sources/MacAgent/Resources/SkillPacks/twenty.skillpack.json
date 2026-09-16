@@ -6,7 +6,7 @@
   "category": "sales_crm",
   "summary": "Open-source CRM.",
   "signInURL": "https://app.twenty.com",
-  "triggers": ["twenty.com", "twenty crm"],
+  "triggers": ["twenty.com"],
   "sections": [],
   "depth": "deep",
   "flows": [

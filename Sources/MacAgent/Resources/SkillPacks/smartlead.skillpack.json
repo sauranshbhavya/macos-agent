@@ -15,7 +15,9 @@
       "startURL": "https://app.smartlead.ai/",
       "steps": [
         "Under Engage, click Campaigns to open the Email Campaigns dashboard, click + Create Campaign, enter a campaign name, and click Continue.",
-        "On the Leads tab, click + Add Leads and choose a source — upload a CSV, import from a connected CRM, import from a saved list, or add from SmartProspect — then click Import Leads.",
+        "On the Leads tab, click + Add Leads and choose a source — upload a CSV, import from a CRM, import from saved lists, or add from SmartProspect.",
+        "On Configure Upload Settings, choose how the leads are processed: the global block list, the unsubscribe list, the community bounce list, and whether leads already in this campaign are skipped or re-added.",
+        "On Map Your Fields, review the mapping Smartlead suggests for each column, adjust any that are wrong, then click Import Leads.",
         "On the Sequence tab, click + Create First Step, choose a step type (Email, Manual Task, or Call), and fill in its details, such as the subject line and body for an email step.",
         "On the Email Accounts tab, select the sending accounts to assign to the campaign.",
         "On the Settings tab, configure the schedule, then click Launch Campaign."

@@ -28,7 +28,7 @@
       "steps": [
         "Select Bulk Email Verification from the Verify emails menu on the navigation bar.",
         "Choose Add from file and select Choose file to upload a CSV, XLS, XLSX, or TXT list, then click the column that contains the emails and click Upload file (or choose Add manually to paste emails and click Verify emails).",
-        "Click the Verify button to start the verification process; you can check progress in the Progress column.",
+        "For a file, click the Verify button once the file has been processed to start the verification, and watch the queue in the Progress column. Emails added manually are already on their way after Verify emails.",
         "Once verification is complete, click Add to list to add the verified emails to a list, or click the Export icon to download the results."
       ],
       "source": "https://snov.io/knowledgebase/how-to-use-the-bulk-email-verification-tool/"

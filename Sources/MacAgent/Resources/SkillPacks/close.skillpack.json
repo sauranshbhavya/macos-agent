@@ -6,7 +6,7 @@
   "category": "sales_crm",
   "summary": "CRM for inside sales teams.",
   "signInURL": "https://app.close.com/login/",
-  "triggers": ["close.com", "close crm"],
+  "triggers": ["close.com"],
   "sections": [],
   "depth": "deep",
   "flows": [

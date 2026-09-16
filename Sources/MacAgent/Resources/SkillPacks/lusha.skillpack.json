@@ -24,7 +24,7 @@
       "title": "Reveal a contact's email or phone",
       "startURL": "https://dashboard.lusha.com/",
       "steps": [
-        "Open a saved table or a set of prospect search results.",
+        "Open a saved Workspace table.",
         "Find a cell showing masked data (dots) and click \"Show\" to reveal the email address or phone number.",
         "Or click \"Show details\" on a contact's row to open a detail panel showing all available data for that record, including phone numbers, email addresses, LinkedIn profile, and company information."
       ],

@@ -15,7 +15,7 @@
       "startURL": "https://app.attio.com/",
       "steps": [
         "Open Quick actions by pressing Cmd+K (Mac) or Ctrl+K (Windows).",
-        "Click \"Add [object]\", for example Add Company or Add Person, to create a new record without navigating to a specific page.",
+        "Click Add [object] — the object being the record type you want — to create a record without navigating to a specific page.",
         "Include an email for a person, or a domain for a company: this helps Attio prevent duplicates, enrich data, and link people and companies automatically."
       ],
       "source": "https://attio.com/help/reference/managing-your-data/records/create-and-view-records"

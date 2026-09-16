@@ -32,18 +32,6 @@
       "source": "https://help.shopify.com/en/manual/fulfillment/managing-orders/viewing-orders"
     },
     {
-      "title": "Fulfill an order",
-      "startURL": "https://admin.shopify.com/",
-      "steps": [
-        "From your Shopify admin, go to Orders.",
-        "Click the order that you want to fulfill.",
-        "In the Unfulfilled or In progress section, click Mark as fulfilled.",
-        "Optionally add a tracking number, pick a shipping carrier, and turn on Send a notification to the customer.",
-        "Click Mark as fulfilled to complete it."
-      ],
-      "source": "https://help.shopify.com/en/manual/fulfillment/fulfilling-orders/single-fulfillment"
-    },
-    {
       "title": "Add a customer",
       "startURL": "https://admin.shopify.com/",
       "steps": [
