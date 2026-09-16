@@ -14,7 +14,7 @@
       "title": "Create a group",
       "startURL": "https://web.telegram.org/",
       "steps": [
-        "In Telegram Desktop, click the menu button in the top left corner, then New Group. On Android, tap the round pencil icon in the chat list, then New Group."
+        "In the chat list, click the round pencil icon, then New Group. Telegram's FAQ gives this as the Android route, and the web client's chat list has the same button."
       ],
       "source": "https://telegram.org/faq"
     },

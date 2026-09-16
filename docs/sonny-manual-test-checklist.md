@@ -5059,8 +5059,9 @@ OneDrive, Outlook Calendar, PandaDoc, Productboard, Slack, SurveyMonkey, Telegra
 Wrike. Jira,
 Confluence and SharePoint still carry only the facts about the site. SONNY-482's section above says
 the other 471 packs carry only facts; with this branch in, these 26 carry flows as well, and that is
-not a finding. Slack and Telegram also answer to more phrases now, such as `in slack` and
-`telegram message`. Signed in, gateway up.
+not a finding. Slack, Telegram and Fireflies.ai also answer to more phrases now: `in slack`,
+`slack message`, `slack messages`, `slack channel` and `open slack`; `in telegram`, `telegram
+message` and `telegram chat`; `fireflies ai` and `fireflies notetaker`. Signed in, gateway up.
 
 - [ ] On the Skills page, **add Google Docs**. Ask the widget: `create a document in google docs called
       wave 9 notes`. The Tasks page's plan for that task names `https://docs.google.com/document/` as

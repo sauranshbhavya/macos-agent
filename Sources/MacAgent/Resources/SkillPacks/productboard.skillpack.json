@@ -37,8 +37,9 @@
       "title": "Share a roadmap by link",
       "startURL": "https://app.productboard.com/",
       "steps": [
-        "On the roadmap, click Share, then Publish, then Copy link.",
-        "Anyone who opens the link can see the published view of the board."
+        "In the top right corner of the roadmap, click Share, then Publish.",
+        "Switch on Publish this board. This is what publishes it: anyone who clicks the link can then see the published view of the board.",
+        "With publication on, click Share, then Publish, then Copy link to copy the URL from the Publish tab."
       ],
       "source": "https://support.productboard.com/hc/en-us/articles/4417696648339-Share-your-roadmaps-with-external-stakeholders-and-customers"
     }
