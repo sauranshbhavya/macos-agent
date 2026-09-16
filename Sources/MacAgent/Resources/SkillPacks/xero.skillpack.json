@@ -26,8 +26,8 @@
       "startURL": "https://login.xero.com/identity/user/login",
       "steps": [
         "Sign in, then in the Reporting menu select All reports.",
-        "Optionally select the Custom, Drafts, Published or Archived tab to see reports by status.",
-        "Browse the categories, or use the Find a report search bar at the top right to search by report name, description, keyword, report group description or the user who prepared it.",
+        "Optionally select the Custom, Drafts, Published, Filed with HMRC or Archived tab to see reports by status.",
+        "Browse the categories, or use the search field in the top right corner to search by report name, description, keyword, report group description or the user who prepared the report.",
         "Click the report to open it. Selecting the star icon next to a report's name puts it under Favourites."
       ],
       "source": "https://central.xero.com/0/article/Access-and-browse-reports"
