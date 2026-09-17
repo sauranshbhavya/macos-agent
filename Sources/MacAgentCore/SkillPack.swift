@@ -16,14 +16,29 @@ import Foundation
 /// settles: the name, the domain, the sign-in URL, the words that mean it, and its top-level
 /// sections. Shallow still earns its place: it tells Sonny the tool exists and where it lives.
 ///
-/// **Two kinds of evidence, and a row says which one its flows rest on** (founders, 2026-09-16,
-/// SONNY-501: every pack is deep, which the 54 sites whose public documentation carries no
-/// step-level flows could not be). `docs/sonny-skill-sites.tsv`'s `task_flow_docs` column carries
-/// `deep` when the site's own documentation holds the flows, `site` when they were read off the live
-/// site instead, and `shallow` when neither — which keeps every pack on that row shallow. The
-/// catalogue is validated in `SkillPackTests`, which allows a deep pack on a `deep` or a `site` row
-/// and on nothing else and requires that row to name at least one page the flows were read from; that
-/// narrowing is what stops a pack being deep on evidence nobody has, or on evidence no row records.
+/// **Two kinds of evidence, and a row says which one its flows rest on** (founders, 2026-09-16 on
+/// SONNY-501; the two values redefined by the founders 2026-09-17 on SONNY-512).
+/// `docs/sonny-skill-sites.tsv`'s `task_flow_docs` column says `deep` when the flows came from a
+/// documentation page anybody can re-open at the URL the row cites, `site` when they came from the
+/// running product, where no artifact exists and the row's `doc_url` cells are the only record of
+/// what was read, and `shallow` when neither — which keeps every pack on that row shallow.
+///
+/// **The value names the kind of evidence, not who read it or how.** A documentation page is read in
+/// a browser like everything else; the rule for how any of these pages must be read is `CLAUDE.md`'s,
+/// named below. The first wording said `site` meant the flows were "read off the live site instead",
+/// which put every browser reading on one side and made the column record the reader rather than the
+/// evidence. The 54 rows it was written for had been grouped on a research claim — that their public
+/// documentation carries no step-level flows — and SONNY-512 measured that claim false for the first
+/// two rows it opened, Canva and Zoho Desk, whose own help pages carry numbered click paths. Those
+/// two are `deep` now. **The other 52 are not re-classified on that evidence**: two sites is a small
+/// sample, and a count of rows carrying a help link is a count of links rather than a claim about
+/// what those pages contain. A row moves one at a time, when somebody opens that site's
+/// documentation and finds flows in it.
+///
+/// The catalogue is validated in `SkillPackTests`, which allows a deep pack on a `deep` or a `site`
+/// row and on nothing else and requires that row to name at least one page the flows were read from;
+/// that narrowing is what stops a pack being deep on evidence nobody has, or on evidence no row
+/// records.
 ///
 /// **What a lane owes before it writes `site` on a row — how those pages must have been read, and why
 /// a fetch of them is not a reading — is stated once, in `CLAUDE.md`'s Claims and evidence section,

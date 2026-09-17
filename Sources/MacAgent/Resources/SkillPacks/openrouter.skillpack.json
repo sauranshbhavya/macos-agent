@@ -14,11 +14,11 @@
       "title": "Find a model in the catalogue",
       "startURL": "https://openrouter.ai/models",
       "steps": [
-        "Go to openrouter.ai and select Models in the top navigation. The catalogue renders without signing in.",
+        "Open openrouter.ai/models. The catalogue renders without signing in, so there is no step through the home page first.",
         "Type part of a model's name into the Search models… box above the list.",
-        "Narrow the list with the two dropdowns and the checkboxes beside that box, and with the row of tabs that begins with All.",
-        "Switch between List view and Table view with the pair of tabs above the list; Pinned limits it to the ones you pinned.",
-        "Select a model's name to open its own page, or Discover Models to browse them by what they are for."
+        "Narrow the list with the checkboxes and the dropdowns beside that box.",
+        "The row of tabs beginning with All limits the list by what a model does: Text, Image, Video, Speech, Transcription, Embeddings and Rerank.",
+        "List and Table switch how the results are laid out. Select a model's name to open its own page."
       ],
       "source": "https://openrouter.ai/models"
     }
