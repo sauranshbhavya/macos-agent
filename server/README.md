@@ -671,7 +671,7 @@ a rehearsal if production's rollback is the one staging walked.
 **No `lock_timeout` is set, and step 4 is where that matters** (PR #164 review, F8). Five up halves
 declare `ACCESS EXCLUSIVE` on `sonny.identity` — 0004, 0005, 0006, 0008 and 0014 (the first line of
 each file: `for f in src/db/migrations/*.sql; do head -n1 "$f"; done | grep -cE 'ACCESS EXCLUSIVE
-sonny\.identity(,|$)'` → 5 at `d85b3ec0`; without the `(,|$)` it answers 6, the sixth being 0016's
+sonny\.identity(,|$)'` → 5 at `8ca07f02`; without the `(,|$)` it answers 6, the sixth being 0016's
 `sonny.identity_provider_user`) — and 0010 and 0015 take the write-blocking `SHARE` and
 `SHARE ROW EXCLUSIVE` on it. That table is what `accountForSupabaseUser` reads on **every
 authenticated request**. A lock request queues every reader behind it, so even a lock held for
