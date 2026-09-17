@@ -1199,6 +1199,9 @@ struct ProductShellTests {
             // `refreshAddedSkills()` from the file the wipe has just deleted, so the planner comes
             // back with no pack rather than the list the wipe removed.
             "skillSelectionStore", "skillPackCatalog", "skillGuidanceSource",
+            // The catalogue load in flight (SONNY-476): a task handle like `pendingServerDeletionDelivery`,
+            // reading the bundle and no local data, and it clears itself when the load lands.
+            "skillPackCatalogueLoad",
             // **`localDataWipe` is the wipe's own handle** (SONNY-404's fix round), and it is in
             // this group for a sharper version of the same reason: the wipe is what would be doing
             // the clearing, so clearing its own handle from inside itself is a task cancelling

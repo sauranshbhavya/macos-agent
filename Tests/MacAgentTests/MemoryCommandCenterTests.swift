@@ -4288,7 +4288,9 @@ private func makeMemoryFixture(
     /// set-aside line, need it pointed at this fixture's own directory and nothing else.
     wipesRealStoreFiles: Bool = false,
     skillPackCatalog: SkillPackCatalog = .empty,
-    backendClient: SonnyBackendClient? = nil
+    backendClient: SonnyBackendClient? = nil,
+    /// The shipping factory when absent. A test that has to count planners passes its own (SONNY-476).
+    makePlanner: PlannerFactory? = nil
 ) throws -> MemoryFixture {
     let suiteName = "MemoryCommandCenterTests-\(UUID().uuidString)"
     let userDefaults = try #require(UserDefaults(suiteName: suiteName))
@@ -4304,6 +4306,7 @@ private func makeMemoryFixture(
         wipesRealStoreFiles: wipesRealStoreFiles,
         skillPackCatalog: skillPackCatalog,
         backendClient: backendClient,
+        makePlanner: makePlanner,
         removesRoot: true
     )
 }
@@ -4317,6 +4320,7 @@ private func makeMemoryFixture(
     wipesRealStoreFiles: Bool = false,
     skillPackCatalog: SkillPackCatalog = .empty,
     backendClient: SonnyBackendClient? = nil,
+    makePlanner: PlannerFactory? = nil,
     removesRoot: Bool
 ) throws -> MemoryFixture {
     let encryption = LocalStorageEncryption(
@@ -4443,6 +4447,7 @@ private func makeMemoryFixture(
         memoryPolicyProvider: policyProvider,
         priorTaskContextStore: PriorTaskContextStore(),
         taskUsageRecorder: TaskUsageRecorder(),
+        makePlanner: makePlanner,
         userDefaults: userDefaults,
         whitelist: PathWhitelist(roots: [outputsRoot])
     )
@@ -4727,6 +4732,326 @@ struct SkillsCommandCenterTests {
         #expect(systems.last == OpenAIPlanner.systemPrompt(toolRegistry: .default))
     }
 
+    // MARK: The catalogue loads after launch (SONNY-476)
+
+    /// Launched the way the shipping app is — no catalogue on the initializer — the page lists nothing,
+    /// the load runs off the main thread, and the page fills in when it lands, with the skill added
+    /// before launch still added.
+    @Test
+    func theCatalogueLoadsOffTheMainThreadAndThePageFillsInWhenItLands() async throws {
+        let catalogue = try Self.catalogue()
+        let fixture = try makeMemoryFixture()
+        defer { fixture.cleanUp() }
+        let viewModel = fixture.viewModel
+        viewModel.addSkill(try #require(catalogue.pack(id: "notion")))
+        // `AppDelegate`'s launch call, which runs before the load has landed.
+        viewModel.refreshAddedSkills()
+        #expect(viewModel.skillPackCatalog.packs.isEmpty)
+        #expect(SkillRowPresentation.rows(for: viewModel, query: "").isEmpty)
+
+        let loader = CatalogueLoaderProbe(catalogue: catalogue, holdsUntilReleased: false)
+        await viewModel.loadSkillPackCatalogue { loader.load() }.value
+
+        #expect(loader.ranOnTheMainThread == [false])
+        #expect(viewModel.skillPackCatalog == catalogue)
+        #expect(viewModel.addedSkills.map(\.id) == ["notion"])
+        // Name order — Docusign, Linear, Notion — and only the added one says Remove.
+        #expect(SkillRowPresentation.rows(for: viewModel, query: "").map(\.buttonTitle) == ["Add", "Add", "Remove"])
+    }
+
+    /// **Nothing plans without the catalogue** (SONNY-476, the founders' added rule): a command given
+    /// while the load is still in flight waits for it, and its plan request carries the pack the person
+    /// added before launch.
+    ///
+    /// **By construction, not by timing.** The loader holds until this test releases it, and the test
+    /// releases it only once the run has written `waitingForSkillsLogMessage`. The view model writes
+    /// that line, waits, and calls the planner factory in one main-actor stretch with nothing but the
+    /// wait between them, and this test reads the log on the same actor. So when the line is visible,
+    /// either the run is parked on the load, or the wait is gone and the factory has already read
+    /// guidance built before the catalogue landed — which the request then shows as the fixed prompt.
+    /// The condition also ends on `!isRunning`, so a run that never waits fails on the assertions below
+    /// rather than on a backstop. **The other way round, a wait that never ends once the load lands,
+    /// can only show as a backstop**, so that wait records a failure of its own when it is stuck
+    /// (`waitRecordingAStuckWait`).
+    ///
+    /// The second run, after the load has landed, writes no waiting line: the handle clears itself.
+    @Test
+    func aCommandGivenBeforeTheCatalogueLandsWaitsForItAndCarriesTheAddedPack() async throws {
+        let catalogue = try Self.catalogue()
+        let backend = SignedInBackendFixture()
+        let requests = RecordedBackendRequests()
+        backend.register { request in
+            requests.append(request)
+            let body = try! JSONSerialization.data(withJSONObject: ["request_id": "req_plan_skills_waiting", "output_text": clarifyingPlanJSON])
+            return .reply(statusCode: 200, headers: ["Content-Type": "application/json"], body: body)
+        }
+        defer { backend.unregister() }
+        let fixture = try makeMemoryFixture(backendClient: backend.client)
+        defer { fixture.cleanUp() }
+        let notion = try #require(catalogue.pack(id: "notion"))
+        let command = "create a page in Notion called wave 9 notes"
+        let viewModel = fixture.viewModel
+        viewModel.addSkill(notion)
+        viewModel.refreshAddedSkills()
+
+        let loader = CatalogueLoaderProbe(catalogue: catalogue, holdsUntilReleased: true)
+        defer { loader.release() }
+        let load = viewModel.loadSkillPackCatalogue { loader.load() }
+
+        viewModel.command = command
+        viewModel.start()
+        try await HangBackstop.waitOrAbandon(for: "the run to reach the planner while the catalogue loads") {
+            Self.loggedTheWait(viewModel) || !viewModel.isRunning
+        }
+        #expect(Self.loggedTheWait(viewModel), "the run reached its planner without waiting for the catalogue")
+        #expect(viewModel.isRunning)
+        #expect(requests.all.filter { $0.path == "/v1/plan" }.isEmpty)
+
+        loader.release()
+        await load.value
+        let stoppedAtItsQuestion = try await Self.waitRecordingAStuckWait(
+            for: "the run to stop at its question once the catalogue landed",
+            stuck: "the run was still waiting for the Skills catalogue after the load had landed, so the wait does not end when the load lands."
+        ) {
+            !viewModel.isRunning && !viewModel.isAwaitingApproval
+        }
+        guard stoppedAtItsQuestion else { return }
+        let systems = Self.planSystemPrompts(requests)
+        #expect(systems.count == 1)
+        let planned = try #require(systems.first ?? nil)
+        #expect(planned.hasSuffix(SkillGuidance.header + "\n\n" + notion.guidance))
+
+        viewModel.cancelCurrentRun()
+        viewModel.command = command
+        viewModel.start()
+        try await HangBackstop.waitOrAbandon(for: "a second run after the catalogue landed to stop at its question") {
+            !viewModel.isRunning && !viewModel.isAwaitingApproval
+        }
+        #expect(Self.planSystemPrompts(requests).count == 2)
+        #expect(!Self.loggedTheWait(viewModel), "a run after the load landed waited for it anyway")
+    }
+
+    /// **A stop pressed while the run waits for the catalogue ends the run at once, and nothing plans:
+    /// not while the load is held, and not after it lands** (SONNY-476; PR #246's review, F2, and the
+    /// founders' decision on its F3).
+    ///
+    /// **By construction.** The loader is held from before the run starts until after the run is seen
+    /// to end, so the load has not landed when the run ends — the catalogue is still empty — and the
+    /// only thing that can have ended the wait is the stop. A wait that ignores a stop keeps this run
+    /// parked until the loader is released, which this test does not do until the run has ended.
+    ///
+    /// **"Nothing plans" is the factory's count, not the backend's silence.** A planner made after a
+    /// stop can still send nothing, because URLSession refuses a cancelled task before the hermetic
+    /// backend sees it: PR #246's review deleted the stop check at `33e13eb4` and the request-only
+    /// version of this test passed six runs out of six. The request assertion stays as the half a
+    /// person would notice. The last run is
+    /// the control for both: once the load has landed, the same factory and the same backend each see
+    /// exactly one plan.
+    ///
+    /// **Nothing the stopped run left behind can plan once the load lands.** Its one route to the
+    /// factory is inside `performStart`, whose `defer` is what sets `isRunning` to false, so a run seen
+    /// to end is past it. The counts after the release check that rather than assume it.
+    @Test
+    func stoppingARunThatIsWaitingForTheCatalogueEndsItAtOnceAndNothingPlans() async throws {
+        let catalogue = try Self.catalogue()
+        let backend = SignedInBackendFixture()
+        let requests = RecordedBackendRequests()
+        backend.register { request in
+            requests.append(request)
+            let body = try! JSONSerialization.data(withJSONObject: ["request_id": "req_plan_skills_stopped", "output_text": clarifyingPlanJSON])
+            return .reply(statusCode: 200, headers: ["Content-Type": "application/json"], body: body)
+        }
+        defer { backend.unregister() }
+        let planners = CountingPlannerFactory(client: backend.client)
+        let fixture = try makeMemoryFixture(backendClient: backend.client, makePlanner: planners.factory)
+        defer { fixture.cleanUp() }
+        let command = "create a page in Notion called wave 9 notes"
+        let viewModel = fixture.viewModel
+        viewModel.addSkill(try #require(catalogue.pack(id: "notion")))
+        viewModel.refreshAddedSkills()
+
+        let loader = CatalogueLoaderProbe(catalogue: catalogue, holdsUntilReleased: true)
+        defer { loader.release() }
+        let load = viewModel.loadSkillPackCatalogue { loader.load() }
+
+        viewModel.command = command
+        viewModel.start()
+        try await HangBackstop.waitOrAbandon(for: "the run to reach the planner while the catalogue loads") {
+            Self.loggedTheWait(viewModel) || !viewModel.isRunning
+        }
+        #expect(Self.loggedTheWait(viewModel), "the run reached its planner without waiting for the catalogue")
+
+        viewModel.cancelCurrentRun()
+        let endedWhileHeld = try await Self.waitRecordingAStuckWait(
+            for: "the stopped run to end while the catalogue is still loading",
+            stuck: "a stop pressed while the run waited for the Skills catalogue did not end the run while the load was held, so the wait does not answer a stop."
+        ) {
+            !viewModel.isRunning
+        }
+        guard endedWhileHeld else { return }
+
+        // The loader has not been released.
+        #expect(viewModel.skillPackCatalog.packs.isEmpty, "the catalogue landed while its loader was held")
+        #expect(planners.calls == 0, "a planner was made for a run stopped while it waited for the catalogue")
+        #expect(viewModel.finalSummary == "Canceled.")
+        #expect(viewModel.errorMessage == nil)
+        #expect(Self.planSystemPrompts(requests).isEmpty)
+
+        loader.release()
+        await load.value
+        #expect(viewModel.skillPackCatalog == catalogue)
+        #expect(planners.calls == 0, "a planner was made for the stopped run once the catalogue landed")
+        #expect(Self.planSystemPrompts(requests).isEmpty)
+
+        // The control: a run once the load has landed plans once, and both counts see it.
+        viewModel.command = command
+        viewModel.start()
+        try await HangBackstop.waitOrAbandon(for: "a run after the catalogue landed to stop at its question") {
+            !viewModel.isRunning && !viewModel.isAwaitingApproval
+        }
+        #expect(planners.calls == 1)
+        #expect(Self.planSystemPrompts(requests).count == 1)
+    }
+
+    /// **The other door that plans, and the one a run resumed at launch reaches.** A resumed run
+    /// carries its plan, so the only planning it does is a delegated instruction inside a screen
+    /// session, through `makeDelegationRunner()`. That runner waits for the catalogue the same way,
+    /// held here by the same construction as the command test. Its first wait ends when a plan request
+    /// arrives, rather than when a run stops, because there is no run here to stop; and the plan is
+    /// waited for under a backstop before `prepare` is awaited, so a wait that never ends once the load
+    /// lands fails this test rather than hanging the suite.
+    @Test
+    func aDelegatedInstructionAskedForBeforeTheCatalogueLandsWaitsForIt() async throws {
+        let catalogue = try Self.catalogue()
+        let backend = SignedInBackendFixture()
+        let requests = RecordedBackendRequests()
+        backend.register { request in
+            requests.append(request)
+            let body = try! JSONSerialization.data(withJSONObject: ["request_id": "req_plan_skills_delegated", "output_text": clarifyingPlanJSON])
+            return .reply(statusCode: 200, headers: ["Content-Type": "application/json"], body: body)
+        }
+        defer { backend.unregister() }
+        let fixture = try makeMemoryFixture(backendClient: backend.client)
+        defer { fixture.cleanUp() }
+        let notion = try #require(catalogue.pack(id: "notion"))
+        let viewModel = fixture.viewModel
+        viewModel.addSkill(notion)
+        viewModel.refreshAddedSkills()
+
+        let loader = CatalogueLoaderProbe(catalogue: catalogue, holdsUntilReleased: true)
+        defer { loader.release() }
+        let load = viewModel.loadSkillPackCatalogue { loader.load() }
+
+        let runner = viewModel.makeDelegationRunner()
+        let preparing = Task { try await runner.prepare(command: "open the Notion page called wave 9 notes") }
+        try await HangBackstop.waitOrAbandon(for: "the delegated instruction to reach its planner while the catalogue loads") {
+            Self.loggedTheWait(viewModel) || !Self.planSystemPrompts(requests).isEmpty
+        }
+        #expect(Self.loggedTheWait(viewModel), "the delegated instruction reached its planner without waiting")
+
+        loader.release()
+        await load.value
+        let requested = try await Self.waitRecordingAStuckWait(
+            for: "the delegated instruction to plan once the catalogue landed",
+            stuck: "the delegated instruction was still waiting for the Skills catalogue after the load had landed, so the wait does not end when the load lands."
+        ) {
+            !Self.planSystemPrompts(requests).isEmpty
+        }
+        guard requested else {
+            // A stop ends the wait, so the task does not stay parked for the rest of the suite.
+            preparing.cancel()
+            return
+        }
+        _ = try await preparing.value
+        let planned = try #require(Self.planSystemPrompts(requests).first ?? nil)
+        #expect(planned.hasSuffix(SkillGuidance.header + "\n\n" + notion.guidance))
+    }
+
+    /// The shipping construction starts the load and hands the initializer no catalogue, so the main
+    /// thread never reads the packs at launch.
+    ///
+    /// **What the load is handed is pinned, not only that there is a load** (PR #246's review, F1).
+    /// Reading the loader first and handing the load its finished result — `let shippedPacks = …` above
+    /// the call and `{ shippedPacks }` in it — still starts a load and still passes no catalogue to the
+    /// initializer, and it put every pack's validation back on the main thread with the whole suite
+    /// green. So the closure must be the loader call itself, and the loader must be called nowhere else
+    /// in the file. A behavioural test cannot hold this: no test may call the shipping construction
+    /// (`LocalStoreInjectionScanTests`).
+    @Test
+    func theShippingViewModelStartsTheCatalogueLoadRatherThanReadingItInline() throws {
+        let source = try MacAgentSource.read("AgentViewModel.swift")
+        // Spelled in two halves, as `FocusRestoreWiringTests` does: `LocalStoreInjectionScanTests`
+        // forbids the whole name in any test source.
+        let factory = "static func atItsRealStore" + "Locations("
+        let start = try #require(source.range(of: factory), "the shipping construction is gone")
+        let shipping = try MacAgentSource.braceBlock(
+            of: String(source[start.lowerBound...]),
+            openedBy: ") -> AgentViewModel {"
+        )
+        // Also in two halves: `SkillPackTests.onlyTheValidatingTestsReadTheShippedPacksFolder` flags a
+        // test line that names the bundle type whole.
+        let loader = "SonnyResource" + "Bundle.skillPackCatalog()"
+
+        // The control: this block is the construction.
+        #expect(MacAgentSource.count(of: "let viewModel = AgentViewModel(", inText: shipping) == 1)
+        #expect(MacAgentSource.count(of: "viewModel.loadSkillPackCatalogue { " + loader + " }", inText: shipping) == 1)
+        #expect(MacAgentSource.count(of: loader, inText: source) == 1)
+        #expect(MacAgentSource.count(of: "skillPackCatalog:", inText: shipping) == 0)
+    }
+
+    /// Every planner the view model makes goes through the wait: the stored factory is called in one
+    /// place, and that place is the waiting helper. A third door that called the factory directly would
+    /// plan without the catalogue, and no behavioural test would know it existed.
+    @Test
+    func thePlannerFactoryIsCalledOnlyWhereTheCatalogueIsWaitedFor() throws {
+        let source = try MacAgentSource.read("AgentViewModel.swift")
+        let helper = try MacAgentSource.braceBlock(
+            of: source,
+            openedBy: "private func plannerOnceTheSkillsCatalogueHasLoaded(for taskContext: BackendTaskContext) async throws -> any Planning {"
+        )
+
+        #expect(MacAgentSource.count(of: "makePlanner(", inText: source) == 1)
+        #expect(MacAgentSource.count(of: "makePlanner(", inText: helper) == 1)
+        #expect(MacAgentSource.count(of: "await Self.waitUntilLandedOrStopped(load)", inText: helper) == 1)
+        // Both doors that plan build their runner on the helper.
+        #expect(MacAgentSource.count(of: "plannerAfterTheSkillsCatalogue(", inText: source) == 3)
+    }
+
+    /// `HangBackstop.wait`, for a wait whose never ending is the failure a test is written to catch,
+    /// and which therefore has to be able to count as a mutation kill (`CLAUDE.md`'s SONNY-259 rule).
+    ///
+    /// Every wording `HangBackstop` records is declared in `scripts/mutate-untrusted-failures`, so a
+    /// test whose only red is a backstop comes back UNATTRIBUTED. This records `stuck` as a second issue,
+    /// in wording nothing declares, once the wait has looked `HangBackstop.observationFloor` times —
+    /// that type's own line between stuck and starved — and nothing more below it. It returns whether
+    /// the condition held, and a caller that gets `false` stops rather than asserting on a state that
+    /// never arrived.
+    static func waitRecordingAStuckWait(
+        for description: String,
+        stuck: String,
+        sourceLocation: SourceLocation = #_sourceLocation,
+        until condition: @MainActor () -> Bool
+    ) async throws -> Bool {
+        let looks = try await HangBackstop.wait(for: description, sourceLocation: sourceLocation, until: condition)
+        if condition() {
+            return true
+        }
+        if looks >= HangBackstop.observationFloor {
+            Issue.record(Comment(rawValue: "\(stuck) Checked \(looks) times."), sourceLocation: sourceLocation)
+        }
+        return false
+    }
+
+    static func loggedTheWait(_ viewModel: AgentViewModel) -> Bool {
+        viewModel.logStore.events.contains { $0.message == AgentViewModel.waitingForSkillsLogMessage }
+    }
+
+    static func planSystemPrompts(_ requests: RecordedBackendRequests) -> [String?] {
+        requests.all
+            .filter { $0.path == "/v1/plan" }
+            .map { ($0.json["messages"] as? [[String: Any]])?.first?["text"] as? String }
+    }
+
     @Test
     func theSearchNarrowsByNameDomainOrLineAndSaysSoWhenNothingMatches() throws {
         let catalogue = try Self.catalogue()
@@ -4749,6 +5074,64 @@ struct SkillsCommandCenterTests {
     /// them. `SkillPackTests` is what reads and validates every shipped pack.
     static func catalogue() throws -> SkillPackCatalog {
         try SkillPackFixtures.catalogue()
+    }
+}
+
+/// A planner factory that counts its calls (SONNY-476, PR #246's review, F2), and makes the shipping
+/// planner through the test's own backend, so a planner that is made and plans sends a request the test
+/// records. Its guidance source is its own: the test that uses it asserts whether a planner is made,
+/// not what the plan carries.
+@MainActor
+private final class CountingPlannerFactory {
+    private(set) var calls = 0
+    private let shipping: PlannerFactory
+
+    init(client: SonnyBackendClient) {
+        shipping = OpenAIPlanner.throughSonnysBackend(client: client, skills: SkillGuidanceSource())
+    }
+
+    var factory: PlannerFactory {
+        { [self] context, recorder in
+            calls += 1
+            return shipping(context, recorder)
+        }
+    }
+}
+
+/// A catalogue loader a test controls (SONNY-476): it records which thread it ran on, and when told
+/// to hold, stays in flight until the test releases it.
+///
+/// **It holds only off the main thread.** The view model runs it in a detached task, so off the main
+/// thread is where it runs; a loader that ran on the main thread instead would otherwise block the
+/// very actor the test needs to release it, turning a wrong answer into a hang. It returns at once
+/// there and records the thread, which is what the thread test asserts on.
+private final class CatalogueLoaderProbe: @unchecked Sendable {
+    private let catalogue: SkillPackCatalog
+    private let holdsUntilReleased: Bool
+    private let released = DispatchSemaphore(value: 0)
+    private let lock = NSLock()
+    private var threads: [Bool] = []
+
+    init(catalogue: SkillPackCatalog, holdsUntilReleased: Bool) {
+        self.catalogue = catalogue
+        self.holdsUntilReleased = holdsUntilReleased
+    }
+
+    var ranOnTheMainThread: [Bool] {
+        lock.withLock { threads }
+    }
+
+    func load() -> SkillPackCatalog {
+        let onMain = Thread.isMainThread
+        lock.withLock { threads.append(onMain) }
+        if holdsUntilReleased && !onMain {
+            released.wait()
+        }
+        return catalogue
+    }
+
+    func release() {
+        released.signal()
     }
 }
 
