@@ -6,12 +6,13 @@
 # over the 473 shipped packs" is as load-bearing a claim as the refusals: a rule that refuses real
 # packs is one a lane switches off.
 #
-# What is deliberately NOT here, so a reader does not take its absence for an oversight: a mutant
-# that adds a word to `SkillPackCredentialRule.privacyObjects`. Adjacency is what makes that list
-# safe — a widened word only excuses `secret` when it lands immediately beside it — so a widening
-# mutant is not killable by any step a pack would plausibly write, and a mutant nobody can kill is a
-# finding with no answer rather than a measurement. The list's contents are a value judgement held by
-# `aControlNamedSecretLoadsAndACredentialNamedSecretStillDoesNot`'s two tables instead.
+# An earlier draft of this file said a `privacyObjects`-widening mutant was not worth writing because
+# adjacency made one unkillable. That was false and review-268's F3 disproved it by running one:
+# adding `client` puts the widened word exactly where the credential sense already puts it, so
+# "Paste the client secret." is excused and the held row fails. It is M11 now. The wrong reasoning
+# came from trying two words (`field`, `page`) that were not adjacent in any row and generalising
+# from two misses — which is this repository's own rule about a control that has not been shown to
+# fire, applied to a mutant.
 
 >>> mutant M1 a purchase act stops refusing on its own: "Click Buy Postage." loads
 >>> file Sources/MacAgentCore/SkillPackContentRules.swift
@@ -40,11 +41,20 @@
            let priced = pricedWords.first(in: units) {
 >>> end
 
->>> mutant M4 postage and a billing change stop being money objects: Dialpad's add-a-user path loads
+>>> mutant M4 a billing change stops being a money object: Dialpad's add-a-user path loads
 >>> file Sources/MacAgentCore/SkillPackContentRules.swift
 >>> from
         "postage", "billing change"
 >>> to
+        "postage"
+>>> end
+
+>>> mutant M4b postage stops being a money object: "Add postage to the shipment." loads
+>>> file Sources/MacAgentCore/SkillPackContentRules.swift
+>>> from
+        "postage", "billing change"
+>>> to
+        "billing change"
 >>> end
 
 >>> mutant M5 the word secret stops being read at all, since it is no longer in the phrase list
@@ -67,10 +77,15 @@
 >>> mutant M7 beside becomes anywhere in the unit: "Paste the secret into the chat." loads
 >>> file Sources/MacAgentCore/SkillPackContentRules.swift
 >>> from
-                return privacyObjects.contains(before ?? "") || privacyObjects.contains(after ?? "")
+    private static func namesAThing(before index: Int, in unit: SkillWords) -> Bool {
+        guard index > 0, unit.joinedToPrevious[index] else { return false }
+        return privacyObjects.contains(unit.words[index - 1])
+    }
 >>> to
-                _ = (before, after)
-                return unit.words.contains { privacyObjects.contains($0) }
+    private static func namesAThing(before index: Int, in unit: SkillWords) -> Bool {
+        _ = index
+        return unit.words.contains { privacyObjects.contains($0) }
+    }
 >>> end
 
 >>> mutant M8 a purchase control refuses with no price beside it: YouTube's free Subscribe button is refused
@@ -99,4 +114,52 @@
     beside it reads.
 >>> to
     credential all still apply.
+>>> end
+
+>>> mutant M11 privacyObjects gains client, so "Paste the client secret." is excused
+>>> file Sources/MacAgentCore/SkillPackContentRules.swift
+>>> from
+        "gist", "gists", "album", "albums"
+>>> to
+        "gist", "gists", "album", "albums", "client"
+>>> end
+
+>>> mutant M12 the gap array stops being read before the word, so "the secret. Boards" excuses again
+>>> file Sources/MacAgentCore/SkillPackContentRules.swift
+>>> from
+        guard index > 0, unit.joinedToPrevious[index] else { return false }
+>>> to
+        guard index > 0 else { return false }
+>>> end
+
+>>> mutant M13 the gap array stops being read after the word, so "Copy the secret, boards" excuses again
+>>> file Sources/MacAgentCore/SkillPackContentRules.swift
+>>> from
+        guard next < unit.words.count, unit.joinedToPrevious[next] else { return false }
+>>> to
+        guard next < unit.words.count else { return false }
+>>> end
+
+>>> mutant M14 a line break counts as a space, so "Copy the secret\nBoards are listed" excuses again
+>>> file Sources/MacAgentCore/SkillPackContentRules.swift
+>>> from
+                if character != " " && character != "\t" {
+>>> to
+                if character != " " && character != "\t" && character != "\n" {
+>>> end
+
+>>> mutant M15 checkout stops being a purchase control: "Click Checkout and confirm the price." loads
+>>> file Sources/MacAgentCore/SkillPackContentRules.swift
+>>> from
+        "renew", "renews", "renewing", "checkout", "check out"
+>>> to
+        "renew", "renews", "renewing"
+>>> end
+
+>>> mutant M16 a seat and a trial stop naming a price: "Click Upgrade to add a seat." loads
+>>> file Sources/MacAgentCore/SkillPackContentRules.swift
+>>> from
+        "seat", "per month", "per year", "paid"
+>>> to
+        "per month", "per year", "paid"
 >>> end

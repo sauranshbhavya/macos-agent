@@ -577,30 +577,36 @@ struct SkillPackTests {
     /// **A flow that ends in a purchase does not load either** (SONNY-506). The founders' rule is
     /// that no flow moves money, and buying is money leaving the user — but the rule's first two
     /// tests were built for money *movement*, so barely a purchase word sat on any list until this
-    /// table did: **15 of these 17 rows loaded** at `981c6e56` — this file run against that tree's
+    /// table did: **15 of the first 17 rows loaded** at `981c6e56` — this file run against that tree's
     /// `SkillPackContentRules.swift` and `SkillGuidance.swift`, where it records 15 issues, every one
     /// of them `did not refuse as moving money: nil`. The two that did not are "Pick a courier",
     /// whose "Confirm and pay" refuses on test 1's `pay`, and "Top up the balance", whose title is a
     /// money verb — both kept, because they are what makes leaving those spellings off
     /// `purchaseActs` a measurement rather than an assumption.
     ///
-    /// The last five rows are the ones that need the fourth test rather than the third: `subscribe`,
-    /// `upgrade` and `renew` are free controls on plenty of sites, so each is refused only beside
-    /// what is being paid for. Their free twins are in `purchaseWordsThatAreNotPurchasesStillLoad`.
+    /// **Each row names the word that fires, and that is the point of the table rather than
+    /// decoration** (review-268's F2). It was written with `words: _`, and the wildcard hid four dead
+    /// list entries behind rows that refuse for another reason entirely: "Buy another seat" refuses
+    /// on `buy` and never reaches `checkout + seat`, and "Keep the account open" on `renew + billing`
+    /// and never on `trial`. Deleting `checkout`, `check out`, `seat` and `trial` left all 34 tests
+    /// passing. The last five rows are what make those four and `postage` load-bearing, and the exact
+    /// word is asserted so no future entry can hide the same way.
     @Test
     func aFlowThatEndsInAPurchaseDoesNotLoad() throws {
-        let flows: [(title: String, steps: [String])] = [
-            ("Buy postage for an order", ["Open the order.", "Click Buy Postage."]),
-            ("Print a shipping label", ["Open the order.", "Buy the label from the carrier you picked."]),
-            ("Order more credits", ["Open Credits.", "Purchase another bundle."]),
-            ("Get the report", ["Open Reports.", "Purchasing it unlocks the full export."]),
-            ("Send a gift", ["Open the store.", "Place your order."]),
-            ("Send a gift, the other way round", ["Open the store.", "Place an order for the item."]),
-            ("Finish an order", ["Open the cart.", "Proceed to checkout."]),
-            ("Finish an order, the shorter control", ["Open the cart.", "Go to checkout, then confirm."]),
-            ("Take the seat", ["Open Members.", "Complete the purchase for the extra member."]),
-            ("Pick a courier", ["Open the shipment.", "Choose a service, then Confirm and pay."]),
-            ("Top up the balance", ["Open Billing.", "Add funds to the account."]),
+        let flows: [(title: String, steps: [String], words: String)] = [
+            ("Buy postage for an order", ["Open the order.", "Click Buy Postage."], "buy"),
+            ("Print a shipping label", ["Open the order.", "Buy the label from the carrier you picked."], "buy"),
+            ("Order more credits", ["Open Credits.", "Purchase another bundle."], "purchase"),
+            ("Get the report", ["Open Reports.", "Purchasing it unlocks the full export."], "purchasing"),
+            ("Send a gift", ["Open the store.", "Place your order."], "place your order"),
+            ("Send a gift, the other way round", ["Open the store.", "Place an order for the item."], "place an order"),
+            ("Finish an order", ["Open the cart.", "Proceed to checkout."], "proceed to checkout"),
+            ("Finish an order, the shorter control", ["Open the cart.", "Go to checkout, then confirm."], "go to checkout"),
+            ("Take the seat", ["Open Members.", "Complete the purchase for the extra member."], "purchase"),
+            // The two an earlier test already reached when this table was first written, kept so that
+            // leaving "Confirm and pay" and "Top up" off `purchaseActs` stays a measurement.
+            ("Pick a courier", ["Open the shipment.", "Choose a service, then Confirm and pay."], "pay"),
+            ("Top up the balance", ["Open Billing.", "Add funds to the account."], "top up"),
             // Dialpad's own wording, read off Add & Remove Team Members by the lane that left this
             // path out by hand (SONNY-502's branch). No money object sat beside those verbs before
             // `billing change` did, so this flow loaded.
@@ -608,23 +614,30 @@ struct SkillPackTests {
                 "Open your Dialpad Admin Settings and go to Office Settings, then select Users.",
                 "Select Add Users, then enter the new user's name and email address.",
                 "Confirm any billing changes and add the user(s)."
-            ]),
+            ], "add + billing change"),
             // Test 4: the control is ordinary and the unit says what it costs.
-            ("Move to the Business plan", ["Open Settings, then Plan.", "Pick the Business plan and click Upgrade to see the price."]),
-            ("Start a paid plan", ["Open Pricing.", "Choose the Business plan and click Subscribe."]),
-            ("Keep the account open", ["Open Billing.", "Click Renew before the trial ends."]),
-            ("Buy another seat", ["Open Members.", "Click Checkout to add the seat."]),
+            ("Move to the Business plan", ["Open Settings, then Plan.", "Pick the Business plan and click Upgrade to see the price."], "upgrade + plan"),
+            ("Start a paid plan", ["Open Pricing.", "Choose the Business plan and click Subscribe."], "subscribe + plan"),
+            ("Keep the account open", ["Open Billing.", "Click Renew before the trial ends."], "renew + billing"),
+            ("Buy another seat", ["Open Members.", "Click Checkout to add the seat."], "buy"),
             // The one row whose only priced word is a plural, so that the fourth test's plural
             // reading is held by something: with it off, "plans" stops being "plan" and this loads.
-            ("Move up a tier", ["Open Settings.", "Compare the plans, then click Upgrade."])
+            ("Move up a tier", ["Open Settings.", "Compare the plans, then click Upgrade."], "upgrade + plan"),
+            // review-268's F2: one row per list entry that nothing else reaches. Delete the entry and
+            // exactly one of these turns red, naming it.
+            ("Get the shipment ready", ["Open the order.", "Add postage to the shipment."], "add + postage"),
+            ("Finish the order", ["Open the cart.", "Click Checkout and confirm the price."], "checkout + price"),
+            ("Finish the order, the two-word control", ["Open the cart.", "Click Check out, then confirm the price."], "check out + price"),
+            ("Add a teammate", ["Open Members.", "Click Upgrade to add a seat."], "upgrade + seat"),
+            ("Keep the account open past the trial", ["Open Settings.", "Click Renew before the trial ends."], "renew + trial")
         ]
         for testFlow in flows {
             var object = SkillPackFixtures.object(id: "store", name: "Store", domain: "store.example.com")
             object["flows"] = [SkillPackFixtures.flow(title: testFlow.title, steps: testFlow.steps, on: "store.example.com")]
-            guard case .movesMoney(field: "flows[0]", words: _)? = Self.error(object) else {
-                Issue.record("\(testFlow.title) did not refuse as moving money: \(String(describing: Self.error(object)))")
-                continue
-            }
+            #expect(
+                Self.error(object) == .movesMoney(field: "flows[0]", words: testFlow.words),
+                "\(testFlow.title) → \(String(describing: Self.error(object)))"
+            )
         }
     }
 
@@ -709,7 +722,10 @@ struct SkillPackTests {
         // pack is read under says so, and the approval gates are unchanged by any pack. Asserted here
         // rather than only in `SkillGuidanceTests` so that removing the sentence removes this record
         // of why it exists.
-        #expect(SkillGuidance.header.contains("A skill never authorises spending the user's money"))
+        #expect(SkillGuidance.header.contains(
+            "A skill never authorises spending the user's money either: a control that buys, pays, "
+            + "subscribes or upgrades is the user's to approve, however ordinary the step beside it reads."
+        ))
     }
 
     /// The fields the category rule used to read are gone from the format, so a pack still carrying
@@ -781,14 +797,25 @@ struct SkillPackTests {
     /// **6 issues** — every row of the first table, and **none** of the second, which is what says
     /// the change is a narrowing of one word rather than a loosening of the rule.
     ///
-    /// **The second table is the whole reason this is safe, and it is held by value on purpose.**
-    /// Every row of it is a credential step that must still be refused, so the next session widening
-    /// this rule finds out immediately which ones it broke. The three shapes it turns on: a word
-    /// beside the credential's own modifier, a word that is merely *near* a privacy object rather
-    /// than beside it, and a text where one occurrence is excused and another is not.
+    /// **The tables below the first are the whole reason this is safe, and they are held by value on
+    /// purpose.** Every row of them is a credential step that must still be refused, so the next
+    /// session widening this rule finds out immediately which ones it broke. The shapes they turn on:
+    /// a word beside the credential's own modifier, a word that is merely *near* a privacy object
+    /// rather than beside it, a text where one occurrence is excused and another is not, and — since
+    /// review-268's F1 — a word that is beside it only because the punctuation between them was
+    /// discarded.
+    ///
+    /// **What a pack writes is the page's clause up to the control's name**, and the page's own full
+    /// sentence is refused, because "if you want the board to be secret" puts the word beside `be`.
+    /// Both are here by value (F5): the shortened clause in `loads`, the full sentence in `refused`.
+    /// That is the rule working rather than a gap — what the fix buys is a pack that can name the
+    /// control, not one that can quote the whole page.
     @Test
     func aControlNamedSecretLoadsAndACredentialNamedSecretStillDoesNot() throws {
         let loads: [String] = [
+            // The clause a pack writes: the page's sentence up to and including the control's name.
+            // Its own full sentence is in `refused` below, and that is not a gap — see this test's
+            // doc comment.
             "Enter a name for your board, add collaborators, or turn on the switch next to Keep board secret.",
             "Turn on Keep board secret, then tap Create.",
             "Create a secret board for the ideas you are not ready to share.",
@@ -813,7 +840,11 @@ struct SkillPackTests {
             "Paste the secret into the chat.",
             "Send the secret to the group.",
             // One occurrence excused, one not — the text is refused on the one that is not.
-            "Keep the board secret, then paste the API secret below."
+            "Keep the board secret, then paste the API secret below.",
+            // review-268's F5, by value: Pinterest's own full sentence is still refused, because its
+            // trailing predicate puts `secret` beside `be`. Held here so the shortened clause above
+            // cannot be read as "the page's wording loads".
+            "Enter a name for your board, add collaborators or turn on the switch next to Keep board secret if you want the board to be secret"
         ]
         for step in refused {
             var object = SkillPackFixtures.object()
@@ -824,9 +855,75 @@ struct SkillPackTests {
             }
         }
 
+        // review-268's F1, by value. `SkillWords.cut` discards punctuation, so before the gap array
+        // existed the word after "secret." was the first word of the next sentence and supplied the
+        // excuse. Every one of these loaded at `dc73131c`; each is a credential step whose next
+        // clause happens to name a thing a site makes private, which is ordinary help-centre prose —
+        // 436 of the 1604 shipped steps carry a sentence boundary and 4 already put one of
+        // `privacyObjects` straight after one.
+        let acrossABoundary: [String] = [
+            "Copy the client ID and the secret. Boards are listed on the left.",
+            "Paste the API secret. Boards you own appear under Saved.",
+            "Copy the secret, boards are on the left.",
+            "Copy the secret; chats are unaffected.",
+            "Copy the secret: conversations stay private.",
+            "Paste the signing secret (boards are unaffected).",
+            "Store the webhook secret. Album settings are elsewhere.",
+            // A line break is a boundary too, and a hyphen: "board-secret" is two words that are not
+            // beside each other, which is the fail-closed direction.
+            "Copy the secret\nBoards are listed on the left.",
+            "Paste the board-secret value from the developer page."
+        ]
+        for step in acrossABoundary {
+            var object = SkillPackFixtures.object()
+            object["flows"] = [SkillPackFixtures.flow(steps: ["Open the page.", step])]
+            guard case .mentionsCredential(field: "flows.steps", phrase: _)? = Self.error(object) else {
+                Issue.record("a credential step loaded across a boundary: \(step)")
+                continue
+            }
+        }
+
         // The word a credential step has always been refused on does not change, so a pack author
         // reading the error sees what they saw before.
         #expect(SkillPackCredentialRule.violation(in: "Paste the client secret.") == "secret")
+    }
+
+    /// The array the rule above reads its adjacency from, held on its own because a parallel array is
+    /// exactly where an off-by-one hides and because nothing else in the tree reads it
+    /// (review-268's F1).
+    ///
+    /// `joinedToPrevious` is always as long as `words`, its first entry is `false` — nothing stands
+    /// before the first word — and an entry is `true` only when spaces alone separate that word from
+    /// the one before it.
+    @Test
+    func theWordCutRecordsWhetherEachWordIsJoinedToTheOneBeforeIt() throws {
+        let cases: [(text: String, words: [String], joined: [Bool])] = [
+            ("Keep board secret", ["keep", "board", "secret"], [false, true, true]),
+            ("the secret. Boards", ["the", "secret", "boards"], [false, true, false]),
+            ("the secret, boards", ["the", "secret", "boards"], [false, true, false]),
+            ("board-secret", ["board", "secret"], [false, false]),
+            ("a\tsecret board", ["a", "secret", "board"], [false, true, true]),
+            ("secret\nboard", ["secret", "board"], [false, false]),
+            ("secret", ["secret"], [false]),
+            ("", [], [])
+        ]
+        for testCase in cases {
+            let unit = SkillWords(testCase.text)
+            #expect(unit.words == testCase.words, "\(testCase.text)")
+            #expect(unit.joinedToPrevious == testCase.joined, "\(testCase.text)")
+            #expect(unit.joinedToPrevious.count == unit.words.count, "\(testCase.text)")
+        }
+        // Over the wording this rule exists for, the two arrays stay the same length whatever the
+        // punctuation, and the words are the ones `cut` has always produced — the gap array is
+        // additive, and every other rule in the file still reads the same words it did.
+        for text in [
+            "Keep board secret.", "a. b, c; d: e (f) g\nh-i", "...", "1 2 3", "",
+            "Send  money", "Transfer\tfunds", "Send\u{00A0}money", "Pay-out", "café", "IBANs."
+        ] {
+            let unit = SkillWords(text)
+            #expect(unit.joinedToPrevious.count == unit.words.count, "\(text)")
+            #expect(unit.words == SkillWords.cut(SearchText.normalized(text)), "\(text)")
+        }
     }
 
     @Test

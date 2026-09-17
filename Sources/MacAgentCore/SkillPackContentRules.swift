@@ -19,15 +19,71 @@ struct SkillWords {
     /// Each word with the singular forms it might be, for the phrases that read plurals.
     let singularForms: [[String]]
 
+    /// For each word, whether only spaces stand between it and the word before it — no punctuation,
+    /// no line break. `false` for the first word, which has nothing before it. Always the same length
+    /// as `words`.
+    ///
+    /// **Every rule here reads words and ignores what separates them, except one** (SONNY-508,
+    /// review-268's F1). That is right for a phrase: "Pay-out" and "pay out" are the same act, and
+    /// the doc above says so. It is wrong for the credential rule's `secret`, whose whole question is
+    /// whether the word beside it *belongs with it* — because `cut` discards the full stop, "Copy the
+    /// client ID and the secret. Boards are listed on the left." made `boards` the next word and
+    /// excused a credential step. Nine steps of that shape are held by value in
+    /// `aControlNamedSecretLoadsAndACredentialNamedSecretStillDoesNot`, and every one of them loaded
+    /// before this array existed. The shape is not exotic, and the count depends on which
+    /// punctuation is called a boundary, so the instrument is named with the number:
+    /// `python3 -c "import json,glob,re; steps=[s for f in glob.glob('Sources/MacAgent/Resources/SkillPacks/*.skillpack.json') for fl in json.load(open(f))['flows'] for s in fl['steps']]; print(len(steps), sum(1 for s in steps if re.search(r'[.:;!?]\s+\S', s)), sum(1 for s in steps if re.search(r'[.!?]\s+\S', s)))"`
+    /// → `1604 436 335` at `af310dee`. Four of those steps already place one of `privacyObjects`
+    /// immediately after a boundary, none of them beside a credential word — which is what the array
+    /// is for rather than a defect anybody has shipped.
+    let joinedToPrevious: [Bool]
+
     init(_ text: String) {
         folded = SearchText.normalized(text)
-        words = Self.cut(folded)
+        let cut = Self.cutRecordingGaps(folded)
+        words = cut.words
+        joinedToPrevious = cut.joinedToPrevious
         casedWords = Self.cut(text)
         singularForms = words.map(Self.singularCandidates(of:))
     }
 
     static func cut(_ text: String) -> [String] {
         text.split { !($0.isLetter || $0.isNumber) }.map(String.init)
+    }
+
+    /// `cut`, plus whether each word is joined to the one before it by spaces alone.
+    ///
+    /// A tab counts as a space, because the whitespace fold above already treats one as a separator
+    /// and a step written with one is the same sentence. A line break does not, and neither does any
+    /// punctuation — including a hyphen, which means "board-secret" is read as two words that are not
+    /// beside each other and is therefore refused. That is the fail-closed direction and it costs a
+    /// spelling no page in the catalogue uses.
+    static func cutRecordingGaps(_ text: String) -> (words: [String], joinedToPrevious: [Bool]) {
+        var words: [String] = []
+        var joinedToPrevious: [Bool] = []
+        var current = ""
+        var gapIsSpaceOnly = true
+        for character in text {
+            if character.isLetter || character.isNumber {
+                if current.isEmpty {
+                    joinedToPrevious.append(words.isEmpty ? false : gapIsSpaceOnly)
+                }
+                current.append(character)
+            } else {
+                if !current.isEmpty {
+                    words.append(current)
+                    current = ""
+                    gapIsSpaceOnly = true
+                }
+                if character != " " && character != "\t" {
+                    gapIsSpaceOnly = false
+                }
+            }
+        }
+        if !current.isEmpty {
+            words.append(current)
+        }
+        return (words, joinedToPrevious)
     }
 
     /// `word` and every singular it might be: `-ies` → `-y`, `-es` dropped, or `-s` dropped (not
@@ -307,8 +363,10 @@ enum SkillPackMoneyRule {
 /// and the shape is fail-closed three times over:
 /// - **every** occurrence in the text must be excused, or the word refuses. "Keep the board secret
 ///   and paste the API secret." is refused on the second one.
-/// - **immediately** beside, not merely in the same sentence. "Paste the secret into the chat."
-///   is refused, though it names a chat.
+/// - **immediately** beside, with spaces alone between the two words. Not merely in the same
+///   sentence — "Paste the secret into the chat." is refused, though it names a chat — and **not
+///   across a boundary either**: "Copy the client ID and the secret. Boards are listed on the left."
+///   is refused, because the full stop means `boards` is not beside anything.
 /// - **only `secret`.** The other collision-capable words — `passcode`, `2fa`, `mfa`, the cased
 ///   `PIN` — keep refusing outright until a lane measures a real control named by one, which is
 ///   **SONNY-514** and opens with nothing to do until somebody does (founders, 2026-09-17).
@@ -380,15 +438,28 @@ enum SkillPackCredentialRule {
             let occurrences = unit.words.indices.filter { unit.words[$0] == spelling }
             guard !occurrences.isEmpty else { continue }
             let everyOneNamesAThing = occurrences.allSatisfy { index in
-                let before = index > unit.words.startIndex ? unit.words[index - 1] : nil
-                let after = index + 1 < unit.words.endIndex ? unit.words[index + 1] : nil
-                return privacyObjects.contains(before ?? "") || privacyObjects.contains(after ?? "")
+                namesAThing(before: index, in: unit) || namesAThing(after: index, in: unit)
             }
             if !everyOneNamesAThing {
                 return spelling
             }
         }
         return nil
+    }
+
+    /// Whether the word before `index` is one of `privacyObjects` **and** is joined to it by spaces
+    /// alone. The second half is what stops a full stop from supplying the excuse (review-268's F1).
+    private static func namesAThing(before index: Int, in unit: SkillWords) -> Bool {
+        guard index > 0, unit.joinedToPrevious[index] else { return false }
+        return privacyObjects.contains(unit.words[index - 1])
+    }
+
+    /// The same, for the word after `index`: it must be joined to *it*, which is the same array read
+    /// one place along.
+    private static func namesAThing(after index: Int, in unit: SkillWords) -> Bool {
+        let next = index + 1
+        guard next < unit.words.count, unit.joinedToPrevious[next] else { return false }
+        return privacyObjects.contains(unit.words[next])
     }
 
     /// Whether a URL names a credential in its query or its fragment. A fragment is read as
