@@ -6,8 +6,47 @@
   "category": "ai_assistants",
   "summary": "AI video generation with avatars.",
   "signInURL": "https://app.synthesia.io/welcome",
-  "triggers": ["synthesia", "synthesia.io"],
+  "triggers": [
+    "synthesia",
+    "synthesia.io"
+  ],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Add a scene to a video",
+      "startURL": "https://app.synthesia.io/",
+      "steps": [
+        "Open the video and select Add scene in the canvas toolbar.",
+        "Choose a blank scene, or pick a Template option.",
+        "The new scene appears in the scene list directly after the scene you were on.",
+        "A scene holds an avatar, text, images and video clips together, the way a slide does in a presentation."
+      ],
+      "source": "https://help.synthesia.io/en/articles/6556948-how-do-i-manage-scenes-in-synthesia"
+    },
+    {
+      "title": "Reuse a scene in another video",
+      "startURL": "https://app.synthesia.io/",
+      "steps": [
+        "Open the video that has the scene you want to reuse.",
+        "In the scene menu, right-click the scene and select Copy, or press Command + C on a Mac or Ctrl + C on Windows. Selecting a scene and pressing Command or Ctrl + A takes all of them, and Shift picks several.",
+        "Open the video you want it in, right-click in the scene bar and select Paste, or press Command + V or Ctrl + V.",
+        "The pasted scene brings its visual and audio elements, animations and full script with it.",
+        "When the two videos' scenes run to different lengths, animation timing may not line up: drag the animations along the Timeline, holding Shift to snap them to words in the script."
+      ],
+      "source": "https://help.synthesia.io/en/articles/6556948-how-do-i-manage-scenes-in-synthesia"
+    },
+    {
+      "title": "Turn PowerPoint slides into a video",
+      "startURL": "https://app.synthesia.io/",
+      "steps": [
+        "Click the Import PowerPoint option on the home screen.",
+        "Upload or drag and drop your PowerPoint file.",
+        "Select the toggle options you want for the project.",
+        "Click Import. Text, shapes, images, videos and tables arrive editable, and speaker notes become the script — where a slide has none, Synthesia writes a script from what is on the slide.",
+        "Fonts are detected automatically; for any that are missing, choose a replacement or upload the original files to keep the design."
+      ],
+      "source": "https://help.synthesia.io/en/articles/6341783-how-do-i-import-powerpoint-slides-into-synthesia"
+    }
+  ]
 }
