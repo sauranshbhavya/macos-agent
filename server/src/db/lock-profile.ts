@@ -44,11 +44,19 @@ import type pg from "pg";
  *   too (measured on Postgres 17.11: `CREATE INDEX`, `SET NOT NULL` and `ADD CONSTRAINT … CHECK` at
  *   least one, `ALTER COLUMN … TYPE` and a volatile `DEFAULT` three).
  *
- * **What neither reading can see**, stated because the union is not complete: a statement that is
- * never planned on an empty database. A row trigger that never fires, a branch of a `DO` block or a
- * function that is never taken, and a function called once per row of an empty table all plan their
- * statements only when they run — so a table those statements read, **and a lock they take**, is
- * absent from both lines. Row locks are not relation locks at all, and neither line reports them.
+ * **What neither reading can see**, stated because the union is not complete. Two shapes:
+ *
+ * - **A statement never planned on an empty database.** A row trigger that never fires, a branch of a
+ *   `DO` block or a function that is never taken, a function called once per row of an empty table.
+ *   **Foreign keys belong here**: Postgres enforces `REFERENCES` and its `ON DELETE`/`ON UPDATE`
+ *   actions as row triggers, so a cascade from an empty parent plans nothing against the child.
+ * - **A read a subtransaction rolled back** — a plpgsql `BEGIN … EXCEPTION` block that catches, or a
+ *   `ROLLBACK TO SAVEPOINT`. The rollback releases the weak locks taken inside it, and on an empty
+ *   table the scan never started, so both readings come up empty on a statement that really was
+ *   planned.
+ *
+ * In either shape a table the statement reads, **and a lock it takes**, is absent from both lines. Row
+ * locks are not relation locks at all, and neither line reports them.
  *
  * **Why not a timing, and why not seeded rows.** A duration is a wall-clock bet whose answer depends
  * on the machine and the data, and a suite that asserts one manufactures failures. Seeding every

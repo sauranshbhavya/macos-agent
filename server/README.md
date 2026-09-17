@@ -835,9 +835,17 @@ is now the union of:
   never fires, a branch of a `DO` block or a function that is never taken, and a function called once
   per row of an empty table plan their statements only when they run. So **a table such a statement
   reads, and a lock it takes, appear on neither line** — the review measured a row trigger taking
-  `ACCESS EXCLUSIVE` on a third table that the empty measurement did not report at all. For a
-  migration whose work happens inside a trigger or behind a condition on the data, the two lines are a
-  floor, and the SQL is the only complete account.
+  `ACCESS EXCLUSIVE` on a third table that the empty measurement did not report at all. **A foreign
+  key is this case too, and it is the one nobody thinks of as a trigger**: Postgres enforces
+  `REFERENCES`, `ON DELETE CASCADE` and `ON UPDATE CASCADE` as row triggers, so a delete from an empty
+  parent plans nothing against the child, and the child table — and any lock the cascade takes on it —
+  is absent from both lines. For a migration whose work happens inside a trigger, a cascade, or behind
+  a condition on the data, the two lines are a floor, and the SQL is the only complete account.
+- **It cannot see a read that a subtransaction rolled back.** A `BEGIN … EXCEPTION` block in plpgsql
+  and an explicit `ROLLBACK TO SAVEPOINT` both release the weak locks taken inside them, so by the
+  time the profile is read those locks are gone; and on an empty table the scan they would have
+  started never ran. The statement *was* planned, so the case above does not cover it: a half that
+  reads a table inside a block whose error it catches declares neither the lock nor the scan.
 - **It measures shapes, not durations.** A duration depends on the rows an environment holds. Read a
   lock beside a scan as *this may take as long as that table is big*, and measure it against realistic
   data before a deploy that matters, as 0017's figures were.

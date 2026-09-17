@@ -18,9 +18,13 @@
 # applied by hand, one at a time, and restored byte for byte: M3's shape before this plan existed, and
 # M1, M5, M6 and M7 in PR #250's fix round, each killed on assertions with no error-shaped failure (the
 # changelog entry carries those runs and their SHAs). **A mutant that breaks the SQL it edits is not a
-# kill**: the review's own M5 deleted two UNION ALL branches and left three bind parameters for a query
-# that now named one, so every measured half died on "bind message supplies 3 parameters" before any
-# assertion ran. M5 below keeps the query whole and changes what is counted.
+# kill, and a mutant re-anchored onto a changed file is a new mutant**: the review's M5 was written
+# against 4b2ae723, where the scan query had one index branch and bound one parameter, and there it
+# deletes that branch and leaves valid SQL. The fix round rewrote that query, so the review's from
+# block matches it 0 times and the mutant does not apply at all. What produced "bind message supplies
+# 3 parameters" was this lane's hand adaptation of it, which deleted both index branches and left the
+# three parameters the new query binds; every measured half then died before any assertion ran. M5
+# below is written against the current query and changes what is counted rather than the SQL.
 #
 # Intended killers:
 #   M1 — migration-lock-profile.db.test.ts, six (measured by hand at 5bdb73dc): the declarations test on
