@@ -51,12 +51,17 @@ import type pg from "pg";
  *   **Foreign keys belong here**: Postgres enforces `REFERENCES` and its `ON DELETE`/`ON UPDATE`
  *   actions as row triggers, so a cascade from an empty parent plans nothing against the child.
  * - **A read a subtransaction rolled back** — a plpgsql `BEGIN … EXCEPTION` block that catches, or a
- *   `ROLLBACK TO SAVEPOINT`. The rollback releases the weak locks taken inside it, and on an empty
- *   table the scan never started, so both readings come up empty on a statement that really was
- *   planned.
+ *   `ROLLBACK TO SAVEPOINT` — costs the **lock** reading and not the scan one. An abort releases the
+ *   weak locks taken inside the subtransaction, and only an abort: a block that raises nothing keeps
+ *   them. The counter above is a delta the backend does not flush, not transactional state, so a scan
+ *   that started is still counted — measured on an empty table inside a caught block, a sequential
+ *   scan and an index scan each still read 1 with no lock surviving, against `ACCESS SHARE` and 1 for
+ *   the same statement outside a subtransaction. Both readings come up empty only when the scan never
+ *   starts too, which is the shape above.
  *
- * In either shape a table the statement reads, **and a lock it takes**, is absent from both lines. Row
- * locks are not relation locks at all, and neither line reports them.
+ * So the first shape is absent from both lines; the second loses its lock and still reaches the scan
+ * line whenever its scan really ran. Row locks are not relation locks at all, and neither line reports
+ * them.
  *
  * **Why not a timing, and why not seeded rows.** A duration is a wall-clock bet whose answer depends
  * on the machine and the data, and a suite that asserts one manufactures failures. Seeding every

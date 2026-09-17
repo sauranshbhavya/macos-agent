@@ -841,11 +841,15 @@ is now the union of:
   parent plans nothing against the child, and the child table — and any lock the cascade takes on it —
   is absent from both lines. For a migration whose work happens inside a trigger, a cascade, or behind
   a condition on the data, the two lines are a floor, and the SQL is the only complete account.
-- **It cannot see a read that a subtransaction rolled back.** A `BEGIN … EXCEPTION` block in plpgsql
-  and an explicit `ROLLBACK TO SAVEPOINT` both release the weak locks taken inside them, so by the
-  time the profile is read those locks are gone; and on an empty table the scan they would have
-  started never ran. The statement *was* planned, so the case above does not cover it: a half that
-  reads a table inside a block whose error it catches declares neither the lock nor the scan.
+- **A subtransaction that rolls back loses the lock half, and keeps the scan half.** A plpgsql
+  `BEGIN … EXCEPTION` block that catches an error, and an explicit `ROLLBACK TO SAVEPOINT`, release
+  the weak locks taken inside them, so those locks are gone by the time the profile is read — and only
+  on abort: the same block that raises nothing keeps them. The scan counter is not rolled back with
+  them, so a scan that really started is still counted and its table still reaches `@scans`. Measured
+  on an empty table inside a caught block: a sequential scan and an index scan each still read 1 with
+  no lock left behind, where the same statement outside a subtransaction leaves `ACCESS SHARE` as
+  well. **Both lines miss such a read only when its scan never starts** — the empty-table join whose
+  second side is skipped, which is the bullet above reaching the same place by another route.
 - **It measures shapes, not durations.** A duration depends on the rows an environment holds. Read a
   lock beside a scan as *this may take as long as that table is big*, and measure it against realistic
   data before a deploy that matters, as 0017's figures were.
