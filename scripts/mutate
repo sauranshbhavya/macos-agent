@@ -566,25 +566,51 @@ Environment:
   MUTATE_SCRATCH    Exported by the harness, not set by you: the build directory private to this
                     run. A replacement suite command that builds with SwiftPM has to use it.
 
-Demonstrating layer 1 (the tee's ignore list), because no selftest arm does:
+Layer 1 and nohup (the tee's ignore list):
+  `scripts/mutate selftest` watches layer 1 fire for TERM and HUP in whatever environment it is
+  started from, `nohup` included, and on every run first shows the same check failing against a
+  copy with that signal taken out of the tee's list (SONNY-367). What follows is the same property
+  demonstrated by hand against a real plan, and the measurements that explain why the selftest's
+  arm has to launch the harness the way it does.
+
   The report writer's pid is exported as $MUTATE_REPORT_TEE_PID, so a suite command can signal it.
-  Run this against any plan, IN THE FOREGROUND, once as-is and once against a copy with HUP taken
-  out of the tee's ignore list:
+  Paste this into bash or zsh at the repository root, on a clean tree, IN THE FOREGROUND, with
+  <plan> replaced by any plan that `scripts/mutate <plan> --check` accepts. It runs the harness
+  twice: once as shipped, once as a copy with HUP taken out of the tee's list. The copy sits in a
+  directory with this script's library and declarations beside it, the way the selftest's control
+  copy is built, because without them it dies at load. The suite command signals the report writer,
+  appends what became of it to a file, and fails — so each run stops at a red baseline and no mutant
+  is ever applied:
 
-    MUTATE_TEST_CMD='kill -HUP "$MUTATE_REPORT_TEE_PID"; sleep 1
-      ps -p "$MUTATE_REPORT_TEE_PID" >/dev/null 2>&1 && echo LAYER1-HELD || echo LAYER1-GONE
-      exit 1' scripts/mutate <plan>
+    demo="$(mktemp -d)"
+    mkdir -p "$demo/lib"
+    cp scripts/lib/battery-state.sh "$demo/lib/"
+    cp scripts/mutate-untrusted-failures "$demo/"
+    sed "/^  ( trap '' .*; exec tee -a /s/ HUP / /" scripts/mutate >"$demo/mutate"
+    chmod +x "$demo/mutate"
+    diff scripts/mutate "$demo/mutate"       # the tee's line, and nothing else
+    export LAYER1_VERDICT="$demo/verdict"
+    export MUTATE_TEST_CMD='kill -HUP "$MUTATE_REPORT_TEE_PID"; sleep 1
+      case "$(ps -p "$MUTATE_REPORT_TEE_PID" -o state= 2>/dev/null)" in
+        ""|Z*) echo LAYER1-GONE ;; *) echo LAYER1-HELD ;; esac >>"$LAYER1_VERDICT"
+      exit 1'
+    scripts/mutate <plan>
+    "$demo/mutate" <plan>
+    cat "$demo/verdict"
+    unset MUTATE_TEST_CMD LAYER1_VERDICT
 
-    sed "s/trap '' INT QUIT TERM HUP PIPE/trap '' INT QUIT TERM PIPE/" scripts/mutate > /tmp/m
-    chmod +x /tmp/m   # then the same MUTATE_TEST_CMD against /tmp/m
-
-  The shipped script prints LAYER1-HELD; the copy prints LAYER1-GONE. Measured 5 runs of 5 each way.
+  The verdict file then reads LAYER1-HELD (the shipped script) above LAYER1-GONE (the copy). Both
+  runs exit 1 on their baseline, and the copy's harness also reports that it ended at a point that
+  is not one of its exits, since it lost its report writer; the tree stays clean and the lock comes
+  off either way. A zombie counts as gone because the tee is the harness's child, not the suite's,
+  and can sit unreaped, so a bare `ps -p` could call a killed tee alive. Run as written
+  3 times on 2026-09-14 (the SONNY-367 changelog entry has the SHA and the outputs).
 
   RUN IT IN THE FOREGROUND. Under `nohup` there is nothing to demonstrate, and that is not a quirk
-  of the reproduction — it is the answer to why no selftest arm for this exists. `nohup` sets
-  SIGHUP to SIG_IGN and an ignored disposition survives fork AND exec, so the tee — which is not a
-  shell and never resets it — ignores HUP whatever this script traps. Measured with a real group
-  signal against a battery in a process group of its own, `kill -HUP -<pgid>` mid-mutant:
+  of the reproduction — it is why three attempts at a selftest arm failed before SONNY-367. `nohup`
+  sets SIGHUP to SIG_IGN and an ignored disposition survives fork AND exec, so the tee — which is
+  not a shell and never resets it — ignores HUP whatever this script traps. Measured with a real
+  group signal against a battery in a process group of its own, `kill -HUP -<pgid>` mid-mutant:
 
     foreground   shipped: exit 129, lock released, tree clean, the interruption in the report (3/3)
                  HUP dropped from the tee's list: exit 141, lock HELD, 23-line report, no
@@ -595,12 +621,18 @@ Demonstrating layer 1 (the tee's ignore list), because no selftest arm does:
 
   So layer 1 carries the foreground case and `nohup` covers the same ground for free — which means
   a battery launched the way this project launches long ones is protected either way, and an arm
-  can only discriminate where `nohup` is absent. That is what defeated three attempts at a reliable
-  arm: it fired foreground 5 of 5 and never under `nohup`, 7 of 7. Two things this misled me about
-  and are now explained rather than merely ruled out: `trap -p HUP` under `nohup` reports no ignore,
-  and a python3 SIG_DFL-then-exec probe reports default — both are true of BASH, which resets it for
-  itself, and neither says anything about the `tee` it execs. `ps -ww` was never the cause; the arm
-  fires without it. SONNY-367 holds the arm work.
+  that inherits its environment can only discriminate where `nohup` is absent. That is what
+  defeated three attempts at a reliable arm: it fired foreground 5 of 5 and never under `nohup`,
+  7 of 7. `ps -ww` was never the cause; the arm fires without it.
+
+  The selftest's arm therefore does not inherit it. It starts the harness through perl, which puts
+  the signal's disposition back to the default and execs — and it has to be something other than
+  bash, measured 2026-09-13 on bash 3.2.57: under `nohup`, `trap -p HUP` prints nothing, exactly as
+  it does in the foreground, and `trap - HUP` changes nothing — a child bash then execs still
+  survives HUP. Bash hides a signal that was ignored when it started and refuses to reset it; it
+  does not reset it for itself. So a `trap -p` reading says nothing about the tee, and neither does
+  a probe that sets the default before it looks, which reports the default by construction. (The
+  record on PR #168 read both as bash resetting HUP for itself; the measurement above corrects it.)
 
 Output:
   Every run writes into one directory of its own, .build/mutate/<sha>-<timestamp>-<pid>/, because
@@ -2154,15 +2186,85 @@ st_absent() {
 st_run() {
   local cmd="$1"
   shift
+  st_run_via "$cmd" "$SELF" "$@"
+}
+
+# st_run with the whole command line given rather than this script assumed, for an arm that has to
+# run a different copy of it or launch it through something first. Same cut, same globals.
+st_run_via() {
+  local cmd="$1"
+  shift
   ST_EXIT=0
-  ST_OUT="$(MUTATE_TEST_CMD="$cmd" "$SELF" "$@" 2>&1)" || ST_EXIT=$?
+  ST_OUT="$(MUTATE_TEST_CMD="$cmd" "$@" 2>&1)" || ST_EXIT=$?
   ST_OUT="$(printf '%s\n' "$ST_OUT" \
     | sed '/^    test cmd   : /,/^    tree       : clean$/{ /^    tree       : clean$/!d; }')"
+}
+
+# The launcher every layer-1 arm runs the harness through (SONNY-367). It puts ONE signal's
+# disposition back to the default and execs the rest of its arguments: `perl -e "$this" HUP cmd...`.
+#
+# Why it exists: an ignored disposition survives fork AND exec, so a selftest launched under `nohup`
+# hands SIGHUP-ignored to the harness, the harness hands it to the tee, and the tee ignores HUP
+# whether or not report_begin's trap names it. An arm run in that environment passes against a
+# build with layer 1 deleted — which is what defeated three attempts at this arm on PR #168 (fired
+# foreground 5 of 5, never under `nohup`, 7 of 7). Put the default back first and the tee's HUP
+# disposition is decided by report_begin alone, in whatever environment the selftest was started.
+#
+# Why perl, and why not bash or python3, each measured rather than assumed (2026-09-13, a
+# `( trap '' <list>; exec sleep 30 )` child sent HUP, launched four ways — foreground, backgrounded,
+# `nohup` foreground, `nohup` backgrounded — with HUP in the list and without it):
+#   * bash's own `trap - HUP` does NOT do it. Bash will not reset a signal that was ignored when it
+#     started, so under `nohup` the child without HUP in its list still survived HUP, both ways.
+#   * perl does: with the reset, the child without HUP in its list died of HUP in all four, and the
+#     child with it survived in all four.
+#   * python3 is out whatever it does with HUP: it ignores SIGPIPE at its own startup and
+#     os.execvp keeps that. A `( exec sleep 30 )` child sent PIPE, from a bash that python3 3.10.2
+#     exec'd, survived it (exit 137 after a SIGKILL); from a bash perl exec'd it died of it (141),
+#     the same as from a bash started directly. So python3 would leak an ignored SIGPIPE into the
+#     harness and from there into the suite — what run_suite's `trap - PIPE` exists to prevent, and
+#     which bash could then not undo, for the reason above.
+# `exec { $ARGV[0] } @ARGV` is the form that never goes through a shell, whatever the path holds.
+readonly ST_DEFAULT_DISPOSITION_EXEC='my $signal = shift @ARGV;
+$SIG{$signal} = "DEFAULT";
+exec { $ARGV[0] } @ARGV or die "could not exec $ARGV[0]: $!\n";'
+
+# Writes <dir>/mutate: a copy of this script, with its libraries beside it, whose report writer does
+# NOT ignore <signal> — layer 1 with that one signal taken out, which is the negative control a
+# layer-1 arm has to be shown able to fail against. Not called inside `$(...)`, because an st_fail
+# there would count in a subshell and vanish.
+#
+# The edit is checked, not trusted: exactly one line of this file is the tee's, exactly one line of
+# the copy differs from it, and that line no longer names the signal. A sed that silently matched
+# nothing — because the tee line was reworded — would leave the control's report writer ignoring
+# the signal too, and the control would then fail for a reason its message misstates. So a copy that
+# is not what it claims to be is refused here, by name, before any run.
+st_copy_without_tee_ignoring() {
+  local signal="$1" dir="$2" tee_lines line_number changed
+  # Anchored at the start of the line, which is what keeps this function's own source out of it.
+  tee_lines="$(grep -n "^  ( trap '' .*; exec tee -a " "$SELF" || true)"
+  if [[ "$(printf '%s' "$tee_lines" | grep -c '^' || true)" != "1" ]]; then
+    st_fail "SIG$signal control: expected exactly one report-writer line in $SELF, found [$tee_lines]"
+    return 1
+  fi
+  line_number="${tee_lines%%:*}"
+  rm -rf -- "$dir"
+  mkdir -p "$dir/lib"
+  sed "${line_number}s/ $signal / /" "$SELF" >"$dir/mutate"
+  chmod +x "$dir/mutate"
+  cp "$BATTERY_STATE_LIB" "$dir/lib/battery-state.sh"
+  cp "$UNTRUSTED_FILE" "$dir/mutate-untrusted-failures"
+  changed="$(diff "$SELF" "$dir/mutate" | grep -c '^>' || true)"
+  if [[ "$changed" != "1" ]] || sed -n "${line_number}p" "$dir/mutate" | grep -q " $signal "; then
+    st_fail "SIG$signal control: $dir/mutate is not this script with $signal out of the tee's list ($changed line(s) differ)"
+    return 1
+  fi
+  st_pass "SIG$signal control: a copy with $signal out of the report writer's ignore list, and nothing else changed"
 }
 
 selftest() {
   require_command git
   require_command python3
+  require_command perl
 
   SELFTEST_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/mutate-selftest.XXXXXX")"
   trap 'cleanup; selftest_cleanup; assert_intended_exit' EXIT
@@ -2496,14 +2598,12 @@ printf \"✔  Test run with 2 tests in 1 suite passed after 0.001 seconds.\n\""
     "$(cat "$reported_path" 2>/dev/null || true)" "0 matches — REFUSED"
 
   # --------------------------------------------------------------------------------------------
-  # The signal enumeration above report_begin, watched firing. Three arms: one per catchable signal
-  # the tee ignores, and one for the case nothing can catch.
+  # The signal enumeration above report_begin, watched firing. Three arms: TERM and HUP, which the
+  # tee ignores, and KILL, which nothing can catch.
   #
-  # Every stand-in finds the tee the way a group signal would reach it — it is a child of the
-  # harness — and signals it directly, because signalling this selftest's OWN process group would
-  # take the selftest down with it. `$1 != me` is not tidiness: the stand-in is itself a child of
-  # the harness and its own command line contains the word `tee`, so without it the first thing any
-  # of these arms does is signal itself.
+  # Every stand-in signals the tee directly rather than the process group a real signal would
+  # arrive through, because signalling this selftest's OWN process group would take the selftest
+  # down with it.
   # --------------------------------------------------------------------------------------------
   # WHAT THE STAND-IN RECORDS, and why the arms assert on that rather than on what happened next.
   #
@@ -2525,9 +2625,16 @@ printf \"✔  Test run with 2 tests in 1 suite passed after 0.001 seconds.\n\""
   local tee_alive="$root/tee-alive"
   local signals_the_tee='  target="${MUTATE_REPORT_TEE_PID:?the harness exported no report-writer pid}"
   printf "%s\n" "$target" >> "'"$tee_sentinel"'"'
+  #
+  # WATCH_LIMIT is filled in per use, in tenths of a second. A tee that ignores the signal never
+  # dies of it — the kernel discards a signal whose disposition is ignore at the moment it is sent —
+  # so how long a surviving tee is watched decides nothing and 3s is plenty. A tee that does NOT
+  # ignore it is dead the moment it is next scheduled, and the loop stops there, so the control's
+  # longer limit costs nothing on a healthy machine and only stops a loaded one from calling a
+  # slow death a survival.
   local records_whether_it_survived='  waited=0
   verdict=yes
-  while [ "$waited" -lt 30 ]; do
+  while [ "$waited" -lt WATCH_LIMIT ]; do
     line="$(ps -p "$target" -o state=,command= 2>/dev/null)"
     case "$line" in
       ""|Z*|*" Z "*) verdict=no; break ;;
@@ -2542,24 +2649,33 @@ printf \"✔  Test run with 2 tests in 1 suite passed after 0.001 seconds.\n\""
   printf "%s\n" "$verdict" >> "'"$tee_alive"'"'
 
   printf '\n==> A signal aimed at the tee does not take the harness down with it\n'
-  # TERM only. **The SIGHUP arm that belongs beside it is deliberately NOT here**, and that absence
-  # is the honest half of this file rather than a gap somebody forgot.
+  # TERM and HUP. HUP is the signal layer 1 was added for, and until SONNY-367 its arm was
+  # deliberately absent: it fired in the foreground 5 runs of 5 and under `nohup` never, 7 of 7, and
+  # an arm that fails at random is a check people learn to skip, which is how SONNY-64's guard
+  # stopped existing.
   #
-  # HUP is the signal layer 1 was added for, and the property IS demonstrated — the same fixture,
-  # run standalone against a build with HUP removed from the tee's ignore list, kills the report
-  # writer 5 runs of 5, and does not under the shipped script. `--help`'s "Demonstrating layer 1"
-  # section has the command. What could not be made to work is that check INSIDE this harness: it
-  # fires in some invocation environments and not others, cleanly split and not isolated (see
-  # `--help` for what was ruled out). A flaky arm is worse than a missing one — it fails at random
-  # in every future run, and a check that fails at random is a check people learn to skip, which is
-  # how SONNY-64's guard stopped existing. So it is out, and the reproduction is written down where
-  # a reader can run it.
+  # **The split was the environment, not the arm, and both halves of the fix are here.** `nohup`
+  # sets SIGHUP to ignored, an ignored disposition survives fork and exec, and so the tee ignored
+  # HUP whether or not report_begin's trap said to — an arm run there could not have failed. So:
+  #   1. Every run in this loop goes through ST_DEFAULT_DISPOSITION_EXEC, which puts the signal's
+  #      disposition back to the default before the harness starts. The tee's disposition is then
+  #      decided by report_begin alone, wherever this selftest was launched from.
+  #   2. Before the shipped script is run, the same arm runs against a copy with that one signal
+  #      taken out of the tee's list, and the tee there has to DIE. That is the arm shown able to
+  #      fail, in this invocation, every time — so if some launch environment ever defeats (1), the
+  #      control fails and says so, and the selftest cannot report a pass that could not have been a
+  #      fail. A guard that silently does nothing where it matters is the failure this area keeps
+  #      producing; this one refuses instead.
+  # Neither half says a battery launched under `nohup` is unprotected, because it is not: `nohup`
+  # covers HUP for the whole battery by the same inheritance, measured and recorded under `--help`'s
+  # "Layer 1 and nohup". This arm proves report_begin's trap, which is what protects the rest.
   #
   # **The tee is signalled and this shell is NOT**, deliberately: an arm that signals both is
   # betting on which of two deliveries bash processes first, and that bet loses under load — it
   # did, twice, on a run sharing the machine with a server suite, reporting `expected [129],
   # got [0]`. The tee's death is the whole discriminator either way.
-  for signal in TERM; do
+  local verdict control_dir
+  for signal in TERM HUP; do
     local signals_the_report_writer='printf "◇  Test run started.\n"
 if grep -q "hour < 13" sample.swift; then
 '"$signals_the_tee"'
@@ -2570,8 +2686,33 @@ if grep -q "hour < 13" sample.swift; then
   exit 1
 fi
 printf "✔  Test run with 2 tests in 1 suite passed after 0.001 seconds.\n"'
+
+    control_dir="$root/without-$signal"
+    if st_copy_without_tee_ignoring "$signal" "$control_dir"; then
+      rm -f "$tee_sentinel" "$tee_alive"
+      st_run_via "${signals_the_report_writer/WATCH_LIMIT/100}" \
+        perl -e "$ST_DEFAULT_DISPOSITION_EXEC" "$signal" "$control_dir/mutate" "$root/kill.plan"
+      if [[ -s "$tee_sentinel" ]]; then
+        st_pass "SIG$signal control: its report writer was found and signalled"
+      else
+        st_fail "SIG$signal control: nothing was signalled, so the control proves nothing (exit $ST_EXIT)"
+      fi
+      verdict="$(cat "$tee_alive" 2>/dev/null || true)"
+      if [[ "$verdict" == "no" ]]; then
+        st_pass "SIG$signal control: and it died of it — so the same check below is one that can fail"
+      else
+        st_fail "SIG$signal control: its report writer did not die of SIG$signal (got [$verdict]) — in this environment the check below cannot fail, so its PASS would mean nothing"
+      fi
+      # The control's harness lost its report writer and may have ended anywhere after that; the
+      # tree and the lock are put back here so the shipped run below starts from what HEAD says.
+      git checkout -- sample.swift 2>/dev/null || true
+      rm -rf -- .git/mutate.lock
+    fi
+    rm -rf -- "$control_dir"
+
     rm -f "$tee_sentinel" "$tee_alive"
-    st_run "$signals_the_report_writer" "$root/kill.plan"
+    st_run_via "${signals_the_report_writer/WATCH_LIMIT/30}" \
+      perl -e "$ST_DEFAULT_DISPOSITION_EXEC" "$signal" "$SELF" "$root/kill.plan"
     reported_path="$(printf '%s\n' "$ST_OUT" | sed -n 's/^    report     : //p' | head -1)"
     if [[ -s "$tee_sentinel" ]]; then
       st_pass "SIG$signal: the report writer was found, so something was actually signalled"
