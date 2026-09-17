@@ -6,8 +6,26 @@
   "category": "marketing_growth",
   "summary": "Review and reputation management platform.",
   "signInURL": "https://app.birdeye.com/sign-in/",
-  "triggers": ["birdeye", "birdeye.com"],
+  "triggers": [
+    "birdeye",
+    "birdeye.com"
+  ],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Reply to a review",
+      "startURL": "https://app.birdeye.com/",
+      "steps": [
+        "Click on the Reviews tab.",
+        "Click on All and it will display the received reviews.",
+        "Click on Haven't replied, which will show only the reviews that you haven't replied to.",
+        "Click on the Reply tab.",
+        "Select a Template, and the template content will auto-populate in the response box.",
+        "Click on the Post reply button on the bottom right.",
+        "There are multiple templates available by default within the dashboard. Additional response templates will appear in the drop-down once you add new templates under Settings."
+      ],
+      "source": "https://support.birdeye.com/en/articles/12653001-how-do-i-respond-to-reviews-from-my-birdeye-account"
+    }
+  ]
 }

@@ -6,8 +6,24 @@
   "category": "marketing_growth",
   "summary": "Partnership and affiliate marketing platform.",
   "signInURL": "https://app.impact.com/login.user",
-  "triggers": ["impact.com"],
+  "triggers": [
+    "impact.com"
+  ],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Invite a creator to a campaign from the Creator Marketplace",
+      "startURL": "https://app.impact.com/",
+      "steps": [
+        "From the left navigation menu, select Discover, then Find Creators, then Creator Marketplace.",
+        "Use the tabs at the top of the Marketplace screen to filter for creators by a specific social channel.",
+        "Once you've selected a social channel, refine your search with the filter bar.",
+        "Select a creator's tile to view their profile, and on the profile slideout, select the Invite drop-down menu.",
+        "To invite the creator to your creator campaign only, select Invite to campaign and choose the appropriate campaign.",
+        "To invite a creator from the marketplace, they'll need to have an active impact.com account."
+      ],
+      "source": "https://help.impact.com/brand/what-would-you-like-to-learn-about/creator-program/recruit-creators/invite-creators-to-your-campaign"
+    }
+  ]
 }
