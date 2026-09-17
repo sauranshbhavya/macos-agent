@@ -32,8 +32,13 @@ struct SkillWords {
     /// `aControlNamedSecretLoadsAndACredentialNamedSecretStillDoesNot`, and every one of them loaded
     /// before this array existed. The shape is not exotic, and the count depends on which
     /// punctuation is called a boundary, so the instrument is named with the number:
-    /// `python3 -c "import json,glob,re; steps=[s for f in glob.glob('Sources/MacAgent/Resources/SkillPacks/*.skillpack.json') for fl in json.load(open(f))['flows'] for s in fl['steps']]; print(len(steps), sum(1 for s in steps if re.search(r'[.:;!?]\s+\S', s)), sum(1 for s in steps if re.search(r'[.!?]\s+\S', s)))"`
-    /// → `1604 436 335` at `af310dee`. Four of those steps already place one of `privacyObjects`
+    /// `python3 -c "import json,glob,re; steps=[s for f in glob.glob('Sources/MacAgent/Resources/SkillPacks/' + '*.skillpack.json') for fl in json.load(open(f))['flows'] for s in fl['steps']]; print(len(steps), sum(1 for s in steps if re.search(r'[.:;!?]\s+\S', s)), sum(1 for s in steps if re.search(r'[.!?]\s+\S', s)))"`
+    /// → `1604 436 335` at `02f5a370`. (The glob is written as two joined strings for the reason
+    /// `CLAUDE.md` gives: a slash-star in a line comment opens a block-comment span that
+    /// `MacAgentSource.read` never closes, and everything below it vanishes from every source scan in
+    /// the tree. Writing the number with its command is what put it there, which is the trap that
+    /// rule keeps setting; `LineCommentMayNotOpenABlockTests` is what caught it, in the full suite
+    /// and not in this file's own.) Four of those steps already place one of `privacyObjects`
     /// immediately after a boundary, none of them beside a credential word — which is what the array
     /// is for rather than a defect anybody has shipped.
     let joinedToPrevious: [Bool]
