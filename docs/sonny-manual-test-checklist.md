@@ -5050,6 +5050,27 @@ it, now that the packs arrive after launch.
       Notion still shows **Added** and **Remove**. **What would be a finding:** an empty page that stays
       empty, or Notion showing Add.
 
+### Eight more skill packs carry task flows (new 2026-09-14, SONNY-486)
+
+Asana, BambooHR, Lever, Meta Ads Manager, Salesforce, Twilio, Xero and Zoom now carry task flows, taken
+from their public help pages, where before they carried only the facts about the site. These rows check
+the plan only: each row names where the plan should start. Once the plan is on the Tasks page, press
+Stop if you do not want Sonny to go on to the site. Signed in, gateway up.
+
+- [ ] On the Skills page, **add Zoom**, then ask the widget: `schedule a zoom meeting called planning for
+      tomorrow at 10`. The Tasks page's plan for that task names `https://zoom.us/` as where it starts.
+      Then ask `zoom in on the first photo in Preview`: that plan names no zoom.us address. **What would be a
+      finding:** the first plan searching the web for Zoom, or the second plan using the Zoom pack.
+- [ ] **Add Asana and Salesforce.** Ask `create an asana task called review the packs`: the plan starts at
+      `https://app.asana.com/`. Ask `convert a lead in salesforce`: the plan starts at
+      `https://salesforce.com/login`. **What would be a finding:** a plan that names neither address.
+- [ ] **Add Meta Ads Manager**, then ask `turn off my facebook ads campaign called spring`. The plan starts at
+      `https://adsmanager.facebook.com/adsmanager/`. Then ask `publish a new facebook ads campaign`: the pack
+      has no flow that creates, publishes or turns on an ad, so nothing from it describes that, and Sonny asks
+      before anything goes out. **What would be a finding:** a plan that publishes or turns on an ad without
+      asking.
+- [ ] Remove the four skills added above, so the next pass starts clean.
+
 ### Developer, data, design and people sites carry task flows (new 2026-09-14, SONNY-485)
 
 Twenty-eight more packs now carry task flows, each step taken from the site's own help page: GitHub,

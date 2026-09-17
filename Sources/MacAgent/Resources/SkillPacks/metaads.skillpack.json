@@ -6,8 +6,41 @@
   "category": "marketing_growth",
   "summary": "Meta's tool for Facebook and Instagram ads.",
   "signInURL": "https://adsmanager.facebook.com/adsmanager/",
-  "triggers": ["meta ads manager"],
+  "triggers": ["meta ads manager", "facebook ads manager", "facebook ads", "adsmanager.facebook.com"],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Find a campaign, ad set or ad",
+      "startURL": "https://adsmanager.facebook.com/adsmanager/",
+      "steps": [
+        "Go to Ads Manager and click the Search and filter bar.",
+        "Enter a search term and choose from the predicted searches, or choose a filter from the drop-down. The arrow next to a filter category shows more.",
+        "To search only some campaigns, ad sets or ads, tick the box next to them and choose Filter by selection from the drop-down.",
+        "Choose the filters and click Apply. To keep these settings, click Save in the search bar and give them a name. Clear removes them."
+      ],
+      "source": "https://www.facebook.com/business/help/430546454422471"
+    },
+    {
+      "title": "View an ad's results",
+      "startURL": "https://adsmanager.facebook.com/adsmanager/",
+      "steps": [
+        "Go to Ads Manager and click Campaigns, Ad sets or Ads.",
+        "Hover over the campaign, ad set or ad and click View charts, which appears underneath it, to open the insights side pane.",
+        "Read the Performance, Demographics, Platform or Delivery chart. The Delivery chart is only there for reach and frequency ad sets.",
+        "To see other results in the charts, click Customise metrics in the top right-hand corner and choose the metrics. Results arrive after a short delay."
+      ],
+      "source": "https://www.facebook.com/business/help/318580098318734"
+    },
+    {
+      "title": "Turn off a campaign, ad set or ad",
+      "startURL": "https://adsmanager.facebook.com/adsmanager/",
+      "steps": [
+        "Go to Meta Ads Manager and select the Campaigns, Ad sets or Ads tab at the top of the screen.",
+        "Click the toggle next to each campaign, ad set or ad to turn off. Turning off a campaign turns off every ad set and ad in it.",
+        "A grey status means off and blue means on. Delivery can take a few minutes to stop, and turning something off does not delete it."
+      ],
+      "source": "https://www.facebook.com/business/help/172764286113080"
+    }
+  ]
 }
