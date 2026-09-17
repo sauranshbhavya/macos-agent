@@ -1090,9 +1090,10 @@ kickoff. Inside a short stack:
 - **`scripts/changelog-order` reports one finding on a stacked branch above the bottom**, naming
   every entry that has not merged, because only one may. On a stack of two that is one finding
   reading *2 entries name a branch that has not merged, and only one may*, and on a stack of three
-  one finding naming all three — measured at `@@HEAD@@` by running
-  `scripts/changelog-order` in a throwaway clone with two and then three entry files present for
-  branches that have refs and no merge: @@COUNTS@@. That count is the
+  one finding naming all three — measured at `279d4dd1` by running `scripts/changelog-order` in a
+  throwaway clone with two and then three entry files present for branches that have refs and no
+  merge: **exit 2 with 1 finding each time**, the finding naming every unmerged branch and its
+  file, against exit 0 with the branch's own entry alone. That count is the
   stack's expected cost. State it on the run log and answer the hook's block with it; **never
   delete or rename an entry file to satisfy it.** It clears one merge at a time. (This clause read
   "one finding per unmerged entry beneath the newest — on the n-th branch from the bottom that is
