@@ -5257,9 +5257,10 @@ when you return to this build, and those three are gone for good.
 Twelve more packs carry task flows, each step taken from the site's own public help page: Bitly, Google
 Ads, Google Business Profile, Google Search Console, LinkedIn, Manychat, Pinterest, Product Hunt,
 SocialPilot, Sprout Social, X and YouTube Studio. The rest of this group's twenty-four sites still carry
-only the facts about the site, and that is not a finding — their help centres could not be opened in a
-browser this session, and they are named on SONNY-503. The ads packs deliberately carry no flow that
-creates, publishes or turns on an ad, the same rule Meta Ads Manager already follows. These rows check
+only the facts about the site, and that is not a finding — their help centres could not be read in a
+browser this session, and they are named on SONNY-503. The ads packs carry no flow that turns an ad
+on, the rule Meta Ads Manager follows — which does carry flows for finding a campaign, viewing an
+ad's results and turning one off. These rows check
 the plan only. Signed in, gateway up. Nothing here needs you to finish the task: stop at the first
 approval Sonny asks for.
 
