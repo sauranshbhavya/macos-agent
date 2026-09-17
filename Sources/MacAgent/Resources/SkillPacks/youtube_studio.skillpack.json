@@ -6,8 +6,35 @@
   "category": "marketing_growth",
   "summary": "YouTube's dashboard for creators.",
   "signInURL": "https://studio.youtube.com/",
-  "triggers": ["youtube studio", "studio.youtube.com"],
+  "triggers": [
+    "youtube studio",
+    "studio.youtube.com"
+  ],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Upload a video",
+      "startURL": "https://studio.youtube.com/",
+      "steps": [
+        "In the top-right corner, click CREATE, then Upload videos.",
+        "Select the file you would like to upload. You can upload up to 15 videos at a time.",
+        "Be sure to click Edit on each file to edit your video details.",
+        "If you close the upload window before you finish choosing your Visibility settings, the video is saved as private on your Content page in YouTube Studio."
+      ],
+      "source": "https://support.google.com/youtube/answer/57407?hl=en&co=GENIE.Platform%3DDesktop"
+    },
+    {
+      "title": "Set the channel's audience",
+      "startURL": "https://studio.youtube.com/",
+      "steps": [
+        "On the left menu, click Settings.",
+        "Click Channel.",
+        "Click the Advanced Settings tab.",
+        "Under Audience, select whether this channel is made for kids, is not made for kids, or that you want to review the setting for every video.",
+        "Click SAVE."
+      ],
+      "source": "https://support.google.com/youtube/answer/9527654?hl=en"
+    }
+  ]
 }

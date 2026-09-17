@@ -6,8 +6,40 @@
   "category": "marketing_growth",
   "summary": "LinkedIn's company pages.",
   "signInURL": "https://www.linkedin.com/login",
-  "triggers": ["linkedin pages"],
+  "triggers": [
+    "linkedin pages"
+  ],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Create a LinkedIn Page",
+      "startURL": "https://www.linkedin.com/",
+      "steps": [
+        "Click the For Business icon in the upper-right corner of your LinkedIn homepage.",
+        "Scroll down and click Create a Company Page.",
+        "Select the Page type: Company, Showcase page, or Educational institution.",
+        "Enter your Page identity, Company or Institution details, and Profile details information.",
+        "Select the verification box to confirm that you have the right to act on behalf of the company or school.",
+        "Click the Create page button.",
+        "Click Start building your page! to complete your LinkedIn Page."
+      ],
+      "source": "https://www.linkedin.com/help/linkedin/answer/a543852"
+    },
+    {
+      "title": "Add an admin to your Page",
+      "startURL": "https://www.linkedin.com/",
+      "steps": [
+        "Go to your Page super admin view.",
+        "Click Settings in the left menu and select Manage admins.",
+        "Click the Page admins or Paid media admins tab.",
+        "Click the Add admin button.",
+        "Enter the name of the member, associated employee, or advertiser you would like to add in the Search for a member field.",
+        "Select the admin's name from the list that appears.",
+        "Select the required admin role.",
+        "Click Save."
+      ],
+      "source": "https://www.linkedin.com/help/linkedin/answer/a569144"
+    }
+  ]
 }

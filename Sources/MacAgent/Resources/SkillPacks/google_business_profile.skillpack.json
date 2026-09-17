@@ -6,8 +6,24 @@
   "category": "marketing_growth",
   "summary": "Google's business listings on Search and Maps.",
   "signInURL": "https://accounts.google.com/ServiceLogin?continue=https%3A%2F%2Fbusiness.google.com%2F",
-  "triggers": ["google business profile", "business.google.com"],
+  "triggers": [
+    "google business profile",
+    "business.google.com"
+  ],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Add your business",
+      "startURL": "https://business.google.com/",
+      "steps": [
+        "Go to business.google.com/add.",
+        "Click Add your business to Google.",
+        "To add details about your business, follow the on-screen instructions.",
+        "Select a verification option, and follow the on-screen steps.",
+        "Make sure your business address is correct and meets Google's address guidelines."
+      ],
+      "source": "https://support.google.com/business/answer/2911778?hl=en"
+    }
+  ]
 }

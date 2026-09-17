@@ -6,8 +6,34 @@
   "category": "marketing_growth",
   "summary": "Social network formerly known as Twitter.",
   "signInURL": "https://x.com/i/jf/onboarding/web?mode=login&redirect_after_login=%2F",
-  "triggers": ["x.com"],
+  "triggers": [
+    "x.com"
+  ],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Write a post",
+      "startURL": "https://x.com/home",
+      "steps": [
+        "Type your post, up to 280 characters, into the compose box at the top of your Home timeline, or select the Post button in the navigation bar.",
+        "You can include up to 4 photos, a GIF, or a video in your post.",
+        "To schedule the post for a later date and time, select the calendar icon at the bottom of the compose box, make your schedule selections, then select Confirm.",
+        "Select the Post button to post it to your profile.",
+        "To save a draft instead, select the X icon in the top left corner of the compose box, then select Save."
+      ],
+      "source": "https://help.x.com/en/using-x/how-to-post"
+    },
+    {
+      "title": "Delete a post",
+      "startURL": "https://x.com/home",
+      "steps": [
+        "Visit your Profile page.",
+        "Locate the post you want to delete.",
+        "Click the icon.",
+        "Click Delete post."
+      ],
+      "source": "https://help.x.com/en/using-x/delete-posts"
+    }
+  ]
 }

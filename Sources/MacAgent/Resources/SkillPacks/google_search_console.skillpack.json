@@ -6,8 +6,36 @@
   "category": "marketing_growth",
   "summary": "Google's tool for a site's search performance.",
   "signInURL": "https://accounts.google.com/ServiceLogin?continue=https%3A%2F%2Fsearch.google.com%2Fsearch-console",
-  "triggers": ["google search console", "search.google.com"],
+  "triggers": [
+    "google search console",
+    "search.google.com"
+  ],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Check whether a page is indexed",
+      "startURL": "https://search.google.com/search-console",
+      "steps": [
+        "Open the URL Inspection tool, either by typing the fully-qualified URL into the inspection search bar at the top of any Search Console screen, or by clicking an Inspect link next to a page URL in most reports.",
+        "Enter the complete URL to inspect. The URL must be in the currently opened property.",
+        "Read the overall page status at the top of the tool: URL is on Google means the URL is eligible to appear in Search results, and URL is not on Google means it cannot appear.",
+        "Expand the Page indexing or Video indexing sections for details about discovery, crawl and indexing.",
+        "To see the HTTP request and response and the returned HTML, click View crawled page."
+      ],
+      "source": "https://support.google.com/webmasters/answer/9012289?hl=en"
+    },
+    {
+      "title": "Test a live URL and request indexing",
+      "startURL": "https://search.google.com/search-console",
+      "steps": [
+        "Inspect the URL. The page must be accessible from the internet without any login requirements.",
+        "Click Test live URL.",
+        "Toggle between the live test results and the indexed results by clicking Google Index or Live Test on the page.",
+        "To rerun a live test, click the re-run test button on the test page.",
+        "To have the page crawled, click Request indexing on the inspection result page. You cannot request indexing if the page is considered non-indexable in the live test."
+      ],
+      "source": "https://support.google.com/webmasters/answer/9012289?hl=en"
+    }
+  ]
 }
