@@ -84,7 +84,7 @@ struct SkillPhraseList {
 /// sections, because all of them reach the planner. A flow is read as one unit, since its money act
 /// is often split between a title ("Create a payout") and a step ("Click Confirm").
 ///
-/// **How it decides — two tests, either of which refuses:**
+/// **How it decides — four tests, any of which refuses:**
 /// 1. **A verb or act that can only mean money**, alone: `pay`, `refund`, `reimburse`, `withdraw`,
 ///    `top up`, `wire`, `remit`, `disburse`, `cash out`, `get paid`, and the old list's
 ///    `make a transfer`, `send a transfer` and `make a deposit` (restored in PR #241's delta round,
@@ -98,6 +98,20 @@ struct SkillPhraseList {
 ///    Trello board, an *account*, a *balance*, an *amount* — and count only when the same unit also
 ///    names money: a bank, billing, an IBAN, a transfer, a wire, a payment, a payout, money, funds, a
 ///    currency, an invoice, or a currency amount.
+/// 3. **A purchase act**, alone: `buy`, `purchase`, `place an order`, `proceed to checkout`,
+///    `complete the purchase`, `confirm and pay`, `add funds`. Buying is money leaving the user, and
+///    tests 1 and 2 were built for money *movement* — transfers, payouts, refunds, payees — so until
+///    SONNY-506 not one purchase word sat on any list: `git grep -cE '"(buy|purchase|checkout|postage)"' 981c6e56 -- Sources/MacAgentCore/SkillPackContentRules.swift`
+///    → exit 1, no output. A purchase act refuses on its own rather than beside an action verb,
+///    because the verb in a purchase step is *click*: "Click Buy Postage" holds no listed action
+///    verb and never will.
+/// 4. **A purchase control beside a price.** `subscribe`, `upgrade`, `renew` and `checkout` are each
+///    a free action on one site and a charge on the next — YouTube's Subscribe, a Workspace edition
+///    called "Teaching and Learning Upgrade" — so each counts only when the same unit also names
+///    what is being paid: a plan, a price, pricing, a cost, billing, a subscription, a payment, a
+///    card, a trial, a seat, per month, per year, paid. This test asks for no action verb either,
+///    for test 3's reason. "Pick the Business plan and click Upgrade to see the price." is refused;
+///    "Click Subscribe." on a channel loads.
 ///
 /// **Every word on those three lists — money objects, contextual objects, money context words — is
 /// read in the plural too, and the lists hold singulars.** Each word of the text is tried with its
@@ -177,7 +191,12 @@ enum SkillPackMoneyRule {
         "bank transfer", "bank account", "bank details", "account number", "routing number",
         "sort code", "direct deposit", "card on file", "credit card", "debit card", "payment card",
         "card number", "card details", "billing details", "billing information", "payment method",
-        "payment details", "payout account", "payout method", "payout details", "charge"
+        "payment details", "payout account", "payout method", "payout details", "charge",
+        // SONNY-506. Both are money objects wherever they appear: postage is bought and never
+        // granted, and a billing change is a change to what the user is charged — Dialpad's
+        // add-a-user page ends at "Confirm any billing changes and add the user(s)", which held no
+        // money object at all before these two.
+        "postage", "billing change"
     ])
 
     /// Ordinary words elsewhere, money objects only beside a money word in the same unit. Singulars,
@@ -193,29 +212,74 @@ enum SkillPackMoneyRule {
         "invoice"
     ])
 
+    /// Buying, which tests 1 and 2 could not see because both were built for money *movement*
+    /// (SONNY-506). These refuse alone, like the money verbs, because a purchase step's own verb is
+    /// *click*: "Click Buy Postage" carries no `actionVerbs` entry and a faithful step never will.
+    ///
+    /// **Every purchase control an earlier test already reaches is deliberately absent**, because a
+    /// list entry that can never fire is one a later reader trusts for no reason. "Confirm and pay"
+    /// and "Top up" are test 1's, on `pay` and `top up`; "Buy postage" and "Complete the purchase"
+    /// are this list's own, on `buy` and `purchase`; "Add funds" is test 2's, as `add + funds`.
+    /// `aFlowThatEndsInAPurchaseDoesNotLoad` carries a row for each of the five, which is what keeps
+    /// that a measurement rather than an assumption — and what will say so if one stops holding.
+    static let purchaseActs = SkillPhraseList([
+        "buy", "buys", "buying", "purchase", "purchases", "purchasing",
+        "place an order", "place the order", "place your order", "placing an order",
+        "proceed to checkout", "go to checkout", "complete checkout"
+    ])
+
+    /// Controls that charge on one site and cost nothing on the next, so each counts only beside
+    /// `pricedWords` in the same unit. Read in the plural too, like every other noun list here.
+    static let purchaseControls = SkillPhraseList([
+        "subscribe", "subscribes", "subscribing", "upgrade", "upgrades", "upgrading",
+        "renew", "renews", "renewing", "checkout", "check out"
+    ])
+
+    /// What names the thing being paid for. A `purchaseControls` word beside one of these is a
+    /// purchase; without one it is YouTube's Subscribe button or a Workspace edition called
+    /// "Teaching and Learning Upgrade". Deliberately holds neither `checkout` nor `cart`, which are
+    /// `purchaseControls` entries and product names — pairing a word with itself would refuse the two
+    /// shipped summaries that read "Checkout pages and online sales platform." and "Shopping cart and
+    /// checkout pages."
+    static let pricedWords = SkillPhraseList([
+        "plan", "price", "pricing", "cost", "billing", "subscription", "payment", "card", "trial",
+        "seat", "per month", "per year", "paid"
+    ])
+
     /// A currency amount — "$500", "€ 20", "500 USD", "20 euros" — which is a money object on its own.
     static let currencyAmount = try! NSRegularExpression(
         pattern: #"[$€£¥₹]\s*\d|\d[\d,.]*\s*(usd|eur|gbp|inr|jpy|cad|aud|chf|dollars?|euros?|pounds?|rupees?)(?![a-z])"#
     )
 
-    /// What in `texts` moves money — a money verb, or "verb + object" — or `nil` when nothing does.
+    /// What in `texts` moves or spends money — a money verb, a purchase act, "verb + object", or a
+    /// purchase control beside a price — or `nil` when nothing does.
+    ///
+    /// The order is the order the doc comment states, and it is what keeps a refusal's wording
+    /// stable: a unit that was refused before SONNY-506 is refused by the same test, in the same
+    /// words, because tests 3 and 4 can only add a refusal to a unit that had none.
     static func violation(in texts: [String]) -> String? {
         let units = texts.map(SkillWords.init)
         if let verb = moneyVerbs.first(in: units) {
             return verb
         }
-        guard let action = actionVerbs.first(in: units) else {
-            return nil
+        if let action = actionVerbs.first(in: units) {
+            if let object = moneyObjects.first(in: units, readingPlurals: true) {
+                return "\(action) + \(object)"
+            }
+            if units.contains(where: hasCurrencyAmount) {
+                return "\(action) + an amount"
+            }
+            if let object = contextualObjects.first(in: units, readingPlurals: true),
+               moneyContext.first(in: units, readingPlurals: true) != nil || units.contains(where: hasCurrencyAmount) {
+                return "\(action) + \(object)"
+            }
         }
-        if let object = moneyObjects.first(in: units, readingPlurals: true) {
-            return "\(action) + \(object)"
+        if let act = purchaseActs.first(in: units) {
+            return act
         }
-        if units.contains(where: hasCurrencyAmount) {
-            return "\(action) + an amount"
-        }
-        if let object = contextualObjects.first(in: units, readingPlurals: true),
-           moneyContext.first(in: units, readingPlurals: true) != nil || units.contains(where: hasCurrencyAmount) {
-            return "\(action) + \(object)"
+        if let control = purchaseControls.first(in: units, readingPlurals: true),
+           let priced = pricedWords.first(in: units, readingPlurals: true) {
+            return "\(control) + \(priced)"
         }
         return nil
     }
@@ -229,6 +293,25 @@ enum SkillPackMoneyRule {
 /// every text field of every pack, as whole words, folded — with one case-sensitive word, `PIN`,
 /// because the lowercase word is how chat tools say they keep a message at the top.
 ///
+/// **One word reads its neighbours, and only one: `secret`** (SONNY-508). Pinterest's board privacy
+/// toggle is named "Keep board secret", so the rule refused a flow for naming a real control, and the
+/// pack dropped the clause rather than inventing a label nobody could find. `secret` and `secrets`
+/// are therefore excused when — and only when — the word sits **immediately** beside one of
+/// `privacyObjects`, the things a site makes private. Everything else about the rule is unchanged,
+/// and the shape is fail-closed three times over:
+/// - **every** occurrence in the text must be excused, or the word refuses. "Keep the board secret
+///   and paste the API secret." is refused on the second one.
+/// - **immediately** beside, not merely in the same sentence. "Paste the secret into the chat."
+///   is refused, though it names a chat.
+/// - **only `secret`.** The other collision-capable words — `passcode`, `2fa`, `mfa`, the cased
+///   `PIN` — keep refusing outright until a lane measures a real control named by one, which is
+///   **SONNY-514** and opens with nothing to do until somebody does (founders, 2026-09-17).
+///   Widening a rule for a collision nobody has hit is how it stops meaning anything.
+///
+/// This is SONNY-492's answer to the same question in the trigger check, where everyday words the
+/// system word list lacked — box, podia, expo, grok, luma — were taught to the check rather than
+/// avoided by the packs. A flow that names a control the user cannot find is worse than no flow.
+///
 /// **What this cannot guarantee.** Like the money rule, it is a guard on first-party wording: a step
 /// can lead to a sign-in page without naming a credential. What refuses to type one is the planner
 /// prompt's own rule, which `SkillGuidance.header` restates above every pack.
@@ -237,7 +320,10 @@ enum SkillPackCredentialRule {
         "password", "passwords", "passcode", "passcodes", "passphrase", "passphrases", "credential",
         "credentials", "login details", "pin code", "pin number", "api key", "api keys", "api token",
         "api tokens", "access token", "access tokens", "auth token", "auth tokens", "bearer token",
-        "refresh token", "secret", "secrets", "secret key", "secret keys", "client secret",
+        // `secret` and `secrets` are not here: `secretViolation(in:)` reads them, because whether
+        // they are a credential depends on the word beside them (SONNY-508). They are checked first,
+        // so a credential step is still refused on the same word it was before.
+        "refresh token", "secret key", "secret keys", "client secret",
         "private key", "private keys", "verification code", "verification codes", "one time code",
         "one time codes", "one time password", "one time passwords", "otp", "otps", "two factor code",
         "two factor codes", "2fa", "mfa", "authentication code", "authentication codes",
@@ -259,12 +345,44 @@ enum SkillPackCredentialRule {
         "pass", "secret", "client_secret", "code", "otp", "auth", "sig", "signature"
     ]
 
+    /// The things a site makes private, which is the only company `secret` may keep (SONNY-508).
+    /// Pinterest's "Keep board secret" is the measured one; the rest are the same control on sites
+    /// this repository has not written a pack for yet.
+    static let privacyObjects: Set<String> = [
+        "board", "boards", "group", "groups", "chat", "chats", "conversation", "conversations",
+        "gist", "gists", "album", "albums"
+    ]
+
     static func violation(in text: String) -> String? {
         let unit = SkillWords(text)
+        if let secret = secretViolation(in: unit) {
+            return secret
+        }
         if let phrase = phrases.first(in: [unit]) {
             return phrase
         }
         return unit.casedWords.first { casedWords.contains($0) }
+    }
+
+    /// `secret` or `secrets` when it is a credential here, `nil` when every occurrence of both names
+    /// a thing a site makes private.
+    ///
+    /// Read before `phrases` so that a credential step is refused on the word it has always been
+    /// refused on — "Paste the client secret." still answers `secret`, not `client secret`.
+    private static func secretViolation(in unit: SkillWords) -> String? {
+        for spelling in ["secret", "secrets"] {
+            let occurrences = unit.words.indices.filter { unit.words[$0] == spelling }
+            guard !occurrences.isEmpty else { continue }
+            let everyOneNamesAThing = occurrences.allSatisfy { index in
+                let before = index > unit.words.startIndex ? unit.words[index - 1] : nil
+                let after = index + 1 < unit.words.endIndex ? unit.words[index + 1] : nil
+                return privacyObjects.contains(before ?? "") || privacyObjects.contains(after ?? "")
+            }
+            if !everyOneNamesAThing {
+                return spelling
+            }
+        }
+        return nil
     }
 
     /// Whether a URL names a credential in its query or its fragment. A fragment is read as

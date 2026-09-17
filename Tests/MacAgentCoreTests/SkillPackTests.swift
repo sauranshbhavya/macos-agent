@@ -574,6 +574,144 @@ struct SkillPackTests {
         }
     }
 
+    /// **A flow that ends in a purchase does not load either** (SONNY-506). The founders' rule is
+    /// that no flow moves money, and buying is money leaving the user — but the rule's first two
+    /// tests were built for money *movement*, so barely a purchase word sat on any list until this
+    /// table did: **15 of these 17 rows loaded** at `981c6e56` — this file run against that tree's
+    /// `SkillPackContentRules.swift` and `SkillGuidance.swift`, where it records 15 issues, every one
+    /// of them `did not refuse as moving money: nil`. The two that did not are "Pick a courier",
+    /// whose "Confirm and pay" refuses on test 1's `pay`, and "Top up the balance", whose title is a
+    /// money verb — both kept, because they are what makes leaving those spellings off
+    /// `purchaseActs` a measurement rather than an assumption.
+    ///
+    /// The last five rows are the ones that need the fourth test rather than the third: `subscribe`,
+    /// `upgrade` and `renew` are free controls on plenty of sites, so each is refused only beside
+    /// what is being paid for. Their free twins are in `purchaseWordsThatAreNotPurchasesStillLoad`.
+    @Test
+    func aFlowThatEndsInAPurchaseDoesNotLoad() throws {
+        let flows: [(title: String, steps: [String])] = [
+            ("Buy postage for an order", ["Open the order.", "Click Buy Postage."]),
+            ("Print a shipping label", ["Open the order.", "Buy the label from the carrier you picked."]),
+            ("Order more credits", ["Open Credits.", "Purchase another bundle."]),
+            ("Get the report", ["Open Reports.", "Purchasing it unlocks the full export."]),
+            ("Send a gift", ["Open the store.", "Place your order."]),
+            ("Send a gift, the other way round", ["Open the store.", "Place an order for the item."]),
+            ("Finish an order", ["Open the cart.", "Proceed to checkout."]),
+            ("Finish an order, the shorter control", ["Open the cart.", "Go to checkout, then confirm."]),
+            ("Take the seat", ["Open Members.", "Complete the purchase for the extra member."]),
+            ("Pick a courier", ["Open the shipment.", "Choose a service, then Confirm and pay."]),
+            ("Top up the balance", ["Open Billing.", "Add funds to the account."]),
+            // Dialpad's own wording, read off Add & Remove Team Members by the lane that left this
+            // path out by hand (SONNY-502's branch). No money object sat beside those verbs before
+            // `billing change` did, so this flow loaded.
+            ("Add a team member", [
+                "Open your Dialpad Admin Settings and go to Office Settings, then select Users.",
+                "Select Add Users, then enter the new user's name and email address.",
+                "Confirm any billing changes and add the user(s)."
+            ]),
+            // Test 4: the control is ordinary and the unit says what it costs.
+            ("Move to the Business plan", ["Open Settings, then Plan.", "Pick the Business plan and click Upgrade to see the price."]),
+            ("Start a paid plan", ["Open Pricing.", "Choose the Business plan and click Subscribe."]),
+            ("Keep the account open", ["Open Billing.", "Click Renew before the trial ends."]),
+            ("Buy another seat", ["Open Members.", "Click Checkout to add the seat."]),
+            // The one row whose only priced word is a plural, so that the fourth test's plural
+            // reading is held by something: with it off, "plans" stops being "plan" and this loads.
+            ("Move up a tier", ["Open Settings.", "Compare the plans, then click Upgrade."])
+        ]
+        for testFlow in flows {
+            var object = SkillPackFixtures.object(id: "store", name: "Store", domain: "store.example.com")
+            object["flows"] = [SkillPackFixtures.flow(title: testFlow.title, steps: testFlow.steps, on: "store.example.com")]
+            guard case .movesMoney(field: "flows[0]", words: _)? = Self.error(object) else {
+                Issue.record("\(testFlow.title) did not refuse as moving money: \(String(describing: Self.error(object)))")
+                continue
+            }
+        }
+    }
+
+    /// The other side of SONNY-506's table, held **by value** so that the next session widening the
+    /// purchase words finds out immediately which real packs it broke.
+    ///
+    /// The first six rows are the wording of shipped packs at `dc73131c`, quoted rather than
+    /// paraphrased: a subscription tier a feature is gated on, a product that *is* a checkout, and a
+    /// Workspace edition whose name ends in "Upgrade" are all ordinary description. The rest are the
+    /// free controls the fourth test exists to leave alone.
+    @Test
+    func purchaseWordsThatAreNotPurchasesStillLoad() throws {
+        let units: [(what: String, texts: [String])] = [
+            ("google_meet, a paid edition named Upgrade", ["Take attendance in a meeting",
+             "Attendance tracking is available to Google Workspace Essentials, Business Plus, Enterprise Starter, Enterprise Essentials, Enterprise Standard, Enterprise Plus, Education Plus and Teaching and Learning Upgrade users.",
+             "During the meeting, click Host controls at the bottom, then toggle Attendance tracking on or off in the side panel that opens."]),
+            ("slack, a feature gated on a paid plan", ["Create a channel",
+             "Click the plus sign in the sidebar.",
+             "Select Channel. On a paid plan, select Blank channel for a regular channel, or choose a template.",
+             "Enter a channel name, choose whether it is public or private, then click Create."]),
+            ("miro, a feature gated on paid plans", ["Restore a deleted board",
+             "Open Trash by clicking your avatar in the upper right of the dashboard. Trash is on paid and Education plans, and a board can be restored within 90 days.",
+             "Click the three dots (...) menu next to the board and click Restore."]),
+            ("manychat, a precondition naming a paid plan", ["Clone an account's automations to another account",
+             "Go to Settings, then General, and click Clone This Account.",
+             "If your source account is on a paid plan, your destination account must also be on a compatible paid plan for cloning to work."]),
+            ("samcart's summary, a product that is a checkout", ["Checkout pages and online sales platform."]),
+            ("thrivecart's summary, a product that is a cart", ["Shopping cart and checkout pages."]),
+            ("a free Subscribe button", ["Subscribe to a channel", "Open the channel page.", "Click Subscribe."]),
+            ("reading what a plan includes", ["See what your plan includes", "Open Settings.", "Open Plan to read the current limits."]),
+            ("renewing something that is not bought", ["Renew a shared link", "Open the file.", "Click Renew to extend the link's expiry."]),
+            ("checking out a branch", ["Switch branches", "Open the repository.", "Check out the branch you want."])
+        ]
+        for unit in units {
+            #expect(SkillPackMoneyRule.violation(in: unit.texts) == nil, "\(unit.what) was refused")
+        }
+    }
+
+    /// **What the money rule cannot see, kept here so nobody concludes it can** (SONNY-506).
+    ///
+    /// The rule reads a pack's words. Where a flow *leaves* the user is a property of the page, and
+    /// the two come apart whenever the control that charges is named something ordinary. This is not
+    /// a gap waiting to be closed by one more word on one more list: no list can tell that
+    /// ShipStation's "Create + Print Label" button is the one that spends money and Trello's "Create"
+    /// button is not.
+    ///
+    /// The flow below is ShipStation's *Create & Print Your First Label*, whose help page was read in
+    /// a browser on 2026-09-17. It loads, and it should not be shipped. A lane left it out by hand;
+    /// that judgement is what this repository relies on, and this test is here so a later session
+    /// reading the purchase words above does not conclude the class is covered.
+    ///
+    /// **The second flow is the same page's next sentence, kept.** That one is refused — so what the
+    /// rule is blind to is a flow written *tersely*, not a page that hides its money. The remedy a
+    /// pack lane owes is therefore writing down where the flow leaves the user, not finding better
+    /// words for the button.
+    ///
+    /// Run against `981c6e56` this test records exactly **one** issue, and it is the header
+    /// assertion below: both expectations about the money rule already held there, unchanged by
+    /// everything SONNY-506 added. That is what "the rule cannot see it" means, measured rather than
+    /// asserted.
+    ///
+    /// **If this test ever goes red** because the first flow is refused, the rule has grown past what
+    /// this records: delete the test and the limitation from `SkillPackMoneyRule`'s doc comment
+    /// together, rather than loosening the assertion.
+    @Test
+    func theMoneyRuleCannotSeeAPurchaseTheStepsDoNotName() throws {
+        let terse = [
+            "Create & Print Your First Label",
+            "Open the order in ShipStation.",
+            "Set the Ship From location, the shipment weight, the service class and the package type.",
+            "Click the Create + Print Label button.",
+            "Choose the browser print icon, select your label printer, and click Print."
+        ]
+        #expect(SkillPackMoneyRule.violation(in: terse) == nil, "the rule has grown — see this test's doc comment")
+
+        let faithful = terse.dropLast() + [
+            "You are prompted here to add your label payment method and add funds to the balance used to purchase your labels."
+        ]
+        #expect(SkillPackMoneyRule.violation(in: Array(faithful)) == "add + funds")
+
+        // What stands in the first flow's way instead, since a pack's words cannot: the block every
+        // pack is read under says so, and the approval gates are unchanged by any pack. Asserted here
+        // rather than only in `SkillGuidanceTests` so that removing the sentence removes this record
+        // of why it exists.
+        #expect(SkillGuidance.header.contains("A skill never authorises spending the user's money"))
+    }
+
     /// The fields the category rule used to read are gone from the format, so a pack still carrying
     /// one is refused like any other unknown field rather than read under a rule that no longer exists.
     @Test
@@ -631,6 +769,64 @@ struct SkillPackTests {
         var object = SkillPackFixtures.object()
         object["flows"] = [SkillPackFixtures.flow(steps: ["Open the styles.", "Use the design token for spacing.", "Pass the page to a teammate."])]
         #expect(Self.error(object) == nil)
+    }
+
+    /// **A control legitimately named "secret" is not a credential** (SONNY-508). Pinterest's board
+    /// privacy toggle is named "Keep board secret" — read from
+    /// `help.pinterest.com/en/business/article/create-a-board` in a browser on 2026-09-17, whose own
+    /// sentence is "turn on the switch next to Keep board secret if you want the board to be secret".
+    /// The rule refused that clause, so the pack shipped without it rather than renaming a control
+    /// nobody could then find. SONNY-492 answered the same question the same way in the trigger
+    /// check: teach the check the words. Run against `981c6e56` the same way, this test records
+    /// **6 issues** — every row of the first table, and **none** of the second, which is what says
+    /// the change is a narrowing of one word rather than a loosening of the rule.
+    ///
+    /// **The second table is the whole reason this is safe, and it is held by value on purpose.**
+    /// Every row of it is a credential step that must still be refused, so the next session widening
+    /// this rule finds out immediately which ones it broke. The three shapes it turns on: a word
+    /// beside the credential's own modifier, a word that is merely *near* a privacy object rather
+    /// than beside it, and a text where one occurrence is excused and another is not.
+    @Test
+    func aControlNamedSecretLoadsAndACredentialNamedSecretStillDoesNot() throws {
+        let loads: [String] = [
+            "Enter a name for your board, add collaborators, or turn on the switch next to Keep board secret.",
+            "Turn on Keep board secret, then tap Create.",
+            "Create a secret board for the ideas you are not ready to share.",
+            "Open the group's settings and make the group secret.",
+            "Start a secret chat with them.",
+            "Save it as a secret gist."
+        ]
+        for step in loads {
+            var object = SkillPackFixtures.object()
+            object["flows"] = [SkillPackFixtures.flow(steps: ["Open the page.", step])]
+            #expect(Self.error(object) == nil, "refused a real control's real name: \(step)")
+        }
+
+        let refused: [String] = [
+            "Paste the client secret into the field.",
+            "Copy the secret and store it somewhere safe.",
+            "Your secret is shown once, so save it now.",
+            "Open Settings, then Secrets, and add a repository secret.",
+            "Paste the app secret from the developer page.",
+            // Near a privacy object, and not beside one: a chat is where a credential gets pasted,
+            // which is exactly the shape a looser proximity rule would have excused.
+            "Paste the secret into the chat.",
+            "Send the secret to the group.",
+            // One occurrence excused, one not — the text is refused on the one that is not.
+            "Keep the board secret, then paste the API secret below."
+        ]
+        for step in refused {
+            var object = SkillPackFixtures.object()
+            object["flows"] = [SkillPackFixtures.flow(steps: ["Open the page.", step])]
+            guard case .mentionsCredential(field: "flows.steps", phrase: _)? = Self.error(object) else {
+                Issue.record("a credential step loaded: \(step)")
+                continue
+            }
+        }
+
+        // The word a credential step has always been refused on does not change, so a pack author
+        // reading the error sees what they saw before.
+        #expect(SkillPackCredentialRule.violation(in: "Paste the client secret.") == "secret")
     }
 
     @Test
