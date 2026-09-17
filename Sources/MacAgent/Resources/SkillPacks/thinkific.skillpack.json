@@ -6,8 +6,38 @@
   "category": "websites_apps_commerce",
   "summary": "Online course platform.",
   "signInURL": "https://courses.thinkific.com/onboarding/signin",
-  "triggers": ["thinkific", "thinkific.com"],
+  "triggers": [
+    "thinkific",
+    "thinkific.com"
+  ],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Create a course and add its first chapter and lesson",
+      "startURL": "https://courses.thinkific.com/onboarding/signin",
+      "steps": [
+        "Go to Products.",
+        "Select Courses.",
+        "Select + New Course at the top right.",
+        "In the Course Builder, make sure you are in the Curriculum tab, then click Add Chapter on the left-hand side.",
+        "Name the Chapter title field as you want it, then click Save.",
+        "Find the chapter you want the lesson in and click Add Lesson.",
+        "Select your Lesson Type, type the lesson name under Lesson Title, add your content and click Save."
+      ],
+      "source": "https://support.thinkific.com/hc/en-us/articles/360030371674-Create-a-Course"
+    },
+    {
+      "title": "Publish a course",
+      "startURL": "https://courses.thinkific.com/onboarding/signin",
+      "steps": [
+        "Go to Products.",
+        "Select Courses.",
+        "Click the Draft course you want live.",
+        "Click the Publish button, then Publish now.",
+        "Click Publish."
+      ],
+      "source": "https://support.thinkific.com/hc/en-us/articles/360030738133-Publishing-Your-Products"
+    }
+  ]
 }
