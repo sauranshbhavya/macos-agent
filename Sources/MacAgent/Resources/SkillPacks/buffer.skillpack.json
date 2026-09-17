@@ -6,8 +6,27 @@
   "category": "marketing_growth",
   "summary": "Social media scheduling tool.",
   "signInURL": "https://login.buffer.com/login",
-  "triggers": ["buffer.com"],
+  "triggers": [
+    "buffer.com"
+  ],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Add a mention or tag to a post",
+      "startURL": "https://login.buffer.com/login",
+      "steps": [
+        "Open the post you are composing in Buffer. You can mention (tag) other Facebook Pages, Instagram profiles, LinkedIn Pages, LinkedIn profiles, Mastodon users, TikTok accounts and X/Twitter profiles in posts scheduled through Buffer.",
+        "If you're creating a post for multiple social networks, select “Customize for each network.” Then, add the correct @ mention to each post to make sure you're tagging the right profile on each one.",
+        "To mention a Facebook Page in your post, type in the @ symbol and start typing the first few letters of the Facebook Page you'd like to mention. Matching results will be returned and you can click on the Page you'd like to include.",
+        "Mentions will only work in the caption of the post. Mentions will not work within the first comment field.",
+        "There is a limit of 10 @ mentions per Facebook post.",
+        "If the Page name contains spaces, it can help to replace the space with an underscore symbol when you type the name. For example, “Runner's World” could be typed as “Runners_World”.",
+        "Once added, you can hover a mention and then click on the card that appears to open the Page you’ve mentioned in a new tab.",
+        "If Buffer is unable to find the Page you're trying to tag, you'll see a “No matches found” error. Check your @ tag and try again.",
+        "It is not currently possible to mention Facebook profiles, Facebook groups or Pinterest profiles in posts scheduled through Buffer."
+      ],
+      "source": "https://support.buffer.com/en-us/articles/adding-mentions-tags-in-posts-ulm0tGb2Ej"
+    }
+  ]
 }
