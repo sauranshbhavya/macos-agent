@@ -259,8 +259,9 @@ struct SkillPackTests {
     /// grows with every pack wave and moves under a rebase without anything in the branch saying so —
     /// this read 95 until a delta pass caught it eight packs later, which is the whole of review-260's
     /// finding. The sentence needs only that the population is not empty; the size is a reading at a
-    /// commit, and this is one — 103 at `1dea6c9d`, against 370 for the `shallow` twin and 0 for a
-    /// depth no pack has, that last being the control saying the pattern can come back empty:
+    /// commit, and this is one — 143 at `8e4ca1c6`, against 330 for the `shallow` twin and 0 for a
+    /// depth no pack has, that last being the control saying the pattern can come back empty. It read
+    /// 103 one update from `main` ago and 95 before that, on this one branch, which is the point:
     ///
     ///     grep -rl '"depth": "deep"' Sources/MacAgent/Resources/SkillPacks | wc -l
     ///

@@ -41,8 +41,9 @@
 # cells — the state a lane's own unfilled row is in — must be caught by the same loop. A count here
 # dates rather than describes, because every pack wave raises it and a rebase raised it inside this
 # branch (review-260's delta pass, which caught this line claiming 95 of them); the reading is
-# `grep -rl '"depth": "deep"' Sources/MacAgent/Resources/SkillPacks | wc -l` -> 103 at 1dea6c9d,
-# against 370 for the `shallow` twin and 0 for a depth no pack has, which is the control. Its
+# `grep -rl '"depth": "deep"' Sources/MacAgent/Resources/SkillPacks | wc -l` -> 143 at 8e4ca1c6,
+# against 330 for the `shallow` twin and 0 for a depth no pack has, which is the control; it answered
+# 95, then 103, then this, at three heads of this one branch as the pack lanes merged around it. Its
 # expected killer is everyShippedPackLoadsAndEveryOneIsARowOfTheCommittedCatalogue, naming a pack and
 # reading "names no page its flows were read from". Shown by hand on the branch as well, on notion's
 # real row, both on a `deep` row and on a `site` one.
