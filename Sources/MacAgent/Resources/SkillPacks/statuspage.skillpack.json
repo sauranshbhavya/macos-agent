@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "statuspage",
+  "name": "Statuspage",
+  "domain": "statuspage.io",
+  "category": "analytics_monitoring",
+  "summary": "Status pages for incidents, from Atlassian.",
+  "signInURL": "https://manage.statuspage.io/login",
+  "triggers": ["statuspage", "statuspage.io"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

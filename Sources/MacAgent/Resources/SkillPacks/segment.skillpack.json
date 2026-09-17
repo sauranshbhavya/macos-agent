@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "segment",
+  "name": "Segment",
+  "domain": "segment.com",
+  "category": "data_databases",
+  "summary": "Customer data platform from Twilio.",
+  "signInURL": "https://app.segment.com/login",
+  "triggers": ["segment.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

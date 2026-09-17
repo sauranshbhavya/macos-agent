@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "google_workspace_admin",
+  "name": "Google Admin console",
+  "domain": "admin.google.com",
+  "category": "it_accounts_security",
+  "summary": "Admin console for Google Workspace.",
+  "signInURL": "https://admin.google.com/",
+  "triggers": ["google admin console", "admin.google.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "plausible",
+  "name": "Plausible Analytics",
+  "domain": "plausible.io",
+  "category": "analytics_monitoring",
+  "summary": "Privacy-friendly web analytics.",
+  "signInURL": "https://plausible.io/login",
+  "triggers": ["plausible analytics", "plausible.io"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

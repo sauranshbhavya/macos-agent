@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "adobe_acrobat",
+  "name": "Adobe Acrobat online",
+  "domain": "acrobat.adobe.com",
+  "category": "documents_storage",
+  "summary": "Adobe's PDF tools in the browser.",
+  "signInURL": "https://acrobat.adobe.com/",
+  "triggers": ["adobe acrobat online", "acrobat.adobe.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

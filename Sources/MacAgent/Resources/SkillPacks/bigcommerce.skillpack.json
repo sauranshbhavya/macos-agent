@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "bigcommerce",
+  "name": "BigCommerce",
+  "domain": "bigcommerce.com",
+  "category": "websites_apps_commerce",
+  "summary": "Ecommerce platform.",
+  "signInURL": "https://login.bigcommerce.com/login/",
+  "triggers": ["bigcommerce", "bigcommerce.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

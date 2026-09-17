@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "tidio",
+  "name": "Tidio",
+  "domain": "tidio.com",
+  "category": "customer_support",
+  "summary": "Live chat and AI chatbot for customer service.",
+  "signInURL": "https://tidio.com/login",
+  "triggers": ["tidio", "tidio.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

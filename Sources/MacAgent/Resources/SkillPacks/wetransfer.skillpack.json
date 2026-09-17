@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "wetransfer",
+  "name": "WeTransfer",
+  "domain": "wetransfer.com",
+  "category": "documents_storage",
+  "summary": "Service for sharing large files.",
+  "signInURL": "https://wetransfer.com/signin",
+  "triggers": ["wetransfer", "wetransfer.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "brevo",
+  "name": "Brevo",
+  "domain": "brevo.com",
+  "category": "marketing_email",
+  "summary": "Email, SMS and CRM marketing platform.",
+  "signInURL": "https://login.brevo.com/",
+  "triggers": ["brevo", "brevo.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

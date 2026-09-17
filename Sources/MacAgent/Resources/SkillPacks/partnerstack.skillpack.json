@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "partnerstack",
+  "name": "PartnerStack",
+  "domain": "partnerstack.com",
+  "category": "marketing_growth",
+  "summary": "Partner and affiliate program platform.",
+  "signInURL": "https://dash.partnerstack.com/login",
+  "triggers": ["partnerstack", "partnerstack.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

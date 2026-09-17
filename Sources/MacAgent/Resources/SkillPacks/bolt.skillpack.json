@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "bolt",
+  "name": "Bolt",
+  "domain": "bolt.new",
+  "category": "ai_assistants",
+  "summary": "AI web app builder from StackBlitz.",
+  "signInURL": "https://bolt.new/",
+  "triggers": ["bolt.new"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

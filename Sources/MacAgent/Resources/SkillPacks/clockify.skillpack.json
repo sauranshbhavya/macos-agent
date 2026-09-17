@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "clockify",
+  "name": "Clockify",
+  "domain": "clockify.me",
+  "category": "finance_billing",
+  "summary": "Time tracking app.",
+  "signInURL": "https://app.clockify.me/en/login",
+  "triggers": ["clockify", "clockify.me"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

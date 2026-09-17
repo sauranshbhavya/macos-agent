@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "google_play_console",
+  "name": "Google Play Console",
+  "domain": "play.google.com",
+  "category": "developer_platforms",
+  "summary": "Google's console for publishing Android apps.",
+  "signInURL": "https://play.google.com/console/",
+  "triggers": ["google play console"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

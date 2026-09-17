@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "calcom",
+  "name": "Cal.com",
+  "domain": "cal.com",
+  "category": "scheduling",
+  "summary": "Open-source scheduling platform.",
+  "signInURL": "https://app.cal.com/auth/login",
+  "triggers": ["cal.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "calendly",
+  "name": "Calendly",
+  "domain": "calendly.com",
+  "category": "scheduling",
+  "summary": "Meeting scheduling links.",
+  "signInURL": "https://calendly.com/login",
+  "triggers": ["calendly", "calendly.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

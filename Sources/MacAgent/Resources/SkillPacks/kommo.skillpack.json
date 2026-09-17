@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "kommo",
+  "name": "Kommo",
+  "domain": "kommo.com",
+  "category": "sales_crm",
+  "summary": "Messenger-based sales CRM.",
+  "signInURL": "https://www.kommo.com/login/",
+  "triggers": ["kommo", "kommo.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

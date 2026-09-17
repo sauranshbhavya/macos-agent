@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "hunter",
+  "name": "Hunter",
+  "domain": "hunter.io",
+  "category": "sales_crm",
+  "summary": "Email address finder and verifier.",
+  "signInURL": "https://hunter.io/users/sign_in",
+  "triggers": ["hunter.io"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

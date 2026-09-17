@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "unbounce",
+  "name": "Unbounce",
+  "domain": "unbounce.com",
+  "category": "websites_apps_commerce",
+  "summary": "Landing page builder.",
+  "signInURL": "https://app.unbounce.com/users/sign_in",
+  "triggers": ["unbounce", "unbounce.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

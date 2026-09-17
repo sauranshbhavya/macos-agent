@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "luma",
+  "name": "Luma",
+  "domain": "luma.com",
+  "category": "marketing_growth",
+  "summary": "Event pages and invitations.",
+  "signInURL": "https://luma.com/signin?next=%2Fhome",
+  "triggers": ["luma", "luma.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

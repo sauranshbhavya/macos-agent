@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "typeform",
+  "name": "Typeform",
+  "domain": "typeform.com",
+  "category": "forms_surveys",
+  "summary": "Conversational forms and surveys.",
+  "signInURL": "https://admin.typeform.com/login/",
+  "triggers": ["typeform", "typeform.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

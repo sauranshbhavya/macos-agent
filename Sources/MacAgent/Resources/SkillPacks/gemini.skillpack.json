@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "gemini",
+  "name": "Gemini",
+  "domain": "gemini.google.com",
+  "category": "ai_assistants",
+  "summary": "Google's AI assistant.",
+  "signInURL": "https://accounts.google.com/ServiceLogin?continue=https%3A%2F%2Fgemini.google.com%2Fapp",
+  "triggers": ["gemini.google.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

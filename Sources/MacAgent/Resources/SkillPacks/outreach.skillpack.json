@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "outreach",
+  "name": "Outreach",
+  "domain": "outreach.io",
+  "category": "sales_crm",
+  "summary": "Sales engagement platform.",
+  "signInURL": "https://web.outreach.io/",
+  "triggers": ["outreach.io"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

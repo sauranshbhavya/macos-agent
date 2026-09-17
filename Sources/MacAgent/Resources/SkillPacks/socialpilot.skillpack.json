@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "socialpilot",
+  "name": "SocialPilot",
+  "domain": "socialpilot.co",
+  "category": "marketing_growth",
+  "summary": "Social media scheduling and management.",
+  "signInURL": "https://auth.socialpilot.co/login",
+  "triggers": ["socialpilot", "socialpilot.co"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

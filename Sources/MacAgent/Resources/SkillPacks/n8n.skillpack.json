@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "n8n",
+  "name": "n8n",
+  "domain": "n8n.io",
+  "category": "automation",
+  "summary": "Workflow automation platform.",
+  "signInURL": "https://app.n8n.cloud/login",
+  "triggers": ["n8n", "n8n.io"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

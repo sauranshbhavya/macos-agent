@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "fathom",
+  "name": "Fathom",
+  "domain": "fathom.video",
+  "category": "communication",
+  "summary": "AI meeting note-taker.",
+  "signInURL": "https://fathom.video/users/sign_in",
+  "triggers": ["fathom.video"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

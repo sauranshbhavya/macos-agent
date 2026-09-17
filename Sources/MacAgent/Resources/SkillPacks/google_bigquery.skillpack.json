@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "google_bigquery",
+  "name": "BigQuery",
+  "domain": "console.cloud.google.com",
+  "category": "data_databases",
+  "summary": "Google Cloud's data warehouse.",
+  "signInURL": "https://console.cloud.google.com/bigquery",
+  "triggers": ["bigquery"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

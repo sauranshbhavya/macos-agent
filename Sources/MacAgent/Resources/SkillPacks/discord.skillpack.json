@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "discord",
+  "name": "Discord",
+  "domain": "discord.com",
+  "category": "communication",
+  "summary": "Voice, video and text chat communities.",
+  "signInURL": "https://discord.com/login",
+  "triggers": ["discord.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

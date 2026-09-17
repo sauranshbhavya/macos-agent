@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "outlook",
+  "name": "Microsoft Outlook",
+  "domain": "outlook.office.com",
+  "category": "email_calendar",
+  "summary": "Microsoft's email service on the web.",
+  "signInURL": "https://outlook.office365.com",
+  "triggers": ["microsoft outlook"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

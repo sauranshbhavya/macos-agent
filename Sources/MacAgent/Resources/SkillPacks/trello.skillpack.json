@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "trello",
+  "name": "Trello",
+  "domain": "trello.com",
+  "category": "project_tracking",
+  "summary": "Kanban boards for tracking work.",
+  "signInURL": "https://id.atlassian.com/login?application=trello--direct-signup&continue=https%3A%2F%2Ftrello.com%2Fauth%2Fatlassian%2Fcallback",
+  "triggers": ["trello", "trello.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

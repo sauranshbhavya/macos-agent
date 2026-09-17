@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "qonto",
+  "name": "Qonto",
+  "domain": "qonto.com",
+  "category": "finance_billing",
+  "summary": "Business banking for small businesses.",
+  "signInURL": "https://app.qonto.com/",
+  "triggers": ["qonto", "qonto.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

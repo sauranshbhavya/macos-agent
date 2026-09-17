@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "algolia",
+  "name": "Algolia",
+  "domain": "algolia.com",
+  "category": "developer_platforms",
+  "summary": "Search and discovery API.",
+  "signInURL": "https://dashboard.algolia.com/users/sign_in",
+  "triggers": ["algolia", "algolia.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

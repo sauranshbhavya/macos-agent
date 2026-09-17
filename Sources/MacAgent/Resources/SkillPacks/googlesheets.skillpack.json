@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "googlesheets",
+  "name": "Google Sheets",
+  "domain": "sheets.google.com",
+  "category": "documents_storage",
+  "summary": "Google's online spreadsheets.",
+  "signInURL": "https://docs.google.com/spreadsheets/",
+  "triggers": ["google sheets", "sheets.google.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

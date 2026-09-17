@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "podia",
+  "name": "Podia",
+  "domain": "podia.com",
+  "category": "websites_apps_commerce",
+  "summary": "Platform for courses, downloads and memberships.",
+  "signInURL": "https://app.podia.com/login",
+  "triggers": ["podia.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

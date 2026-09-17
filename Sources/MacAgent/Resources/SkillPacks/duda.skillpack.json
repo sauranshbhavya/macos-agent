@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "duda",
+  "name": "Duda",
+  "domain": "duda.co",
+  "category": "websites_apps_commerce",
+  "summary": "Website builder for agencies.",
+  "signInURL": "https://www.duda.co/login",
+  "triggers": ["duda", "duda.co"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

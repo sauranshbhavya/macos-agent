@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "toggl_track",
+  "name": "Toggl Track",
+  "domain": "toggl.com",
+  "category": "finance_billing",
+  "summary": "Time tracking app.",
+  "signInURL": "https://accounts.toggl.com/app/login/",
+  "triggers": ["toggl track"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

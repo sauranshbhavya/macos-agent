@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "todoist",
+  "name": "Todoist",
+  "domain": "todoist.com",
+  "category": "project_tracking",
+  "summary": "To-do list and task manager.",
+  "signInURL": "https://www.todoist.com/auth/login",
+  "triggers": ["todoist", "todoist.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

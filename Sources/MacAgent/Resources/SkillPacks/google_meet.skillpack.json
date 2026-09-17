@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "google_meet",
+  "name": "Google Meet",
+  "domain": "meet.google.com",
+  "category": "communication",
+  "summary": "Google's video meetings.",
+  "signInURL": "https://accounts.google.com/ServiceLogin?continue=https%3A%2F%2Fmeet.google.com%2F",
+  "triggers": ["google meet", "meet.google.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

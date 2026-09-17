@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "gusto",
+  "name": "Gusto",
+  "domain": "gusto.com",
+  "category": "recruiting_hr",
+  "summary": "Payroll, benefits and HR for small businesses.",
+  "signInURL": "https://gusto.com/login",
+  "triggers": ["gusto.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

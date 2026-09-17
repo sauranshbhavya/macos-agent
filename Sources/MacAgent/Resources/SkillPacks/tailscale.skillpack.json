@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "tailscale",
+  "name": "Tailscale",
+  "domain": "tailscale.com",
+  "category": "it_accounts_security",
+  "summary": "Private networking between devices and servers.",
+  "signInURL": "https://login.tailscale.com/welcome",
+  "triggers": ["tailscale", "tailscale.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

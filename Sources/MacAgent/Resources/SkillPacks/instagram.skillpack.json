@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "instagram",
+  "name": "Instagram",
+  "domain": "instagram.com",
+  "category": "marketing_growth",
+  "summary": "Photo and video social network.",
+  "signInURL": "https://instagram.com/login",
+  "triggers": ["instagram", "instagram.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

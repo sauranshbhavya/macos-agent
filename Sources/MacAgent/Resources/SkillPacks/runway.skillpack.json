@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "runway",
+  "name": "Runway",
+  "domain": "runwayml.com",
+  "category": "ai_assistants",
+  "summary": "AI video generation and editing.",
+  "signInURL": "https://app.runwayml.com/login",
+  "triggers": ["runwayml.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

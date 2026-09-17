@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "gong",
+  "name": "Gong",
+  "domain": "gong.io",
+  "category": "sales_crm",
+  "summary": "Revenue intelligence platform for sales conversations.",
+  "signInURL": "https://app.gong.io/",
+  "triggers": ["gong.io"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

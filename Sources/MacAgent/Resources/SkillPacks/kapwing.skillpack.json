@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "kapwing",
+  "name": "Kapwing",
+  "domain": "kapwing.com",
+  "category": "design",
+  "summary": "Online video editor.",
+  "signInURL": "https://www.kapwing.com/signin",
+  "triggers": ["kapwing", "kapwing.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

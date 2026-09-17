@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "substack",
+  "name": "Substack",
+  "domain": "substack.com",
+  "category": "marketing_email",
+  "summary": "Newsletter publishing platform.",
+  "signInURL": "https://substack.com/sign-in",
+  "triggers": ["substack", "substack.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

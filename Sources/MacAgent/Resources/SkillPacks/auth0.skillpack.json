@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "auth0",
+  "name": "Auth0",
+  "domain": "auth0.com",
+  "category": "developer_platforms",
+  "summary": "Identity and sign-in platform from Okta.",
+  "signInURL": "https://auth0.com/api/auth/login?redirectTo=dashboard",
+  "triggers": ["auth0", "auth0.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

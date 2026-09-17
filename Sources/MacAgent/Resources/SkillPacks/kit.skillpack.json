@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "kit",
+  "name": "Kit",
+  "domain": "kit.com",
+  "category": "marketing_email",
+  "summary": "Email marketing for creators.",
+  "signInURL": "https://app.kit.com/users/login",
+  "triggers": ["kit.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "lemon_squeezy",
+  "name": "Lemon Squeezy",
+  "domain": "lemonsqueezy.com",
+  "category": "finance_billing",
+  "summary": "Payments and subscriptions for software sellers.",
+  "signInURL": "https://app.lemonsqueezy.com/login",
+  "triggers": ["lemon squeezy", "lemonsqueezy.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

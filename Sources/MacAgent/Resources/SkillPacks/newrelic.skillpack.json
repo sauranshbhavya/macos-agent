@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "newrelic",
+  "name": "New Relic",
+  "domain": "newrelic.com",
+  "category": "analytics_monitoring",
+  "summary": "Observability platform.",
+  "signInURL": "https://one.newrelic.com/",
+  "triggers": ["new relic", "newrelic.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

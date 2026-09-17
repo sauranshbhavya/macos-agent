@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "bill",
+  "name": "BILL",
+  "domain": "bill.com",
+  "category": "finance_billing",
+  "summary": "Accounts payable and receivable automation.",
+  "signInURL": "https://login.us.bill.com/neo/login",
+  "triggers": ["bill.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

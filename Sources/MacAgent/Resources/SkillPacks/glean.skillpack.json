@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "glean",
+  "name": "Glean",
+  "domain": "glean.com",
+  "category": "knowledge_bases",
+  "summary": "Work AI search across company apps.",
+  "signInURL": "https://app.glean.com/login?redirect=%2F",
+  "triggers": ["glean.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

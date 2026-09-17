@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "claude",
+  "name": "Claude",
+  "domain": "claude.ai",
+  "category": "ai_assistants",
+  "summary": "Anthropic's AI assistant.",
+  "signInURL": "https://claude.ai/login",
+  "triggers": ["claude.ai"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

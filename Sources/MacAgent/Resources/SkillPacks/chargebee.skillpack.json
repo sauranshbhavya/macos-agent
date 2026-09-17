@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "chargebee",
+  "name": "Chargebee",
+  "domain": "chargebee.com",
+  "category": "finance_billing",
+  "summary": "Subscription billing and revenue management.",
+  "signInURL": "https://app.chargebee.com/login",
+  "triggers": ["chargebee", "chargebee.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

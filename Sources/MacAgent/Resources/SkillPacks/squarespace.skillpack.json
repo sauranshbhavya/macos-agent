@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "squarespace",
+  "name": "Squarespace",
+  "domain": "squarespace.com",
+  "category": "websites_apps_commerce",
+  "summary": "Website builder and hosting.",
+  "signInURL": "https://squarespace.com/login",
+  "triggers": ["squarespace", "squarespace.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

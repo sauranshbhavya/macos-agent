@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "mailchimp",
+  "name": "Mailchimp",
+  "domain": "mailchimp.com",
+  "category": "marketing_email",
+  "summary": "Email marketing platform.",
+  "signInURL": "https://login.mailchimp.com",
+  "triggers": ["mailchimp", "mailchimp.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "lattice",
+  "name": "Lattice",
+  "domain": "lattice.com",
+  "category": "recruiting_hr",
+  "summary": "People management for performance and engagement.",
+  "signInURL": "https://lattice.com/login",
+  "triggers": ["lattice.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

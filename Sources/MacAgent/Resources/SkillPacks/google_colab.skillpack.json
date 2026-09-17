@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "google_colab",
+  "name": "Google Colab",
+  "domain": "colab.research.google.com",
+  "category": "data_databases",
+  "summary": "Hosted Python notebooks from Google.",
+  "signInURL": "https://accounts.google.com/ServiceLogin?continue=https%3A%2F%2Fcolab.research.google.com%2F",
+  "triggers": ["google colab", "colab.research.google.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

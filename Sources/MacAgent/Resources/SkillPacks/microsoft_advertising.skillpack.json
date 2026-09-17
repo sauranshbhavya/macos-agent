@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "microsoft_advertising",
+  "name": "Microsoft Advertising",
+  "domain": "ads.microsoft.com",
+  "category": "marketing_growth",
+  "summary": "Microsoft's search advertising platform.",
+  "signInURL": "https://ads.microsoft.com/signin?redirect=pmaxlitesignin",
+  "triggers": ["microsoft advertising", "ads.microsoft.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

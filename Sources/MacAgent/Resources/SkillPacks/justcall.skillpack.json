@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "justcall",
+  "name": "JustCall",
+  "domain": "justcall.io",
+  "category": "communication",
+  "summary": "Cloud phone and SMS for sales and support teams.",
+  "signInURL": "https://justcall.io/login/",
+  "triggers": ["justcall", "justcall.io"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

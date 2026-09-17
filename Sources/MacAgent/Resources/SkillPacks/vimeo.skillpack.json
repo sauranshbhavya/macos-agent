@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "vimeo",
+  "name": "Vimeo",
+  "domain": "vimeo.com",
+  "category": "design",
+  "summary": "Video hosting and sharing platform.",
+  "signInURL": "https://vimeo.com/log_in",
+  "triggers": ["vimeo", "vimeo.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

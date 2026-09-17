@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "chatbase",
+  "name": "Chatbase",
+  "domain": "chatbase.co",
+  "category": "ai_assistants",
+  "summary": "AI chatbots for customer service.",
+  "signInURL": "https://chatbase.co/login",
+  "triggers": ["chatbase", "chatbase.co"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

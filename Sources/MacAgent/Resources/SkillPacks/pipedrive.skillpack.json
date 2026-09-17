@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "pipedrive",
+  "name": "Pipedrive",
+  "domain": "pipedrive.com",
+  "category": "sales_crm",
+  "summary": "Sales CRM and pipeline management.",
+  "signInURL": "https://app.pipedrive.com/auth/login",
+  "triggers": ["pipedrive", "pipedrive.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "recruitee",
+  "name": "Recruitee",
+  "domain": "recruitee.com",
+  "category": "recruiting_hr",
+  "summary": "Applicant tracking software.",
+  "signInURL": "https://app.tellent.com/",
+  "triggers": ["recruitee.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

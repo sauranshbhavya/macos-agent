@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "datadog",
+  "name": "Datadog",
+  "domain": "datadoghq.com",
+  "category": "analytics_monitoring",
+  "summary": "Monitoring and observability platform.",
+  "signInURL": "https://datadoghq.com/login",
+  "triggers": ["datadog", "datadoghq.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

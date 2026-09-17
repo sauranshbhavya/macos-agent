@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "tiktok_ads",
+  "name": "TikTok Ads Manager",
+  "domain": "ads.tiktok.com",
+  "category": "marketing_growth",
+  "summary": "TikTok's advertising platform.",
+  "signInURL": "https://ads.tiktok.com/i18n/login",
+  "triggers": ["tiktok ads manager", "ads.tiktok.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

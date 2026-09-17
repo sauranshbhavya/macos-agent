@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "birdeye",
+  "name": "Birdeye",
+  "domain": "birdeye.com",
+  "category": "marketing_growth",
+  "summary": "Review and reputation management platform.",
+  "signInURL": "https://app.birdeye.com/sign-in/",
+  "triggers": ["birdeye", "birdeye.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

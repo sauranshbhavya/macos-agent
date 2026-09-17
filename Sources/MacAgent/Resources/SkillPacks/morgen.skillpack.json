@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "morgen",
+  "name": "Morgen",
+  "domain": "morgen.so",
+  "category": "email_calendar",
+  "summary": "Calendar and daily planning app.",
+  "signInURL": "https://web.morgen.so/?loginHint=login",
+  "triggers": ["morgen.so"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

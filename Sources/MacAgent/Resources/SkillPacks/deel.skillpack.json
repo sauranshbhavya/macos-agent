@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "deel",
+  "name": "Deel",
+  "domain": "deel.com",
+  "category": "recruiting_hr",
+  "summary": "Global hiring and payroll platform.",
+  "signInURL": "https://app.deel.com/login?lang=en",
+  "triggers": ["deel", "deel.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

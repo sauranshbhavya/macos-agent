@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "grok",
+  "name": "Grok",
+  "domain": "grok.com",
+  "category": "ai_assistants",
+  "summary": "AI assistant from xAI.",
+  "signInURL": "https://grok.com/sign-in?return_to=%2F",
+  "triggers": ["grok.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

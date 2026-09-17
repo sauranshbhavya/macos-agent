@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "thrivecart",
+  "name": "ThriveCart",
+  "domain": "thrivecart.com",
+  "category": "websites_apps_commerce",
+  "summary": "Shopping cart and checkout pages.",
+  "signInURL": "https://thrivecart.com/signin/",
+  "triggers": ["thrivecart", "thrivecart.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

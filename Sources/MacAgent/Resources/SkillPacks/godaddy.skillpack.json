@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "godaddy",
+  "name": "GoDaddy",
+  "domain": "godaddy.com",
+  "category": "developer_platforms",
+  "summary": "Domain registrar and web hosting provider.",
+  "signInURL": "https://dashboard.godaddy.com/sign-in",
+  "triggers": ["godaddy", "godaddy.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

@@ -5004,6 +5004,30 @@ Signed in, gateway up, screen control allowed for the account.
 - [ ] During the Safe-mode session above, while an action approval is waiting, press ⌃⌥⎋: the session
       stops. (It still holds the key while it waits.)
 
+### Every catalogue site has a skill pack (new 2026-09-13, SONNY-482)
+
+The Skills page now lists every site in the catalogue, 473 in all. Notion and Linear carry task flows.
+The other 471 carry only the facts about the site: its name, its web address, its sign-in page and a
+one-line description. SONNY-452's rows above were written before this branch and expect exactly three
+packs, so with this branch in they read differently: use search to find those three, and typing `lin`
+leaves many rows, Linear among them, rather than Linear alone. Neither is a finding. SONNY-476's
+section below was written at three packs too: its list of Docusign, Linear and Notion means those
+three among the 473, and its 6 ms load time was measured with three packs. No sign-in is needed for
+these rows.
+
+- [ ] Open **Skills** and scroll the whole list, top to bottom. It scrolls without stutter or blank rows,
+      and every row has a name, a one-line description under it and an **Add** button (or **Remove**, if
+      you added it earlier). **What would be a finding:** a row with no description, or a description
+      that talks about Sonny rather than the site.
+- [ ] Search. `stripe` leaves only **Stripe**, reading "Online payments infrastructure.". `slack` leaves
+      only **Slack**. `hubspot.com` leaves only **HubSpot**. `gmail` leaves **Gmail** and **Streak**
+      (Streak's line is "CRM inside Gmail."). `zoho` leaves eight: Bigin by Zoho CRM, Zoho Books, Zoho
+      CRM, Zoho Calendar, Zoho Creator, Zoho Desk, Zoho Forms and Zoho Mail. The list filters as you
+      type, with no pause you can see. Clear the search.
+- [ ] **Add Gmail and Calendly.** Each row gains the **Added** badge and its button reads **Remove**.
+      Quit Sonny (⌘Q), relaunch, open Skills: both are still added. **Remove Calendly**: its row reads
+      **Add** again and Gmail's still reads **Remove**. Remove Gmail too, so the next pass starts clean.
+
 ### Skills load after launch, and a command at launch still gets them (new 2026-09-13, SONNY-476)
 
 Sonny now reads its skill packs just after it launches instead of while it launches, so a large set

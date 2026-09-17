@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "workable",
+  "name": "Workable",
+  "domain": "workable.com",
+  "category": "recruiting_hr",
+  "summary": "Recruiting software and applicant tracking.",
+  "signInURL": "https://www.workable.com/signin",
+  "triggers": ["workable.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

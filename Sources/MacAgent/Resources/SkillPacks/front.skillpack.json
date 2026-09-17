@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "front",
+  "name": "Front",
+  "domain": "front.com",
+  "category": "customer_support",
+  "summary": "Shared inbox for customer communication.",
+  "signInURL": "https://app.frontapp.com/signin",
+  "triggers": ["front.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

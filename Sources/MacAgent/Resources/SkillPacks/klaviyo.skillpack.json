@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "klaviyo",
+  "name": "Klaviyo",
+  "domain": "klaviyo.com",
+  "category": "marketing_email",
+  "summary": "Email and SMS marketing for online stores.",
+  "signInURL": "https://www.klaviyo.com/login",
+  "triggers": ["klaviyo", "klaviyo.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

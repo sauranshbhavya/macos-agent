@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "render",
+  "name": "Render",
+  "domain": "render.com",
+  "category": "developer_platforms",
+  "summary": "Cloud hosting for web apps, services and databases.",
+  "signInURL": "https://dashboard.render.com/",
+  "triggers": ["render.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

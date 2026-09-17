@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "facebook_pages",
+  "name": "Facebook Pages",
+  "domain": "facebook.com",
+  "category": "marketing_growth",
+  "summary": "Facebook's pages for businesses and public figures.",
+  "signInURL": "https://www.facebook.com/login/",
+  "triggers": ["facebook pages"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "google_ads",
+  "name": "Google Ads",
+  "domain": "ads.google.com",
+  "category": "marketing_growth",
+  "summary": "Google's advertising platform.",
+  "signInURL": "https://ads.google.com/nav/login",
+  "triggers": ["google ads", "ads.google.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

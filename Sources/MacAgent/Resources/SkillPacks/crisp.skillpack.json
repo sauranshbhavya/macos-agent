@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "crisp",
+  "name": "Crisp",
+  "domain": "crisp.chat",
+  "category": "customer_support",
+  "summary": "Customer messaging platform.",
+  "signInURL": "https://app.crisp.chat/",
+  "triggers": ["crisp.chat"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

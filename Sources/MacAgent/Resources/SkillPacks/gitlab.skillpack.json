@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "gitlab",
+  "name": "GitLab",
+  "domain": "gitlab.com",
+  "category": "code_hosting",
+  "summary": "DevOps platform for code hosting and CI/CD.",
+  "signInURL": "https://gitlab.com/users/sign_in/",
+  "triggers": ["gitlab", "gitlab.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

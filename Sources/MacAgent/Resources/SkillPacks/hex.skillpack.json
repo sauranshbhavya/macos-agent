@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "hex",
+  "name": "Hex",
+  "domain": "hex.tech",
+  "category": "data_databases",
+  "summary": "Collaborative data notebooks and analytics.",
+  "signInURL": "https://app.hex.tech/login",
+  "triggers": ["hex.tech"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "make",
+  "name": "Make",
+  "domain": "make.com",
+  "category": "automation",
+  "summary": "Visual automation platform.",
+  "signInURL": "https://www.make.com/en/login",
+  "triggers": ["make.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

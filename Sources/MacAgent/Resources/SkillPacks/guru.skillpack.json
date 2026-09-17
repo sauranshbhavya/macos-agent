@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "guru",
+  "name": "Guru",
+  "domain": "getguru.com",
+  "category": "knowledge_bases",
+  "summary": "Company wiki and knowledge management.",
+  "signInURL": "https://app.getguru.com/signin",
+  "triggers": ["getguru.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

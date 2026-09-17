@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "cloudflare",
+  "name": "Cloudflare",
+  "domain": "cloudflare.com",
+  "category": "developer_platforms",
+  "summary": "Web performance, security and developer platform.",
+  "signInURL": "https://dash.cloudflare.com/login",
+  "triggers": ["cloudflare", "cloudflare.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "impact",
+  "name": "impact.com",
+  "domain": "impact.com",
+  "category": "marketing_growth",
+  "summary": "Partnership and affiliate marketing platform.",
+  "signInURL": "https://app.impact.com/login.user",
+  "triggers": ["impact.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

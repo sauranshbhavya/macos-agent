@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "stripe",
+  "name": "Stripe",
+  "domain": "stripe.com",
+  "category": "finance_billing",
+  "summary": "Online payments infrastructure.",
+  "signInURL": "https://dashboard.stripe.com/login",
+  "triggers": ["stripe.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

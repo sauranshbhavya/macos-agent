@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "twilio",
+  "name": "Twilio",
+  "domain": "twilio.com",
+  "category": "communication",
+  "summary": "Communications APIs for messaging, voice and video.",
+  "signInURL": "https://app.twilio.com/login",
+  "triggers": ["twilio", "twilio.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

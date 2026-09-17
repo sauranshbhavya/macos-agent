@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "google",
+  "name": "Google",
+  "domain": "google.com",
+  "category": "it_accounts_security",
+  "summary": "Google Account settings.",
+  "signInURL": "https://accounts.google.com/ServiceLogin?continue=https%3A%2F%2Fmyaccount.google.com%2F",
+  "triggers": ["google account"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "lusha",
+  "name": "Lusha",
+  "domain": "lusha.com",
+  "category": "sales_crm",
+  "summary": "B2B contact data platform.",
+  "signInURL": "https://auth.lusha.com/login",
+  "triggers": ["lusha", "lusha.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

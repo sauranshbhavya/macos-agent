@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "google_chat",
+  "name": "Google Chat",
+  "domain": "chat.google.com",
+  "category": "communication",
+  "summary": "Google's team messaging.",
+  "signInURL": "https://accounts.google.com/ServiceLogin?continue=https%3A%2F%2Fchat.google.com%2F",
+  "triggers": ["google chat", "chat.google.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

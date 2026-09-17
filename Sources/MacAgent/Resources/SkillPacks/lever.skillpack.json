@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "lever",
+  "name": "Lever",
+  "domain": "lever.co",
+  "category": "recruiting_hr",
+  "summary": "Applicant tracking and recruiting software.",
+  "signInURL": "https://hire.lever.co/",
+  "triggers": ["lever.co"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

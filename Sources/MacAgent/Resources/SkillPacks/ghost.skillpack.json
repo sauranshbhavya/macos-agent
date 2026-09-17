@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "ghost",
+  "name": "Ghost",
+  "domain": "ghost.org",
+  "category": "websites_apps_commerce",
+  "summary": "Publishing platform for newsletters and memberships.",
+  "signInURL": "https://account.ghost.org/signin/",
+  "triggers": ["ghost.org"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

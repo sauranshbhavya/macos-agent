@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "linkedin_sales_navigator",
+  "name": "LinkedIn Sales Navigator",
+  "domain": "linkedin.com",
+  "category": "sales_crm",
+  "summary": "LinkedIn's prospecting tool for sales teams.",
+  "signInURL": "https://www.linkedin.com/login",
+  "triggers": ["linkedin sales navigator"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

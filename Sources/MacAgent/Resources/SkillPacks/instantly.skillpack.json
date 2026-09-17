@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "instantly",
+  "name": "Instantly",
+  "domain": "instantly.ai",
+  "category": "marketing_email",
+  "summary": "Cold email outreach platform.",
+  "signInURL": "https://app.instantly.ai/auth/login",
+  "triggers": ["instantly.ai"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

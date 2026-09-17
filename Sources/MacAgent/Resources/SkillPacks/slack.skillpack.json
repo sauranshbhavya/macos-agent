@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "slack",
+  "name": "Slack",
+  "domain": "slack.com",
+  "category": "communication",
+  "summary": "Team messaging app.",
+  "signInURL": "https://slack.com/mweb-signin-start?dest=signin",
+  "triggers": ["slack.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

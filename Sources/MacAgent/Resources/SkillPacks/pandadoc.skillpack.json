@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "pandadoc",
+  "name": "PandaDoc",
+  "domain": "pandadoc.com",
+  "category": "documents_storage",
+  "summary": "Proposals, quotes and contracts with electronic signatures.",
+  "signInURL": "https://app.pandadoc.com/login/?lng=en-US&cid=fdgdfgdf",
+  "triggers": ["pandadoc", "pandadoc.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

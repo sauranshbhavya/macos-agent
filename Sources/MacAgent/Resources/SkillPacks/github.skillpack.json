@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "github",
+  "name": "GitHub",
+  "domain": "github.com",
+  "category": "code_hosting",
+  "summary": "Code hosting and collaboration platform.",
+  "signInURL": "https://github.com/login",
+  "triggers": ["github", "github.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

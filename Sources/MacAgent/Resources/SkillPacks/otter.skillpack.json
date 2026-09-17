@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "otter",
+  "name": "Otter.ai",
+  "domain": "otter.ai",
+  "category": "communication",
+  "summary": "AI meeting transcription and notes.",
+  "signInURL": "https://otter.ai/signin",
+  "triggers": ["otter.ai"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

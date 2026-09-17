@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "zoom",
+  "name": "Zoom",
+  "domain": "zoom.us",
+  "category": "communication",
+  "summary": "Video meetings and communication platform.",
+  "signInURL": "https://zoom.us/signin",
+  "triggers": ["zoom.us"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

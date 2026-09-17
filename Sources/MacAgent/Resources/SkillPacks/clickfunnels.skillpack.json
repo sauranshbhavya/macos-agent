@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "clickfunnels",
+  "name": "ClickFunnels",
+  "domain": "clickfunnels.com",
+  "category": "websites_apps_commerce",
+  "summary": "Sales funnel and landing page builder.",
+  "signInURL": "https://app.clickfunnels.com/users/sign_in",
+  "triggers": ["clickfunnels", "clickfunnels.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

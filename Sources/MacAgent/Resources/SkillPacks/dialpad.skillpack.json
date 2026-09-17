@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "dialpad",
+  "name": "Dialpad",
+  "domain": "dialpad.com",
+  "category": "communication",
+  "summary": "AI-powered business phone system.",
+  "signInURL": "https://dialpad.com/login",
+  "triggers": ["dialpad", "dialpad.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

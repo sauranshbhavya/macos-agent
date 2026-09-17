@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "rocketreach",
+  "name": "RocketReach",
+  "domain": "rocketreach.co",
+  "category": "sales_crm",
+  "summary": "Contact information lookup for professionals.",
+  "signInURL": "https://app.rocketreach.co/login",
+  "triggers": ["rocketreach", "rocketreach.co"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "buffer",
+  "name": "Buffer",
+  "domain": "buffer.com",
+  "category": "marketing_growth",
+  "summary": "Social media scheduling tool.",
+  "signInURL": "https://login.buffer.com/login",
+  "triggers": ["buffer.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

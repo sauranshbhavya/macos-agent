@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "snov",
+  "name": "Snov.io",
+  "domain": "snov.io",
+  "category": "sales_crm",
+  "summary": "Lead generation and email outreach platform.",
+  "signInURL": "https://app.snov.io/login?lang=en&signup_source=landing&signup_page=snov.io%2Findex&cta_type=button",
+  "triggers": ["snov.io"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

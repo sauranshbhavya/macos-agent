@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "optimizely",
+  "name": "Optimizely",
+  "domain": "optimizely.com",
+  "category": "developer_platforms",
+  "summary": "Digital experience platform for experimentation and content.",
+  "signInURL": "https://app.optimizely.com/login",
+  "triggers": ["optimizely", "optimizely.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

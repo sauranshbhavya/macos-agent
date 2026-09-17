@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "gumroad",
+  "name": "Gumroad",
+  "domain": "gumroad.com",
+  "category": "websites_apps_commerce",
+  "summary": "Platform for selling digital products.",
+  "signInURL": "https://gumroad.com/login",
+  "triggers": ["gumroad", "gumroad.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}
