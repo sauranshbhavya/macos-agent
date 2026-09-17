@@ -16,6 +16,21 @@ import Foundation
 /// settles: the name, the domain, the sign-in URL, the words that mean it, and its top-level
 /// sections. Shallow still earns its place: it tells Sonny the tool exists and where it lives.
 ///
+/// **Two kinds of evidence, and a row says which one its flows rest on** (founders, 2026-09-16,
+/// SONNY-501: every pack is deep, which the 54 sites whose public documentation carries no
+/// step-level flows could not be). `docs/sonny-skill-sites.tsv`'s `task_flow_docs` column carries
+/// `deep` when the site's own documentation holds the flows, `site` when they were read off the live
+/// site instead, and `shallow` when neither — which keeps every pack on that row shallow. The
+/// catalogue is validated in `SkillPackTests`, which allows a deep pack on a `deep` or a `site` row
+/// and on nothing else and requires that row to name at least one page the flows were read from; that
+/// narrowing is what stops a pack being deep on evidence nobody has, or on evidence no row records.
+///
+/// **What a lane owes before it writes `site` on a row — how those pages must have been read, and why
+/// a fetch of them is not a reading — is stated once, in `CLAUDE.md`'s Claims and evidence section,
+/// in the clean-zero family it belongs to** (review-255's F4, recorded on SONNY-463): none of it is
+/// restated here, deliberately, because a rule with two copies is a rule with one stale copy, and
+/// nothing in a file says which of the two a reader got (review-260's F1).
+///
 /// **No flow moves money, in any pack, whatever its category** (founders, 2026-09-13 on SONNY-452,
 /// widening SONNY-461's decision 4). A flow may not send, transfer, pay, refund or pay out money, or
 /// change payment details or payees; a pack may still describe reading orders, invoices, statements

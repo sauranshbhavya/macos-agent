@@ -28,9 +28,13 @@ struct SkillPackTests {
             let row = try #require(rowsByID[pack.id], "\(pack.id) ships as a pack but is not a catalogue row")
             #expect(row["domain"] == pack.domain, "\(pack.id)'s domain disagrees with its catalogue row")
             #expect(row["category"] == pack.category, "\(pack.id)'s category disagrees with its catalogue row")
-            // A deep pack needs a deep row, because its flows need documentation. A shallow pack may sit on
-            // any row: every site gets one before its flows are written (founders, SONNY-463 decision 2).
-            #expect(pack.depth == .shallow || row["task_flow_docs"] == "deep", "\(pack.id) is deep but its catalogue row is not")
+            // A deep pack needs a row whose flows rest on evidence somebody read — documentation
+            // (`deep`) or the live site (`site`). A shallow pack may sit on any row: every site gets one
+            // before its flows are written (founders, SONNY-463 decision 2).
+            let evidence = try #require(row["task_flow_docs"])
+            let pages = try ["doc_url_1", "doc_url_2", "doc_url_3"].map { try #require(row[$0]) }
+            let problem = Self.depthProblem(pack.depth, taskFlowDocs: evidence, pages: pages)
+            #expect(problem == nil, "\(pack.id) \(problem ?? "")")
         }
     }
 
@@ -79,7 +83,16 @@ struct SkillPackTests {
         for added in ["zapier", "make", "n8n"] {
             #expect(ids.contains(added), "\(added) was added by founder decision")
         }
-        #expect(Set(rows.map { $0["task_flow_docs"]! }) == ["deep", "shallow"])
+        // Two of the column's three values are in use: the flows rest on documentation on 419 rows and
+        // on the live site on the 54 SONNY-501 moved, and no row says `shallow` any more
+        // (`awk -F'\t' 'NR > 1 {c[$8]++} END {for (k in c) print k, c[k]}' docs/sonny-skill-sites.tsv`).
+        // No SHA beside those numbers deliberately: this assertion re-counts them on every run, so
+        // unlike a stamped figure they cannot describe a tree that has since moved. It is also the
+        // whole vocabulary check — a fourth word, or a near-miss spelling of one of these two, cannot
+        // make this dictionary equal, so a separate set-membership assertion added only a message
+        // (review-260's F3).
+        let evidence = rows.map { $0["task_flow_docs"]! }
+        #expect(Dictionary(evidence.map { ($0, 1) }, uniquingKeysWith: +) == ["deep": 419, "site": 54])
         #expect(rows.filter { $0["why_in_list"]!.hasPrefix("founder-named") }.count == 100)
         for row in rows {
             #expect(!row["domain"]!.isEmpty, "\(row["id"]!) has no domain")
@@ -227,6 +240,69 @@ struct SkillPackTests {
         ]
         for entry in allowed {
             #expect(Self.triggerProblem(entry.trigger, siteName: entry.site, ordinary: ordinary) == nil, "\(entry.trigger) was refused")
+        }
+    }
+
+    /// The depth check itself, held in both directions, so a check that let everything through could
+    /// not pass the shipped packs vacuously. Both packs are decoded through the real loader and meet
+    /// `depthProblem`, the same function the shipped packs meet — a depth written as a literal here
+    /// would prove nothing about the loader or about the check (SONNY-388: a sample that enters
+    /// downstream of the mechanism tests only what already works).
+    ///
+    /// **These samples are the whole guard for the first condition, and that is why the near misses are
+    /// here** (SONNY-501). The shipped packs cannot hold that narrowing any more: no row says
+    /// `shallow`, so the loop over every pack has nothing to refuse and would pass exactly as warmly
+    /// with the narrowing gone. Widening `evidenceForADeepPack` by one more word, or emptying
+    /// `depthProblem`, dies here or nowhere. The page condition is the other way round: every shipped
+    /// deep pack sits on a row that names a page, so the loop holds that one on a live population and
+    /// these samples only say what the rule is. **The count is deliberately not in that sentence.** It
+    /// grows with every pack wave and moves under a rebase without anything in the branch saying so —
+    /// this read 95 until a delta pass caught it eight packs later, which is the whole of review-260's
+    /// finding. The sentence needs only that the population is not empty; the size is a reading at a
+    /// commit, and this is one — 143 at `8e4ca1c6`, against 330 for the `shallow` twin and 0 for a
+    /// depth no pack has, that last being the control saying the pattern can come back empty. It read
+    /// 103 one update from `main` ago and 95 before that, on this one branch, which is the point:
+    ///
+    ///     grep -rl '"depth": "deep"' Sources/MacAgent/Resources/SkillPacks | wc -l
+    ///
+    /// Every value a loop reads is written out rather than taken from the declaration under test: a
+    /// loop over `evidenceForADeepPack`, or over a list of the column's words, passes whatever that
+    /// declaration says, which is the vacuous direction this test exists to avoid (review-260's F3
+    /// found one such loop here and it is gone).
+    @Test
+    func aDeepPackNeedsDocumentedOrSiteReadFlowsAndAShallowPackSitsOnAnyRow() throws {
+        let deep = try SkillPackDecoder.decode(SkillPackFixtures.data(SkillPackFixtures.object(depth: "deep")))
+        let shallow = try SkillPackDecoder.decode(SkillPackFixtures.data(SkillPackFixtures.object(depth: "shallow")))
+        // The control: each fixture loaded as the depth it claims, so what follows is a check about a
+        // deep pack rather than about a pack that quietly came back shallow.
+        #expect(deep.depth == .deep)
+        #expect(shallow.depth == .shallow)
+        let page = ["https://example.com/help/create", "", ""]
+        let noPage = ["", "", ""]
+
+        for evidence in ["deep", "site"] {
+            #expect(Self.depthProblem(deep.depth, taskFlowDocs: evidence, pages: page) == nil, "a deep pack was refused on a \(evidence) row")
+        }
+        // Exactly one value was added, so every near miss is still refused: the word the 54 rows used
+        // to carry, an empty cell, and four spellings that are not the new value.
+        for evidence in ["shallow", "", "Site", "site ", "site_read", "live_site"] {
+            #expect(Self.depthProblem(deep.depth, taskFlowDocs: evidence, pages: page) != nil, "a deep pack was allowed on a \(evidence) row")
+        }
+        // A shallow pack sits on any row, including one whose cell is a word the column does not have,
+        // and it owes no page: nobody has read its flows yet, which is what `shallow` says.
+        for evidence in ["deep", "site", "shallow", "", "Site"] {
+            #expect(Self.depthProblem(shallow.depth, taskFlowDocs: evidence, pages: noPage) == nil, "a shallow pack was refused on a \(evidence) row")
+        }
+        // The page condition, on both kinds of row and in both directions (review-260's F4). A `site`
+        // row is the case it exists for: the browser reading it claims left no artifact anywhere else.
+        for evidence in ["deep", "site"] {
+            #expect(Self.depthProblem(deep.depth, taskFlowDocs: evidence, pages: noPage) != nil, "a deep pack with no page was allowed on a \(evidence) row")
+            #expect(Self.depthProblem(deep.depth, taskFlowDocs: evidence, pages: ["", "", "https://example.com/help/third"]) == nil, "the third cell did not count as a page on a \(evidence) row")
+        }
+        // A cell has to name a page somebody can open, not merely carry text — otherwise a note about
+        // having read one satisfies the rule that exists because the reading left no artifact.
+        for cell in ["read in a browser 2026-09-17", "example.com/help", " https://example.com/help"] {
+            #expect(Self.depthProblem(deep.depth, taskFlowDocs: "site", pages: [cell, "", ""]) != nil, "\(cell) was taken for a page")
         }
     }
 
@@ -748,6 +824,35 @@ struct SkillPackTests {
 
     static var shippedPacksDirectory: URL {
         repositoryRoot.appendingPathComponent("Sources/MacAgent/Resources/SkillPacks")
+    }
+
+    /// The two values of a catalogue row's `task_flow_docs` that let a pack be deep, out of the three
+    /// the column has. `deep` is documentation that carries step-level flows; `site` is the live site,
+    /// read in a browser — what a lane owes before writing that word on a row is stated once, in
+    /// `CLAUDE.md`'s Claims and evidence section (SONNY-501). `shallow` is neither, and a row saying it
+    /// keeps every pack on it shallow; no row says it today, and it stays a legal word because a site
+    /// added before anyone has read its flows has nothing else to say — which is a statement about
+    /// `depthProblem`'s answer, held below in `aDeepPackNeedsDocumentedOrSiteReadFlowsAndAShallowPackSitsOnAnyRow`,
+    /// rather than about a list of words. There was such a list, `taskFlowEvidence`; neither of its
+    /// uses pinned it, and removing `shallow` from it passed the whole suite (review-260's F3), so it
+    /// is gone rather than pinned: the tally in `theCommittedCatalogueIsTheListTheFoundersDecided`
+    /// already refuses any word the column does not have, by counting.
+    static let evidenceForADeepPack: Set<String> = ["deep", "site"]
+
+    /// Why a pack of this depth may not sit on this row, or `nil` when it may. Two conditions, both
+    /// about evidence: the row names a kind somebody read, and it names at least one page it was read
+    /// from. The second is review-260's F4 — a documentation reading leaves an artifact anyone can
+    /// re-open, a browser reading leaves none, so for a `site` row the cells are the only place that
+    /// evidence exists at all.
+    static func depthProblem(_ depth: SkillPackDepth, taskFlowDocs: String, pages: [String]) -> String? {
+        guard depth == .deep else { return nil }
+        guard evidenceForADeepPack.contains(taskFlowDocs) else {
+            return "is deep, and its catalogue row's task_flow_docs says \(taskFlowDocs.isEmpty ? "nothing" : taskFlowDocs)"
+        }
+        guard pages.contains(where: { $0.hasPrefix("http") }) else {
+            return "is deep, and its catalogue row names no page its flows were read from"
+        }
+        return nil
     }
 
     /// The committed catalogue's rows as column-name dictionaries, refusing a row with the wrong
