@@ -14,6 +14,7 @@ import {
   ProviderUnavailable,
   type TextRequest,
 } from "../src/model/upstream.js";
+import { DEFAULT_ROUTE_CHAINS } from "../src/model/provider-router.js";
 
 /**
  * The Cerebras adapter (SONNY-132) — the open-weights planner, moved off the Mac.
@@ -98,6 +99,38 @@ describe("the request Cerebras receives", () => {
     expect(call.method).toBe("POST");
     expect(call.headers["authorization"]).toBe("Bearer csk-test-key");
     expect(call.body["model"]).toBe("test-cerebras-model");
+  });
+
+  it("may only serve a route chain once it carries a store decision", async () => {
+    // SONNY-513, and the founders' decision of 2026-09-17 that this adapter stays without the
+    // field. **This test exists because the reason is conditional and the comment holding it is
+    // not enforced.** Both Responses adapters send `store: false`; this one sends nothing, and
+    // that is defensible only while two things hold together: `cerebras` serves no route, and
+    // `store` is undocumented at this provider. The first can be undone by one edit to
+    // `DEFAULT_ROUTE_CHAINS` in another file — at which point real user content starts flowing
+    // through a body with no store decision on it, and nothing would say so.
+    //
+    // **The failure mode being prevented is silence, not a wrong value.** Whoever adds `cerebras`
+    // to a chain is solving a routing problem and has no reason to open this adapter, so the
+    // judgement would be broken by someone who never read the comment recording it. This turns
+    // that into a red suite naming the decision.
+    //
+    // It passes if `cerebras` stays out of every chain, and it passes if it joins one while
+    // sending a `store` field. It fails only on the combination nobody has decided for.
+    const chained = Object.values(DEFAULT_ROUTE_CHAINS).flat();
+    // The walk reached something: an empty or mis-read table must not read as a clean pass.
+    expect(chained.length).toBeGreaterThan(0);
+
+    const calls = stubUpstream(() => reply("{}"));
+    await makeCerebrasTextAdapter(settings)(request());
+    const body = calls[0]!.body;
+    // The probe really drove the adapter, rather than asserting over an empty object.
+    expect(body["model"]).toBe("test-cerebras-model");
+
+    expect({
+      servesARouteChain: chained.includes("cerebras"),
+      sendsAStoreDecision: Object.hasOwn(body, "store"),
+    }).not.toEqual({ servesARouteChain: true, sendsAStoreDecision: false });
   });
 
   it("sends no response_format — the schema goes in the prompt, which is the measured answer", async () => {

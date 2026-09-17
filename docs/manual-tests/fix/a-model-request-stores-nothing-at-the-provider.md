@@ -21,27 +21,36 @@ indistinguishable from "it stored nothing". The second call asks for storage exp
 cannot be retrieved either, this route does not support retrieval and the pair says nothing about
 `store` at all. Only `404`-then-`200` is evidence.
 
-Needs `VISION_API_KEY` and `VISION_BASE_URL` for the route that ships. Skip if either is missing —
-that is a gap, not a pass.
+Needs **three** variables for the route that ships — `VISION_API_KEY`, `VISION_BASE_URL` and
+`VISION_MODEL`. The first line of the script requires all three and fails loudly if any is unset,
+which is not ceremony: an unset `VISION_MODEL` would send `"model":""`, the provider would reject
+the body, and the row would land on its own most urgent finding — a missing prerequisite
+manufacturing the alarm the row exists to raise. Skip the row if you cannot supply all three; that
+is a gap, not a pass.
 
 - [ ] **Run both calls below, in order.** Each sends a one-word prompt and no image, so neither
       costs anything meaningful and neither involves your screen.
 
       ```
+      # 0. All three required, and the base normalised the way the gateway normalises it:
+      #    `endpoint()` in vision.ts strips one trailing slash, so a base ending in `/` would
+      #    otherwise make these calls hit `//responses` rather than the path the server uses.
+      : "${VISION_API_KEY:?set it}" "${VISION_MODEL:?set it}" "${VISION_BASE_URL:?set it}"
+      BASE="${VISION_BASE_URL%/}"
       # 1. store:false — what this branch now sends.
       curl -s -H "Authorization: Bearer $VISION_API_KEY" -H "content-type: application/json" \
         -d '{"model":"'"$VISION_MODEL"'","store":false,"input":"ping"}' \
-        "$VISION_BASE_URL/responses" | tee /tmp/off.json | head -c 300; echo
+        "$BASE/responses" | tee /tmp/off.json | head -c 300; echo
       # 2. store:true — the control.
       curl -s -H "Authorization: Bearer $VISION_API_KEY" -H "content-type: application/json" \
         -d '{"model":"'"$VISION_MODEL"'","store":true,"input":"ping"}' \
-        "$VISION_BASE_URL/responses" | tee /tmp/on.json | head -c 300; echo
+        "$BASE/responses" | tee /tmp/on.json | head -c 300; echo
       # 3. Retrieve each by its own id.
       for f in /tmp/off.json /tmp/on.json; do
         id=$(python3 -c "import json;print(json.load(open('$f')).get('id',''))")
         printf '%s id=%s -> ' "$f" "$id"
         curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $VISION_API_KEY" \
-          "$VISION_BASE_URL/responses/$id"
+          "$BASE/responses/$id"
       done
       ```
 

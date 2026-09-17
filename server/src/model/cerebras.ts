@@ -188,16 +188,22 @@ export function makeCerebrasTextAdapter(
       // two adapters defend against. Anyone moving the text route to a new provider should assume
       // Chat Completions stores by default too, and check.
       //
-      // What holds here is provider-specific. Cerebras does not list `store` among the parameters
-      // it accepts and documents nothing about what it does with a field it does not recognise
-      // (read 2026-09-17 at `inference-docs.cerebras.ai/api-reference/chat-completions`), so
-      // sending one would be an unverifiable change against a third-party endpoint no test in this
-      // repository can reach. And the exposure is smaller than a reader of this file would guess:
+      // **So the reason is not that the exposure is undocumented — it is documented.** It rests on
+      // two provider-and-routing facts that hold today and could each stop holding. First,
       // `cerebras` appears in no chain in `DEFAULT_ROUTE_CHAINS` (`provider-router.ts`), so this
-      // adapter serves nothing unless a deployment names it in a `MODEL_ROUTE_*` variable.
+      // adapter serves nothing unless a deployment names it in a `MODEL_ROUTE_*` variable — no
+      // user content flows through this body as shipped. Second, Cerebras does not list `store`
+      // among the parameters it accepts and documents nothing about what it does with a field it
+      // does not recognise (read 2026-09-17 at
+      // `inference-docs.cerebras.ai/api-reference/chat-completions`), so sending one would be an
+      // unverifiable change against a third-party endpoint no test in this repository can reach.
+      // Founders' decision of 2026-09-17: it stays off on those two grounds.
       //
-      // If this route is ever pointed at a provider that documents `store`, that is when the field
-      // goes on, and `store` is the token to grep for.
+      // **The first of those two is enforced rather than trusted to this comment**, because it can
+      // be undone by one edit in another file by someone with no reason to open this one:
+      // `cerebras.test.ts`'s `may only serve a route chain once it carries a store decision` fails
+      // if `cerebras` joins a chain while this body still sends no `store`. Adding the field is one
+      // of the two ways to make it green again; the other is leaving the chains alone.
     };
 
     let response: Response;

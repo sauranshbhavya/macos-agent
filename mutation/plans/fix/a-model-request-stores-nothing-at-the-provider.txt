@@ -5,10 +5,12 @@
 # (SONNY-455). None of these four mutants touches a database path, so this plan measures the same
 # either way, but scripts/mutate-all still runs a server plan only with DATABASE_URL set.
 #
-# **A direct `scripts/mutate <plan>` run does NOT infer the half — it defaults to the Swift command,
-# and `--check` will print that command above a clean exit.** That is a clean result from the wrong
-# suite, which is the shape this repository keeps writing down. To run this plan by hand, name the
-# suite:
+# **A direct `scripts/mutate <plan>` run does NOT infer the half — it defaults to the Swift command.**
+# `--check` prints that command in its header, which is startling and is not itself a defect: it runs
+# no suite at all and says so ("No tests were run, nothing was changed. This is not a battery
+# result"), so a clean `--check` exit means every mutant matched and nothing else. The hazard is a
+# bare run WITHOUT `--check`, which would run the Swift suite against these server-half mutants and
+# report a result about the wrong tree. To run this plan by hand, name the suite:
 #
 #   MUTATE_TEST_CMD='cd server && npx vitest run test/screen.test.ts test/model.test.ts' \
 #     scripts/mutate mutation/plans/fix/a-model-request-stores-nothing-at-the-provider.txt
