@@ -35,5 +35,13 @@
 	     silently failing. -->
 	<key>NSAppleEventsUsageDescription</key>
 	<string>Sonny automates Finder to read your selected files and folders, and Microsoft Word to convert documents you ask it to convert.</string>
+	<!-- EventKitAccess.swift asks for full access to events the first time a calendar read runs, and
+	     to reminders the first time a reminder is added (SONNY-453). macOS 14 refuses both requests
+	     outright for an app without these two keys; the older NSCalendarsUsageDescription and
+	     NSRemindersUsageDescription are not read for a full-access request. -->
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>Sonny reads your calendar when you ask what's on it.</string>
+	<key>NSRemindersFullAccessUsageDescription</key>
+	<string>Sonny adds reminders when you ask it to remind you.</string>
 </dict>
 </plist>

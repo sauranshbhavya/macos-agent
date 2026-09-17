@@ -1095,8 +1095,10 @@ struct ItemJobTests {
     /// The complement is the half that carries the risk here, and it is asserted over
     /// `AgentOperation.allCases` rather than over a hand-picked five: this rule refuses work a user
     /// legitimately asked for, and a job is *for* doing one thing many times, so a rule that crept
-    /// wider would break the feature it lives inside. Exactly two operations are refused, and the
-    /// sweep is what says so.
+    /// wider would break the feature it lives inside. The sweep is what says which operations are
+    /// refused, and the count lives in its assertion rather than in this test's name (`CLAUDE.md`'s
+    /// rule; SONNY-453 is the third entry, and the name that said "the standing cap and the one that
+    /// needs an answer" would have been wrong about both how many and why).
     ///
     /// **The delivery is pinned as well as the membership** (SONNY-385). `start_watching` has
     /// nothing for the user to answer and `rename` has exactly one thing, so the two take different
@@ -1106,9 +1108,15 @@ struct ItemJobTests {
     /// it by telling the user the run failed instead of asking them for the names, which is the
     /// founders' decision reversed with the test still green.
     @Test
-    func theOnlyOperationsAJobMayNotRepeatAreTheStandingCapAndTheOneThatNeedsAnAnswer() {
+    func theOperationsAJobMayNotRepeatAreNamedAndEverythingElseMay() {
         let refused = AgentOperation.allCases.filter { $0.jobTemplateRefusal != nil }
-        #expect(refused == [.startWatching, .rename])
+        #expect(refused == [.startWatching, .rename, .createReminder])
+        #expect(
+            AgentOperation.createReminder.jobTemplateRefusal
+                == .refused("Sonny will not add a reminder for each item — that would fill Reminders with copies of one reminder. Ask for the reminder on its own.")
+        )
+        // A read repeated per item is pointless and harmless, so it is not refused.
+        #expect(AgentOperation.readCalendarEvents.jobTemplateRefusal == nil)
         #expect(
             AgentOperation.startWatching.jobTemplateRefusal
                 == .refused("Sonny will not start a watcher for each item — that would spend everything it can watch on copies of one page. Ask for the watcher on its own.")

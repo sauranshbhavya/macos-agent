@@ -51,13 +51,15 @@ struct PlannerBoundaryTests {
         - For Finder context phrases such as "selected folder", "selected files", "this Finder selection", or "the folder selected in Finder", set contextSource to finder_selection and leave inputPath null.
         - For "reveal the result/zip/markdown/PDFs in Finder" after a writing step, add reveal_in_finder with outputPath null so the executor can reveal the previous produced artifact.
         - For permission/readiness requests, produce one show_permission_readiness step.
-        - For teaching a routine, produce one save_routine step with routineName and routineSteps containing only registered non-routine steps. Do not put save_routine, run_routine, create_workspace, edit_workspace, switch_running_app, vision_session, start_watching, clarify, or unsupported inside routineSteps.
+        - For teaching a routine, produce one save_routine step with routineName and routineSteps containing only registered non-routine steps. Do not put save_routine, run_routine, create_workspace, edit_workspace, switch_running_app, vision_session, start_watching, read_calendar_events, create_reminder, clarify, or unsupported inside routineSteps.
         - For running a saved routine, produce one run_routine step with routineName.
         - For creating a workspace, produce one create_workspace step with workspaceName, workspaceApps, and workspaceURLs. Use only explicitly named apps/URLs. If none are provided, ask a clarification question.
         - For changing a workspace the user already saved, produce one edit_workspace step with workspaceName and only the fields the user asked to change: workspaceApps, workspaceURLs, workspaceFileLocations to add, and workspaceAppsToRemove, workspaceURLsToRemove, workspaceFileLocationsToRemove to remove. Never use create_workspace to change an existing workspace, and never put an item in both an add and a remove field.
         - For opening a saved workspace, produce one open_workspace step with workspaceName.
         - For running an existing Apple Shortcut, produce one invoke_shortcut step with shortcutName and optional shortcutInput when simple text input was explicitly supplied.
         - For "tell me when this page changes", "let me know if X updates", or any request to be told about a future change to one web page, produce one start_watching step with targetURL and watchSubject holding what the user asked to be told about, in their own words. Sonny only notifies: never combine start_watching with a step that acts on the change, and never promise one.
+        - For "what's on my calendar", "what do I have on Friday", or any question about the events on the user's calendar for one day, produce one read_calendar_events step with calendarDay holding the day they asked about, or null for today.
+        - For "remind me in 5 minutes to call the bank" or any request to be reminded of something, produce one create_reminder step with reminderTitle and exactly one of reminderMinutesFromNow or reminderTime, adding calendarDay when the user named a day. If the user named no time, return exactly one clarify step asking when.
         - When the user asks for the same work to be done to every item in one folder or in the Finder selection — "summarise each of these", "convert all of these folders" — set itemJob and write steps as the work done to ONE item, which Sonny then repeats for each item it finds. Leave itemJob null for every other command, including one that names two or three things explicitly: that is an ordinary multi-step plan. Never write the items themselves; Sonny reads them from the folder or the selection.
         - You may produce multi-step chained plans when the user asks for multiple supported actions. Keep steps in execution order.
         - For any unsupported request, return one unsupported step whose description says why in one short sentence. That sentence goes to Sonny's log only; the user never reads it, so name the missing capability plainly.
@@ -145,7 +147,11 @@ struct PlannerBoundaryTests {
             "visionGoal",
             "browserName",
             "watchSubject",
-            "newName"
+            "newName",
+            "calendarDay",
+            "reminderTitle",
+            "reminderMinutesFromNow",
+            "reminderTime"
         ])
 
         let stepProperties = try #require(stepItems["properties"] as? [String: Any])
@@ -682,7 +688,7 @@ private let expectedDefaultPlannerDescription = """
   dry run: Show the current path and the name it would be given.
   examples: Rename ~/Documents/scan1.pdf to invoice-march | Rename that folder to Archive
 - show_permission_readiness: Show permission readiness
-  description: Show readiness for the Sonny account, microphone, hotkey, Finder/Word automation, Desktop/Documents access, Accessibility, and Screen Recording.
+  description: Show readiness for the Sonny account, microphone, hotkey, Finder/Word automation, Desktop/Documents access, Accessibility, Screen Recording, Calendars, and Reminders.
   required fields: none
   side effects: none
   dry run: Show permission readiness without requesting new permissions.
@@ -735,6 +741,18 @@ private let expectedDefaultPlannerDescription = """
   side effects: read one public web page, write local watcher record
   dry run: Show the page and what is being watched for, without starting anything.
   examples: Tell me when https://example.com/status changes
+- read_calendar_events: Read calendar events
+  description: List the events on the user's calendars for one day. Reads only and changes nothing. Set calendarDay to the day the user asked about, or null for today.
+  required fields: none
+  side effects: read calendars
+  dry run: Show which day would be read, without reading the calendar.
+  examples: What's on my calendar today? | What do I have on Friday?
+- create_reminder: Add a reminder
+  description: Add one reminder with an alert to the user's Reminders. Set reminderTitle to what to remind them about, and exactly one of reminderMinutesFromNow or reminderTime, with calendarDay when they named a day. If the user named no time, ask a clarification question for when.
+  required fields: reminderTitle
+  side effects: add reminder
+  dry run: Show the reminder and when it is due, without adding it.
+  examples: Remind me in 5 minutes to call the bank | Remind me tomorrow at 9am to send the invoice
 - clarify: Ask clarification
   description: Ask a short question when a required folder, app, count, or output destination is missing or ambiguous.
   required fields: question

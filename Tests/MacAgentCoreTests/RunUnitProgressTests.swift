@@ -438,7 +438,9 @@ struct ResumeRepeatSafetyTests {
         // duplicate and notifies twice about one change, days later. That is why this test's name no
         // longer carries a count or the see-inside reason — `CLAUDE.md`'s rule about counts in test
         // names, and a name that would now be wrong about *why* as well as how many.
-        #expect(unsafe == [.invokeShortcut, .runRoutine, .visionSession, .startWatching, .unsupported])
+        // `.createReminder` (SONNY-453) meets the bar the first three do: a second copy lands in a
+        // Reminders list other people may see, which is the same fact that makes the capability ask.
+        #expect(unsafe == [.invokeShortcut, .runRoutine, .visionSession, .startWatching, .createReminder, .unsupported])
 
         let safe = Set(AgentOperation.allCases.filter { $0.resumeRepeatSafety == .safeToRepeat })
         #expect(safe == [
@@ -455,7 +457,9 @@ struct ResumeRepeatSafetyTests {
             // because a rename onto an occupied name is refused by name and a rename of a source
             // that is already gone fails. It is also never *silent*, since every rename carries an
             // unconditional destructive escalation and therefore asks.
-            .rename
+            .rename,
+            // SONNY-453. A read; repeating it changes nothing.
+            .readCalendarEvents
         ])
 
         // And the two sets are the whole population, so an operation cannot be absent from both by

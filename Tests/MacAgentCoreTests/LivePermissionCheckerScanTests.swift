@@ -60,6 +60,10 @@ struct LivePermissionCheckerScanTests {
     static let forbidden = [
         "SystemScreenCapturePermissionChecker(",
         "SystemMicrophonePermissionChecker(",
+        // SONNY-453. The third checker, added the day it existed rather than after a fixture
+        // reached it — `theForbiddenTokensStillNameTheLiveImplementations` cannot notice a new
+        // defaulted seam, which is this file's own fourth evasion.
+        "SystemEventKitPermissionChecker(",
         "PermissionReadinessService("
     ]
 
@@ -213,6 +217,7 @@ struct LivePermissionCheckerScanTests {
         // Both checkers named, so the exempt construction cannot itself be partial.
         #expect(source.contains("screenPermissionChecker: DeterministicScreenPermissions("))
         #expect(source.contains("microphonePermissionChecker: DeterministicMicrophonePermission("))
+        #expect(source.contains("eventKitPermissionChecker: DeterministicEventKitPermission("))
     }
 
     /// **Every value handed to `permissionReadinessService:` is the deterministic helper** (PR #72 C1).
@@ -321,6 +326,8 @@ struct LivePermissionCheckerScanTests {
         // Both are still the defaults, which is the whole reason a fixture can reach one by omission.
         #expect(readiness.contains("= SystemScreenCapturePermissionChecker()"))
         #expect(readiness.contains("= SystemMicrophonePermissionChecker()"))
+        #expect(readiness.contains("public struct SystemEventKitPermissionChecker"))
+        #expect(readiness.contains("= SystemEventKitPermissionChecker()"))
         // And every token in the list still names something real, so the list cannot rot into one
         // that matches nothing.
         for token in Self.forbidden {

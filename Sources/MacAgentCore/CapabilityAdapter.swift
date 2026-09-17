@@ -30,6 +30,8 @@ public enum CapabilityPermissionRequirement: String, Codable, CaseIterable, Equa
     case shortcutsAutomation = "shortcuts_automation"
     case screenRecording = "screen_recording"
     case accessibilityControl = "accessibility_control"
+    case calendarsAccess = "calendars_access"
+    case remindersAccess = "reminders_access"
 
     public var displayName: String {
         switch self {
@@ -51,6 +53,10 @@ public enum CapabilityPermissionRequirement: String, Codable, CaseIterable, Equa
             return "Screen Recording"
         case .accessibilityControl:
             return "Accessibility control"
+        case .calendarsAccess:
+            return "Calendars"
+        case .remindersAccess:
+            return "Reminders"
         }
     }
 
@@ -74,6 +80,10 @@ public enum CapabilityPermissionRequirement: String, Codable, CaseIterable, Equa
             return "Sonny may capture the frontmost window of an app you target so screen-aware tools can see it."
         case .accessibilityControl:
             return "Sonny may use macOS Accessibility to act inside apps you have specifically allowed."
+        case .calendarsAccess:
+            return "Sonny may read the events on your calendars."
+        case .remindersAccess:
+            return "Sonny may add reminders to your Reminders."
         }
     }
 }
@@ -190,8 +200,15 @@ public struct CapabilityExecutionContext {
     /// record. The resumable half of the store is the view model's own and does not come through
     /// here.
     public var resumableTaskStore: ResumableTaskStore
+    /// The user's calendars and reminders (SONNY-453). Read by `read_calendar_events` and
+    /// `create_reminder` and nothing else.
+    public var eventKit: any EventKitAccessing
     public var fileManager: FileManager
     public var now: () -> Date
+    /// The calendar a named day and a clock time are read in — this Mac's own, in the product, and a
+    /// fixed one in every test that asks what "tomorrow" is (SONNY-453). Beside `now` because the two
+    /// together are what a day means.
+    public var calendar: Calendar
     /// Live push-to-talk hotkey registration state. Read through a closure for the same reason
     /// as `now` — the real value lives in the UI layer and changes after launch, so a snapshot
     /// or a hardcoded `true` would misreport an actual Control-Option-Space conflict.
@@ -379,8 +396,12 @@ public struct CapabilityExecutionContext {
         // defaulted store resolves to the real `~/Library` location, so a fixture that omitted it
         // would create watchers in the developer's own data — and then check them on a real timer.
         resumableTaskStore: ResumableTaskStore,
+        // Defaulted to the seam that refuses, which is the safe direction for the focus restorer's
+        // reason (SONNY-451): a construction site that says nothing cannot reach a real calendar.
+        eventKit: any EventKitAccessing = UnavailableEventKitStore(),
         fileManager: FileManager = .default,
         now: @escaping () -> Date = Date.init,
+        calendar: Calendar = .autoupdatingCurrent,
         hotKeyReady: @escaping () -> Bool = { true },
         modelAccessReadiness: @escaping () -> ModelAccessReadiness = { .undetermined },
         planReadiness: @escaping () -> PlanReadiness = { .undetermined },
@@ -433,8 +454,10 @@ public struct CapabilityExecutionContext {
         self.shortcutInvoker = shortcutInvoker
         self.shortcutRunHistoryStore = shortcutRunHistoryStore
         self.resumableTaskStore = resumableTaskStore
+        self.eventKit = eventKit
         self.fileManager = fileManager
         self.now = now
+        self.calendar = calendar
         self.hotKeyReady = hotKeyReady
         self.modelAccessReadiness = modelAccessReadiness
         self.planReadiness = planReadiness

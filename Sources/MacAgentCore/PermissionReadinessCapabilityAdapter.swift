@@ -19,7 +19,7 @@ public struct PermissionReadinessCapabilityAdapter: CapabilityAdapter {
                 // **Names no provider** (SONNY-136, founder decision 2026-08-19). This read "OpenAI
                 // key" and the row it referred to is gone; the planner is given the tool's real
                 // subject instead, which is the Sonny account.
-                description: "Show readiness for the Sonny account, microphone, hotkey, Finder/Word automation, Desktop/Documents access, Accessibility, and Screen Recording.",
+                description: "Show readiness for the Sonny account, microphone, hotkey, Finder/Word automation, Desktop/Documents access, Accessibility, Screen Recording, Calendars, and Reminders.",
                 requiredFields: [],
                 sideEffects: [],
                 dryRunBehavior: "Show permission readiness without requesting new permissions.",

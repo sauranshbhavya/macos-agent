@@ -145,6 +145,32 @@ struct AutomationStoresTests {
         #expect(innerStep.count == 3)
     }
 
+    /// The behavioural half of `resolvedReminderDueDate`'s membership (PR #244, F2). A routine may not
+    /// hold a reminder step at all, so the file this reaches is one Sonny did not write; the pin goes
+    /// at both nesting levels, and the counting function the read door logs with sees it.
+    @Test
+    func aForgedReminderDueDateIsStrippedAtBothNestingLevels() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
+
+        var nested = AgentStep(id: "remind", operation: .createReminder, description: "Remind.", reminderTitle: "call the bank")
+        nested.resolvedReminderDueDate = Date(timeIntervalSince1970: 1_800_000_000)
+        var outer = AgentStep(id: "open", operation: .openApp, description: "Open Safari.", appName: "Safari")
+        outer.resolvedReminderDueDate = Date(timeIntervalSince1970: 1_800_000_000)
+        outer.routineSteps = [nested]
+        #expect(StoredRoutine.resolverPinnedStepCount([outer]) == 2)
+        try store.saveBypassingStepValidation(StoredRoutine(name: "Forged", steps: [outer]))
+
+        let loaded = try store.routine(named: "Forged")
+
+        #expect(loaded.steps[0].resolvedReminderDueDate == nil)
+        let innerStep = try #require(loaded.steps.first?.routineSteps?.first)
+        #expect(innerStep.resolvedReminderDueDate == nil)
+        #expect(innerStep.reminderTitle == "call the bank")
+        #expect(loaded.steps[0].appName == "Safari")
+    }
+
     /// The other direction, and the one that makes the strip safe to apply unconditionally: a routine
     /// saved the way the product saves them round-trips byte-identically. If this ever fails, the
     /// strip has started removing something a legitimate store had.
@@ -242,7 +268,12 @@ struct AutomationStoresTests {
             // stripped — a saved routine that renames a named file to a named name is a routine a
             // user can legitimately author, and the tier-3 destructive escalation is what stops a
             // *scheduled* run of one from renaming anything unattended.
-            "newName"
+            "newName",
+            // SONNY-453. Words and numbers out of the user's own sentence. `calendarDay` is rewritten
+            // by the resolve phase into a date, but a date is a value the model could have written
+            // itself, so it is not a pin and is not stripped — and a routine cannot carry either
+            // operation that reads these anyway.
+            "calendarDay", "reminderTitle", "reminderMinutesFromNow", "reminderTime"
         ]
         /// Resolver-only: written by the executor, never decodable from a planner response, and
         /// therefore stripped by the routine store's read door — each one held by a behavioural test
@@ -258,7 +289,10 @@ struct AutomationStoresTests {
             // decode-excluded on the same terms, and meaningless outside the plan whose `itemJob`
             // holds the list, so the strip must clear it. Held behaviourally by
             // `aForgedJobItemIndexIsStrippedAtBothNestingLevels`.
-            "itemIndex"
+            "itemIndex",
+            // PR #244, F2. The instant a reminder is due, pinned by the resolve phase and absent from
+            // the decoder's keys. Held behaviourally by `aForgedReminderDueDateIsStrippedAtBothNestingLevels`.
+            "resolvedReminderDueDate"
         ]
 
         #expect(
@@ -371,6 +405,10 @@ struct AutomationStoresTests {
                 // create a watcher on every occurrence until the cap refuses — records the user
                 // never asked for, against a cap that exists to stop exactly that accumulation.
                 .startWatching,
+                // SONNY-453. A reminder asks first and a scheduled routine passes tier 2 without
+                // asking; a first calendar read raises macOS's prompt with nobody there to answer.
+                .readCalendarEvents,
+                .createReminder,
                 .clarify,
                 .unsupported
             ]
@@ -479,6 +517,8 @@ struct AutomationStoresTests {
             .switchRunningApp: "A routine can't bring an open app to the front.",
             .visionSession: "A routine can't control an app on your screen.",
             .startWatching: "A routine can't watch a page for changes.",
+            .readCalendarEvents: "A routine can't read your calendar.",
+            .createReminder: "A routine can't add a reminder.",
             .clarify: "A routine can't stop to ask you a question.",
             .unsupported: "A routine can't include something Sonny can't do yet."
         ]
