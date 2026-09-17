@@ -260,6 +260,9 @@ struct SkillPackTests {
         #expect(deep.depth == .deep)
         #expect(shallow.depth == .shallow)
 
+        // The two allowed values are written out here rather than read from `evidenceForADeepPack`:
+        // a loop over the set under test passes whatever that set says, which is the vacuous direction
+        // this test exists to avoid.
         for evidence in ["deep", "site"] {
             #expect(Self.depthProblem(deep.depth, taskFlowDocs: evidence) == nil, "a deep pack was refused on a \(evidence) row")
         }
