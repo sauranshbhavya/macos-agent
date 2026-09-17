@@ -23,16 +23,22 @@ import Foundation
 /// running product, where no artifact exists and the row's `doc_url` cells are the only record of
 /// what was read, and `shallow` when neither — which keeps every pack on that row shallow.
 ///
-/// **The value names the kind of evidence, not who read it or how.** A documentation page is read in
-/// a browser like everything else; the rule for how any of these pages must be read is `CLAUDE.md`'s,
-/// named below. The first wording said `site` meant the flows were "read off the live site instead",
+/// **The value names the kind of evidence, not who read it or how, and neither value is scoped to a
+/// set of rows.** A documentation page is read in a browser like everything else; the rule for how
+/// any of these pages must be read is `CLAUDE.md`'s, named below. Any row whose flows came from the
+/// running product says `site`, wherever that row came from; any row whose documentation carries the
+/// flows says `deep`. A row is not held to the value it arrived with: one whose documentation turns
+/// out to carry step-level flows becomes `deep` the day somebody reads them there.
+///
+/// *How the column got here, kept because knowing the definition changed is worth having — history,
+/// not scope.* The first wording said `site` meant the flows were "read off the live site instead",
 /// which put every browser reading on one side and made the column record the reader rather than the
-/// evidence. The 54 rows it was written for had been grouped on a research claim — that their public
-/// documentation carries no step-level flows — and SONNY-512 measured that claim false for the first
-/// two rows it opened, Canva and Zoho Desk, whose own help pages carry numbered click paths. Those
-/// two are `deep` now. **The other 52 are not re-classified on that evidence**: two sites is a small
-/// sample, and a count of rows carrying a help link is a count of links rather than a claim about
-/// what those pages contain. A row moves one at a time, when somebody opens that site's
+/// evidence. It was introduced for 54 rows that had been grouped on a research claim — that their
+/// public documentation carries no step-level flows — and SONNY-512 measured that claim false for the
+/// first two of them it opened, Canva and Zoho Desk, whose own help pages carry numbered click paths.
+/// Those two are `deep` now. **The other 52 are not re-classified on that evidence**: two sites is a
+/// small sample, and a count of rows carrying a help link is a count of links rather than a claim
+/// about what those pages contain. A row moves one at a time, when somebody opens that site's
 /// documentation and finds flows in it.
 ///
 /// The catalogue is validated in `SkillPackTests`, which allows a deep pack on a `deep` or a `site`
