@@ -1,0 +1,82 @@
+# SONNY-501 — a catalogue row can say its flows were read from the live site, so every pack can be
+# deep. Swift half only; nothing under server/ moved on this branch.
+#
+# What the branch claims: a pack may be deep when its catalogue row's task_flow_docs says `deep` or
+# `site`, and on nothing else. W1, W2 and W3 widen that past the two allowed values or drop the
+# narrowing altogether; W4 reads the pack's depth the wrong way round; W5 takes the new value out of
+# the column's vocabulary; C1 is the wiring mutant.
+#
+# The expected killer of W1 to W4 is the one test, in Tests/MacAgentCoreTests/SkillPackTests.swift:
+# aDeepPackNeedsDocumentedOrSiteReadFlowsAndAShallowPackSitsOnAnyRow. That is not a gap in this plan
+# and it is worth saying why, because a reader will expect the 473-pack loop to be among the killers.
+# It cannot be. No catalogue row says `shallow` any more — the 54 that did are the rows this branch
+# moved — so everyShippedPackLoadsAndEveryOneIsARowOfTheCommittedCatalogue has nothing to refuse and
+# passes exactly as warmly with the narrowing gone. The held samples are the whole guard, which is
+# why they run through depthProblem rather than asserting against literals, and why the mutants aim
+# at it.
+#
+# W2's one-line `from` block sits inside W3's three-line one. Each mutant is applied to an unmutated
+# tree, so both still match exactly once (`scripts/mutate <plan> --check`, at the head this plan was
+# written at).
+#
+# C1 is the mutant that measures the shipped population, and it is a data mutant for the reason
+# SONNY-492's plan gives for its own C1: a mutant of a test's own assertion survives on every tree
+# where the property holds, so it would be a survivor every week and measure nothing. C1 instead
+# makes every row read as `shallow`, the way a catalogue nobody had updated would, and the 95 deep
+# packs shipped at 3bf70677 then sit on rows that refuse them. Expected killers:
+# everyShippedPackLoadsAndEveryOneIsARowOfTheCommittedCatalogue, naming a pack, and
+# theCommittedCatalogueIsTheListTheFoundersDecided on the split. It survives only if the loop over
+# the shipped packs stopped consulting the check. It was also shown by hand on the branch, both
+# directions, by moving one deep pack's real row: to `shallow` the suite went red naming notion, to
+# `site` the same test passed (the changelog entry has both runs).
+
+>>> mutant W1 the allowed values gain `shallow`, so a pack may be deep on a row with no evidence at all
+>>> file Tests/MacAgentCoreTests/SkillPackTests.swift
+>>> from
+    static let evidenceForADeepPack: Set<String> = ["deep", "site"]
+>>> to
+    static let evidenceForADeepPack: Set<String> = ["deep", "site", "shallow"]
+>>> end
+
+>>> mutant W2 the cell is matched by prefix rather than as the word, so `site_read` and a trailing space pass
+>>> file Tests/MacAgentCoreTests/SkillPackTests.swift
+>>> from
+        guard evidenceForADeepPack.contains(taskFlowDocs) else {
+>>> to
+        guard evidenceForADeepPack.contains(where: { taskFlowDocs.hasPrefix($0) }) else {
+>>> end
+
+>>> mutant W3 the narrowing is dropped: a deep pack sits on any row whatever its cell says
+>>> file Tests/MacAgentCoreTests/SkillPackTests.swift
+>>> from
+        guard evidenceForADeepPack.contains(taskFlowDocs) else {
+            return "is deep, and its catalogue row's task_flow_docs says \(taskFlowDocs.isEmpty ? "nothing" : taskFlowDocs)"
+        }
+>>> to
+>>> end
+
+>>> mutant W4 the check reads the depth the wrong way round: deep packs go anywhere and shallow packs are refused
+>>> file Tests/MacAgentCoreTests/SkillPackTests.swift
+>>> from
+        guard depth == .deep else { return nil }
+>>> to
+        guard depth == .shallow else { return nil }
+>>> end
+
+>>> mutant W5 the column's vocabulary forgets the value this branch added, so the 54 rows carry a word it does not have
+>>> file Tests/MacAgentCoreTests/SkillPackTests.swift
+>>> from
+    static let taskFlowEvidence: Set<String> = ["deep", "site", "shallow"]
+>>> to
+    static let taskFlowEvidence: Set<String> = ["deep", "shallow"]
+>>> end
+
+>>> mutant C1 every catalogue row reads as `shallow`, the way a catalogue nobody had updated would
+>>> file Tests/MacAgentCoreTests/SkillPackTests.swift
+>>> from
+            return Dictionary(uniqueKeysWithValues: zip(header, columns))
+>>> to
+            var row = Dictionary(uniqueKeysWithValues: zip(header, columns))
+            row["task_flow_docs"] = "shallow"
+            return row
+>>> end
