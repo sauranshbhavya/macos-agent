@@ -22,18 +22,13 @@ import Foundation
 /// `deep` when the site's own documentation holds the flows, `site` when they were read off the live
 /// site instead, and `shallow` when neither — which keeps every pack on that row shallow. The
 /// catalogue is validated in `SkillPackTests`, which allows a deep pack on a `deep` or a `site` row
-/// and on nothing else; that narrowing is what stops a pack being deep on evidence nobody has.
+/// and on nothing else and requires that row to name at least one page the flows were read from; that
+/// narrowing is what stops a pack being deep on evidence nobody has, or on evidence no row records.
 ///
-/// **Writing `site` on a row means a person opened those pages in a browser, in a profile with no
-/// sign-ins, and read them. A scripted fetch is not a reading** (review-255's F4, recorded on
-/// SONNY-463). This is measured rather than cautious, and it is the clean-zero family CLAUDE.md
-/// documents arriving through a browser: of 23 pages cited in an earlier group, 18 served a scripted
-/// client nothing at all while answering HTTP 200, and four render into shadow DOM, where a DOM query
-/// returns a clean zero. A lane that only fetches therefore writes flows from nothing and its own
-/// checks agree with it, because what it read looked like a successful empty page rather than a
-/// failure. A third-party proxy is no substitute either: one flow read through one lost three of four
-/// tabs. And a page a note saved is not the page today — Customer.io renamed Profiles to People, and
-/// a Brevo article changed inside six days, both caught only by opening them again.
+/// **What a lane owes before it writes `site` on a row — a browser, a profile with no sign-ins, and a
+/// reading rather than a fetch — is stated once, in `CLAUDE.md`'s Claims and evidence section, in the
+/// clean-zero family it belongs to** (review-255's F4, recorded on SONNY-463; kept there rather than
+/// repeated here so the measurements behind it cannot go stale in one copy while the other is read).
 ///
 /// **No flow moves money, in any pack, whatever its category** (founders, 2026-09-13 on SONNY-452,
 /// widening SONNY-461's decision 4). A flow may not send, transfer, pay, refund or pay out money, or
