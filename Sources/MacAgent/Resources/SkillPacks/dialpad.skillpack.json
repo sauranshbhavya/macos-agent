@@ -6,8 +6,36 @@
   "category": "communication",
   "summary": "AI-powered business phone system.",
   "signInURL": "https://dialpad.com/login",
-  "triggers": ["dialpad", "dialpad.com"],
+  "triggers": [
+    "dialpad",
+    "dialpad.com"
+  ],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Set call routing rules for a department",
+      "startURL": "https://dialpad.com/app",
+      "steps": [
+        "Open your Dialpad Admin Settings and go to Departments.",
+        "Select the department, open Business hours & call routing, then select Edit Call Routing. When the department has its own business hours, walk through this once for open hours and once for closed hours.",
+        "To ring people, choose an operator routing type: Longest idle, Fixed order, Round robin, or Simultaneous, which rings everyone at once. You can also set how long calls ring before the fallback takes them.",
+        "To ring nobody, choose No operator and pick where calls go instead: straight to voicemail, to a message, to another department, to a team member or room phone, to an automated response menu, to a voice workflow, or to an AI agent.",
+        "Set the welcome greeting, the ring duration and the hold queue with its size, wait time and hold music.",
+        "Set the fallback for when no operator is free. Fallback options only appear when the routing option is Operators."
+      ],
+      "source": "https://help.dialpad.com/hc/en-us/articles/54958444128795-Set-Call-Routing-Rules-for-Departments"
+    },
+    {
+      "title": "Restore a deleted team member",
+      "startURL": "https://dialpad.com/app",
+      "steps": [
+        "Open your Dialpad Admin Settings and go to Office Settings, then select Users. This needs an admin.",
+        "Select the Deleted Users tab. A deleted user sits there for 72 hours and their number is held, so it cannot be reassigned during that time.",
+        "Select Options beside the user's name, then select Restore, which brings back the user's number and data.",
+        "After the 72 hours the user's data is gone for good. People on a free trial do not see the Deleted Users tab at all."
+      ],
+      "source": "https://help.dialpad.com/hc/en-us/articles/55207563459227-Add-Remove-Team-Members"
+    }
+  ]
 }
