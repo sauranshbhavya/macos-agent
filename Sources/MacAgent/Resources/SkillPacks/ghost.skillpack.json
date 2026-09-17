@@ -14,7 +14,7 @@
   "flows": [
     {
       "title": "Add a card to a post in the editor",
-      "startURL": "https://account.ghost.org/",
+      "startURL": "https://account.ghost.org/signin/",
       "steps": [
         "Open the post you want to edit in the Ghost editor.",
         "Insert a card by clicking the + button, or by typing / on a new line to search for a particular card.",
@@ -26,7 +26,7 @@
     },
     {
       "title": "Set your publication's title, description, timezone and language",
-      "startURL": "https://account.ghost.org/",
+      "startURL": "https://account.ghost.org/signin/",
       "steps": [
         "Set a publication title and description from the Settings, then General, then Title & description area.",
         "Set the timezone of your publication from the Settings, then General, then Timezone area. A custom timezone is used for scheduling and publishing posts.",

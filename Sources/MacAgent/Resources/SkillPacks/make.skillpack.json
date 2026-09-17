@@ -30,7 +30,9 @@
       "steps": [
         "In the Scenario Builder toolbar, click Every 15 minutes to open the schedule settings.",
         "In the Schedule setting window that appears, set how frequently your scenario should run.",
-        "Consider how frequently you need to check for new data, because a shorter interval uses more credits."
+        "Consider how frequently you need to check for new data, because a shorter interval uses more credits.",
+        "Click Save.",
+        "After you schedule your scenario, you are prompted to activate it. Click Activate scenario."
       ],
       "source": "https://help.make.com/step-10-schedule-your-scenario"
     }
