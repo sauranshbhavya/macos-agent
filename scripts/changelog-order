@@ -425,7 +425,7 @@ def check(path: str, cwd: str, mainline: Mainline | None = None,
             "%d entries name a branch that has not merged, and only one may — %s. On a branch "
             "cut from main that is one entry, its own; a short stack of two or three carries "
             "this finding until each merge clears it, which is its expected cost (WORKFLOW.md, "
-            "Stacked pull requests)."
+            "Pull requests in flight)."
             % (len(unmerged), ", ".join("%s (%s)" % (w, b) for w, b in unmerged)))
 
     # Arm 3 — completeness, over the one-file-per-branch era only. Everything merged before the
@@ -679,12 +679,17 @@ def selftest() -> int:
     case("FAULT 1: a second unmerged entry is caught",
          ["this/branch"] + good + ["also/unmerged"], None,
          "name a branch that has not merged, and only one may")
+    # The phrase alone is produced by three separate loops — the archive's, the entry
+    # directory's and the manual directory's — so asserting it bare is satisfied by any of them,
+    # and a mutant disabling the entry directory's copy survived exactly that way before these
+    # two cases were anchored. Only the archive's finding carries `entry '<name>'`, which is what
+    # separates it; the directory cases below anchor on their own paths.
     case("FAULT 3: an entry naming a branch that does not exist is caught",
          good + ["never/existed"], None,
-         "names a branch that does not exist")
+         "entry 'never/existed' names a branch that does not exist")
     case("  ...and it is caught even when it is the only unmerged entry",
          ["never/existed"] + good, None,
-         "names a branch that does not exist")
+         "entry 'never/existed' names a branch that does not exist")
     case("a bodiless heading is caught", good,
          lambda b: b.replace("### Branch: new/b", "### Branch: stray/heading\n\n### Branch: new/b"),
          "has 0 'Status:' lines")
@@ -750,8 +755,9 @@ def selftest() -> int:
                  "is caught", "name a branch that has not merged, and only one may",
                  lambda: _full(repo, ["this/branch", "also/unmerged"]))
         dir_case("FAULT 3: an entry file named for a branch that does not exist is caught",
-                 "names a branch that does not exist",
-                 lambda: _full(repo, ["never/existed"]))
+                 "docs/changelog/never/existed.md: names a branch that does not exist",
+                 lambda: _put(repo, ENTRY_DIR, "never/existed",
+                              GOOD_ENTRY % "never/existed"))
         dir_case("  ...and so is a manual-test file named for one",
                  "docs/manual-tests/never/existed.md: names a branch that does not exist",
                  lambda: _put(repo, MANUAL_DIR, "never/existed", "# rows\n"))
@@ -904,6 +910,30 @@ def selftest() -> int:
             print("  FAIL  a run with findings did not print the mainline line above them "
                   "(exit %d, mainline line at %s, first finding at %s)\n        got: %s"
                   % (proc.returncode, line_at, finding_at, proc.stdout.strip()))
+            failures += 1
+
+        # The merged stream, which is what the stop hook captures and shows. stdout is buffered
+        # and stderr is not, so an unflushed run hands the reader its finding COUNT before the
+        # mainline line, the era line and the findings it counts.
+        merged = subprocess.run(
+            "%s %s check %s 2>&1" % (shlex.quote(sys.executable),
+                                     shlex.quote(os.path.abspath(__file__)), shlex.quote(bad)),
+            shell=True, capture_output=True, text=True, cwd=repo)
+        ml = merged.stdout.split("\n")
+        at_main = next((i for i, l in enumerate(ml) if l.startswith("changelog-order: mainline")),
+                       None)
+        at_era = next((i for i, l in enumerate(ml) if "one-file-per-branch era" in l), None)
+        at_find = next((i for i, l in enumerate(ml) if os.path.basename(bad) in l), None)
+        at_count = next((i for i, l in enumerate(ml) if "finding(s)." in l), None)
+        ran += 1
+        if (merged.returncode == 2 and None not in (at_main, at_era, at_find, at_count)
+                and at_main < at_era < at_find < at_count):
+            print("  ok    stdout and stderr merged, as the stop hook reads them, stay in order")
+        else:
+            print("  FAIL  the merged stream is out of order (exit %d, mainline %s, era %s, "
+                  "finding %s, count %s)\n        got: %s"
+                  % (merged.returncode, at_main, at_era, at_find, at_count,
+                     merged.stdout.strip()))
             failures += 1
 
         # A refusal rather than a clean zero, proved rather than asserted.
@@ -1109,6 +1139,12 @@ def main(argv: list[str]) -> int:
     if findings:
         for f in findings:
             print(f)
+        # The stop hook captures this with `2>&1`, and Python buffers stdout while stderr is
+        # unbuffered — so without this flush the summary reaches the hook's transcript ABOVE the
+        # mainline line, the era line and the findings themselves, and a reader is handed a count
+        # before anything it counts. PR #243's F1 put the mainline line above the findings for
+        # exactly this reason and the merged stream was still undoing it.
+        sys.stdout.flush()
         print("\n%d finding(s). docs/changelog/README.md states where an entry goes and what "
               "it owes; WORKFLOW.md step 7 is the process around it." % len(findings),
               file=sys.stderr)
