@@ -6,8 +6,38 @@
   "category": "websites_apps_commerce",
   "summary": "Simple one-page website builder.",
   "signInURL": "https://carrd.co/login",
-  "triggers": ["carrd", "carrd.co"],
+  "triggers": [
+    "carrd",
+    "carrd.co"
+  ],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Add a contact form to a site",
+      "startURL": "https://carrd.co/dashboard",
+      "steps": [
+        "Click Add Element.",
+        "Click Form to create a new Form element.",
+        "Set Type to Contact.",
+        "Optionally enter one or more Recipient Email addresses, up to five and comma-separated, to have this form's messages sent somewhere other than the default.",
+        "Optionally check Filter messages to automatically filter out messages with common spam content.",
+        "Optionally click the Fields tab to rename or toggle the form's fields.",
+        "Optionally click the Button tab to change the form's submit button Label."
+      ],
+      "source": "https://carrd.com/docs/forms/setting-up-a-contact-form"
+    },
+    {
+      "title": "Publish a site to a custom domain",
+      "startURL": "https://carrd.co/dashboard",
+      "steps": [
+        "Register the domain first at a domain provider, because it must be registered before Carrd can use it.",
+        "Click Publish.",
+        "Set Action to Publish to a custom domain.",
+        "Enter the domain name exactly as you want it to appear in the address bar, either domain.ext or www.domain.ext. The version you do not use forwards to the other automatically.",
+        "Scroll down to locate the site's DNS records, then set those records up at your domain provider so they point the domain at the Carrd site."
+      ],
+      "source": "https://carrd.com/docs/sites/using-a-custom-domain"
+    }
+  ]
 }

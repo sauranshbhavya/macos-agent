@@ -6,8 +6,33 @@
   "category": "automation",
   "summary": "Visual automation platform.",
   "signInURL": "https://www.make.com/en/login",
-  "triggers": ["make.com"],
+  "triggers": [
+    "make.com"
+  ],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Create a scenario and add its first app",
+      "startURL": "https://www.make.com/en/login",
+      "steps": [
+        "From the main dashboard, click + Create a new scenario in the top-right corner to open the Scenario Builder.",
+        "In the top-left corner, click New scenario to update your scenario's name.",
+        "Enter a name for the scenario, then click the Save icon on the Scenario Builder toolbar.",
+        "Click the giant plus in the center of the canvas to open the list of apps.",
+        "Choose the app you want to start the scenario with, then choose its trigger module."
+      ],
+      "source": "https://help.make.com/step-3-add-your-first-app"
+    },
+    {
+      "title": "Set how often a scenario runs",
+      "startURL": "https://www.make.com/en/login",
+      "steps": [
+        "In the Scenario Builder toolbar, click Every 15 minutes to open the schedule settings.",
+        "In the Schedule setting window that appears, set how frequently your scenario should run.",
+        "Consider how frequently you need to check for new data, because a shorter interval uses more credits."
+      ],
+      "source": "https://help.make.com/step-10-schedule-your-scenario"
+    }
+  ]
 }
