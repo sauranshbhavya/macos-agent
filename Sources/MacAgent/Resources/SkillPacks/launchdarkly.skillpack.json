@@ -8,6 +8,41 @@
   "signInURL": "https://app.launchdarkly.com/login",
   "triggers": ["launchdarkly", "launchdarkly.com"],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Create a feature flag",
+      "startURL": "https://app.launchdarkly.com/",
+      "steps": [
+        "Click Create and choose Flag. The Create flag dialog appears.",
+        "Enter a unique, human-readable Name. A key is suggested from it; click Edit key to change it now, because a saved flag key cannot be modified.",
+        "Optionally enter a Description, and click Custom to pick a flag template such as Release, Kill switch or Experiment. Without a template, select the type of Variations: boolean, string, number or JSON.",
+        "Click Create flag. The flag's Targeting tab appears."
+      ],
+      "source": "https://launchdarkly.com/docs/home/flags/new"
+    },
+    {
+      "title": "Turn a flag on",
+      "startURL": "https://app.launchdarkly.com/",
+      "steps": [
+        "In the left sidebar, click Code, then click Flags.",
+        "Click the name of the flag. Its Targeting tab opens.",
+        "Click the tab for the environment. If it is not shown, click + and select it from the list of environments.",
+        "Click the flag toggle. It turns green and reads On.",
+        "Click Review and save."
+      ],
+      "source": "https://launchdarkly.com/docs/home/flags/toggle"
+    },
+    {
+      "title": "Turn a flag off",
+      "startURL": "https://app.launchdarkly.com/",
+      "steps": [
+        "In the left sidebar, click Code, then click Flags.",
+        "Click the name of the flag, and on its Targeting tab click the tab for the environment.",
+        "Set the toggle to Off. The variation the flag will serve once saved is shown; its targeting rules stop applying.",
+        "Click Review and save."
+      ],
+      "source": "https://launchdarkly.com/docs/home/flags/toggle"
+    }
+  ]
 }

@@ -6,8 +6,42 @@
   "category": "data_databases",
   "summary": "Customer data platform from Twilio.",
   "signInURL": "https://app.segment.com/login",
-  "triggers": ["segment.com"],
+  "triggers": ["twilio segment", "segment source", "segment destination", "segment.com"],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Add a source",
+      "startURL": "https://app.segment.com/",
+      "steps": [
+        "Go to Connections and click Add Source.",
+        "Click the source to add, such as a JavaScript website, then click Add Source.",
+        "Enter a name for the source and any information the setup page asks for.",
+        "Click Add Source."
+      ],
+      "source": "https://www.twilio.com/docs/segment/getting-started/implementation-guide"
+    },
+    {
+      "title": "Add a destination",
+      "startURL": "https://app.segment.com/",
+      "steps": [
+        "From the workspace, click Add destination. It is on the Connections home page, the Destinations list and each Source overview page.",
+        "Search for the destination in the Catalog and click its tile, then click Configure on the summary page.",
+        "Choose which source sends data to it, and click Confirm source.",
+        "In the Connection Settings that appear, enter any required fields. Segment's page says these might be a key or token issued by the destination tool, an account ID, or a prompt to log in to that tool. If needed, click the toggle to enable the destination so it starts receiving data."
+      ],
+      "source": "https://www.twilio.com/docs/segment/getting-started/05-data-to-destinations"
+    },
+    {
+      "title": "Invite team members",
+      "startURL": "https://app.segment.com/",
+      "steps": [
+        "Go to Settings > Workspace Settings and click the Access Management tab.",
+        "Click + Invite Team Member.",
+        "Enter the team members' email addresses, separated by commas. Optionally add them to user groups, or give individual roles to all the invites.",
+        "Click Invite."
+      ],
+      "source": "https://www.twilio.com/docs/segment/getting-started/implementation-guide"
+    }
+  ]
 }

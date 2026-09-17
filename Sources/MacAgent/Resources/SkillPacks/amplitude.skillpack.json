@@ -6,8 +6,40 @@
   "category": "analytics_monitoring",
   "summary": "Product analytics platform.",
   "signInURL": "https://app.amplitude.com/login",
-  "triggers": ["amplitude.com"],
+  "triggers": ["amplitude analytics", "amplitude dashboard", "amplitude cohort", "open amplitude", "amplitude.com"],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Create a dashboard",
+      "startURL": "https://app.amplitude.com/",
+      "steps": [
+        "Navigate to Create > Dashboard. From inside a chart, clicking + Add to and then + Create a new dashboard does the same.",
+        "Type the dashboard's name where it reads Untitled Dashboard. Amplitude saves the new, still-empty dashboard.",
+        "Click Add Content, select the type of content from the drop-down, then select the items in the panel that opens on the right.",
+        "Repeat until the dashboard holds everything it needs."
+      ],
+      "source": "https://amplitude.com/docs/analytics/dashboard-create"
+    },
+    {
+      "title": "Import a cohort from a file",
+      "startURL": "https://app.amplitude.com/",
+      "steps": [
+        "Navigate to Cohorts & Audiences and click Import from CSV.",
+        "Select a CSV or text file of user IDs or Amplitude IDs: one ID per line, no header row, no extra spaces, and under 100MB.",
+        "Specify whether the file contains Amplitude IDs, user IDs or groups."
+      ],
+      "source": "https://amplitude.com/docs/analytics/create-cohorts"
+    },
+    {
+      "title": "Add events to a chart",
+      "startURL": "https://app.amplitude.com/",
+      "steps": [
+        "In the chart's Events module, click Add Event or Metric. Amplitude lists the available events, and a chart can hold up to 10.",
+        "Search for the event. If the exact name is unknown, change the operator to *(glob match) and use a wildcard such as *chart*.",
+        "To narrow an event, add a Filter by condition on an event or user property. To break the results out by a property, use Group-by instead."
+      ],
+      "source": "https://amplitude.com/docs/analytics/charts/build-charts-add-events"
+    }
+  ]
 }
