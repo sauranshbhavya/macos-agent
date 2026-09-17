@@ -231,13 +231,53 @@ assert "the same fault COMMITTED in the directory is caught, with the archive un
   2 "only one may" -
 assert "  ...and the hook says it read a committed change" 2 "committed on this branch" -
 
-# A fault reachable only through the manual-tests directory, which is the path a trigger that
-# listed the changelog alone would miss entirely.
+# ---------------------------------------------------------------------------------------------
+# ONE PATH EACH, which is the pair that actually pins the trigger list (PR #259's review, F2).
+#
+# Every case above writes BOTH directories, so `docs/manual-tests` alone keeps the trigger firing
+# and no case holds `docs/changelog`. Measured: dropping `docs/changelog` from `changelog_paths`
+# passed all 24 cases, while dropping either of the other two killed it — the shipped code being
+# right and the test not holding it. The failure it would let through is an entry-only branch,
+# which `WORKFLOW.md` step 7 names explicitly as owing an entry (#122 and #123 are corrections to
+# the record and touched nothing else), finishing a turn with a real finding unreported.
+#
+# So: one case whose only changed path is under `docs/changelog`, one whose only changed path is
+# under `docs/manual-tests`, each carrying a fault that only that directory can produce, and each
+# asserting the other directory is absent so neither can drift back into touching both.
+# ---------------------------------------------------------------------------------------------
+
+# only_one_directory <repo> <dir that must exist> <dir that must not>
+only_one_directory() {
+  local repo="$1" present="$2" absent="$3"
+  cases=$((cases + 1))
+  if [ -d "$repo/$present" ] && [ ! -e "$repo/$absent" ] &&
+     [ -n "$(git -C "$repo" status --porcelain -- "$present")" ] &&
+     [ -z "$(git -C "$repo" status --porcelain -- "$absent")" ]; then
+    printf '  ok    ...and its only changed path is under %s\n' "$present"
+  else
+    printf '  FAIL  the case meant to touch only %s also touched %s\n' "$present" "$absent"
+    failures=$((failures + 1))
+  fi
+}
+
+# docs/changelog alone. The fault is one only an entry file can carry: its heading naming a
+# different branch from its filename.
+repo="$(new_fixture)"
+mkdir -p "$repo/$ENTRY_DIR/docs"
+entry new/a > "$repo/$ENTRY_DIR/docs/fixture-branch.md"
+run_hook "$repo" false
+assert "a fault reachable only through docs/changelog is caught" \
+  2 "the heading names 'new/a' and the path names 'docs/fixture-branch'" -
+only_one_directory "$repo" "$ENTRY_DIR" "$MANUAL_DIR"
+
+# docs/manual-tests alone. The fault is one a manual-test file can carry on its own: a name that
+# matches no merge and no ref.
 repo="$(new_fixture)"
 write_entry "$repo" "$MANUAL_DIR" never/existed
 run_hook "$repo" false
-assert "a manual-test file naming a branch that does not exist is caught" \
-  2 "names a branch that does not exist" -
+assert "a fault reachable only through docs/manual-tests is caught" \
+  2 "docs/manual-tests/never/existed.md: names a branch that does not exist" -
+only_one_directory "$repo" "$MANUAL_DIR" "$ENTRY_DIR"
 
 # ---------------------------------------------------------------------------------------------
 # The two battery states. Neither is this ticket's work; both are what it had to not break.

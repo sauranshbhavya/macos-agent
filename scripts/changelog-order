@@ -292,31 +292,55 @@ def directory_entries(cwd: str, directory: str) -> tuple[list[DirEntry], list[st
     that is the honest state, and after it the completeness arm below turns a deleted
     directory into a finding per missing entry, which names what is gone instead of refusing
     to measure anything at all.
+
+    THE POPULATION IS GIT'S, NOT THE FILESYSTEM'S (PR #259's review, F3). This used to walk the
+    directory with `os.walk`, which reads everything on disk — including files git ignores. These
+    two directories are now where a founder goes to read the records, so a Finder window over one
+    of them writes a `.DS_Store` into it, and the arm below then exited 2, blocked the stop hook,
+    and advised renaming that file to `<branch>.md`: a session stopped for something it did not
+    do, by advice nobody can act on, which is how `CLAUDE.md` describes a check becoming one
+    people turn off. `git ls-files --cached --others --exclude-standard` is the fix and not merely
+    a filter on the symptom: it is exactly the set of files git tracks or would track, so
+    everything the arm can now fire on is a file somebody really did add, and the advice is true
+    whenever it is given. Untracked files are included, because a branch writes its entry before
+    it commits it and a population of tracked files alone would read a just-written entry as
+    absent. A tracked path whose file is gone from the working tree is dropped rather than opened,
+    since what the tree holds is what a reader gets.
     """
     root = os.path.join(cwd, directory)
     found: list[DirEntry] = []
     findings: list[str] = []
     if not os.path.isdir(root):
         return found, findings
-    for dirpath, dirnames, filenames in os.walk(root):
-        dirnames.sort()
-        for name in sorted(filenames):
-            full = os.path.join(dirpath, name)
-            rel = os.path.relpath(full, cwd)
-            if os.path.dirname(rel) == directory and name == DIRECTORY_README:
-                continue
-            if not name.endswith(".md"):
-                # Silently skipping it is the clean zero this repository keeps being caught
-                # by: the file is plainly somebody's entry, and nothing would ever read it.
-                findings.append(
-                    "%s: not a .md file, so nothing under %s reads it as a branch's file — "
-                    "rename it to <branch>.md or move it out of this directory"
-                    % (rel, directory))
-                continue
-            with open(full, encoding="utf-8") as fh:
-                text = fh.read()
-            branch = rel[len(directory) + 1:-len(".md")]
-            found.append(DirEntry(rel, branch, text.split("\n")))
+    listed = subprocess.run(["git", "ls-files", "--cached", "--others", "--exclude-standard",
+                             "-z", "--", directory],
+                            capture_output=True, text=True, cwd=cwd)
+    if listed.returncode != 0:
+        # Never an empty list: a search whose engine cannot see the bytes you mean answers a
+        # clean zero, and a clean zero is the one answer that looks like good news.
+        raise Unmeasurable("git ls-files failed over %s: %s"
+                           % (directory, listed.stderr.strip()))
+    for rel in sorted({r for r in listed.stdout.split("\0") if r}):
+        full = os.path.join(cwd, rel)
+        if not os.path.isfile(full):
+            continue
+        name = os.path.basename(rel)
+        if os.path.dirname(rel) == directory and name == DIRECTORY_README:
+            continue
+        if not name.endswith(".md"):
+            # Silently skipping it is the clean zero this repository keeps being caught
+            # by: the file is one git tracks or would track, sitting where entries live, and
+            # nothing would ever read it.
+            findings.append(
+                "%s: not a .md file, so nothing under %s reads it as a branch's file — "
+                "rename it to <branch>.md or move it out of this directory. (Files git ignores "
+                "are not in this population, so this names something somebody added.)"
+                % (rel, directory))
+            continue
+        with open(full, encoding="utf-8") as fh:
+            text = fh.read()
+        branch = rel[len(directory) + 1:-len(".md")]
+        found.append(DirEntry(rel, branch, text.split("\n")))
     found.sort(key=lambda e: e.path)
     return found, findings
 
@@ -606,7 +630,11 @@ def _fixture_repo(tmp: str, merges: list[tuple[int, str]], unmerged: list[str] =
     _git(tmp, "config", "user.email", "selftest@example.invalid")
     _git(tmp, "config", "user.name", "selftest")
     open(os.path.join(tmp, "seed"), "w").write("seed\n")
-    _git(tmp, "add", "seed")
+    # This repository ignores `.DS_Store` repo-wide, and the fixture has to as well or the case
+    # below proves nothing: a file that is not ignored anywhere cannot demonstrate that ignored
+    # files are out of the population.
+    open(os.path.join(tmp, ".gitignore"), "w").write(".DS_Store\n")
+    _git(tmp, "add", "seed", ".gitignore")
     _git(tmp, "commit", "-q", "-m", "seed")
     for pr, branch in merges:
         _git(tmp, "checkout", "-q", "-b", branch)
@@ -641,6 +669,9 @@ def _put(repo: str, directory: str, branch: str, text: str, suffix: str = ".md")
 def _clear(repo: str) -> None:
     for directory in (ENTRY_DIR, MANUAL_DIR):
         shutil.rmtree(os.path.join(repo, directory), ignore_errors=True)
+    # Some cases stage files to make a path tracked; the index has to go back with them, or the
+    # next case measures a population a previous one built.
+    _git(repo, "reset", "-q")
 
 
 def _full(repo: str, branches: list[str]) -> None:
@@ -712,6 +743,11 @@ def selftest() -> int:
                 print("  FAIL  %s — the check refused to measure: %s" % (name, exc))
                 failures += 1
                 continue
+            except Exception as exc:  # noqa: BLE001 — see the note above this block
+                print("  FAIL  %s — the check raised %s: %s"
+                      % (name, type(exc).__name__, exc))
+                failures += 1
+                continue
             if expect == "":
                 ok = not findings
             else:
@@ -738,6 +774,11 @@ def selftest() -> int:
                 findings = check(_write(tmp, good), repo)
             except Unmeasurable as exc:
                 print("  FAIL  %s — the check refused to measure: %s" % (name, exc))
+                failures += 1
+                return
+            except Exception as exc:  # noqa: BLE001 — a raise is one case's failure, not the run's
+                print("  FAIL  %s — the check raised %s: %s"
+                      % (name, type(exc).__name__, exc))
                 failures += 1
                 return
             ok = (not findings) if expect == "" else any(expect in f for f in findings)
@@ -777,6 +818,16 @@ def selftest() -> int:
         dir_case("a file that is not .md is caught rather than skipped",
                  "not a .md file",
                  lambda: _put(repo, ENTRY_DIR, "this/branch", "x\n", suffix=".txt"))
+        # PR #259's review, F3. macOS writes `.DS_Store` into any directory a Finder window
+        # opens, and these two directories are now where a founder goes to read the records — so
+        # before this, opening one of them in Finder made the tool exit 2, blocked the stop hook,
+        # and advised renaming that file to `<branch>.md`. The case above is this one's control:
+        # a non-`.md` file git does NOT ignore is still a finding, so what changed is the
+        # population and not the arm.
+        dir_case("a file git ignores is not in the population at all", "",
+                 lambda: (_full(repo, ["this/branch"]),
+                          _put(repo, ENTRY_DIR, ".DS_Store", "macos junk", suffix=""),
+                          _put(repo, MANUAL_DIR, ".DS_Store", "macos junk", suffix="")))
         dir_case("a README at a directory's root is not read as a branch's file", "",
                  lambda: (_full(repo, ["this/branch"]),
                           _put(repo, ENTRY_DIR, "README", "# how to write one\n"),
@@ -810,6 +861,11 @@ def selftest() -> int:
                 print("  FAIL  %s — the check refused to measure: %s" % (name, exc))
                 failures += 1
                 return
+            except Exception as exc:  # noqa: BLE001 — a raise is one case's failure, not the run's
+                print("  FAIL  %s — the check raised %s: %s"
+                      % (name, type(exc).__name__, exc))
+                failures += 1
+                return
             ok = (not findings) if expect == "" else any(expect in f for f in findings)
             print("  %s  %s" % ("ok  " if ok else "FAIL", name))
             if not ok:
@@ -832,6 +888,16 @@ def selftest() -> int:
         era_case("deleting the whole directory names every entry it lost, rather than refusing",
                  "docs/changelog/wave/one.md: missing",
                  lambda: _full(era_repo, []))
+        # A file git has in its index but the working tree no longer holds. `git ls-files
+        # --cached` still names it, so without the `isfile` guard the read raises and the run
+        # dies with a traceback instead of reporting the entry as gone — and a deleted entry file
+        # is exactly what the completeness arm exists to see. What a reader gets is what the tree
+        # holds, so the path is dropped and the branch reads as missing its record.
+        era_case("an entry file staged but deleted from the working tree reads as missing",
+                 "docs/changelog/wave/two.md: missing",
+                 lambda: (_full(era_repo, era_all),
+                          _git(era_repo, "add", "-A"),
+                          os.remove(os.path.join(era_repo, ENTRY_DIR, "wave/two.md"))))
         ran += 1
         era_index = merge_index(resolve_mainline(era_repo), era_repo)
         if ("begins at PR #54" in era_line(era_index)
@@ -910,6 +976,30 @@ def selftest() -> int:
             print("  FAIL  a run with findings did not print the mainline line above them "
                   "(exit %d, mainline line at %s, first finding at %s)\n        got: %s"
                   % (proc.returncode, line_at, finding_at, proc.stdout.strip()))
+            failures += 1
+
+        # A branch that merged twice keeps its LATEST merge, which is the position its entry
+        # describes. `merge_index`'s docstring has always said so and no fixture exercised it, so
+        # a mutant keeping the FIRST merge survived the whole selftest (PR #259's review). This
+        # repository's own mainline has one such branch, so the case is reachable rather than
+        # theoretical. Its own repository, because a second merge moves every position after it.
+        twice = os.path.join(tmp, "twice")
+        os.makedirs(twice, exist_ok=True)
+        _fixture_repo(twice, [(3, "old/a"), (4, "again/x"), (5, "old/b")])
+        _git(twice, "checkout", "-q", "again/x")
+        open(os.path.join(twice, "more"), "w").write("more\n")
+        _git(twice, "add", "-A")
+        _git(twice, "commit", "-q", "-m", "more work on again/x")
+        _git(twice, "checkout", "-q", "main")
+        _git(twice, "merge", "-q", "--no-ff", "-m",
+             "Merge pull request #6 from ns/again/x", "again/x")
+        ran += 1
+        twice_index = merge_index(resolve_mainline(twice), twice)
+        if twice_index.get("again/x") == (3, 6):
+            print("  ok    a branch merged twice keeps its latest merge, not its first")
+        else:
+            print("  FAIL  a branch merged twice did not keep its latest merge\n"
+                  "        got: %r, wanted (3, 6)" % (twice_index.get("again/x"),))
             failures += 1
 
         # The merged stream, which is what the stop hook captures and shows. stdout is buffered
@@ -1100,13 +1190,20 @@ USAGE = "usage: scripts/changelog-order [check [<path>] | read | manual-tests | 
 
 
 def main(argv: list[str]) -> int:
+    # Help is read off the RAW argv, before the filter below (PR #259's review). That filter drops
+    # anything starting with `-`, so `--help` never reached the branch that answers it and the
+    # tool silently checked the tree instead — exit 0 and a clean report, which reads exactly like
+    # a help request that worked. It matters more now than it did: this command is the documented
+    # front door to the whole branch-by-branch history.
+    if any(a in ("-h", "--help", "help") for a in argv[1:]):
+        print(__doc__)
+        print(USAGE)
+        return 0
     args = [a for a in argv[1:] if not a.startswith("-")]
     if args and args[0] == "selftest":
         return selftest()
     if args and args[0] not in ("check", "read", "manual-tests"):
         print(__doc__)
-        if args[0] in ("help", "--help"):
-            return 0
         print(USAGE, file=sys.stderr)
         return 1
     command = args[0] if args else "check"
