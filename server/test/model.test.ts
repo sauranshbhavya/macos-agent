@@ -229,6 +229,32 @@ describe("POST /v1/plan and POST /v1/research/synthesize", () => {
     await app.close();
   });
 
+  it("asks the provider to store nothing, on both routes that carry user content", async () => {
+    // SONNY-513, and the twin of `screen.test.ts`'s. This route fires on every ordinary command
+    // rather than only on screen control, so the content the Responses API's stateful default
+    // would have kept for thirty days is the user's own command text and the model's reply.
+    //
+    // Both routes are asserted here rather than only `/v1/plan`: they are separate registrations
+    // over one adapter, and a test covering one of them would keep passing if the other stopped
+    // sending the field. `toBe(false)` rather than a falsy check — `undefined` is the defect.
+    for (const url of ["/v1/plan", "/v1/research/synthesize"]) {
+      const calls = stubUpstream(() => jsonResponse({ output_text: "{}" }));
+      const app = build();
+      await app.inject({
+        method: "POST",
+        url,
+        headers: { authorization: authorization() },
+        payload: planBody(),
+      });
+
+      const body = calls[0]!.body as { store?: unknown };
+      expect(Object.hasOwn(body, "store"), `${url} sent no store field`).toBe(true);
+      expect(body.store, `${url} did not ask the provider to store nothing`).toBe(false);
+      await app.close();
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("maps response_schema onto the provider's structured-output mechanism, strictly", async () => {
     const calls = stubUpstream(() => jsonResponse({ output_text: "{}" }));
     const app = build();

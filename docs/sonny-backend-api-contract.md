@@ -758,11 +758,24 @@ Five rules on this route specifically. Each is here because breaking it is silen
    because vision token cost is driven by pixel dimensions rather than bytes, so metering cannot
    derive the cost without them.
 4. **The image arrives already redacted, and the server never receives a raw one.** Section 1.3.
-5. **One request is one iteration.** There is no conversation state on the server. Continuity lives
-   client-side in the runner's `history`, redacted before every send and folded into `prompt`. A
-   session sends up to twelve of these (`VisionSessionLimits.default.maximumIterations = 12`,
-   `VisionSessionContainment.swift:205`, `:209-210`), with a fresh full capture at the top of every
-   pass (`VisionSessionRunner.swift:196`) including for `wait`, `delegate`, `done` and `stuck`.
+5. **One request is one iteration.** There is no conversation state on the server, and none at the
+   provider either. Continuity lives client-side in the runner's `history`, redacted before every
+   send and folded into `prompt`. A session sends up to twelve of these
+   (`VisionSessionLimits.default.maximumIterations = 12`, `VisionSessionContainment.swift:205`,
+   `:209-210`), with a fresh full capture at the top of every pass (`VisionSessionRunner.swift:196`)
+   including for `wait`, `delegate`, `done` and `stuck`.
+   **The second half of that first sentence is newer than the rest of this rule, and until
+   SONNY-513 it was not true** (2026-09-17). This rule described what *this gateway* keeps, which
+   was nothing, while the request it sends asked the provider to keep the reply: the Responses API
+   is stateful by default — Azure documents "By default, response data is retained for 30 days",
+   Amazon documents `store` as defaulting to `true` — and the adapter sent no `store` field, so a
+   reader checking the system against this rule would have found the client and the server honest
+   and the window open one hop further out. `store: false` is now on the body
+   (`server/src/model/vision.ts`), pinned by a test that fails when the field is dropped or
+   flipped, and the same field is on `/v1/plan` and `/v1/research/synthesize`
+   (`server/src/model/openai.ts`), which carry command text rather than captures. This is separate
+   from, and underneath, the provider's own abuse-monitoring retention, which is SONNY-110's and is
+   not closed by anything here.
 
 ### 4.6 `DELETE /v1/tasks/{task_id}`
 

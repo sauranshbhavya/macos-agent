@@ -175,6 +175,18 @@ export function makeCerebrasTextAdapter(
       ...(request.reasoningEffort === undefined
         ? {}
         : { reasoning_effort: request.reasoningEffort }),
+      // **There is deliberately no `store: false` on this body, and its absence is a decision
+      // rather than the oversight it resembles** (SONNY-513). Both Responses adapters in this
+      // directory carry one; this is Chat Completions, a different API, and the stateful 30-day
+      // default they defend against is documented for the Responses API specifically. Cerebras
+      // additionally does not list `store` among the parameters it accepts, and documents nothing
+      // about what it does with a field it does not recognise — so sending one would be an
+      // unverifiable change to a live route, against a third-party endpoint no test in this
+      // repository can reach, to remove an exposure not documented to exist. Read 2026-09-17 at
+      // `inference-docs.cerebras.ai/api-reference/chat-completions`.
+      //
+      // If this provider gains a stored-completions default, this is the line that changes, and
+      // `store` is the token to grep for.
     };
 
     let response: Response;
