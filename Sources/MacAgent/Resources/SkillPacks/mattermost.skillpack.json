@@ -6,47 +6,8 @@
   "category": "communication",
   "summary": "Open-source team messaging.",
   "signInURL": null,
-  "triggers": [
-    "mattermost",
-    "mattermost.com"
-  ],
+  "triggers": ["mattermost", "mattermost.com"],
   "sections": [],
-  "depth": "deep",
-  "flows": [
-    {
-      "title": "Create a channel",
-      "startURL": "https://mattermost.com/",
-      "steps": [
-        "Select Add channels in the channel sidebar, then Create New Channel.",
-        "Enter a channel name.",
-        "Choose whether it is a public or a private channel.",
-        "Optionally describe what the channel is for. That text sits in the channel header where every member sees it.",
-        "Optionally put the channel in a category, which is where members find it in their own sidebar. Whoever creates a channel becomes its channel admin."
-      ],
-      "source": "https://docs.mattermost.com/end-user-guide/collaborate/create-channels"
-    },
-    {
-      "title": "Invite people to a workspace",
-      "startURL": "https://mattermost.com/",
-      "steps": [
-        "Select the team name at the top of the channel sidebar, then select Invite People.",
-        "Choose how to invite them: Copy invite link to hand out a link, Invite as member to email someone who has no account yet, Add existing users to bring workspace members into this team, or Invite as guest for someone who should see only part of it.",
-        "For a guest, select at least one channel they may reach. Guests are held to the channels you name and cannot discover the others.",
-        "An emailed invitation expires after 48 hours and works once. An invite link keeps working for anyone who has it until a system admin re-generates or revokes it under Team Settings, Access, Invite Code."
-      ],
-      "source": "https://docs.mattermost.com/end-user-guide/collaborate/invite-people"
-    },
-    {
-      "title": "Search for messages",
-      "startURL": "https://mattermost.com/",
-      "steps": [
-        "Select the Search field, select Messages, and type what to look for. Results cover every channel in your current team.",
-        "Select All Teams to search across all of them, or pick one team instead.",
-        "Narrow the results with modifiers: from: for a person, in: for a channel, before:, after: and on: for dates, quotation marks for an exact phrase, a hyphen to leave a term out, and an asterisk at the end of a word for a wildcard.",
-        "Select Files rather than Messages to search file names and the text inside documents, then use the File Type Filter to keep only documents, spreadsheets or images.",
-        "Select Jump on a result to read that message in its channel. Very common words, and one- and two-letter terms, return nothing."
-      ],
-      "source": "https://docs.mattermost.com/end-user-guide/collaborate/search-for-messages"
-    }
-  ]
+  "depth": "shallow",
+  "flows": []
 }

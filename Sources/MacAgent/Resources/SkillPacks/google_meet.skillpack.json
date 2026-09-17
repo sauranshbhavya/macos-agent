@@ -32,9 +32,9 @@
       "steps": [
         "Attendance tracking is available to Google Workspace Essentials, Business Plus, Enterprise Starter, Enterprise Essentials, Enterprise Standard, Enterprise Plus, Education Plus and Teaching and Learning Upgrade users.",
         "During the meeting, click Host controls at the bottom, then toggle Attendance tracking on or off in the side panel that opens.",
-        "To arrange it beforehand, open the event in Google Calendar, click Change conference settings, tick the box next to Attendance tracking and click Save.",
+        "To arrange it beforehand, go to calendar.google.com. On a new event, click Add Google Meet video conferencing, then Change conference settings on the right. On an existing meeting, click it, click Edit event, then click Change conference settings under event details. Either way, tick the box next to Attendance tracking and click Save.",
         "After the meeting the organiser is emailed a Google Sheets report naming each participant, their email, when they joined and left, and how long they were on the call.",
-        "Attendance tracking is kept in Meet only for a short time, so collect the report soon after the meeting."
+        "Attendance tracking is retained in Meet for a short time, and the page asks you to report any tracking issues as soon as possible."
       ],
       "source": "https://support.google.com/meet/answer/10090454?hl=en"
     }

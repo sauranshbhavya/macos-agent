@@ -18,7 +18,7 @@
       "startURL": "https://app.simpletexting.com/",
       "steps": [
         "Go to Messaging, then New campaign.",
-        "Give the campaign a name for your own reference — it is not what recipients see.",
+        "Give the campaign a name for your own reference.",
         "Write the message, including any link you want people to open.",
         "Select the list to text.",
         "Send the message, or schedule it for a later time instead of sending it now."

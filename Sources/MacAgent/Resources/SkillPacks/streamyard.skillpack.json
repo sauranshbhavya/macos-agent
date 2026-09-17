@@ -15,7 +15,7 @@
   "flows": [
     {
       "title": "Use a green screen",
-      "startURL": "https://streamyard.com/",
+      "startURL": "https://streamyard.com/dashboard",
       "steps": [
         "In your StreamYard studio, click Settings.",
         "Open the Virtual Background tab.",
@@ -28,8 +28,9 @@
     },
     {
       "title": "Connect a Facebook Page to stream to",
-      "startURL": "https://streamyard.com/",
+      "startURL": "https://streamyard.com/dashboard",
       "steps": [
+        "Before this can work, Meta requires the Facebook account to be at least 60 days old and the Facebook Page or professional mode profile to have at least 100 followers.",
         "Open the Destinations tab, click Add a Destination, then Facebook Page, and select your page from the list that appears.",
         "If your page is not in the list, check that you hold Facebook access or task access to create content for it.",
         "Check too that you are on the Facebook profile that holds the page: click your profile picture at the top right of facebook.com to see which one you are on.",

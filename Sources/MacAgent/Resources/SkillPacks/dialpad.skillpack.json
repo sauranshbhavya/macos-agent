@@ -15,7 +15,7 @@
   "flows": [
     {
       "title": "Set call routing rules for a department",
-      "startURL": "https://dialpad.com/",
+      "startURL": "https://dialpad.com/app",
       "steps": [
         "Open your Dialpad Admin Settings and go to Departments.",
         "Select the department, open Business hours & call routing, then select Edit Call Routing. When the department has its own business hours, walk through this once for open hours and once for closed hours.",
@@ -28,7 +28,7 @@
     },
     {
       "title": "Restore a deleted team member",
-      "startURL": "https://dialpad.com/",
+      "startURL": "https://dialpad.com/app",
       "steps": [
         "Open your Dialpad Admin Settings and go to Office Settings, then select Users. This needs an admin.",
         "Select the Deleted Users tab. A deleted user sits there for 72 hours and their number is held, so it cannot be reassigned during that time.",

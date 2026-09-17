@@ -17,7 +17,7 @@
   "flows": [
     {
       "title": "Share a video by email",
-      "startURL": "https://www.loom.com/",
+      "startURL": "https://www.loom.com/looms",
       "steps": [
         "Open the video and select Share.",
         "To share it inside your workspace, type the person's email address or search for their name, and choose whether they get view or edit access. The email they receive carries a thumbnail of the recording.",
@@ -29,7 +29,7 @@
     },
     {
       "title": "Move a video into a space",
-      "startURL": "https://www.loom.com/",
+      "startURL": "https://www.loom.com/looms",
       "steps": [
         "Only the owner of a video can move it between spaces.",
         "In the upper-left corner of the video, select the menu and then Move.",
