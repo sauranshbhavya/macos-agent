@@ -15,7 +15,7 @@
   "flows": [
     {
       "title": "Set up a Position Tracking campaign",
-      "startURL": "https://www.semrush.com/position-tracking/",
+      "startURL": "https://www.semrush.com/login/",
       "steps": [
         "Open the Position Tracking tool from the left-hand menu.",
         "When you create your first folder in Semrush, Position Tracking is automatically configured and launched for the domain you provided. For any subsequent folders, create a new folder from Position Tracking and follow the prompts to configure it.",
