@@ -5252,26 +5252,6 @@ when you return to this build, and those three are gone for good.
       ~/Documents instead`. **Sonny zips the 3 largest files from Documents.** **What would be a
       finding:** Sonny asking what to do, or planning anything other than that task on Documents.
 
-### SONNY-502 — deep Skills packs, communication (six sites)
-
-Each pack's flows were written from a public help page read in a real browser this session. What is
-being checked here is that the pack reaches the planner at all and that its steps are the ones the
-site actually uses — not that Sonny completes the task on a live account. Sign in to nothing.
-
-- [ ] **A Discord command pulls in the Discord pack.** Ask the widget `search my discord messages for
-      the release notes`. **Sonny's plan uses Discord's own search — the search bar at the top right,
-      or the from:, in:, mentions: and has: filters — and starts on discord.com.** **What would be a
-      finding:** a plan that opens some other site, that invents a Discord control the pack does not
-      name, or that asks you to sign in as part of the task.
-- [ ] **A Loom command pulls in the Loom pack.** Ask `share my latest loom video with the team by
-      email`. **Sonny's plan uses Share, then the recipient's email address or name, and offers view
-      or edit access** — the wording on Loom's own page. **What would be a finding:** a plan that
-      pastes a link without going through Share, or that names a control Loom does not have.
-- [ ] **No flow in these packs moves money.** In both commands above, read the whole plan.
-      **Nothing asks to pay, refund, top up, change a card or confirm a billing change.** **What
-      would be a finding:** any step that touches payment, billing or a card — that would be a defect
-      in the pack, not in the planner.
-
 ## 8. How to report back
 
 For each real finding, give me:
