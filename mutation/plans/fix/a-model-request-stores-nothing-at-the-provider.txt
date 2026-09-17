@@ -1,4 +1,18 @@
 # fix/a-model-request-stores-nothing-at-the-provider: the branch's mutation plan (SONNY-513).
+#
+# SERVER HALF. Every `>>> file` path below is under server/, so scripts/mutate-all runs this plan
+# against the whole vitest suite, `cd server && npx vitest run`, never the flagged swift test
+# (SONNY-455). None of these four mutants touches a database path, so this plan measures the same
+# either way, but scripts/mutate-all still runs a server plan only with DATABASE_URL set.
+#
+# **A direct `scripts/mutate <plan>` run does NOT infer the half — it defaults to the Swift command,
+# and `--check` will print that command above a clean exit.** That is a clean result from the wrong
+# suite, which is the shape this repository keeps writing down. To run this plan by hand, name the
+# suite:
+#
+#   MUTATE_TEST_CMD='cd server && npx vitest run test/screen.test.ts test/model.test.ts' \
+#     scripts/mutate mutation/plans/fix/a-model-request-stores-nothing-at-the-provider.txt
+#
 # Written under the founders' decision of 2026-09-10 — batteries are founder-triggered, over every
 # plan under mutation/plans/, about weekly; a branch writes its plan and does not run it.
 # Format: scripts/mutate --help. Every `from` block must match its file exactly once.

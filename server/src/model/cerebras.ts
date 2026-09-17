@@ -177,16 +177,27 @@ export function makeCerebrasTextAdapter(
         : { reasoning_effort: request.reasoningEffort }),
       // **There is deliberately no `store: false` on this body, and its absence is a decision
       // rather than the oversight it resembles** (SONNY-513). Both Responses adapters in this
-      // directory carry one; this is Chat Completions, a different API, and the stateful 30-day
-      // default they defend against is documented for the Responses API specifically. Cerebras
-      // additionally does not list `store` among the parameters it accepts, and documents nothing
-      // about what it does with a field it does not recognise — so sending one would be an
-      // unverifiable change to a live route, against a third-party endpoint no test in this
-      // repository can reach, to remove an exposure not documented to exist. Read 2026-09-17 at
-      // `inference-docs.cerebras.ai/api-reference/chat-completions`.
+      // directory carry one; this does not, for reasons that are about *this provider* rather than
+      // about this API.
       //
-      // If this provider gains a stored-completions default, this is the line that changes, and
-      // `store` is the token to grep for.
+      // **Default storage is not a Responses-API peculiarity, and an earlier version of this
+      // comment said it was.** OpenAI's own migration guide puts the two side by side: "Responses
+      // are stored by default. Chat completions are stored by default for new accounts." So the
+      // difference is narrower than "different API" suggests — what *is* Responses-specific is
+      // Azure's "By default, response data is retained for 30 days", which is the figure the other
+      // two adapters defend against. Anyone moving the text route to a new provider should assume
+      // Chat Completions stores by default too, and check.
+      //
+      // What holds here is provider-specific. Cerebras does not list `store` among the parameters
+      // it accepts and documents nothing about what it does with a field it does not recognise
+      // (read 2026-09-17 at `inference-docs.cerebras.ai/api-reference/chat-completions`), so
+      // sending one would be an unverifiable change against a third-party endpoint no test in this
+      // repository can reach. And the exposure is smaller than a reader of this file would guess:
+      // `cerebras` appears in no chain in `DEFAULT_ROUTE_CHAINS` (`provider-router.ts`), so this
+      // adapter serves nothing unless a deployment names it in a `MODEL_ROUTE_*` variable.
+      //
+      // If this route is ever pointed at a provider that documents `store`, that is when the field
+      // goes on, and `store` is the token to grep for.
     };
 
     let response: Response;
