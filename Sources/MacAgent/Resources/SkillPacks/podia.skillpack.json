@@ -28,7 +28,7 @@
       "title": "Add lessons and sections to a course, then publish it",
       "startURL": "https://app.podia.com/login",
       "steps": [
-        "Open the course from the Products page of your Admin dashboard.",
+        "After creating the course, the next step is to add your content — you need at least one lesson before you can publish it.",
         "Click + New lesson and choose what to add: Lesson, Quiz or Files.",
         "To group related lessons together, click the + New section button.",
         "To move a lesson or a whole section, click the three-line icon next to it and drag it where you want it.",

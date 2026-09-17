@@ -20,7 +20,8 @@
         "Enter the course title and the author, and a description if you want one.",
         "Add a thumbnail image. The aspect ratio is 16:9 and the recommended size is 1024 × 576 px.",
         "In the step that outlines the course, choose how to build the curriculum: Generate with AI, Start from scratch, Bulk upload, or Copy from another course.",
-        "In the Course Setup Guide, check the curriculum under Curriculum Preview.",
+        "Click Finish to create your course. You land on the Course Setup Guide, a checklist for structuring, designing and publishing it.",
+        "From the Setup Guide, check the curriculum under Curriculum Preview.",
         "Choose the sales page students enrol from — the course sales page, the product details page, or an external URL — and choose the thank-you page they land on afterwards.",
         "Click Publish course."
       ],
