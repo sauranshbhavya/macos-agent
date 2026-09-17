@@ -1,55 +1,7 @@
 import Foundation
+import MacAgentTestSupport
 import Testing
 @testable import MacAgentCore
-
-/// A pack that passes every rule, built as the JSON a pack author writes and decoded through the
-/// real loader — so a fixture pack cannot be something the loader would refuse.
-enum SkillPackFixtures {
-    static func object(
-        id: String = "notion",
-        name: String = "Notion",
-        domain: String = "notion.so",
-        category: String = "knowledge_bases",
-        depth: String = "deep"
-    ) -> [String: Any] {
-        [
-            "format": 1,
-            "id": id,
-            "name": name,
-            "domain": domain,
-            "category": category,
-            "summary": "A site used in tests.",
-            "signInURL": "https://\(domain)/login",
-            "triggers": [name.lowercased()],
-            "sections": [],
-            "depth": depth,
-            "flows": depth == "deep" ? [flow(on: domain)] : []
-        ]
-    }
-
-    /// A flow starting on `domain`'s own site, which every flow has to (PR #241's F4). Its citation is
-    /// deliberately on another host, because the rule does not hold citations to the site.
-    static func flow(
-        title: String = "Create a page",
-        steps: [String] = ["Click the new page icon.", "Type a title."],
-        on domain: String = "notion.so"
-    ) -> [String: Any] {
-        [
-            "title": title,
-            "startURL": "https://www.\(domain)/",
-            "steps": steps,
-            "source": "https://www.example.com/help/create"
-        ]
-    }
-
-    static func data(_ object: [String: Any]) throws -> Data {
-        try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
-    }
-
-    static func pack(id: String, name: String, domain: String) throws -> SkillPack {
-        try SkillPackDecoder.decode(data(object(id: id, name: name, domain: domain)))
-    }
-}
 
 @Suite
 struct SkillPackTests {
@@ -148,6 +100,59 @@ struct SkillPackTests {
             for trigger in pack.triggers {
                 #expect(Self.triggerProblem(trigger, siteName: pack.name, ordinary: ordinary) == nil, "\(pack.id): \(trigger)")
             }
+        }
+    }
+
+    /// **Only this file reads the shipped packs folder** (SONNY-481). The pack lanes add packs there, and
+    /// a test elsewhere that reads it for a page's rows or a planner's prompt goes red on a well-formed
+    /// pack for no product reason — the Skills suite in `MemoryCommandCenterTests` did, until it moved to
+    /// `SkillPackFixtures.catalogue()`. Every Swift file under `Tests/` goes through
+    /// `readsTheShippedPacks(_:)`, and so do the held samples, so the check the files meet is the check
+    /// the samples prove.
+    ///
+    /// **What it does not see** (PR #245's review): a path assembled from pieces; a read of the built
+    /// resource bundle (`Bundle(url:)` and its `resourceURL`), which is how `SonnyResourceBundle` itself
+    /// reads the packs; a call to `AgentViewModel.atItsRealStoreLocations()`, which reads them through
+    /// `SonnyResourceBundle`; and a CRLF file whose first line is a line comment, because `"\r\n"` is
+    /// one `Character`, so the file never splits and reads as one comment line. And the exemption is
+    /// the whole of this file, not its two validating tests: a test added here could pin shipped
+    /// contents and pass.
+    ///
+    /// **The `readers` assertion does not show the validating tests read the folder.** This file's own
+    /// sample lines and `shippedPacksDirectory` satisfy it on their own. What shows the read is the
+    /// validating tests' own count checks: `catalogue.packs.count == files.count` and `>= 3`.
+    @Test
+    func onlyTheValidatingTestsReadTheShippedPacksFolder() throws {
+        let root = Self.repositoryRoot.standardizedFileURL.path + "/"
+        let enumerator = try #require(FileManager.default.enumerator(at: Self.repositoryRoot.appendingPathComponent("Tests"), includingPropertiesForKeys: nil))
+        var scanned: Set<String> = []
+        var readers: [String] = []
+        for case let url as URL in enumerator where url.pathExtension == "swift" {
+            let path = url.standardizedFileURL.path.replacingOccurrences(of: root, with: "")
+            scanned.insert(path)
+            if Self.readsTheShippedPacks(try String(contentsOf: url, encoding: .utf8)) {
+                readers.append(path)
+            }
+        }
+
+        // The control: the walk reached this file and the suite that used to read the folder.
+        #expect(scanned.isSuperset(of: ["Tests/MacAgentCoreTests/SkillPackTests.swift", "Tests/MacAgentTests/MemoryCommandCenterTests.swift"]))
+        // This file's own sample lines satisfy this on their own; the validating tests' count checks
+        // are what show they read the folder.
+        #expect(readers == ["Tests/MacAgentCoreTests/SkillPackTests.swift"])
+
+        #expect(Self.readsTheShippedPacks(#"    .appendingPathComponent("Sources/MacAgent/Resources/SkillPacks")"#))
+        #expect(Self.readsTheShippedPacks("    let catalogue = SonnyResourceBundle.skillPackCatalog()"))
+        #expect(Self.readsTheShippedPacks("    let files = SkillPackCatalog.packFileURLs(in: SkillPackTests.shippedPacksDirectory)"))
+        #expect(!Self.readsTheShippedPacks("    /// Never read from `Sources/MacAgent/Resources/SkillPacks/`."))
+    }
+
+    /// Whether a Swift file names the shipped packs folder, or a way to it, on a line that is not a
+    /// line comment.
+    static func readsTheShippedPacks(_ source: String) -> Bool {
+        source.split(separator: "\n", omittingEmptySubsequences: false).contains { line in
+            !line.drop(while: { $0 == " " || $0 == "\t" }).hasPrefix("//")
+                && ["Resources/SkillPacks", "SonnyResourceBundle", "shippedPacksDirectory"].contains { line.contains($0) }
         }
     }
 
@@ -365,6 +370,37 @@ struct SkillPackTests {
         }
         // The control: naming them without an action verb still loads.
         #expect(error("Find the account numbers and the cards on file.") == nil)
+    }
+
+    /// A money context word or a contextual object in the plural counts exactly as its singular does
+    /// (SONNY-479: "at the banks" and "in two currencies" loaded at `65a50865` while "at the bank" was
+    /// refused). Each pair has to fail with the same words. The context list's other two missing
+    /// plurals, IBANs and wires, are not here because both words are money objects as well, so a unit
+    /// naming either is refused before its context is read.
+    @Test
+    func aContextWordOrAContextualObjectInThePluralCountsAsItsSingularDoes() throws {
+        func error(_ step: String) -> SkillPackLoadError? {
+            var object = SkillPackFixtures.object(id: "store", name: "Store", domain: "store.example.com")
+            object["flows"] = [SkillPackFixtures.flow(title: "Do a thing", steps: ["Open it.", step], on: "store.example.com")]
+            return Self.error(object)
+        }
+        let pairs: [(singular: String, plural: String)] = [
+            ("Update the account at the bank.", "Update the account at the banks."),
+            ("Update the balance in one currency.", "Update the balance in two currencies."),
+            ("Update the account on the invoice.", "Update the account on the invoices."),
+            ("Update the recipient of the transfer.", "Update the recipient of the transfers."),
+            ("Update the card at the bank.", "Update the cards at the bank."),
+            ("Update the amount in one currency.", "Update the amounts in one currency.")
+        ]
+        for pair in pairs {
+            let singular = error(pair.singular)
+            #expect(singular != nil, "\(pair.singular) loaded")
+            #expect(error(pair.plural) == singular, "\(pair.plural) → \(String(describing: error(pair.plural)))")
+        }
+        // The controls: a plural context word with no contextual object loads, and so does a plural
+        // contextual object with no money word beside it.
+        #expect(error("Update the list of banks and currencies.") == nil)
+        #expect(error("Move the cards to Done.") == nil)
     }
 
     /// The summary and the sections reach the planner too, so they are read by the same rule — each
