@@ -202,6 +202,31 @@ describe("POST /v1/screen/analyze", () => {
     await app.close();
   });
 
+  it("asks the provider to store nothing, so a capture leaves no stateful copy behind", async () => {
+    // SONNY-513. The Responses API is stateful by default — Azure documents "By default, response
+    // data is retained for 30 days", Amazon documents `store` as defaulting to `true` — so the
+    // *absence* of this field is what created a thirty-day window holding a reply about the user's
+    // screen. The assertion is `toBe(false)` rather than a falsy check on purpose: `undefined` is
+    // the defect this test exists to catch, and `expect(body.store).toBeFalsy()` passes on it.
+    //
+    // This also pins contract §4.5 rule 5, "There is no conversation state on the server", which
+    // until this field was sent described the client's behaviour rather than the system's.
+    const calls = stubUpstream(() => jsonResponse({ output_text: "{}" }));
+    const app = build();
+
+    await app.inject({
+      method: "POST",
+      url: "/v1/screen/analyze",
+      headers: { authorization: authorization() },
+      payload: analyzeBody(),
+    });
+
+    const body = calls[0]!.body as { store?: unknown };
+    expect(Object.hasOwn(body, "store")).toBe(true);
+    expect(body.store).toBe(false);
+    await app.close();
+  });
+
   it("uses the media type the capture carried rather than assuming one", async () => {
     // §4.5 rule 2. `RedactedCaptureEncoder` encodes both PNG and JPEG and sends the smaller, so
     // roughly half of real captures are each — a server that hardcoded either is wrong half the

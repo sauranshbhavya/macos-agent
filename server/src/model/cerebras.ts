@@ -175,6 +175,35 @@ export function makeCerebrasTextAdapter(
       ...(request.reasoningEffort === undefined
         ? {}
         : { reasoning_effort: request.reasoningEffort }),
+      // **There is deliberately no `store: false` on this body, and its absence is a decision
+      // rather than the oversight it resembles** (SONNY-513). Both Responses adapters in this
+      // directory carry one; this does not, for reasons that are about *this provider* rather than
+      // about this API.
+      //
+      // **Default storage is not a Responses-API peculiarity, and an earlier version of this
+      // comment said it was.** OpenAI's own migration guide puts the two side by side: "Responses
+      // are stored by default. Chat completions are stored by default for new accounts." So the
+      // difference is narrower than "different API" suggests — what *is* Responses-specific is
+      // Azure's "By default, response data is retained for 30 days", which is the figure the other
+      // two adapters defend against. Anyone moving the text route to a new provider should assume
+      // Chat Completions stores by default too, and check.
+      //
+      // **So the reason is not that the exposure is undocumented — it is documented.** It rests on
+      // two provider-and-routing facts that hold today and could each stop holding. First,
+      // `cerebras` appears in no chain in `DEFAULT_ROUTE_CHAINS` (`provider-router.ts`), so this
+      // adapter serves nothing unless a deployment names it in a `MODEL_ROUTE_*` variable — no
+      // user content flows through this body as shipped. Second, Cerebras does not list `store`
+      // among the parameters it accepts and documents nothing about what it does with a field it
+      // does not recognise (read 2026-09-17 at
+      // `inference-docs.cerebras.ai/api-reference/chat-completions`), so sending one would be an
+      // unverifiable change against a third-party endpoint no test in this repository can reach.
+      // Founders' decision of 2026-09-17: it stays off on those two grounds.
+      //
+      // **The first of those two is enforced rather than trusted to this comment**, because it can
+      // be undone by one edit in another file by someone with no reason to open this one:
+      // `cerebras.test.ts`'s `may only serve a route chain once it carries a store decision` fails
+      // if `cerebras` joins a chain while this body still sends no `store`. Adding the field is one
+      // of the two ways to make it green again; the other is leaving the chains alone.
     };
 
     let response: Response;

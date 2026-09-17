@@ -104,6 +104,12 @@ export function makeOpenAITextAdapter(
   return async (request) => {
     const body = {
       model: settings.textModel,
+      // The same retention control the vision adapter carries, on the same API and for the same
+      // reason (SONNY-513) — `vision.ts` has the full note. This route is the one that fires on
+      // *every ordinary command* rather than only on screen control, so what it would otherwise
+      // leave stored at the provider is the user's typed or spoken command text and the model's
+      // reply, for thirty days, on the Responses API's default.
+      store: false,
       input: request.messages.map((message) => ({
         role: message.role,
         content: [{ type: "input_text", text: message.text }],

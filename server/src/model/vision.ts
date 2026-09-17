@@ -228,6 +228,23 @@ export function makeVisionAdapter(settings: VisionSettings): VisionProvider {
   return async (request) => {
     const body = {
       model: settings.model,
+      // **`store: false` is a retention control, not a tidiness** (SONNY-513). The Responses API is
+      // stateful by default: Azure's own documentation says "By default, response data is retained
+      // for 30 days. Delete a stored response by ID", and Amazon's says of the same API that
+      // `store` "defaults to `true`". So a request that omits the field asks the provider to keep
+      // the reply — and on this route the reply describes the user's screen, beside a prompt that
+      // quotes it.
+      //
+      // That window is separate from, and underneath, the abuse-monitoring retention SONNY-110 was
+      // filed about: it is the one this gateway can close on its own, with no provider change, no
+      // purchase and no approval, which is why it is fixed here rather than waiting on that
+      // ticket's provider decision. It is also correct on every candidate provider, so a later
+      // move cannot silently reopen it.
+      //
+      // Contract §4.5 rule 5 — "There is no conversation state on the server" — is a statement
+      // about this line. Before it, the rule described the Mac's behaviour while the provider kept
+      // state anyway.
+      store: false,
       input: [
         {
           role: "user",

@@ -374,9 +374,17 @@ const schema = z.object({
    * contract's §1.3 says becomes server configuration — so a deployment that sets neither behaves as
    * the app used to.
    *
-   * **This pair is the one SONNY-110 moves.** That ticket's requirement widened on 2026-08-16 to no
-   * retention *and* no training rights over our data; making it a redeploy rather than an app release
-   * is the whole reason the Mac's vision client no longer names a provider, a model or an endpoint.
+   * **This pair is the one SONNY-110 moves**, and making it a redeploy rather than an app release is
+   * the whole reason the Mac's vision client no longer names a provider, a model or an endpoint.
+   *
+   * **What that ticket is has changed twice, so read it rather than this comment for the current
+   * answer.** It was filed to reach a "paid zero-retention provider"; the requirement widened on
+   * 2026-08-16 to no retention *and* no training rights; and on **2026-09-04** the founders decided
+   * Azure OpenAI as configured ships v1, which stopped it being a release blocker and turned it into
+   * a configuration verification. That verification was done on 2026-09-17 and is recorded on the
+   * ticket — it found that Microsoft's current terms state no retention period at all, so the
+   * bounded window the decision assumed is not one Azure documents. Nothing here asserts which
+   * provider ships; these two variables are what makes that a redeploy whichever way it lands.
    *
    * The credential is `VISION_API_KEY`, read by `providerCredentials` below — `vision` has been in
    * the `providers` list since SONNY-126, waiting for this route.
