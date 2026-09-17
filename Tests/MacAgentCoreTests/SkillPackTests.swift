@@ -253,9 +253,16 @@ struct SkillPackTests {
     /// here** (SONNY-501). The shipped packs cannot hold that narrowing any more: no row says
     /// `shallow`, so the loop over every pack has nothing to refuse and would pass exactly as warmly
     /// with the narrowing gone. Widening `evidenceForADeepPack` by one more word, or emptying
-    /// `depthProblem`, dies here or nowhere. The page condition is the other way round — 95 shipped
-    /// packs are deep and every one of their rows names a page, so the loop holds it on a live
-    /// population and these samples say what the rule is.
+    /// `depthProblem`, dies here or nowhere. The page condition is the other way round: every shipped
+    /// deep pack sits on a row that names a page, so the loop holds that one on a live population and
+    /// these samples only say what the rule is. **The count is deliberately not in that sentence.** It
+    /// grows with every pack wave and moves under a rebase without anything in the branch saying so —
+    /// this read 95 until a delta pass caught it eight packs later, which is the whole of review-260's
+    /// finding. The sentence needs only that the population is not empty; the size is a reading at a
+    /// commit, and this is one — 103 at `1dea6c9d`, against 370 for the `shallow` twin and 0 for a
+    /// depth no pack has, that last being the control saying the pattern can come back empty:
+    ///
+    ///     grep -rl '"depth": "deep"' Sources/MacAgent/Resources/SkillPacks | wc -l
     ///
     /// Every value a loop reads is written out rather than taken from the declaration under test: a
     /// loop over `evidenceForADeepPack`, or over a list of the column's words, passes whatever that
