@@ -577,9 +577,12 @@ struct SkillPackTests {
     /// **A flow that ends in a purchase does not load either** (SONNY-506). The founders' rule is
     /// that no flow moves money, and buying is money leaving the user — but the rule's first two
     /// tests were built for money *movement*, so barely a purchase word sat on any list until this
-    /// table did: **15 of the first 17 rows loaded** at `981c6e56` — this file run against that tree's
+    /// table did: **15 of the 17 rows it then held loaded** at `981c6e56` — this file *as it stood at
+    /// `c36c8107`*, before review-268 added the last five rows, run against that tree's
     /// `SkillPackContentRules.swift` and `SkillGuidance.swift`, where it records 15 issues, every one
-    /// of them `did not refuse as moving money: nil`. The two that did not are "Pick a courier",
+    /// of them `did not refuse as moving money: nil`. The five rows added after that measurement have
+    /// a control of their own and a sharper one: delete the list entry each exists for and exactly
+    /// that row turns red, naming the word. The two that did not are "Pick a courier",
     /// whose "Confirm and pay" refuses on test 1's `pay`, and "Top up the balance", whose title is a
     /// money verb — both kept, because they are what makes leaving those spellings off
     /// `purchaseActs` a measurement rather than an assumption.
@@ -694,9 +697,9 @@ struct SkillPackTests {
     /// pack lane owes is therefore writing down where the flow leaves the user, not finding better
     /// words for the button.
     ///
-    /// Run against `981c6e56` this test records exactly **one** issue, and it is the header
-    /// assertion below: both expectations about the money rule already held there, unchanged by
-    /// everything SONNY-506 added. That is what "the rule cannot see it" means, measured rather than
+    /// Run against `981c6e56` — this test as it stood at `c36c8107` — it records exactly **one**
+    /// issue, and it is the header assertion below: both expectations about the money rule already
+    /// held there, unchanged by everything SONNY-506 added. That is what "the rule cannot see it" means, measured rather than
     /// asserted.
     ///
     /// **If this test ever goes red** because the first flow is refused, the rule has grown past what
@@ -793,9 +796,10 @@ struct SkillPackTests {
     /// sentence is "turn on the switch next to Keep board secret if you want the board to be secret".
     /// The rule refused that clause, so the pack shipped without it rather than renaming a control
     /// nobody could then find. SONNY-492 answered the same question the same way in the trigger
-    /// check: teach the check the words. Run against `981c6e56` the same way, this test records
-    /// **6 issues** — every row of the first table, and **none** of the second, which is what says
-    /// the change is a narrowing of one word rather than a loosening of the rule.
+    /// check: teach the check the words. Run against `981c6e56` the same way — this test as it stood
+    /// at `c36c8107`, before review-268 added the boundary table — it records **6 issues**: every row
+    /// of the first table, and **none** of the second, which is what says the change is a narrowing
+    /// of one word rather than a loosening of the rule.
     ///
     /// **The tables below the first are the whole reason this is safe, and they are held by value on
     /// purpose.** Every row of them is a credential step that must still be refused, so the next
@@ -857,10 +861,14 @@ struct SkillPackTests {
 
         // review-268's F1, by value. `SkillWords.cut` discards punctuation, so before the gap array
         // existed the word after "secret." was the first word of the next sentence and supplied the
-        // excuse. Every one of these loaded at `dc73131c`; each is a credential step whose next
-        // clause happens to name a thing a site makes private, which is ordinary help-centre prose —
-        // 436 of the 1604 shipped steps carry a sentence boundary and 4 already put one of
-        // `privacyObjects` straight after one.
+        // excuse. Each is a credential step whose next clause happens to name a thing a site makes
+        // private, which is ordinary help-centre prose — 495 of the 1767 shipped steps carry a
+        // sentence boundary and 4 already put one of `privacyObjects` straight after one.
+        //
+        // The control, run rather than argued: with the two `unit.joinedToPrevious` reads deleted
+        // from `namesAThing`, this test records exactly **9** issues, one per row here, and nothing
+        // else in it moves. That pair of numbers — nine, and nothing else — is what says these rows
+        // hold the boundary and not something they share with the tables above.
         let acrossABoundary: [String] = [
             "Copy the client ID and the secret. Boards are listed on the left.",
             "Paste the API secret. Boards you own appear under Saved.",
