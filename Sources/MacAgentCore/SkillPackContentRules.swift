@@ -98,23 +98,28 @@ struct SkillPhraseList {
 ///    Trello board, an *account*, a *balance*, an *amount* — and count only when the same unit also
 ///    names money: a bank, billing, an IBAN, a transfer, a wire, a payment, a payout, money, funds, a
 ///    currency, an invoice, or a currency amount.
-/// 3. **A purchase act**, alone: `buy`, `purchase`, `place an order`, `proceed to checkout`,
-///    `complete the purchase`, `confirm and pay`, `add funds`. Buying is money leaving the user, and
-///    tests 1 and 2 were built for money *movement* — transfers, payouts, refunds, payees — so until
-///    SONNY-506 not one purchase word sat on any list: `git grep -cE '"(buy|purchase|checkout|postage)"' 981c6e56 -- Sources/MacAgentCore/SkillPackContentRules.swift`
+/// 3. **A purchase act**, alone: `buy`, `purchase`, `place an order`, `proceed to checkout` — and
+///    those four spellings only, since every other one this list was drafted with is already reached
+///    by an earlier test, which `purchaseActs`' own comment names. Buying is money leaving the user,
+///    and tests 1 and 2 were built for money *movement* — transfers, payouts, refunds, payees — so
+///    what reached a purchase before SONNY-506 was whatever a money verb happened to cover (`pay`,
+///    `top up`) and nothing else:
+///    `git grep -cE '"(buy|purchase|checkout|postage)"' 981c6e56 -- Sources/MacAgentCore/SkillPackContentRules.swift`
 ///    → exit 1, no output. A purchase act refuses on its own rather than beside an action verb,
 ///    because the verb in a purchase step is *click*: "Click Buy Postage" holds no listed action
 ///    verb and never will.
-/// 4. **A purchase control beside a price.** `subscribe`, `upgrade`, `renew` and `checkout` are each
-///    a free action on one site and a charge on the next — YouTube's Subscribe, a Workspace edition
-///    called "Teaching and Learning Upgrade" — so each counts only when the same unit also names
-///    what is being paid: a plan, a price, pricing, a cost, billing, a subscription, a payment, a
-///    card, a trial, a seat, per month, per year, paid. This test asks for no action verb either,
-///    for test 3's reason. "Pick the Business plan and click Upgrade to see the price." is refused;
-///    "Click Subscribe." on a channel loads.
+/// 4. **A purchase control beside a price.** `subscribe`, `upgrade`, `renew` and `checkout` — the
+///    last spelled as one word or two — are each a free action on one site and a charge on the next:
+///    YouTube's Subscribe, a Workspace edition called "Teaching and Learning Upgrade". So each counts
+///    only when the same unit also names what is being paid: a plan, a price, pricing, a cost,
+///    billing, a subscription, a payment, a card, a trial, a seat, per month, per year, paid. This
+///    test asks for no action verb either, for test 3's reason. "Pick the Business plan and click
+///    Upgrade to see the price." is refused; "Click Subscribe." on a channel loads.
 ///
 /// **Every word on those three lists — money objects, contextual objects, money context words — is
-/// read in the plural too, and the lists hold singulars.** Each word of the text is tried with its
+/// read in the plural too, and the lists hold singulars**, as do test 4's two (`purchaseControls`
+/// and `pricedWords`). `purchaseActs` is the one list that does not, because its entries are verbs
+/// and acts whose forms are spelled out. Each word of the text is tried with its
 /// singular forms, through `SkillWords.singularCandidates(of:)`, so "Add the IBANs", "Update the
 /// cards on file", "Update the account at the banks." and "Update the balance in two currencies." are
 /// refused exactly as their singulars are. Money objects have read plurals since PR #241's second
@@ -241,6 +246,7 @@ enum SkillPackMoneyRule {
     /// `purchaseControls` entries and product names — pairing a word with itself would refuse the two
     /// shipped summaries that read "Checkout pages and online sales platform." and "Shopping cart and
     /// checkout pages."
+    /// Read in the plural too, so "Compare the plans" names a plan.
     static let pricedWords = SkillPhraseList([
         "plan", "price", "pricing", "cost", "billing", "subscription", "payment", "card", "trial",
         "seat", "per month", "per year", "paid"
