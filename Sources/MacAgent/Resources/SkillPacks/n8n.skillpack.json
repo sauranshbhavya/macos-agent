@@ -6,8 +6,42 @@
   "category": "automation",
   "summary": "Workflow automation platform.",
   "signInURL": "https://app.n8n.cloud/login",
-  "triggers": ["n8n", "n8n.io"],
+  "triggers": [
+    "n8n",
+    "n8n.io"
+  ],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Create a workflow",
+      "startURL": "https://n8n.io/",
+      "steps": [
+        "Select the create button in the upper-left corner of the side menu, then select workflow.",
+        "If your n8n instance supports projects, choose whether to create the workflow inside your personal space or a specific project you have access to.",
+        "Get started by adding a trigger node: select Add first step."
+      ],
+      "source": "https://docs.n8n.io/build/understand-workflows/create-and-run-workflows"
+    },
+    {
+      "title": "Run a workflow manually",
+      "startURL": "https://n8n.io/",
+      "steps": [
+        "Open the workflow you want to run on the workflow canvas.",
+        "Select Execute Workflow.",
+        "Run a workflow this way while building and testing, or when the workflow has no trigger node."
+      ],
+      "source": "https://docs.n8n.io/build/understand-workflows/create-and-run-workflows"
+    },
+    {
+      "title": "Publish a workflow so it runs automatically",
+      "startURL": "https://n8n.io/",
+      "steps": [
+        "Open your workflow. All new workflows are unpublished by default.",
+        "Click Publish. A workflow that starts with a trigger node or a Webhook node must be published before it can run automatically.",
+        "A published workflow runs whenever its trigger conditions are met. The option to unpublish is in the workflow settings menu."
+      ],
+      "source": "https://docs.n8n.io/build/understand-workflows/create-and-run-workflows"
+    }
+  ]
 }
