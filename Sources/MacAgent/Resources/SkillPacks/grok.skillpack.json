@@ -7,7 +7,20 @@
   "summary": "AI assistant from xAI.",
   "signInURL": "https://grok.com/sign-in?return_to=%2F",
   "triggers": ["grok.com"],
-  "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "sections": ["Home", "Imagine", "Settings"],
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Ask Grok a question",
+      "startURL": "https://grok.com/",
+      "steps": [
+        "Go to grok.com. The prompt box is on the page itself, so there is no separate step to reach it.",
+        "Type the question into the box, whose placeholder reads Ask Grok anything.",
+        "Attach, beside the box, adds a file to the question before it is sent.",
+        "The control labelled Fast, also beside the box, selects the answering mode.",
+        "Select Submit to send the question. Imagine and Settings sit in the side navigation, and Sign in and Sign up in the corner."
+      ],
+      "source": "https://grok.com/"
+    }
+  ]
 }

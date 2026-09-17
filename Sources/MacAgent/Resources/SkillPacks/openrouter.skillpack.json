@@ -7,7 +7,20 @@
   "summary": "One API for many AI models.",
   "signInURL": "https://openrouter.ai/sign-in",
   "triggers": ["openrouter", "openrouter.ai"],
-  "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "sections": ["Models", "Benchmarks", "Chat", "Rankings", "Apps", "Ori", "Enterprise", "Docs"],
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Find a model in the catalogue",
+      "startURL": "https://openrouter.ai/models",
+      "steps": [
+        "Go to openrouter.ai and select Models in the top navigation. The catalogue renders without signing in.",
+        "Type part of a model's name into the Search models… box above the list.",
+        "Narrow the list with the two dropdowns and the checkboxes beside that box, and with the row of tabs that begins with All.",
+        "Switch between List view and Table view with the pair of tabs above the list; Pinned limits it to the ones you pinned.",
+        "Select a model's name to open its own page, or Discover Models to browse them by what they are for."
+      ],
+      "source": "https://openrouter.ai/models"
+    }
+  ]
 }
