@@ -2,6 +2,7 @@ import { readFile, readdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import pg from "pg";
+import { declaredLockProfile, LOCKS_MARKER, SCANS_MARKER } from "./lock-profile.js";
 import { migrationContentHash } from "./migration-hash.js";
 
 /**
@@ -18,6 +19,10 @@ import { migrationContentHash } from "./migration-hash.js";
  * **Every migration must supply a rollback.** The file is split on the `-- @rollback` marker; a
  * file without one is refused at load rather than at 2am. That is what makes the ticket's
  * "applied and rolled back" requirement a property of the system rather than of a lucky migration.
+ *
+ * **Every half must declare its lock profile** (SONNY-370): a `-- @locks` and a `-- @scans` line,
+ * refused at load when absent, the same way as a missing rollback. `lock-profile.ts` has the format
+ * and the measurement that holds each declaration true.
  *
  * **Every applied migration is recorded with a hash of its executable SQL, and a later run refuses
  * to proceed past a file that has changed** (SONNY-364). The ledger used to hold the id alone, so
@@ -40,6 +45,26 @@ export interface Migration {
   readonly contentHash: string;
 }
 
+/**
+ * Refuses a half that does not say what it locks and what it scans (SONNY-370, founders' option B).
+ *
+ * The same shape as the rollback rule above and for the same reason: a file that never stated its
+ * lock profile is refused when it is loaded, on every command, rather than discovered after it has
+ * stalled a deploy. **What this cannot do is check that the declaration is true** — the runner has no
+ * seeded shadow database to measure against — so a present and wrong declaration passes here, and
+ * `test/migration-lock-profile.db.test.ts` is what finds it wrong. A declaration that is present and
+ * unreadable is refused by `declaredLockProfile` itself, which names the file and half the same way.
+ */
+function refuseUndeclaredLockProfile(file: string, half: "up" | "down", sql: string): void {
+  if (declaredLockProfile(sql, `${file} ${half} half`) !== undefined) return;
+  throw new Error(
+    `${file}'s ${half} half declares no lock profile. Every migration half needs a "${LOCKS_MARKER}" ` +
+      `line and a "${SCANS_MARKER}" line — "none" is a valid answer for either — so that what it ` +
+      `blocks and what it reads through are stated before it runs. Write your best reading, then run ` +
+      `npm run test:db: it measures every half and prints the two lines that are true.`,
+  );
+}
+
 export async function loadMigrations(dir: string = migrationsDir): Promise<readonly Migration[]> {
   const files = (await readdir(dir)).filter((name) => name.endsWith(".sql")).sort();
   const migrations: Migration[] = [];
@@ -54,6 +79,8 @@ export async function loadMigrations(dir: string = migrationsDir): Promise<reado
     }
     const up = text.slice(0, marker).trim();
     const down = text.slice(marker + ROLLBACK_MARKER.length).trim();
+    refuseUndeclaredLockProfile(file, "up", up);
+    refuseUndeclaredLockProfile(file, "down", down);
     migrations.push({
       id: file.replace(/\.sql$/, ""),
       up,
@@ -309,8 +336,50 @@ export function migrationStates(
   }));
 }
 
+/**
+ * Wraps one half's SQL inside its transaction, and exists so the suite can measure a migration's
+ * lock profile on the path that really applies it (SONNY-370, `lock-profile.ts`).
+ *
+ * **A hook rather than a copy of the transaction in a test**, because a measurement taken over a
+ * re-implementation says nothing about this runner: were `up` ever to run a migration outside its
+ * transaction, or split it, a copied harness would keep measuring the old shape and stay green.
+ * `run` executes the half's SQL and nothing else; the ledger write comes after the observer
+ * returns, so what is measured is the migration and not the bookkeeping. The CLI never passes one.
+ */
+export type MigrationObserver = (
+  client: pg.Client,
+  migration: Migration,
+  half: "up" | "down",
+  run: () => Promise<void>,
+) => Promise<void>;
+
+/**
+ * Runs a half's SQL through the observer when there is one, and refuses an observer that returned
+ * without running it: the ledger row that follows would otherwise record a migration never applied.
+ */
+async function runHalf(
+  client: pg.Client,
+  migration: Migration,
+  half: "up" | "down",
+  observe: MigrationObserver | undefined,
+): Promise<void> {
+  let ran = false;
+  const run = async (): Promise<void> => {
+    if (ran) throw new Error(`observer ran ${migration.id}'s ${half} half twice`);
+    ran = true;
+    await client.query(half === "up" ? migration.up : migration.down);
+  };
+  if (observe === undefined) return run();
+  await observe(client, migration, half, run);
+  if (!ran) throw new Error(`observer returned without running ${migration.id}'s ${half} half`);
+}
+
 /** Applies every migration not yet recorded, oldest first. Returns the ids it applied. */
-export async function up(client: pg.Client, dir?: string): Promise<readonly string[]> {
+export async function up(
+  client: pg.Client,
+  dir?: string,
+  observe?: MigrationObserver,
+): Promise<readonly string[]> {
   const recorded = await applied(client);
   const migrations = await loadMigrations(dir);
   // Before anything is applied: a schema built by SQL that no longer exists is not a base to build
@@ -323,7 +392,7 @@ export async function up(client: pg.Client, dir?: string): Promise<readonly stri
     // than half a migration applied and unrecorded.
     await client.query("BEGIN");
     try {
-      await client.query(migration.up);
+      await runHalf(client, migration, "up", observe);
       // The hash goes in inside the same transaction as the SQL it describes, so a ledger row can
       // never exist without one, nor name a different text than the one that just ran.
       await client.query(
@@ -341,7 +410,11 @@ export async function up(client: pg.Client, dir?: string): Promise<readonly stri
 }
 
 /** Rolls back the most recently applied migration. Returns its id, or undefined if none. */
-export async function down(client: pg.Client, dir?: string): Promise<string | undefined> {
+export async function down(
+  client: pg.Client,
+  dir?: string,
+  observe?: MigrationObserver,
+): Promise<string | undefined> {
   const recorded = await applied(client);
   const migrations = await loadMigrations(dir);
   // A rollback is the half most likely to be edited after the fact, and running a `down` that was
@@ -351,7 +424,7 @@ export async function down(client: pg.Client, dir?: string): Promise<string | un
   if (!last) return undefined;
   await client.query("BEGIN");
   try {
-    await client.query(last.down);
+    await runHalf(client, last, "down", observe);
     await client.query("DELETE FROM sonny_meta.schema_migration WHERE id = $1", [last.id]);
     await client.query("COMMIT");
     return last.id;

@@ -1,3 +1,6 @@
+-- @locks SHARE ROW EXCLUSIVE sonny.account
+-- @scans sonny.account, sonny.identity
+
 -- 0003 — a closed account cannot hold identities (SONNY-127, PR #87 F3).
 --
 -- **The bug this closes was a permanent denial of service on an address, and the first fix missed
@@ -47,5 +50,7 @@ DELETE FROM sonny.identity i
  WHERE i.account_id = a.id AND a.deleted_at IS NOT NULL;
 
 -- @rollback
+-- @locks ACCESS EXCLUSIVE sonny.account
+-- @scans sonny.account
 DROP TRIGGER IF EXISTS account_close_releases_identities ON sonny.account;
 DROP FUNCTION IF EXISTS sonny.release_identities_on_close();

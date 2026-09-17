@@ -1,3 +1,6 @@
+-- @locks ACCESS EXCLUSIVE sonny.entitlement
+-- @scans none
+
 -- 0019 — topping up happens only if you asked (SONNY-215).
 --
 -- Spec §16.4 names auto top-up as the mechanism that serves its mid-task-lapse principle: a user
@@ -225,6 +228,8 @@ COMMENT ON COLUMN sonny.entitlement.billing_customer_id IS
   'there.';
 
 -- @rollback
+-- @locks ACCESS EXCLUSIVE sonny.auto_topup_consent, ACCESS EXCLUSIVE sonny.credit_topup, ACCESS EXCLUSIVE sonny.entitlement
+-- @scans none
 
 -- Both tables go and the entitlement rows stay. What is lost is every consent and every record of a
 -- top-up that was charged -- which is why a rollback of this migration is a thing to think about

@@ -1,3 +1,6 @@
+-- @locks ACCESS EXCLUSIVE sonny.content_deletion
+-- @scans sonny.content_deletion
+
 -- 0021 — the account's content can be deleted without the account (SONNY-404). Contract §4.6.3.
 --
 -- **What this is for.** Settings › Data › "Delete Sonny local data" is a promise about the account
@@ -26,6 +29,8 @@ ALTER TABLE sonny.content_deletion
                     'expiry', 'snapshot_expiry'));
 
 -- @rollback
+-- @locks ACCESS EXCLUSIVE sonny.content_deletion
+-- @scans sonny.content_deletion
 
 DELETE FROM sonny.content_deletion WHERE reason = 'account_content';
 

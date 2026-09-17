@@ -1,3 +1,6 @@
+-- @locks none
+-- @scans none
+
 -- 0009 — the delete guard counts the same rows the drain does (SONNY-127, PR #87 sixth round).
 --
 -- **0008's trigger asked a different question than every other reader of this column, and the
@@ -46,6 +49,8 @@ BEGIN
 END $$;
 
 -- @rollback
+-- @locks none
+-- @scans none
 -- Back to 0008's body verbatim, missing clause included. A rollback restores the previous state
 -- rather than a better version of it.
 CREATE OR REPLACE FUNCTION sonny.refuse_delete_while_revocation_owed() RETURNS trigger

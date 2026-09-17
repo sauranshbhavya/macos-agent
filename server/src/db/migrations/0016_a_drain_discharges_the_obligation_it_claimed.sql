@@ -1,3 +1,6 @@
+-- @locks ACCESS EXCLUSIVE sonny.identity_provider_user
+-- @scans none
+
 -- 0016 — the discharge of a revocation obligation carries the identity of the obligation it
 -- discharges, so a drain can only stamp what it actually claimed (SONNY-365).
 --
@@ -166,6 +169,8 @@ COMMENT ON COLUMN sonny.identity_provider_user.provider_session_revoked_at IS
   'that produced it (SONNY-365).';
 
 -- @rollback
+-- @locks ACCESS EXCLUSIVE sonny.identity_provider_user
+-- @scans none
 
 -- The column goes, and the two functions return to 0015's text. Nothing is corrupted and nothing is
 -- repaired: rows keep whatever `provider_session_revoked_at` they carry, read afterwards by a

@@ -228,10 +228,15 @@ describeDb("migrations against a real Postgres", () => {
       const dir = await mkdtemp(join(tmpdir(), "sonny-mig-fail-"));
       await writeFile(
         join(dir, "0001_half_fails.sql"),
-        "CREATE TABLE public.mig_probe (id int);\nSELECT this_function_does_not_exist();\n" +
-          "-- @rollback\nDROP TABLE IF EXISTS public.mig_probe;",
+        // The two declaration lines per half are what lets this file load at all (SONNY-370). Without
+        // them `up` still rejects naming `0001_half_fails` — at load, for the missing declaration —
+        // and every assertion below then passes about a migration that never ran. So the rejection
+        // is matched on the runner's rolled-back wording, which only a migration that ran produces.
+        "-- @locks none\n-- @scans none\n" +
+          "CREATE TABLE public.mig_probe (id int);\nSELECT this_function_does_not_exist();\n" +
+          "-- @rollback\n-- @locks none\n-- @scans none\nDROP TABLE IF EXISTS public.mig_probe;",
       );
-      await expect(up(client, dir)).rejects.toThrow(/0001_half_fails/);
+      await expect(up(client, dir)).rejects.toThrow(/migration 0001_half_fails failed and was rolled back/);
 
       const { rows: tables } = await client.query(
         "SELECT tablename FROM pg_tables WHERE tablename = 'mig_probe'",

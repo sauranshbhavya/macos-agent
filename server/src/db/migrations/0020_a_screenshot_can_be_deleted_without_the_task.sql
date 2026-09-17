@@ -1,3 +1,6 @@
+-- @locks ACCESS EXCLUSIVE sonny.content_deletion
+-- @scans sonny.content_deletion
+
 -- 0020 — a screenshot can be deleted without the task it belonged to (SONNY-404). Contract §4.6.2.
 --
 -- **What this is for.** "Delete what Sonny did on screen" is a per-task control in the Mac app's
@@ -64,6 +67,8 @@ COMMENT ON COLUMN sonny.content_deletion.snapshot_screenshots_cleared IS
   'apart from snapshot_rows for the same reason.';
 
 -- @rollback
+-- @locks ACCESS EXCLUSIVE sonny.content_deletion
+-- @scans sonny.content_deletion
 
 DELETE FROM sonny.content_deletion WHERE reason = 'task_screenshots';
 
