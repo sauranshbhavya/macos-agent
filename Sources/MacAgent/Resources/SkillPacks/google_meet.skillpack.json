@@ -16,7 +16,7 @@
   "flows": [
     {
       "title": "Start or schedule a meeting",
-      "startURL": "https://meet.google.com/",
+      "startURL": "https://meet.google.com/landing",
       "steps": [
         "On your computer, go to Google Meet and click New meeting.",
         "Choose Create a meeting for later to get a link you can share now and use afterwards, Start an instant meeting to open one straight away, or Schedule in Google Calendar to be taken to Calendar.",
@@ -28,7 +28,7 @@
     },
     {
       "title": "Take attendance in a meeting",
-      "startURL": "https://meet.google.com/",
+      "startURL": "https://meet.google.com/landing",
       "steps": [
         "Attendance tracking is available to Google Workspace Essentials, Business Plus, Enterprise Starter, Enterprise Essentials, Enterprise Standard, Enterprise Plus, Education Plus and Teaching and Learning Upgrade users.",
         "During the meeting, click Host controls at the bottom, then toggle Attendance tracking on or off in the side panel that opens.",

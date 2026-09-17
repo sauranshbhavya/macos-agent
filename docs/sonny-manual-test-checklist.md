@@ -5252,7 +5252,7 @@ when you return to this build, and those three are gone for good.
       ~/Documents instead`. **Sonny zips the 3 largest files from Documents.** **What would be a
       finding:** Sonny asking what to do, or planning anything other than that task on Documents.
 
-### SONNY-502 — deep Skills packs, communication (seven sites)
+### SONNY-502 — deep Skills packs, communication (six sites)
 
 Each pack's flows were written from a public help page read in a real browser this session. What is
 being checked here is that the pack reaches the planner at all and that its steps are the ones the
