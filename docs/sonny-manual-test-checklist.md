@@ -5050,6 +5050,25 @@ it, now that the packs arrive after launch.
       Notion still shows **Added** and **Remove**. **What would be a finding:** an empty page that stays
       empty, or Notion showing Add.
 
+### Deep skill packs for marketing, sales and commerce sites (new 2026-09-14, SONNY-483)
+
+The founder-named marketing email, sales, support, commerce and billing sites now carry task flows,
+the way Notion and Linear do, each step taken from the site's own public help page. A few of them
+also match on a phrase with the site's name in it, such as `harvest timesheet`, because their name
+alone is an ordinary word. Signed in, gateway up. These rows only read the plan: stop the task before
+it acts if you do not want the change made in your own account.
+
+- [ ] On the Skills page, **add Mailchimp**. Ask the widget: `create a tag called wave 9 in mailchimp`.
+      The plan uses the Mailchimp pack: the Tasks page's plan for that task names
+      `https://admin.mailchimp.com/` as where it starts. **What would be a finding:** a plan that
+      searches the web for Mailchimp or names no Mailchimp URL.
+- [ ] **Add Harvest and Close.** Ask: `start a timer on my harvest timesheet`. The plan names
+      `https://id.getharvest.com/harvest/sign_in` as where it starts, from the `harvest timesheet`
+      trigger. Then ask: `close the finder window`: that plan names no Close URL, because Close now
+      matches only `close.com`. **What would be a finding:** a Close URL in the second plan, or no
+      Harvest URL in the first.
+- [ ] Remove Mailchimp, Harvest and Close, so the next pass starts clean.
+
 ## 8. How to report back
 
 For each real finding, give me:

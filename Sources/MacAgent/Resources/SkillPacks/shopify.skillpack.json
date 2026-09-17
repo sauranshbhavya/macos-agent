@@ -8,6 +8,41 @@
   "signInURL": "https://accounts.shopify.com/lookup",
   "triggers": ["shopify", "shopify.com"],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Add a product",
+      "startURL": "https://admin.shopify.com/",
+      "steps": [
+        "From your Shopify admin, go to Products.",
+        "From the Products page, click Add product.",
+        "Enter a title for your product, along with any additional details that you want to add.",
+        "Click Save."
+      ],
+      "source": "https://help.shopify.com/en/manual/products/add-update-products"
+    },
+    {
+      "title": "Find an order",
+      "startURL": "https://admin.shopify.com/",
+      "steps": [
+        "From your Shopify admin, go to Orders.",
+        "Use the search box to find an order by its order number, customer name, email address, or product details.",
+        "Or narrow the list using filters like fulfillment status, payment status, sales channel, date range, or tags."
+      ],
+      "source": "https://help.shopify.com/en/manual/fulfillment/managing-orders/viewing-orders"
+    },
+    {
+      "title": "Add a customer",
+      "startURL": "https://admin.shopify.com/",
+      "steps": [
+        "From your Shopify admin, go to Customers.",
+        "Click Add customer.",
+        "Enter the customer's information.",
+        "If the customer agreed to receive marketing emails and has an email address entered, check Customer agreed to receive marketing emails in the Customer overview section.",
+        "In the Tax settings section, select whether to collect tax for this customer.",
+        "Click Save."
+      ],
+      "source": "https://help.shopify.com/en/manual/customers/manage-customers"
+    }
+  ]
 }

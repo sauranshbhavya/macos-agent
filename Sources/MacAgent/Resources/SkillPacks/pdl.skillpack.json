@@ -8,6 +8,42 @@
   "signInURL": "https://peopledatalabs.com/login",
   "triggers": ["people data labs", "peopledatalabs.com"],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Run a batch enrich job",
+      "startURL": "https://dashboard.peopledatalabs.com/",
+      "steps": [
+        "Click New enrich job and choose a Person, Company, or IP job type from the dropdown.",
+        "Upload a CSV list for enrichment — using the Download CSV Template first means the columns map automatically.",
+        "Map each column in your list to the matching field using the dropdown in the PDL mapping column.",
+        "Set any optional parameters, such as Title case or Required fields, to control which records count as a match.",
+        "Review the job in the preview step, then click Start Enrichment to run it."
+      ],
+      "source": "https://support.peopledatalabs.com/hc/en-us/articles/30907595600667-Batch-Enrich-Tool"
+    },
+    {
+      "title": "View your API usage",
+      "startURL": "https://dashboard.peopledatalabs.com/",
+      "steps": [
+        "Click Usage in the left navigation menu to open the Usage page.",
+        "Use the dropdown menu in the Usage overview section to choose which PDL product to view usage for.",
+        "Click the date range dropdown to pick a period, then select a \"View by\" option to see the Usage chart broken down for that period.",
+        "Click the table icon in the top right to switch to the Usage table view.",
+        "Click Download to export the usage data."
+      ],
+      "source": "https://support.peopledatalabs.com/hc/en-us/articles/27602118383387-Usage-Page"
+    },
+    {
+      "title": "Create a usage alert",
+      "startURL": "https://dashboard.peopledatalabs.com/",
+      "steps": [
+        "Navigate to the Usage Alerts tab on the Settings page.",
+        "Select a product to configure an alert for.",
+        "Enter a threshold value between 1 and 100.",
+        "Click Add Alert; the alert appears in the table below."
+      ],
+      "source": "https://support.peopledatalabs.com/hc/en-us/articles/27548020405147-Usage-Alerts"
+    }
+  ]
 }
