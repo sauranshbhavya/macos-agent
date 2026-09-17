@@ -6,8 +6,47 @@
   "category": "ai_assistants",
   "summary": "OpenAI's AI assistant.",
   "signInURL": "https://chatgpt.com/auth/login",
-  "triggers": ["chatgpt", "chatgpt.com"],
+  "triggers": [
+    "chatgpt",
+    "chatgpt.com"
+  ],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Set custom instructions",
+      "startURL": "https://chatgpt.com/",
+      "steps": [
+        "On the web or in the desktop app, open Settings and select Personalization.",
+        "Make sure Enable customization is toggled on.",
+        "Enter your instructions in the Custom Instructions field. They apply immediately across all chats, including existing conversations.",
+        "Free and Go accounts can store up to 1,500 characters of custom instructions; Plus, Pro, Enterprise, Business and Education accounts up to 5,000."
+      ],
+      "source": "https://help.openai.com/en/articles/8096356-chatgpt-custom-instructions"
+    },
+    {
+      "title": "Share a conversation as a link",
+      "startURL": "https://chatgpt.com/",
+      "steps": [
+        "Open the conversation you want to share.",
+        "Select Share.",
+        "Review the conversation and any sharing options that appear, because anyone permitted to open the link can see what it holds.",
+        "Select Create link or Copy link, whichever option is shown.",
+        "Send the link to the person who should see it. A shared conversation link begins with https://chatgpt.com/share/."
+      ],
+      "source": "https://help.openai.com/en/articles/7925741-chatgpt-shared-links"
+    },
+    {
+      "title": "Find and remove a shared link",
+      "startURL": "https://chatgpt.com/",
+      "steps": [
+        "Go to Settings.",
+        "Select Data controls.",
+        "For Shared links, select Manage. The list holds shared conversation links and shared scheduled task links.",
+        "Select Delete shared link for one item, or open More actions and select Delete all shared links.",
+        "Removing a link stops future access through it and leaves the original conversation or task in place."
+      ],
+      "source": "https://help.openai.com/en/articles/7925741-chatgpt-shared-links"
+    }
+  ]
 }

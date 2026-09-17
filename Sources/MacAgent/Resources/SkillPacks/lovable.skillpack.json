@@ -6,8 +6,46 @@
   "category": "ai_assistants",
   "summary": "AI app builder.",
   "signInURL": "https://lovable.dev/login",
-  "triggers": ["lovable.dev"],
+  "triggers": [
+    "lovable.dev"
+  ],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Invite someone to a project",
+      "startURL": "https://lovable.dev/",
+      "steps": [
+        "Open the project and click Share in the top bar.",
+        "Enter one or more email addresses, or workspace groups on Business and Enterprise plans, in the Add people field.",
+        "Choose the access level: Admin for everything including project settings and integrations, Editor to build and edit, or Viewer for read-only access to the editor.",
+        "Click Invite. Each person gets an email with a link, and the project also appears in their Shared with me section if they already use Lovable."
+      ],
+      "source": "https://docs.lovable.dev/features/share-project"
+    },
+    {
+      "title": "Make a preview link for a reviewer",
+      "startURL": "https://lovable.dev/",
+      "steps": [
+        "Open the project, click Share, and select Share preview.",
+        "Click Create new preview link.",
+        "Give it a Link name that says who it is for, such as Client review — each active link in a project needs its own name — and choose whether to Allow comments.",
+        "Click Create preview link. Lovable copies the URL to your clipboard, and it can be copied again later from Your active links.",
+        "A preview link is view-only: it shows the latest in-progress version of the app and grants no access to the editor, the chat or the source code."
+      ],
+      "source": "https://docs.lovable.dev/features/share-project"
+    },
+    {
+      "title": "Switch or create the branch Lovable syncs",
+      "startURL": "https://lovable.dev/",
+      "steps": [
+        "Open Project settings, then Git, then GitHub.",
+        "Click the branch picker and search or select the branch you want. Clicking it switches Lovable to editing and syncing that branch.",
+        "To make a new one, click the branch picker and click Create branch at the bottom of the list, then enter a name — Lovable checks it against empty names, invalid characters and duplicates.",
+        "The new branch starts from whichever branch is active, not the repository's default, so switch to main first if that is where it should come from.",
+        "Lovable edits and syncs one branch at a time, and neither switching nor creating works while it is editing the project."
+      ],
+      "source": "https://docs.lovable.dev/integrations/github"
+    }
+  ]
 }

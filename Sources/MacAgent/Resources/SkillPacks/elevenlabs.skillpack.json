@@ -6,8 +6,35 @@
   "category": "ai_assistants",
   "summary": "AI voice and audio generation.",
   "signInURL": "https://elevenlabs.io/app/sign-in",
-  "triggers": ["elevenlabs", "elevenlabs.io"],
+  "triggers": [
+    "elevenlabs",
+    "elevenlabs.io"
+  ],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Turn text into speech",
+      "startURL": "https://elevenlabs.io/app/speech-synthesis",
+      "steps": [
+        "Type or paste your text into the input box on the Text to Speech page.",
+        "Select the voice you want from your Voices at the bottom left of the screen.",
+        "Optionally modify the voice settings for the output you want.",
+        "Click Generate to create the audio file.",
+        "Writing numbers and symbols out as words gives the model less to interpret, which the guide recommends for multilingual models especially."
+      ],
+      "source": "https://elevenlabs.io/docs/eleven-creative/playground/text-to-speech"
+    },
+    {
+      "title": "Find a voice in the Voice Library and keep it",
+      "startURL": "https://elevenlabs.io/app/speech-synthesis",
+      "steps": [
+        "Click Voices in the sidebar and select Explore.",
+        "Browse the handpicked collections, sort by Trending, Latest, Most users or Character usage, and narrow with the filters for language, accent, category, gender, age, notice period, live moderation and quality.",
+        "Click the + button on a voice to keep it in My Voices. A voice kept from the Voice Library does not use a custom voice slot.",
+        "In My Voices, click the T button on a voice to open Text to Speech with that voice already selected."
+      ],
+      "source": "https://elevenlabs.io/docs/eleven-creative/voices/voice-library"
+    }
+  ]
 }

@@ -6,8 +6,34 @@
   "category": "ai_assistants",
   "summary": "General-purpose AI agent.",
   "signInURL": "https://manus.im/login",
-  "triggers": ["manus.im"],
+  "triggers": [
+    "manus.im"
+  ],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Invite someone to collaborate on a task",
+      "startURL": "https://manus.im/",
+      "steps": [
+        "Open the task the collaboration is for.",
+        "Find the share button on that task.",
+        "Click it, select collaboration, and invite the people who should join.",
+        "Only the task's owner can invite collaborators, and one task holds up to 50 people including the owner."
+      ],
+      "source": "https://help.manus.im/en/articles/12135428-how-can-i-use-manus-collab"
+    },
+    {
+      "title": "Set up Mail Manus so an email becomes a task",
+      "startURL": "https://manus.im/",
+      "steps": [
+        "Go to Settings, then Mail Manus.",
+        "Under Base Emails, configure the Approved senders — the addresses you send from, capped at ten — and note Manus's Email, the address that turns what it receives into a task.",
+        "Optionally personalise the custom address, which can be changed once every seven days, and write Custom Instructions for a workflow email, so that mail sent to it is handled the same way each time.",
+        "Send a new email, or forward an existing one, from an approved sender to that address, and Manus creates a task from its contents.",
+        "Anyone added as a recipient or cc joins the task as a collaborator."
+      ],
+      "source": "https://help.manus.im/en/articles/12059745-how-can-i-use-mail-manus"
+    }
+  ]
 }

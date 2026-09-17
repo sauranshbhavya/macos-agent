@@ -6,8 +6,45 @@
   "category": "ai_assistants",
   "summary": "Google's AI assistant.",
   "signInURL": "https://accounts.google.com/ServiceLogin?continue=https%3A%2F%2Fgemini.google.com%2Fapp",
-  "triggers": ["gemini.google.com"],
+  "triggers": [
+    "gemini.google.com"
+  ],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Find what you have asked Gemini",
+      "startURL": "https://gemini.google.com/",
+      "steps": [
+        "On your computer, go to gemini.google.com.",
+        "Click Settings & help, then Activity. Going to myactivity.google.com/product/gemini reaches the same place.",
+        "The list shows your prompts. For a conversation with a Gem, the Gem it used is named beside it.",
+        "An entry from a Gemini Live chat carries an icon for what it holds — audio, a shared screen, or camera video — and Details opens or downloads that data."
+      ],
+      "source": "https://support.google.com/gemini/answer/13278892?hl=en"
+    },
+    {
+      "title": "Delete Gemini activity",
+      "startURL": "https://gemini.google.com/",
+      "steps": [
+        "On your computer, go to gemini.google.com and click Settings & help, then Activity.",
+        "Above your activity, click Delete and choose All time, Last hour, Last day, or Custom range for a particular period.",
+        "For one day, click Delete all activity from that day beside it; for a single item, click Delete activity item next to it.",
+        "Deleting a conversation with a Gem does not delete the Gem, and deleting a shared chat does not disable the public link that was made from it."
+      ],
+      "source": "https://support.google.com/gemini/answer/13278892?hl=en"
+    },
+    {
+      "title": "Change how long Gemini keeps your activity",
+      "startURL": "https://gemini.google.com/",
+      "steps": [
+        "On your computer, go to gemini.google.com and click Settings & help, then Activity.",
+        "Near the top, click Deleting activity older than … months, or Choose an auto-delete option.",
+        "Choose how long activity is kept — 3, 18 or 36 months — or select Don't auto-delete activity. The default is 18 months.",
+        "Click Next and follow the instructions on screen.",
+        "To stop activity being kept at all, click On near the top instead and choose Turn off, or Turn off and delete activity. Conversations are still held for up to 72 hours to run the service, and do not appear in your activity."
+      ],
+      "source": "https://support.google.com/gemini/answer/13278892?hl=en"
+    }
+  ]
 }

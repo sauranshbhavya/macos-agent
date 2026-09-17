@@ -6,8 +6,45 @@
   "category": "ai_assistants",
   "summary": "Anthropic's AI assistant.",
   "signInURL": "https://claude.ai/login",
-  "triggers": ["claude.ai"],
+  "triggers": [
+    "claude.ai"
+  ],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Start a project",
+      "startURL": "https://claude.ai/projects",
+      "steps": [
+        "Hover over the left side of your account and click Projects, or go straight to claude.ai/projects.",
+        "Click + New Project in the upper right corner.",
+        "Give the project a name and a description. Claude does not read either of them.",
+        "On a Team or Enterprise plan, choose whether to keep it private to you and the members you invite, or share it with your broader organization where administrators allow that.",
+        "With the project set up, start chats with Claude inside it."
+      ],
+      "source": "https://support.claude.com/en/articles/9519177-how-can-i-create-and-manage-projects"
+    },
+    {
+      "title": "Give a project knowledge and instructions",
+      "startURL": "https://claude.ai/projects",
+      "steps": [
+        "Open the project. Its knowledge base is on the right side of the project's main page, and what sits there is used across every chat in that project.",
+        "Click the + button and upload the documents, text files or code snippets the project should know about.",
+        "Click Set project instructions, write how Claude should behave and respond, and click Save instructions.",
+        "Context does not travel between chats in a project unless it is in the project knowledge base."
+      ],
+      "source": "https://support.claude.com/en/articles/9519177-how-can-i-create-and-manage-projects"
+    },
+    {
+      "title": "Share a chat, and stop sharing it",
+      "startURL": "https://claude.ai/",
+      "steps": [
+        "Click the Share button in the upper right corner of the chat.",
+        "Click Share in the pop-out to make a link. Anyone with it can then read a snapshot of every message sent before that moment, artifacts included; messages sent afterwards stay private until the chat is unshared and shared again.",
+        "To stop sharing, open the Share menu, click the visibility dropdown and change the chat from Public to Private.",
+        "On a free, Pro or Max plan, Settings then Privacy then Manage next to Shared chats lists every shared snapshot, with an Unshare button beside each one."
+      ],
+      "source": "https://support.claude.com/en/articles/10593882-share-and-unshare-chats"
+    }
+  ]
 }

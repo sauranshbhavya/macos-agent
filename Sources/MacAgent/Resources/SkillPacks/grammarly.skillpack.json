@@ -6,8 +6,46 @@
   "category": "ai_assistants",
   "summary": "AI writing assistant.",
   "signInURL": "https://www.grammarly.com/signin",
-  "triggers": ["grammarly", "grammarly.com"],
+  "triggers": [
+    "grammarly",
+    "grammarly.com"
+  ],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Check a piece of writing in the Grammarly Editor",
+      "startURL": "https://app.grammarly.com/",
+      "steps": [
+        "Open the Grammarly Editor at app.grammarly.com, where documents can be written and edited in the browser with nothing else installed.",
+        "Write or paste the text. Grammarly underlines some critical suggestions as you go.",
+        "Click the Grammarly icon on your screen to see every suggestion it has, not only the underlined ones.",
+        "Suggestions come in four kinds — correctness, clarity, engagement and delivery. On Grammarly Pro, Plus or Business, grey underlines are your company's style guide."
+      ],
+      "source": "https://support.grammarly.com/hc/en-us/articles/19812297751053-Get-started-with-Grammarly"
+    },
+    {
+      "title": "Set your writing preferences",
+      "startURL": "https://account.grammarly.com/customize",
+      "steps": [
+        "Open the Writing section of your Account Hub at account.grammarly.com/customize.",
+        "Add words to your personal dictionary, or remove ones you no longer want it to keep.",
+        "Set the language preference: American, British, Indian, Australian or Canadian English.",
+        "On Grammarly Pro, Plus, Premium, Business or Education, the suggestions you see can be customised here too."
+      ],
+      "source": "https://support.grammarly.com/hc/en-us/articles/19812297751053-Get-started-with-Grammarly"
+    },
+    {
+      "title": "Rework a piece of text where you are typing",
+      "startURL": "https://www.grammarly.com/",
+      "steps": [
+        "Inline Intelligence works in the Superhuman browser extension for Chrome, on editable text anywhere on the web — an email draft, a document, a text field.",
+        "Highlight the text. The Superhuman icon appears at the lower-right edge of your selection.",
+        "Click the icon to open the Inline Intelligence menu.",
+        "Choose Proofread, Rephrase or Shorten, or type your own instruction in the prompt field at the top of the menu.",
+        "The result arrives in a rewrite card next to your original, so nothing changes until you have read it and applied it."
+      ],
+      "source": "https://support.grammarly.com/hc/en-us/articles/47686551174029-Get-started-with-Inline-Intelligence"
+    }
+  ]
 }
