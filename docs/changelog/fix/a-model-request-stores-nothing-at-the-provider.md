@@ -2,7 +2,7 @@
 Status: complete
 Date: 2026-09-17
 Tickets: SONNY-513 — the two Responses adapters now send `store: false`; the probe that found it, the population sweep, the contract reconciliation and the stale-SONNY-110 wording all landed with it.
-Reviewed by: fresh session (per WORKFLOW.md step 7) — pending at the time of writing.
+Reviewed by: fresh session (per WORKFLOW.md step 7), review-267 — six findings, none code: rule 5 asserting the provider's behaviour as fact; a manual-test row that could neither be run nor report a negative; a false leg in the Cerebras reasoning (default storage is documented for Chat Completions too, and cerebras is in no default route chain); a `fetch(` citation whose line numbers were the base's with no rev; a mutation plan not declaring its half, so `--check` validated against the Swift command; and a grep missing polar.ts's four aliased call sites. All six verified independently and fixed in `d89a0a2c`..`df266268`; the server half was re-measured afterwards because the Cerebras fix moved `server`.
 
 Spec sections covered: §16.5 (provider routing and provider-specific retention configuration stays server-side). Contract §4.5 rule 5 is amended by this branch rather than merely referenced.
 Files changed: `server/src/model/vision.ts`, `server/src/model/openai.ts`, `server/src/model/cerebras.ts` (a comment recording why it deliberately gets no field), `server/src/config.ts` (doc comment only), `server/.env.example` (comment only), `docs/sonny-backend-api-contract.md` (§4.5 rule 5), `server/test/screen.test.ts`, `server/test/model.test.ts`, plus this entry, `docs/manual-tests/fix/a-model-request-stores-nothing-at-the-provider.md` and `mutation/plans/fix/a-model-request-stores-nothing-at-the-provider.txt`.
