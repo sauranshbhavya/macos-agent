@@ -125,36 +125,161 @@ public struct PriorTaskContext: Codable, Equatable, Sendable {
         return String(summary.prefix(69)) + "..."
     }
 
-    public var plannerContextText: String {
-        let formatter = ISO8601DateFormatter()
-        let stepLines = steps.enumerated().map { index, step in
-            "\(index + 1). \(Self.escapeForPlanner(step.plannerText))"
-        }
+    // MARK: - The planner's view of this context (SONNY-491, SONNY-343)
 
-        // **These two say what is missing and never why** (SONNY-150). They used to read
-        // "prior task failed before preparation completed", which names a cause that is only
-        // sometimes the reason. Row E made the other case common: every task recorded before this
-        // row has no stored plan, so a follow-up on one would put that sentence twice, directly
-        // above `Previous outcome: completed - …` — a flat contradiction inside a segment the
-        // planner's own system prompt describes as authoritative. "Not recorded" is true of the
-        // live no-plan case and the rehydrated pre-row-E case alike.
+    /// The fixed names the trusted pair is built from. **Names, not delimiters**, exactly as
+    /// `UntrustedContentBoundary`'s four are since SONNY-234: a boundary line is a name plus a
+    /// prompt's tag, and ``trustedBegin(_:)`` and ``trustedEnd(_:)`` are the only things that make one.
+    /// They live here rather than on that type because they are this block's vocabulary; the tag and
+    /// the matching are what is shared.
+    public static let trustedBeginName = "TRUSTED_PRIOR_TASK_CONTEXT_BEGIN"
+    public static let trustedEndName = "TRUSTED_PRIOR_TASK_CONTEXT_END"
+
+    /// The id the observed segment carries, so a reader of the prompt can tell this segment from any
+    /// other observed segment a future prompt might hold.
+    public static let observedSegmentID = "prior-task"
+
+    public static func trustedBegin(_ delimiters: UntrustedContentBoundary.Delimiters) -> String {
+        "\(trustedBeginName)_\(delimiters.tag)"
+    }
+
+    public static func trustedEnd(_ delimiters: UntrustedContentBoundary.Delimiters) -> String {
+        "\(trustedEndName)_\(delimiters.tag)"
+    }
+
+    /// The four markers the planner's prior-task message is built from, in the order it writes them.
+    public static func markers(_ delimiters: UntrustedContentBoundary.Delimiters) -> [String] {
+        [trustedBegin(delimiters), trustedEnd(delimiters), delimiters.observedBegin, delimiters.observedEnd]
+    }
+
+    /// The sentence that declares this message's tag, for the planner's system message — the same one
+    /// sentence the vision and web-research prompts declare theirs with, over this message's markers.
+    public static func segmentTagRule(_ delimiters: UntrustedContentBoundary.Delimiters) -> String {
+        delimiters.segmentTagRule(naming: markers(delimiters))
+    }
+
+    /// What the planner receives about the previous task: a **trusted** block holding the command
+    /// that was submitted and the fields no model and no stranger can write, and an **observed**
+    /// segment holding everything else.
+    ///
+    /// **Why the line is drawn there, and why provenance alone could not draw it** (SONNY-491, whose
+    /// enumeration is on the ticket). Until this change every field sat in the trusted block, and the
+    /// planner's system prompt calls that block Sonny's record. Three kinds of text reached it that
+    /// nobody in Sonny wrote:
+    ///
+    /// - **A result carrying a stranger's words.** A calendar read's summary lists event titles, and
+    ///   anyone who can send the user an invitation writes one — most calendar services add an
+    ///   invitation without the user doing anything.
+    /// - **A model's prose.** A screen-control session's closing rationale, the planner's own plan
+    ///   summary, each step's description.
+    /// - **A plan's values**, which a model chose and which an ordinary follow-up fills with a
+    ///   stranger's words without any injection having to work first: after a calendar read, "search
+    ///   the web for my first meeting" puts the event title into `searchQuery`. An item job's step
+    ///   paths are file names read off the disk, because the recorded plan is the resolved one.
+    ///
+    /// Routing only the result by `StoredTaskResult.Provenance` would have closed the first and left
+    /// the third: the same title would have re-entered the trusted block on the next command as a
+    /// `searchQuery=` detail and inside "Saved web research Markdown for search query …", a sentence
+    /// code wrote. So the trusted block is built from the command and the fields no model and no
+    /// stranger can write — each step's operation, the outcome's status and the capture time — and
+    /// everything else goes to the observed segment **whatever its provenance**.
+    ///
+    /// Provenance is still read: the trusted block says in Sonny's words who wrote the result, which
+    /// is the one fact about that text the planner cannot learn from the text itself.
+    ///
+    /// **The command is the one exception to "no model and no stranger", and it is not always typed**
+    /// (PR #249's review, F2). On most paths it is what the user typed or said. Three sentence shapes
+    /// are built in code around a value the user did not type: "Run my <name> routine", from the
+    /// routine card and from a scheduled run's history row; "Open my <name> workspace"; and the
+    /// workspace sheet's edit sentence, which can name an installed app by the display name its maker
+    /// wrote. A routine's or a workspace's name comes from a planner's `save_routine` or
+    /// `create_workspace` step. That is not a new route — the same sentence is already the *current*
+    /// command when the card is pressed — and it belongs to SONNY-494, which covers model-written text
+    /// in the command position.
+    ///
+    /// **Nothing a planner used is withheld.** SONNY-490 keeps a calendar read's titles and times in
+    /// the next command's context, and they are here — as data the system prompt lets the planner use
+    /// to fill a field ("remind me ten minutes before the standup") and never obey.
+    ///
+    /// **One tag for all four markers, drawn per prompt** (SONNY-343). The trusted pair used to be the
+    /// one fixed pair left after SONNY-234, defended only by escaping, whose frontier PR #100 showed
+    /// has no bottom. It now carries the same tag as the observed pair. `delimiters` is the prompt's
+    /// boundary; `OpenAIPlanner` draws one per request and declares it in the system message.
+    public func plannerContextText(delimiters: UntrustedContentBoundary.Delimiters) -> String {
+        let formatter = ISO8601DateFormatter()
+
+        // Operations only: an enum's raw value is the one part of a step no model and no stranger can
+        // write. The description and the details are the observed segment's.
+        let operationLines = steps.enumerated().map { index, step in
+            "\(index + 1). \(step.operation.rawValue)"
+        }
+        let observedLines = observedLines()
+
+        // **These say what is missing and never why** (SONNY-150). The plan-summary line used to read
+        // "prior task failed before preparation completed", which names a cause that is only sometimes
+        // the reason; row E made the other case common, since every task recorded before that row has
+        // no stored plan. "Not recorded" is true of the live no-plan case and the rehydrated
+        // pre-row-E case alike.
         let planSummaryText = planSummary.isEmpty
             ? "- not recorded"
-            : Self.escapeForPlanner(planSummary)
-        let stepsText = stepLines.isEmpty
+            : "the Plan summary line in the observed segment below"
+        let stepsText = operationLines.isEmpty
             ? "- none recorded"
-            : stepLines.joined(separator: "\n")
+            : operationLines.joined(separator: "\n")
+        let resultText = outcome.summary.isEmpty
+            ? "- none recorded"
+            : "the Result line in the observed segment below, \(outcome.provenance.plannerAuthorshipPhrase)"
 
-        return """
-        TRUSTED_PRIOR_TASK_CONTEXT_BEGIN
-        Previous command: \(Self.escapeForPlanner(previousCommand))
+        let trusted = """
+        \(Self.trustedBegin(delimiters))
+        Previous command: \(Self.escapeForPlanner(previousCommand, delimiters: delimiters))
         Previous plan summary: \(planSummaryText)
         Previous plan steps:
         \(stepsText)
-        Previous outcome: \(Self.escapeForPlanner(outcome.plannerText))
+        Previous outcome: \(outcome.status.rawValue)
+        Previous result: \(resultText)
         Captured at: \(formatter.string(from: createdAt))
-        TRUSTED_PRIOR_TASK_CONTEXT_END
+        \(Self.trustedEnd(delimiters))
         """
+        guard !observedLines.isEmpty else {
+            return trusted
+        }
+
+        // The observed segment's own escape neutralises its four markers and the four bare names;
+        // this block's two names, tagged and bare, are neutralised first so a stranger's text cannot
+        // close the trusted block either — even though the trusted block ends above this segment,
+        // a forged closing line is exactly the text the degradation argument in
+        // `UntrustedContentBoundary.Delimiters` says must still be escaped.
+        let observed = delimiters.observedContent(
+            observedLines.map { Self.neutralizingPriorTaskDelimiters(in: $0, delimiters: delimiters) }
+                .joined(separator: "\n"),
+            id: Self.observedSegmentID,
+            source: "sonnys-record-of-the-previous-task"
+        )
+        return trusted + "\n" + observed
+    }
+
+    /// One line per value a model or someone outside Sonny wrote. Each value is folded onto its line
+    /// (`UntrustedContentBoundary.foldingLineBreaks`), because this segment is line-oriented and a
+    /// value carrying a break would forge a further line inside it — the same reason
+    /// `VisionSessionPromptBuilder.observedBlock` folds each history entry.
+    private func observedLines() -> [String] {
+        var lines: [String] = []
+        if !planSummary.isEmpty {
+            lines.append("Plan summary: \(UntrustedContentBoundary.foldingLineBreaks(in: planSummary))")
+        }
+        for (index, step) in steps.enumerated() {
+            let detailText = step.details.isEmpty ? "" : "(\(step.details.joined(separator: "; ")))"
+            let text = [step.description, detailText].filter { !$0.isEmpty }.joined(separator: " ")
+            guard !text.isEmpty else {
+                continue
+            }
+            lines.append("Step \(index + 1): \(UntrustedContentBoundary.foldingLineBreaks(in: text))")
+        }
+        if !outcome.summary.isEmpty {
+            lines.append("Result: \(UntrustedContentBoundary.foldingLineBreaks(in: outcome.summary))")
+        }
+        return lines
     }
 
     /// Neutralize the trusted-block delimiters anywhere inside interpolated content.
@@ -246,11 +371,70 @@ public struct PriorTaskContext: Codable, Equatable, Sendable {
     /// **What it costs this block, stated rather than hidden:** a genuine paragraph in a model-authored
     /// summary reaches the planner as one line with `\n` where the breaks were. That is the whole
     /// price, and these summaries are one to three sentences.
-    private static func escapeForPlanner(_ value: String) -> String {
-        UntrustedContentBoundary.neutralizingDelimiters(
+    ///
+    /// **Since SONNY-491 this escapes one field, and every word of the history above still applies to
+    /// it.** The trusted block interpolates the command and nothing else that is free text — the
+    /// operations are enum raw values, the status is an enum, the time is formatted here and the
+    /// authorship phrase is a constant — so the command is the one value this function now guards.
+    /// The other four fields moved to the observed segment, where `observedLines` folds each and
+    /// `UntrustedContentBoundary.Delimiters.observedContent` escapes the segment.
+    ///
+    /// **It neutralises twelve strings, and since SONNY-343 the tag is what closes the class.** The
+    /// block's two delimiters carry the prompt's tag, so a forgery that lacks it is not a delimiter
+    /// however it renders. The list still holds this block's two tagged delimiters and its two bare
+    /// names, and the observed boundary's eight (its four tagged markers and four bare names) — the
+    /// same degradation argument `UntrustedContentBoundary.Delimiters` makes: a prompt that ever
+    /// stopped declaring its tag must fall back to exactly the protection this block had before, never
+    /// below it. One pass over all twelve, longest first, so a tagged delimiter is never half-matched
+    /// by the bare name that prefixes it.
+    private static func escapeForPlanner(
+        _ value: String,
+        delimiters: UntrustedContentBoundary.Delimiters
+    ) -> String {
+        let priorTaskDelimiters = priorTaskNeutralisedDelimiters(delimiters)
+        return UntrustedContentBoundary.neutralizingDelimiters(
             in: UntrustedContentBoundary.foldingLineBreaks(in: value),
-            delimiters: ["TRUSTED_PRIOR_TASK_CONTEXT_BEGIN", "TRUSTED_PRIOR_TASK_CONTEXT_END"]
+            delimiters: priorTaskDelimiters + delimiters.neutralisedDelimiters
+        ) { matched in
+            priorTaskDelimiters.contains(matched)
+                ? "[escaped prior-task delimiter: \(matched)]"
+                : "[escaped delimiter: \(matched)]"
+        }
+    }
+
+    /// This block's four strings only, for text the observed segment is about to wrap — whose own
+    /// `escape` covers the other eight, so escaping them here too would escape them twice.
+    private static func neutralizingPriorTaskDelimiters(
+        in value: String,
+        delimiters: UntrustedContentBoundary.Delimiters
+    ) -> String {
+        UntrustedContentBoundary.neutralizingDelimiters(
+            in: value,
+            delimiters: priorTaskNeutralisedDelimiters(delimiters)
         ) { "[escaped prior-task delimiter: \($0)]" }
+    }
+
+    private static func priorTaskNeutralisedDelimiters(
+        _ delimiters: UntrustedContentBoundary.Delimiters
+    ) -> [String] {
+        [trustedBegin(delimiters), trustedEnd(delimiters), trustedBeginName, trustedEndName]
+    }
+}
+
+extension StoredTaskResult.Provenance {
+    /// How the trusted block names the author of a result it does not itself hold (SONNY-491).
+    ///
+    /// Sonny's own words about the text, which is the whole reason they may sit in the trusted block:
+    /// the text is in the observed segment, and this says who wrote it.
+    var plannerAuthorshipPhrase: String {
+        switch self {
+        case .codeAuthored:
+            return "a sentence Sonny wrote around values the task used"
+        case .modelAuthored:
+            return "written by a model"
+        case .outsideAuthored:
+            return "a sentence Sonny wrote around text someone outside Sonny wrote"
+        }
     }
 }
 
@@ -314,22 +498,21 @@ public struct PriorTaskOutcome: Codable, Equatable, Sendable {
     /// sat unread on the same expression, so a model-authored paragraph entered the trusted block
     /// indistinguishable from "Zipped 3 files."
     ///
-    /// **Nothing reads it yet, and this changes no behaviour.** `plannerContextText` routes all four
-    /// interpolated fields through `escapeForPlanner` regardless of provenance, and the trusted
-    /// block's shape is deliberately unchanged — adding a line to it would be a prompt change, which
-    /// is a different decision from carrying a fact. What this buys is that the first reader who
-    /// *does* want to treat model-authored prior-task text differently — a tighter length budget, an
-    /// untrusted wrapper rather than the trusted one, an audit surface — is handed a value that
-    /// knows, instead of having to re-derive it from a record this type no longer references. Row I's
-    /// lesson in the repository's own words: a structural guarantee is only as wide as the type that
-    /// carries it.
+    /// **Read since SONNY-491, and what reads it is the trusted block's `Previous result:` line.**
+    /// This said "nothing reads it yet" and anticipated the reader it now has — "an untrusted wrapper
+    /// rather than the trusted one". The wrapper arrived for every result rather than for model-authored
+    /// ones only, for the reason `plannerContextText(delimiters:)` records: a code-authored template
+    /// still carries values a planner chose. So provenance does not decide where the text goes; it
+    /// decides what Sonny says, inside the trusted block, about who wrote the text in the observed
+    /// segment. Row I's lesson in the repository's own words: a structural guarantee is only as wide as
+    /// the type that carries it.
     ///
     /// Defaults to `.codeAuthored` so every existing construction site is unchanged, and that
     /// default is the honest one: the deterministic strings this repository builds are the ordinary
-    /// case, and the one producer of free model text is the screen-control session. The default is
-    /// safe for the synthesized `Codable` too — this type reaches no disk, `PriorTaskContextStore`
-    /// holds one context in memory and nothing persists it across launches — so there is no stored
-    /// shape without the key to decode.
+    /// case. It is safe for the synthesized `Codable` too — this type reaches no disk,
+    /// `PriorTaskContextStore` holds one context in memory and nothing persists it across launches —
+    /// so there is no stored shape without the key to decode. A wrong default here is now a wrong
+    /// sentence about authorship and never a trusted result, because no result is trusted.
     public var provenance: StoredTaskResult.Provenance
 
     public init(

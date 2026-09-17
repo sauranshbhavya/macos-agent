@@ -40,8 +40,9 @@ public struct StoredTaskResult: Codable, Equatable, Sendable {
     /// that actually matters: `.modelAuthored` text can be an entire injected paragraph, while a
     /// `.codeAuthored` template bounds a model's contribution to the slots it interpolates.
     ///
-    /// Two cases rather than a spectrum, because only one distinction changes what a reader may do
-    /// with the value: whether a model composed it. Enumerated at `ef0cf7c` — `grep -rn
+    /// Two cases rather than a spectrum when this was written, because only one distinction then
+    /// changed what a reader might do with the value: whether a model composed it. (SONNY-491 added a
+    /// third, below, and the reason is recorded there.) Enumerated at `ef0cf7c` — `grep -rn
     /// "AgentRunResult(" Sources | wc -l` finds 27 construction sites, 26 of which interpolate
     /// counts, names and paths into code-authored templates, and exactly one of which
     /// (`VisionSessionCapabilityAdapter.swift:278`) carries free text a model wrote after reading
@@ -54,12 +55,52 @@ public struct StoredTaskResult: Codable, Equatable, Sendable {
     /// step, and `AgentActionExecutor.visionSplitDisclosure` writes the sentence that describes that
     /// shape to the user, while `StoredRoutine.forbiddenStepOperations` refuses `.visionSession`
     /// inside a routine outright. The routine wrapper forwards anyway, for the reason written there.
+    ///
+    /// **A third case since SONNY-491, because two cases called a calendar read's summary
+    /// code-authored.** "Today: 09:00 Standup" is a sentence this repository composed, but its slots
+    /// hold text a stranger wrote: anyone who can send the user an invitation writes an event's
+    /// title. The two-case enum could only say "a model composed it" or "Sonny composed it", and the
+    /// second was the one a sentence built around a stranger's words fell into. `.outsideAuthored` is
+    /// the case for a template whose slots carry text **read at run time from somewhere neither Sonny
+    /// nor the user wrote** — an event's title, a file's name read off the disk, a track's name a
+    /// media catalogue returned, a URL a search provider returned. SONNY-491's enumeration, on that
+    /// ticket, lists the adapters that declare it.
+    ///
+    /// **What reads it, and what it does not decide.** `PriorTaskContext.plannerContextText(delimiters:)`
+    /// reads it to say, in Sonny's own words inside the trusted block, who wrote the result sitting
+    /// in the untrusted segment beside it. It does **not** decide whether the result is trusted: every
+    /// result goes to that segment, whatever its provenance, because a code-authored template still
+    /// interpolates values a planner chose and a planner can copy a stranger's words into one during
+    /// an ordinary follow-up. `PriorTaskContext`'s doc comment carries that reasoning.
+    ///
+    /// The raw values are storage, so the two existing ones never change: a record written before
+    /// this case existed decodes exactly as it did (`TaskResultStorageTests` holds both spellings).
     public enum Provenance: String, Codable, Equatable, Sendable, CaseIterable {
         /// Free-form prose a model composed. Untrusted input wearing the shape of a result.
         case modelAuthored = "model_authored"
         /// A sentence this repository composed, with counts, names and paths interpolated into its
         /// slots — including values a planner chose, and including an error's own description.
         case codeAuthored = "code_authored"
+        /// A sentence this repository composed around text someone outside Sonny wrote, read at run
+        /// time: an event's title, a file's name on disk, a catalogue's track name, a search result.
+        case outsideAuthored = "outside_authored"
+
+        /// The provenance of one summary joined from several (SONNY-491).
+        ///
+        /// **The join is only as trustworthy as its least trustworthy part**, so free model prose wins
+        /// over everything — it can contain anything, a stranger's words included — and a stranger's
+        /// words win over Sonny's own template. A chain or a routine that forwarded `.codeAuthored`
+        /// because *it* wrote the joining sentence would launder the one segment the declaration
+        /// exists to mark, which is the reasoning `executeChain` already records for the model case.
+        public func joined(with other: Provenance) -> Provenance {
+            if self == .modelAuthored || other == .modelAuthored {
+                return .modelAuthored
+            }
+            if self == .outsideAuthored || other == .outsideAuthored {
+                return .outsideAuthored
+            }
+            return .codeAuthored
+        }
     }
 
     /// The stored text's ceiling, in characters.

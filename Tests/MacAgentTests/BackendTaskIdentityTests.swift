@@ -258,7 +258,7 @@ struct BackendTaskIdentityTests {
         #expect(viewModel.errorMessage == sentence)
         let record = try #require(viewModel.taskHistoryRecords.first)
         #expect(record.result?.text == sentence)
-        let context = try #require(viewModel.priorTaskContext?.plannerContextText)
+        let context = try #require(viewModel.priorTaskContext?.plannerContextText(delimiters: .forOnePrompt()))
         #expect(context.contains(sentence))
         for surface in [viewModel.errorMessage ?? "", record.result?.text ?? "", context] {
             #expect(!surface.contains(reason), "the planner's reason reached the user: \(surface)")

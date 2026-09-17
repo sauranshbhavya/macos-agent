@@ -4722,14 +4722,25 @@ struct SkillsCommandCenterTests {
             !viewModel.isRunning && !viewModel.isAwaitingApproval
         }
 
-        let systems = requests.all
+        // The shared reader for the system messages (`planSystemPrompts`), and the plan requests'
+        // whole message arrays beside it, because the second run's prior-task message is what says
+        // which tag its system message must declare (SONNY-343).
+        let systems = Self.planSystemPrompts(requests)
+        let plans = requests.all
             .filter { $0.path == "/v1/plan" }
-            .map { ($0.json["messages"] as? [[String: Any]])?.first?["text"] as? String }
+            .compactMap { $0.json["messages"] as? [[String: Any]] }
         #expect(systems.count == 2)
         let withNotion = try #require(systems.first ?? nil)
         #expect(withNotion.hasSuffix(SkillGuidance.header + "\n\n" + notion.guidance))
         #expect(!withNotion.contains(linear.guidance), "Linear was never added")
-        #expect(systems.last == OpenAIPlanner.systemPrompt(toolRegistry: .default))
+        // The second run follows up the first, so its system message also declares the prior-task
+        // message's tag after the fixed prompt (SONNY-343) — and nothing of the removed skill.
+        let withoutNotion = try #require(systems.last ?? nil)
+        let priorTaskMessage = try #require(plans.last?.dropFirst().first?["text"] as? String)
+        let segments = try #require(PriorTaskMessageSegments(message: priorTaskMessage))
+        let boundary = try #require(UntrustedContentBoundary.Delimiters(tag: segments.tag))
+        #expect(withoutNotion == OpenAIPlanner.systemPrompt(toolRegistry: .default) + "\n\n" + PriorTaskContext.segmentTagRule(boundary))
+        #expect(!withoutNotion.contains(notion.guidance))
     }
 
     // MARK: The catalogue loads after launch (SONNY-476)

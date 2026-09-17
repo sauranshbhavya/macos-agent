@@ -4288,6 +4288,9 @@ struct AgentActionExecutorTests {
         #expect(markdown.contains("https://example.com/missing"))
         #expect(result.summary.contains("Skipped 1 unreachable source"))
         #expect(result.summary.contains("https://example.com/missing"))
+        // Named URLs came from the plan, not from a search provider, so skipping one quotes nothing
+        // from outside (SONNY-491; PR #249's review, F4): the condition is search *and* skipped.
+        #expect(result.summaryProvenance == .codeAuthored)
     }
 
     @Test
@@ -4967,6 +4970,10 @@ struct AgentActionExecutorTests {
         #expect(markdown.contains("- [Swift Two](https://example.com/swift-two)"))
         #expect(synthesizer.prompts[0].trustedPlan.steps[0].searchQuery == "Swift concurrency")
         #expect(result.summary == "Saved web research Markdown for search query \"Swift concurrency\" using 2 sources to \(output.path).")
+        // A search that skipped nothing names no URL a search provider chose, so the sentence is
+        // Sonny's around the plan's query (SONNY-491; PR #249's review, F4 — the control for the
+        // skipped case below).
+        #expect(result.summaryProvenance == .codeAuthored)
     }
 
     /// Partial synthesis can reduce the surviving source count to one — the summary must then say
@@ -5006,6 +5013,9 @@ struct AgentActionExecutorTests {
         let result = try await executor.execute(plan: plan) { _, _ in }
 
         #expect(result.summary == "Saved web research Markdown for search query \"single survivor\" using 1 source to \(output.path). Skipped 1 unreachable source: https://example.com/dead.")
+        // The skipped URL is one a search provider returned, which someone else published (SONNY-491;
+        // PR #249's review, F4).
+        #expect(result.summaryProvenance == .outsideAuthored)
     }
 
     @Test
