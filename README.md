@@ -2,7 +2,7 @@
 
 Sonny is an AI-native macOS agent platform for power users. It turns typed or spoken natural-language requests into validated local actions: it plans with a hosted model (OpenAI by default), assesses risk, previews side effects, executes only registered local capabilities, and streams logs plus a final summary. Sonny has two Mac-native surfaces sharing one state layer — a floating command widget, opened from the menu-bar icon or the push-to-talk hotkey, and a full Command Center window for history, insights, routines, workspaces, settings and privacy.
 
-See `docs/sonny-major-release-spec.md` for the full product spec and `docs/sonny-v1-implementation-changelog.md` for branch-by-branch implementation history — both are the source of truth for product direction; this file just orients a new contributor to the running app.
+See `docs/sonny-major-release-spec.md` for the full product spec, and `scripts/changelog-order read | less` for the branch-by-branch implementation history — every branch's entry newest-first, then `docs/sonny-v1-implementation-changelog.md`, which is the archive of everything written before 2026-09-16. Both are the source of truth for product direction; this file just orients a new contributor to the running app.
 
 ## Cool Prototype Demo (Old)
 

@@ -29,7 +29,25 @@ then; if that isn't what happened, the row has to say so.
 The **"New Task"** clause of §6's three-menu-item row is the worked example — confirmed 2026-07-24,
 found broken 2026-08-01, fixed by SONNY-8 (PR #20), re-confirmed 2026-08-03.
 
-## Where a manual item lives (convention, added 2026-08-26)
+## Where a manual item lives (convention, added 2026-08-26; the file moved 2026-09-16)
+
+**This file is the archive and takes no new rows (2026-09-16, SONNY-500).** A branch now writes
+its rows at `docs/manual-tests/<branch-name>.md`, a slash in the branch name becoming a folder,
+so two branches never write to one file — which is what every conflict in wave 9 was.
+`docs/manual-tests/README.md` is the live rule. **Every row already here stays exactly where it
+is**, including the status tracker, §0's setup and every `confirmed <date>` history, because
+correcting a row in place is what the convention below requires and rows are corrected here for
+as long as they exist.
+
+**The founders read both, in one command:**
+
+```
+scripts/changelog-order manual-tests | less
+```
+
+That prints every per-branch file newest-first, by merge commit, and then all of this file. The
+rule below is unchanged in substance — an item recorded anywhere but the place the founders read
+from is an item they never see — and only the place has moved.
 
 **Every manual-test item a ticket produces is added to this file as an unchecked row before the
 ticket closes.** A PR note or a ticket comment may summarize them, but this file is the only place

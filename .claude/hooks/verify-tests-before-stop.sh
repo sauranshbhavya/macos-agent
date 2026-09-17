@@ -3,8 +3,9 @@
 #
 #   1. If Swift source changed this turn, the required test suite must pass before Claude can
 #      finish. Skips fast when nothing Swift changed.
-#   2. If this branch has touched the changelog, `scripts/changelog-order` must pass. Skips fast
-#      when the branch has not touched it. (SONNY-361.)
+#   2. If this branch has touched any of the records `scripts/changelog-order` reads — the
+#      archived changelog, `docs/changelog/`, `docs/manual-tests/` — that tool must pass. Skips
+#      fast when the branch has touched none of them. (SONNY-361; the directories, SONNY-500.)
 #
 # Never loops: stop_hook_active means this already blocked once, so let it end this time.
 #
@@ -108,19 +109,20 @@ else
 fi
 
 # ---------------------------------------------------------------------------------------------
-# The changelog's entry order (SONNY-361).
+# The branch entries (SONNY-361; the directories, SONNY-500).
 #
-# `scripts/changelog-order` proves the changelog's entries sit in `main`'s first-parent merge
-# order within each of the file's two eras, that no entry names a branch that never merged, and
-# that every heading has exactly one entry beneath it. `WORKFLOW.md` step 7 names it as owed by
-# any diff that touches the changelog — and that is the half that decides nothing. `CLAUDE.md`'s
-# record of SONNY-64's guard is explicit: a check people learn to skip has stopped existing. The
-# defect this one catches is invisible by construction — nobody else edits the spot a misplaced
-# entry lands in, so the merge is clean, no test reads the file, and the symptom is a wrong number
-# in prose two months later. Nothing else in this repository would ever go red on it. So it runs
-# unasked, here.
+# `scripts/changelog-order` proves that every branch's entry names a branch that merged, that a
+# branch which merged wrote one, that each entry's heading and its filename are the same branch,
+# and that the archived changelog's own entries still sit in `main`'s first-parent merge order
+# within each of its two eras. `WORKFLOW.md` step 7 names it as owed by any diff that touches
+# those records — and that is the half that decides nothing. `CLAUDE.md`'s record of SONNY-64's
+# guard is explicit: a check people learn to skip has stopped existing. The defects this one
+# catches are invisible by construction — nobody else edits the spot a misplaced entry lands in,
+# and a branch that merges with no entry at all leaves nothing behind to notice, so the merge is
+# clean, no test reads any of it, and the symptom is a wrong number in prose two months later.
+# Nothing else in this repository would ever go red on it. So it runs unasked, here.
 #
-# WHEN IT FIRES: whenever THIS BRANCH has touched the changelog at all — uncommitted in the
+# WHEN IT FIRES: whenever THIS BRANCH has touched any of those records — uncommitted in the
 # working tree, or committed since the merge-base with `main`. The working-tree reading alone
 # would be the obvious one and it is not enough, and the gap is the common case rather than an
 # edge of it: step 7 has the entry written AND committed before the PR opens, so on the last turn
@@ -133,9 +135,10 @@ fi
 # because a stop hook fires on a machine that has not just run this.
 #
 # WHAT IT WILL NOT DO is go red on a branch that legitimately wrote its own entry. The check
-# exempts the first entry and only the first, because step 7 writes it before the PR opens, so
-# the newest entry names no merge yet. A check that reports honest work as a failure is a check
-# people turn off.
+# allows exactly one entry to name a branch that has not merged, because step 7 writes the entry
+# before the PR opens, so on the branch under review its own entry names no merge yet. A check
+# that reports honest work as a failure is a check people turn off. The allowance is a count and
+# not a reading of `HEAD`, so a reviewer's detached worktree gets the same answer a lane does.
 #
 # The three answers, and none of them is silence:
 #   exit 0 -> nothing to say; the hook carries on to the suite.
@@ -147,7 +150,11 @@ fi
 #             is not a finding, so it is reported loudly and blocks nothing. Same for a missing
 #             or non-executable script.
 # ---------------------------------------------------------------------------------------------
-changelog_rel="docs/sonny-v1-implementation-changelog.md"
+# Every record `scripts/changelog-order` CHECKS, and only those. `docs/sonny-manual-test-checklist.md`
+# is deliberately absent: the tool reads it when it assembles the checklist for a reader, never
+# when it checks, so a diff touching it alone cannot produce a finding and running the tool over
+# that diff would be work that can only ever say "clean".
+changelog_paths=("docs/sonny-v1-implementation-changelog.md" "docs/changelog" "docs/manual-tests")
 changelog_block=""
 
 # A check that did not run says so three ways: to this session (stderr), to the user
@@ -160,13 +167,13 @@ changelog_note() {
     battery_journal "stop-hook/changelog-order" "$changelog_note_what"
   fi
   printf 'Stop hook: scripts/changelog-order did NOT run — %s\n' "$changelog_note_what" >&2
-  printf 'The changelog entry order has NOT been checked this turn. Nothing here says it is in order.\n' >&2
-  printf '{"systemMessage": "Stop hook: scripts/changelog-order did NOT run — %s. The changelog entry order has NOT been checked this turn."}\n' \
+  printf 'The branch entries have NOT been checked this turn. Nothing here says they are in order.\n' >&2
+  printf '{"systemMessage": "Stop hook: scripts/changelog-order did NOT run — %s. The branch entries have NOT been checked this turn."}\n' \
     "$changelog_note_what"
 }
 
 changelog_touched=""
-if [ -n "$(git status --porcelain -- "$changelog_rel" 2>/dev/null)" ]; then
+if [ -n "$(git status --porcelain -- "${changelog_paths[@]}" 2>/dev/null)" ]; then
   changelog_touched="uncommitted in the working tree"
 else
   changelog_base=""
@@ -175,14 +182,14 @@ else
     [ -n "$changelog_base" ] && break
   done
   if [ -n "$changelog_base" ] &&
-     [ -n "$(git diff --name-only "$changelog_base" HEAD -- "$changelog_rel" 2>/dev/null)" ]; then
+     [ -n "$(git diff --name-only "$changelog_base" HEAD -- "${changelog_paths[@]}" 2>/dev/null)" ]; then
     changelog_touched="committed on this branch"
   fi
 fi
 
 if [ -n "$changelog_touched" ]; then
   if [ ! -x "$CLAUDE_PROJECT_DIR/scripts/changelog-order" ]; then
-    changelog_note "this branch changed the changelog ($changelog_touched) and scripts/changelog-order is missing or not executable in this checkout"
+    changelog_note "this branch changed a branch record ($changelog_touched) and scripts/changelog-order is missing or not executable in this checkout"
   else
     # No pipe between the command and the exit code that gets reported (CLAUDE.md, Claims and
     # evidence): a pipeline reports the LAST command's status, and three people on SONNY-127 read
@@ -192,12 +199,12 @@ if [ -n "$changelog_touched" ]; then
     case "$changelog_exit" in
       0) : ;;
       2)
-        changelog_block="$(printf 'Stop hook: the changelog is out of order, and this branch changed it (%s).\n\n%s\n\nThat is scripts/changelog-order speaking. WORKFLOW.md step 7 and the changelog own Entry\nTemplate preamble say where an entry goes and why the file has two eras. Fix it before finishing.\n' \
+        changelog_block="$(printf 'Stop hook: scripts/changelog-order has findings, and this branch changed a record it reads (%s).\n\n%s\n\nThat is scripts/changelog-order speaking. docs/changelog/README.md says where an entry goes\nand what a branch owes; WORKFLOW.md step 7 is the process around it. Fix it before finishing.\n' \
           "$changelog_touched" "$changelog_output")"
         ;;
       *)
         # Quotes and newlines are stripped because this string is interpolated into the JSON above.
-        changelog_note "this branch changed the changelog ($changelog_touched) and scripts/changelog-order exited $changelog_exit without measuring: $(printf '%s' "$changelog_output" | tr -d '"\\' | tr '\n\t' '  ' | cut -c1-200)"
+        changelog_note "this branch changed a branch record ($changelog_touched) and scripts/changelog-order exited $changelog_exit without measuring: $(printf '%s' "$changelog_output" | tr -d '"\\' | tr '\n\t' '  ' | cut -c1-200)"
         ;;
     esac
   fi
@@ -218,7 +225,7 @@ if [ "$stop_hook_active" = "true" ]; then
   # Already blocked once this turn, so nothing here may block again. The finding still has to
   # reach somebody: the abandoned-mutant arm above takes the same shape, and for the same reason.
   if [ -n "$changelog_block" ]; then
-    printf '{"systemMessage": "The changelog is out of merge order and this hook has already blocked once, so it is letting this turn end. Run scripts/changelog-order and fix the entry it names."}\n'
+    printf '{"systemMessage": "scripts/changelog-order has findings and this hook has already blocked once, so it is letting this turn end. Run scripts/changelog-order and fix what it names."}\n'
   fi
   exit 0
 fi

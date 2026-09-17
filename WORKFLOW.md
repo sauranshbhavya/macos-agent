@@ -112,11 +112,16 @@ write it so that session needs nothing else. Every ticket carries:
 - **Acceptance criteria** — checkable, not vibes.
 - **Required verification** — the exact commands (see step 5) plus any ticket-specific tests.
 - **Manual-test items** — what the user must check in the real app. Before the ticket
-  closes, these are added to `docs/sonny-manual-test-checklist.md` as unchecked rows naming
-  the ticket; a PR note or ticket comment may summarize them, but the checklist file is the
-  only place the founders test from, and an item recorded anywhere else is an item they
-  never see. This bullet used to end "these aggregate into the PR's manual checklist", and
-  SONNY-281's session followed that sentence exactly — its thirteen items sat on PR #118,
+  closes, these are added to the branch's own file, `docs/manual-tests/<branch-name>.md`, as
+  unchecked rows naming the ticket; a PR note or ticket comment may summarize them, but that
+  directory and the archive behind it are the only places the founders test from, and an item
+  recorded anywhere else is an item they never see. The founders read both in one command,
+  `scripts/changelog-order manual-tests | less`. **A branch that owes no rows writes the file
+  anyway**, with one line saying so and why each ticket owes none: a missing file and a
+  deliberate "none" are the same silence otherwise. This bullet named
+  `docs/sonny-manual-test-checklist.md` until 2026-09-16 (SONNY-500), which is now the archive
+  and takes no new rows; before that it ended "these aggregate into the PR's manual checklist",
+  and SONNY-281's session followed that sentence exactly — its thirteen items sat on PR #118,
   seven in the body and six more in its review rounds' dated notes, until SONNY-292
   recovered them (2026-08-26).
 - **Decisions carried from discussion** — anything that would otherwise live only in chat.
@@ -200,10 +205,12 @@ has documented consequences:
   which hits the same shared local stores despite lacking bundle identity — from a second
   worktree while any instance is running.
 - **Merge one branch at a time, and rebase once — at merge time, never after each merge.**
-  **When more than one PR is in flight, from parallel lanes or from one session, they are one
-  stack** — each branch cut from the one beneath, based on it, merged bottom-up — and
-  `## Stacked pull requests`, after step 7, is that rule in full; what follows is how a branch
-  waits and lands inside it.
+  **Every branch is cut from `origin/main` and merges as its own review closes** — there is no
+  wave-wide order to wait for — and `## Pull requests in flight`, after step 7, is that rule in
+  full, including the one exception, a short stack of at most three for a real code dependency.
+  What follows is how a branch waits and lands. (This bullet said *"when more than one PR is in
+  flight ... they are one stack"* from 2026-09-11 until 2026-09-16, when SONNY-500 removed the
+  one thing that coupled parallel branches: their two shared record files.)
   Never batch-merge parallel branches: they land one at a time, in an order the user sets,
   because two branches merged together is how a conflict resolution nobody read reaches
   `main`. **What a lane does while it waits is finish on its base, push, and hold.** It does
@@ -538,8 +545,16 @@ time, summarizing all tickets (linked by identifier); it is not updated per-tick
 exception: when a post-open fix commit changes user-visible behavior the description
 names, append a short dated note (never rewrite) before the user's merge read. The
 changelog entry for the branch is written before the PR opens, by the session that closes
-the branch's last ticket — tickets hold per-task history, the changelog holds the durable
-architectural decisions and pitfalls; both, not either. **Its figures are measured at the
+the branch's last ticket, **in the branch's own file, `docs/changelog/<branch-name>.md`** — a
+slash in the branch name is a folder, as `mutation/plans/` already does it. Tickets hold
+per-task history, the entry holds the durable architectural decisions and pitfalls; both, not
+either. `docs/changelog/README.md` is the template and the rule about what a branch owes.
+**The one way to read the whole branch-by-branch history in order is
+`scripts/changelog-order read | less`**, which prints every branch's file newest-first, by merge
+commit, and then `docs/sonny-v1-implementation-changelog.md` from its `## Entries` line down —
+that file is the archive now, keeps every word it had, and takes no new entries (2026-09-16,
+SONNY-500). The same shape holds for the manual-test rows: the branch's own
+`docs/manual-tests/<branch-name>.md`, read with `scripts/changelog-order manual-tests | less`. **Its figures are measured at the
 head that merges.** The entry is written before the head stops moving, so when a fix round
 or a rebase moves it, every figure the entry cites is re-measured at the new head or
 dropped — never carried forward on the strength of the old head alone — and once merged,
@@ -549,28 +564,51 @@ cross a moved head is step 5's tree-identity proof: `git rev-parse <old>:<path> 
 printing one hash twice makes the figure a measurement *of* the new head rather than a stale
 one re-stamped at it, and the entry carries the proof beside the figure. No proof, no carry.
 
-**A diff that touches the changelog runs `scripts/changelog-order`, and its exit code goes in
+**A diff that touches a branch record runs `scripts/changelog-order`, and its exit code goes in
 the closing comment beside the suite's.** It is a second or two, it needs no build, and it is
-owed by exactly the diffs that can break it — every branch writing an entry, and nothing else.
-It checks three things: that the entries are in `main`'s first-parent merge order within each
-of the file's two eras, that no entry names a branch that never merged, and that every heading
-has exactly one entry under it. That last arm is not about ordering at all and is the reason
-the tool exists rather than a rule in prose: at `711c92f` the file held a heading with no entry
-beneath it and a second heading glued to the end of the previous entry's last line by a lost
-newline, so no line-anchored search could see it — and the entry's own self-verifying `awk`
-command, pointed at that invisible heading, had been answering a number nobody read for two
-merges (SONNY-329). **A misplaced entry raises no rebase conflict, because nobody else is
-editing that spot, so a clean merge is the tell** — five have been recorded that way.
+owed by exactly the diffs that can break it — every branch writing an entry or a manual-test
+file, and nothing else. What it checks:
+
+- **Every entry names a branch that merged**, and at most one may not — the branch under review,
+  whose entry this step has written before its PR opens. A second unmerged entry is a finding.
+  The allowance is a count and not a reading of `HEAD`, so a reviewer's detached worktree and a
+  lane get the same answer.
+- **A name that matches no merge and no ref at all** — a typo, or a branch renamed after its file
+  was written — is a finding at any count, in either directory.
+- **A branch that merged and wrote no file** is a finding, per directory. This is the arm the
+  one-file-per-branch move made necessary and possible: a missing record used to be invisible,
+  and PR #124's missing entry was found only by a coordinator sweeping both branches by hand
+  (step 7's own record of it, below). A branch that owes nothing writes one line saying so; a
+  missing file and a deliberate "none" are otherwise the same silence. Only branches merged in
+  the one-file-per-branch era are checked — the roughly thirty that merged before it and wrote
+  nothing are the archive's.
+- **An entry's heading and its filename are the same branch**, which is the shape a copied entry
+  takes and the one thing nothing else could see.
+- **Exactly one `Status:` line per entry, and one `### Branch:` heading per file.** That arm is
+  not about ordering at all and is the reason the tool exists rather than a rule in prose: at
+  `711c92f` the archive held a heading with no entry beneath it and a second heading glued to the
+  end of the previous entry's last line by a lost newline, so no line-anchored search could see
+  it — and the entry's own self-verifying `awk` command, pointed at that invisible heading, had
+  been answering a number nobody read for two merges (SONNY-329).
+- **The archive's own two-era ordering**, unchanged. That file takes no new entries, so this can
+  no longer go red on honest work; what it still catches is a session appending an entry to it
+  out of habit. **A misplaced entry raises no rebase conflict, because nobody else is editing
+  that spot, so a clean merge is the tell** — five have been recorded that way.
+
+`scripts/changelog-order selftest` re-proves every one of those arms, and prints on every run
+which mainline it read and where it resolved the one-file-per-branch era to begin — a boundary
+that stopped resolving would switch the completeness arm off without any output changing.
 
 **It also runs unasked, from the `.claude/` stop hook** (SONNY-361). Whenever the branch has
-touched the changelog — uncommitted, or committed since the merge-base with `main` — the hook runs
-it before it considers the Swift suite, and a finding blocks the turn. The committed half of that
-reading is the half that matters: step 7 has the entry written *and committed* before the PR opens,
-so on the last turn of the branch whose entry is at issue the tree is clean, and a
-dirty-file-only trigger would fire never. The hook does not fire on a branch that legitimately
-wrote its own entry — the check exempts the first entry and only the first — it skips during a live
-mutation battery and says so, and when it cannot run at all (the script missing, or the tool
-refusing to measure) it says that too rather than passing quietly.
+touched any record that tool checks — `docs/sonny-v1-implementation-changelog.md`,
+`docs/changelog/`, `docs/manual-tests/`, uncommitted or committed since the merge-base with
+`main` — the hook runs it before it considers the Swift suite, and a finding blocks the turn. The
+committed half of that reading is the half that matters: step 7 has the entry written *and
+committed* before the PR opens, so on the last turn of the branch whose entry is at issue the tree
+is clean, and a dirty-file-only trigger would fire never. The hook does not fire on a branch that
+legitimately wrote its own entry — the check allows one entry to name an unmerged branch — it skips
+during a live mutation battery and says so, and when it cannot run at all (the script missing, or
+the tool refusing to measure) it says that too rather than passing quietly.
 `.claude/hooks/verify-tests-before-stop-selftest.sh` re-proves every one of those arms.
 
 **Naming it here is still the load-bearing half, and the hook does not retire it.** `CLAUDE.md`'s
@@ -582,12 +620,15 @@ be quoted, and a session whose hook never fired looks exactly like a session who
 this is owed by a named population too, and a session that writes an entry and does not report its
 exit code has not finished step 7.
 
-**Not every branch owes one, and what decides it is what the branch recorded, not what it
-touched.** An entry is owed whenever a branch records anything of the kind the sentence above
-names — a durable architectural decision, a pitfall discovered, or a correction to the record;
-the first two are that sentence's own words, the third is what #122's and #123's entries are —
-and a bookkeeping branch that records none of that writes no entry at all. The prefix does not
-decide it: `docs/` is no exemption, and eleven `docs/` branches have entries
+**Every branch writes the file; what the branch recorded decides what is in it.** An entry is
+owed whenever a branch records anything of the kind the sentence above names — a durable
+architectural decision, a pitfall discovered, or a correction to the record; the first two are
+that sentence's own words, the third is what #122's and #123's entries are — and a bookkeeping
+branch that records none of that writes a file saying so, in one line, rather than writing
+nothing. **That last half changed on 2026-09-16** (SONNY-500): a branch used to write no entry at
+all, and the difference between "recorded nothing" and "forgot" was then invisible to everything
+except a coordinator reading two branches side by side, which is exactly how #124's gap was found.
+The prefix does not decide it: `docs/` is no exemption, and eleven `docs/` branches have entries
 (`grep -n '^### Branch: docs/' docs/sonny-v1-implementation-changelog.md`, at `310f893`). Nor
 does the template's `Architectural decisions / pitfalls discovered` field: its "write none if
 true" governs a field inside an entry already owed, and does not make one owed.
@@ -733,9 +774,10 @@ to do.
 - The full cycle-3 re-check stays reserved for fix rounds that could themselves introduce
   defects: production-code changes, test-integrity rebuilds (vacuous-test rewrites),
   rebases carrying conflict resolutions. In a stack, the rebase pass decides this per branch, and
-  a branch that needs it gets the scoped delta pass `## Stacked pull requests` clause 2 describes;
-  a conflict confined to changelog or checklist entries and resolved by keeping each entry whole
-  does not by itself count as a conflict resolution for this bullet.
+  a branch that needs it gets the scoped delta pass `## Pull requests in flight` describes for a
+  short stack; a conflict confined to record files and resolved by keeping each entry whole does
+  not by itself count as a conflict resolution for this bullet — a conflict of that shape is now
+  itself rare, since one file per branch is what removed it.
 
 The ceiling itself does not move, and the fix-in-branch rule is untouched either way — nor
 does the scoped verification round below move it, because what that bounds is verification
@@ -931,126 +973,143 @@ PR opens, so late failures need an explicit path, not improvisation:
   rule, close it again with a fresh closing comment. The original implementing session
   need not exist anymore — the ticket's comments are the handoff.
 
-Then: the user runs the aggregated manual items — the unchecked rows in
-`docs/sonny-manual-test-checklist.md` — in the real packaged app, and merges — at
-GitHub's control with "Create a merge commit", never a squash or a rebase merge, whatever the page
-offers (§8).
+Then: the user runs the aggregated manual items — the unchecked rows that
+`scripts/changelog-order manual-tests | less` prints, which is every branch's own
+`docs/manual-tests/` file followed by the archived checklist — in the real packaged app, and
+merges — at GitHub's control with "Create a merge commit", never a squash or a rebase merge,
+whatever the page offers (§8).
 Delete the branch, remove the worktree if its session's sequence ends here (step 3's
 lifecycle rule — a session with tickets still ahead of it keeps the same one), confirm the
-tickets' final states. **When more than one PR is in flight they are one stack**, and the merge
-order, the base each PR is diffed against and what deleting a merged branch does next are
-`## Stacked pull requests`, directly below.
+tickets' final states. **Each branch is cut from `main` and merges on its own**, and what a
+branch does while it waits, the one update from `main` it takes before merging, and the one
+exception — a short stack of at most three for a real code dependency — are
+`## Pull requests in flight`, directly below.
 
-## Stacked pull requests
+## Pull requests in flight
 
-**When more than one PR is in flight — from one session or from parallel lanes — the PRs form one
-stack.** Founder decision, 2026-09-11 (Sauransh), verbatim: *"from now on when running parallel
-sessions or even one session but if they contain multiple PRs then we will use the concept of
-stacked PRs, it is better and efficient way of handling the PRs sequentially."* Every clause below
-is written from wave 7's chain of 2026-09-11 (PRs #226 to #236; run log SONNY-438, coordinator
-record SONNY-412), which was stacked by accident and repaired by hand, so each one is something
-that went wrong once or was needed once. (SONNY-459.)
+**Every branch is cut from `origin/main`, and merges as its own review closes.** Founder
+decision, 2026-09-16 (SONNY-500, recorded against SONNY-459 and SONNY-463), replacing the
+2026-09-11 rule that every wave's pull requests form one stack. **The measurement that produced
+the change is wave 9's own**: across every carry proof the coordinator ran on that thirteen-branch
+stack, no code conflicted anywhere — **0 of 44 differing paths on PR #244, 0 of 34 on PR #250, 0
+of 3 on PR #248** (those three figures are that wave's record, carried here and not re-measured)
+— and every conflict in the whole wave was in `docs/sonny-v1-implementation-changelog.md` or
+`docs/sonny-manual-test-checklist.md`, because every branch inserted at the same place in both.
+Two branches editing one line of one file was the whole coupling, and SONNY-500 removed it: a
+branch now writes `docs/changelog/<branch-name>.md` and `docs/manual-tests/<branch-name>.md`, so
+no two branches touch a file the other touches.
 
-**The shape.** The coordinator fixes the merge order at kickoff, from measured file overlap: the
-pairs that overlap most sit adjacent, and the branch that must land first sits lowest. That is the
-order step 3 says the user sets: the user launches the kickoffs that fix it and presses every
-merge, and a stack admits no other order, because clause 5 never merges a PR above an unmerged
-one. The lowest
-branch is cut from `origin/main`; every later branch is cut from the head of the branch directly
-beneath it. Each PR's base on GitHub is the branch beneath it — `main` for the lowest — and its
-body names the PR that must merge before it. So a kickoff command reads
-`git worktree add -b <branch> <path> origin/<branch beneath>`, and `origin/main` appears in exactly
-one of them.
+**The shape.**
 
-1. **A branch is cut only from a head that is final for its round.** Never cut above a branch whose
-   review or fix round is open. Wave 7 ran reviews in side worktrees and landed fix rounds after
-   the next branch had been cut; seven of eleven heads then failed `git merge-base --is-ancestor`
-   against their base, nineteen commits were missing from the top, and no tree holding all of them
-   had been tested. (Those three figures are that wave's own record on SONNY-438, carried here and
-   not re-measured.)
-2. **A fix round low in the stack is followed by one rebase pass upward, before anything merges.**
-   The coordinator records every cut point first — `git merge-base <branch> <old head of the branch
-   beneath>`, posted on the run log — because the old head is what the rebase has to name and the
-   fix round is what moves it. **Each branch is then rebased by its own session, or by the session
-   the founder routes to that ticket, one branch at a time from the bottom up** (founders' decision
-   on PR #239's review, F4, 2026-09-13), with
-   `git rebase --onto <new head of the branch beneath> <its recorded cut point> <branch>`, which
-   replays that branch's own commits and nothing else. A conflict in the changelog or the checklist
-   is resolved by keeping the newer entry above and taking the older entry as its own branch's
-   final text — the branch beneath owns that text, and the copy being replayed is the stale one.
-   That session pushes with `--force-with-lease` — step 3's standing authorization, which covers a
-   session's own ticket branch and nothing else, never bare `--force` — and only then does the
-   next branch up start. No one session rebases the whole stack, because no authorization lets a
-   session force-push a branch it does not own.
+1. **Cut from `origin/main`.** `git worktree add -b <branch> <path> origin/main`, and every PR's
+   base on GitHub is `main`. No branch is cut above another, so nothing above waits on a fix
+   round below, and no rebase pass upward is owed at the end of a wave.
+2. **One update from `main` before merge, and only one.** A branch finishes on its base, pushes
+   and holds; when it is next to merge and `main` has moved under it, it takes exactly one hop
+   onto the new `main` — step 3's merge-one-branch-at-a-time bullet, unchanged, and the
+   `--force-with-lease` it needs is that bullet's standing authorization. **Zero hops is better
+   than one** and is the right answer when `main` has not moved under anything the branch's
+   figures depend on.
+3. **After that hop, re-run only what the range touched.** The range is
+   `git diff --name-only <the branch's merge-base before the hop> origin/main` — the whole range,
+   never the conflict list, which is not the population that can break a branch
+   (`CLAUDE.md`'s rebase gotcha: a type changed beneath and a new user of it added above conflict
+   nowhere and stop agreeing anyway). Step 5's tree-identity proof then decides each figure: one
+   whose paths are byte-identical across the hop is carried **with the proof beside it**, in the
+   braced `${old}:Sources` form and never with a loop variable named `path` (`CLAUDE.md`, Claims
+   and evidence, has both traps); everything else is re-measured at the new head. A pre-hop SHA
+   may stay only as labelled history. Nothing under `Sources/`, `Tests/` or `Package.swift` in
+   the range means no Swift suite and no `scripts/warnings`; nothing under `server/` means none
+   of the server's commands; `scripts/no-attribution tree` and `npm run check:secrets` are owed
+   either way.
+4. **Whether the review already posted still stands is decided by what moved, not by the PR's
+   diff** (founders' decision on PR #239's review, F1, 2026-09-13, which the hop inherits from the
+   rebase it replaces). The session doing the hop states what moved — the range above — and
+   whether the branch uses any of it, by enumerating the branch's uses across the tree rather than
+   by reading its own diff. The review stands only when nothing the branch uses changed in that
+   range and the hop resolved no conflict except one confined to record files and resolved by
+   keeping each entry whole; its reviewer then re-runs the ancestry check and nothing more. **A
+   conflict anywhere else, or a change in that range to anything the branch uses — a type, a
+   signature, a fixture, a helper — gets a scoped delta pass on that branch**, in its review
+   worktree re-pointed at the new head, reading the resolution and the moved code the branch uses
+   and searching for nothing else. That is the re-check step 7 reserves for a rebase carrying a
+   conflict resolution: a reviewing session's pass, not the coordinator's direct verification,
+   and scoped to the range the hop crossed.
+5. **Merging stays one branch at a time, and stays the founder's.** Merge with a merge commit
+   (§8), delete the branch by hand — the repository does not delete a head branch on merge
+   (`gh api repos/{owner}/{repo} --jq .delete_branch_on_merge` → `false`, read 2026-09-13) — pull
+   `main`, and the next branch whose review has closed follows. Never two together: a conflict
+   resolution nobody read is what that prevents.
+6. **`scripts/changelog-order` reports nothing for this shape.** A branch cut from `main` carries
+   exactly one entry naming an unmerged branch — its own — which the check allows, so a branch
+   that has written its entry exits 0. The n − 1 findings a stacked branch used to produce, and
+   the clause that existed to explain them, are not paid any more.
+7. **Step 3's disjointness rule holds between every pair of lanes, in full**: no overlapping files
+   *and* no shared assumptions — a store contract, a shared type — not files alone (founders'
+   decision on PR #239's review, F3, 2026-09-13), because two lanes can build on one assumption
+   and break each other without touching a common file. The record files are no longer an
+   exception to it, which is the change: they used to be the one overlap every lane had by design.
 
-   **Whether a review already posted on the rebased branch still stands is decided by what moved,
-   not by the PR's diff** (founders' decision on PR #239's review, F1, 2026-09-13). The diff can
-   be the same while the code under it has stopped agreeing with its new base: `CLAUDE.md`'s rebase
-   gotcha is exactly that shape, a type changed beneath and a user of it added above with no
-   conflict anywhere. So the session doing the rebase states what moved — every file in the range
-   it rebased across, `git diff --name-only <its recorded cut point> <new head of the branch
-   beneath>`, not the conflict list — and whether the branch uses any of it, by enumerating the
-   branch's uses across the tree rather than reading its own diff. **The review stands only when
-   nothing the branch uses changed in that range and the rebase resolved no conflict except one
-   confined to changelog or checklist entries and resolved by keeping each entry whole**, the way
-   this clause resolves it above — the conflict clause 7 expects in every stack, whose resolution
-   edits no code and no entry's content, so it does not by itself cost a delta pass (founders'
-   decision on the delta pass's note to F1, 2026-09-13); its reviewer then re-runs the ancestry
-   check and nothing more. **A conflict anywhere else, or a change in that range to anything the
-   branch uses — a type, a signature, a fixture, a helper — gets a scoped delta pass on that
-   branch**, in its review worktree re-pointed at the new head, reading the resolution and the
-   moved code the branch uses and searching for nothing else. That is the re-check step 7
-   reserves for a rebase carrying a conflict resolution — a reviewing session's pass, not the
-   coordinator's direct verification — and like every re-check it is scoped to what the round it
-   follows moved, which here is the range the rebase crossed.
-3. **After that rebase, every figure a branch's entry cites is re-measured at its new head or
-   dropped**, carried only with step 5's tree-identity proof — in the braced `${old}:Sources` form,
-   and never with a loop variable named `path` (`CLAUDE.md`, Claims and evidence, has both traps).
-   A pre-rebase SHA may stay only as labelled history. **The union is measured once, at the top
-   branch's head**: the flagged suite, `scripts/warnings`, the server's suites where `server/`
-   moved, `scripts/changelog-order`, `scripts/no-attribution tree` and `npm run check:secrets`.
-4. **A reviewer pins the base SHA it diffs against** — the head of the branch beneath at cut time —
-   and posts the review in full on the PR. A fix round gets a scoped delta pass in the same review
-   worktree, re-pointed at the new head.
-5. **Merging is bottom-up and mechanical.** Merge with a merge commit (§8), delete the branch at
-   once so GitHub retargets the next PR to `main`, pull `main`, repeat. The deletion is a separate
-   step by hand: the repository does not delete a head branch on merge
-   (`gh api repos/{owner}/{repo} --jq .delete_branch_on_merge` → `false`, read 2026-09-13). **Never
-   merge a PR whose predecessor is unmerged.**
-6. **`scripts/changelog-order` and the stop hook report one finding per unmerged entry beneath the
-   newest.** On the n-th branch from the bottom that is n − 1 findings and exit 2 — measured at
-   `ae74415c` by adding one, two and three entries naming unmerged branches under `## Entries` in a
-   scratch copy and running `scripts/changelog-order check <copy>` over each: exit 0, then 1
-   finding, then 2, each reading *only the newest may be unmerged*. That count is the stack's
-   expected cost. State it on the run log and answer the hook's block with it; never reorder or
-   remove an entry to satisfy it. It clears one merge at a time.
-7. **Parallel lanes in a stack cut from the branch beneath as it stands** — empty, if the lanes
-   start together — and expect the rebase pass at the end. **Step 3's disjointness rule holds
-   between them in full**: no overlapping files *and* no shared assumptions — a store contract, a
-   shared type — not files alone (founders' decision on PR #239's review, F3, 2026-09-13), because
-   two lanes can build on one assumption and break each other without touching a common file. So
-   the pass is expected to be conflict-free apart from the changelog and the checklist, which every
-   lane touches by design and which clause 2 does not count against a posted review while each
-   entry is kept whole, and clause 2 still decides, branch by branch, whether that review stands.
-8. **One session, many PRs, is sequential by construction.** The session finishes a branch's
-   review and fix round before it cuts the next, and never reviews branch n while building branch
-   n + 1.
+**The exception: a short stack, for a real code dependency and nothing else.** When branch B
+genuinely cannot compile or cannot be tested without branch A's code — not adjacency, not a
+shared subject area, and never a shared record file, which is no longer possible — B is cut from
+A and the two are a stack. **At most three branches**, and the coordinator fixes the order at
+kickoff. Inside a short stack:
 
-**Clauses 1 and 7 read as a contradiction and are not one.** Clause 1 is the default: a branch
-started after the one beneath already has work is cut only once that work is final for its round.
-Clause 7 is the case of lanes the coordinator starts together, which are cut above work that cannot
-be final yet because it does not exist yet — and that is allowed only because clause 2's pass is
-owed before anything merges. Both end in the same state, and it is the one wave 7 never reached:
-**before the first merge, `git merge-base --is-ancestor origin/<branch beneath> origin/<branch>`
-exits 0 for every adjacent pair in the stack.** A pair that exits 1 is a pass not yet made.
+- **A branch is cut only from a head that is final for its round.** Never cut above a branch whose
+  review or fix round is open. Wave 7 ran reviews in side worktrees and landed fix rounds after
+  the next branch had been cut; seven of eleven heads then failed `git merge-base --is-ancestor`
+  against their base, nineteen commits were missing from the top, and no tree holding all of them
+  had been tested. (Those three figures are that wave's own record on SONNY-438, carried here and
+  not re-measured.) Lanes the coordinator starts together are the one case cut above work that is
+  not final because it does not exist yet, and that is allowed only because the rebase pass below
+  is owed before anything merges.
+- **A fix round low in the stack is followed by one rebase pass upward, before anything merges.**
+  The coordinator records every cut point first — `git merge-base <branch> <old head of the branch
+  beneath>`, posted on the run log — because the old head is what the rebase has to name and the
+  fix round is what moves it. **Each branch is rebased by its own session, or by the session the
+  founder routes to that ticket, one branch at a time from the bottom up** (founders' decision on
+  PR #239's review, F4, 2026-09-13), with
+  `git rebase --onto <new head of the branch beneath> <its recorded cut point> <branch>`, which
+  replays that branch's own commits and nothing else. That session pushes with
+  `--force-with-lease` — step 3's standing authorization, which covers a session's own ticket
+  branch and nothing else, never bare `--force` — and only then does the next branch up start. No
+  one session rebases the whole stack, because no authorization lets a session force-push a branch
+  it does not own. Clauses 3 and 4 above decide what is re-measured and whether the review stands,
+  reading the rebase's range exactly as they read a hop's.
+- **The union is measured once, at the top branch's head**: the flagged suite, `scripts/warnings`,
+  the server's suites where `server/` moved, `scripts/changelog-order`, `scripts/no-attribution
+  tree` and `npm run check:secrets`.
+- **A reviewer pins the base SHA it diffs against** — the head of the branch beneath at cut time —
+  and posts the review in full on the PR. A fix round gets a scoped delta pass in the same review
+  worktree, re-pointed at the new head.
+- **Merging is bottom-up.** Merge the lowest first, delete it at once so GitHub retargets the next
+  PR to `main`, pull, repeat. **Never merge a PR whose predecessor is unmerged.** Before the first
+  merge, `git merge-base --is-ancestor origin/<branch beneath> origin/<branch>` exits 0 for every
+  adjacent pair; a pair that exits 1 is a rebase pass not yet made.
+- **`scripts/changelog-order` reports one finding on a stacked branch above the bottom**, naming
+  every entry that has not merged, because only one may. On a stack of two that is one finding
+  reading *2 entries name a branch that has not merged, and only one may*, and on a stack of three
+  one finding naming all three — measured at `@@HEAD@@` by running
+  `scripts/changelog-order` in a throwaway clone with two and then three entry files present for
+  branches that have refs and no merge: @@COUNTS@@. That count is the
+  stack's expected cost. State it on the run log and answer the hook's block with it; **never
+  delete or rename an entry file to satisfy it.** It clears one merge at a time. (This clause read
+  "one finding per unmerged entry beneath the newest — on the n-th branch from the bottom that is
+  n − 1 findings" while entries shared one file and position decided which was exempt; with one
+  file per branch there is no position, the allowance is a count, and the tool names all of them
+  in one finding instead.)
+- **One session, many PRs, is sequential by construction.** The session finishes a branch's review
+  and fix round before it cuts the next, and never reviews branch n while building branch n + 1.
 
 **How this composes with step 3's merge-one-branch-at-a-time rule.** That rule holds a lane on its
-base and allows it one hop onto `main` at merge time, and says zero hops is better. A stack is the
+base and allows it one hop onto `main` at merge time, and says zero hops is better. A branch cut
+from `main` takes that hop only when `main` moved under it while it waited. A short stack is the
 zero-hop case by construction: every branch already contains everything beneath it, so when the
-branch beneath merges with a merge commit and GitHub retargets, the PR's diff against `main` is its
-own commits and nothing needs replaying. The rebase in clause 2 is not a hop onto `main`; it is the
-one repair a moved branch beneath forces on the branches above it, and it happens before any merge,
-not between them.
+branch beneath merges with a merge commit and GitHub retargets, the PR's diff against `main` is
+its own commits and nothing needs replaying. The rebase inside a stack is not a hop onto `main`;
+it is the one repair a moved branch beneath forces on the branches above it, and it happens before
+any merge, not between them.
 
 ## Weekly battery
 
