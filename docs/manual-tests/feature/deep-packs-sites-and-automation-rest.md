@@ -19,7 +19,7 @@ Same packaged app. Sign in to Duda yourself first.
 
 No app needed — a browser signed out of everything, which is what Sonny meets on a fresh Mac.
 
-- [ ] `https://sso.teachable.com/secure/teachable_accounts/sign_in` — a security check may hold it for a few seconds; when it clears the page says "Log in to Teachable" and offers Sign Up only as a link underneath.
+- [ ] `https://sso.teachable.com/secure/teachable_accounts/sign_in` — says "Log in to Teachable" and offers Sign Up only as a link underneath. One session here met a bot check titled "Just a moment..." first, which cleared itself in about nine seconds; two later loads went straight to the form. If you see it, wait rather than marking this broken.
 - [ ] `https://app.podia.com/login` — "Login to Podia", one email box, Sign up a link.
 - [ ] `https://courses.thinkific.com/onboarding/signin` — "Sign In", email and password, Create an account a link.
 - [ ] `https://www.duda.co/login` — "Welcome back!", Log in is the button, Sign up here is a link.
