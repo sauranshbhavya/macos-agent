@@ -33,7 +33,9 @@ struct SkillWords {
     /// before this array existed. The shape is not exotic, and the count depends on which
     /// punctuation is called a boundary, so the instrument is named with the number:
     /// `python3 -c "import json,glob,re; steps=[s for f in glob.glob('Sources/MacAgent/Resources/SkillPacks/' + '*.skillpack.json') for fl in json.load(open(f))['flows'] for s in fl['steps']]; print(len(steps), sum(1 for s in steps if re.search(r'[.:;!?]\s+\S', s)), sum(1 for s in steps if re.search(r'[.!?]\s+\S', s)))"`
-    /// → `1604 436 335` at `02f5a370`. (The glob is written as two joined strings for the reason
+    /// → `1767 495 381` at `9ae00161`, after this branch's one hop onto a `main` three pack
+    /// branches had grown under it. The figure reads the shipped pack resources only, which no commit
+    /// on this branch touches. (The glob is written as two joined strings for the reason
     /// `CLAUDE.md` gives: a slash-star in a line comment opens a block-comment span that
     /// `MacAgentSource.read` never closes, and everything below it vanishes from every source scan in
     /// the tree. Writing the number with its command is what put it there, which is the trap that
