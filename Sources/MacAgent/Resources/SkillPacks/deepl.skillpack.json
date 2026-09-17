@@ -6,8 +6,38 @@
   "category": "ai_assistants",
   "summary": "AI translation and writing tool.",
   "signInURL": "https://app.deepl.com/login",
-  "triggers": ["deepl", "deepl.com"],
+  "triggers": [
+    "deepl",
+    "deepl.com"
+  ],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Translate a file",
+      "startURL": "https://www.deepl.com/translator",
+      "steps": [
+        "On the web translator, click Translate files.",
+        "Select a file from your computer, or drag and drop it into the translator window.",
+        "Select one or more target languages.",
+        "Optionally select a glossary, a formal or informal tone, or a language model. The formality option is hidden when more than one target language is selected.",
+        "Click the Start translations button, then click Download.",
+        "Each target language uses one file translation from the monthly count."
+      ],
+      "source": "https://support.deepl.com/hc/en-us/articles/360020569480-Translate-files-with-DeepL-file-translation"
+    },
+    {
+      "title": "Translate a PDF and get a Word document back",
+      "startURL": "https://www.deepl.com/translator",
+      "steps": [
+        "Open DeepL's file translation feature.",
+        "Upload one or more PDF files.",
+        "Optionally apply a glossary or formality, or change the language model.",
+        "Click Start translation.",
+        "In the new window, select Convert all to Word documents (.docx), then click Translate file.",
+        "With several files at once, select Choose individual format per files to pick a format for each one."
+      ],
+      "source": "https://support.deepl.com/hc/en-us/articles/21315109374748-Edit-your-file-translation"
+    }
+  ]
 }

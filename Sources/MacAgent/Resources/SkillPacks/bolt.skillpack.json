@@ -6,8 +6,45 @@
   "category": "ai_assistants",
   "summary": "AI web app builder from StackBlitz.",
   "signInURL": "https://bolt.new/",
-  "triggers": ["bolt.new"],
+  "triggers": [
+    "bolt.new"
+  ],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Make a visual edit in the preview",
+      "startURL": "https://bolt.new/",
+      "steps": [
+        "Open your Bolt project and click Select in the chatbox.",
+        "Point at the element you want in the preview — Bolt highlights each one as you hover — and click it. The selection appears above the chatbox together with the toolbar.",
+        "Double-click text to edit it in place, or adjust the properties the toolbar offers for that element, such as font size, alignment or colour.",
+        "Click Add changes to put the edit into the batch. A marker then appears on the element.",
+        "Keep selecting elements and adding edits, then click Save changes for Bolt to apply the whole batch to your project's code."
+      ],
+      "source": "https://support.bolt.new/building/visual-edits"
+    },
+    {
+      "title": "Attach a file to the chat",
+      "startURL": "https://bolt.new/",
+      "steps": [
+        "Open your project.",
+        "In the chatbox, click the plus icon.",
+        "Click Attach file, then choose your file.",
+        "An agents.md file added this way is found and used automatically."
+      ],
+      "source": "https://support.bolt.new/best-practices/manage-context"
+    },
+    {
+      "title": "Clear a project's context",
+      "startURL": "https://bolt.new/",
+      "steps": [
+        "In the chatbox, enter /clear.",
+        "Click Clear context in the menu that appears.",
+        "Bolt still reaches your codebase and files afterwards, but reads them as if for the first time, with no memory of the recent chat history.",
+        "Project knowledge is kept: it lives outside the conversation and survives a context reset."
+      ],
+      "source": "https://support.bolt.new/best-practices/manage-context"
+    }
+  ]
 }
