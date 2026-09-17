@@ -8,6 +8,35 @@
   "signInURL": "https://coda.io/login",
   "triggers": ["coda.io"],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Create a doc or a page",
+      "startURL": "https://coda.io/",
+      "steps": [
+        "To create a doc, click the new doc button on the workspace home.",
+        "To add a page to a doc, click the new page option in the sidebar on the left."
+      ],
+      "source": "https://coda.io/resources/guides/how-to-build-docs-that-scale-with-your-team"
+    },
+    {
+      "title": "Share a doc with someone",
+      "startURL": "https://coda.io/",
+      "steps": [
+        "Click the Share icon in the upper right corner of the doc.",
+        "Type the name or email address of the person to share with.",
+        "Choose their access level: Can view, Can comment or Can edit."
+      ],
+      "source": "https://coda.io/resources/guides/how-to-share-and-organize-your-coda-docs"
+    },
+    {
+      "title": "Add a table",
+      "startURL": "https://coda.io/",
+      "steps": [
+        "In the doc, type /table, or use the insert panel in the top-right corner, to add a blank table.",
+        "To edit a column, right-click it and select Edit column."
+      ],
+      "source": "https://coda.io/resources/guides/introduction-to-tables"
+    }
+  ]
 }
