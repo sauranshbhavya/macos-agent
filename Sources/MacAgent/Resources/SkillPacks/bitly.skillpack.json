@@ -19,7 +19,7 @@
       "steps": [
         "Click Create new in the left sidebar and select Shorten a link. You can also press L on your keyboard as a shortcut.",
         "Enter your destination URL.",
-        "Select your domain or use bit.ly from the dropdown.",
+        "If you have a custom domain, select it, or use bit.ly from the dropdown.",
         "Enter a custom back-half to make your link more unique, and optionally add a title to make your link easier to find later on.",
         "Toggle the QR Code option if you want a Bitly Code for this link.",
         "If you would like the link to expire, toggle the Link Expiration switch and set the time and date.",

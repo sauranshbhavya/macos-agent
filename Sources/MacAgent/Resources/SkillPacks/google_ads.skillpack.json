@@ -19,9 +19,9 @@
       "steps": [
         "Click the Campaigns icon.",
         "Click the Campaigns drop down in the section menu.",
-        "On the Campaigns page, click on the campaign that you would like to view.",
-        "Click Add filter to view specific filtered data about your campaign.",
-        "Update the date dropdown menu to reflect the amount of data you would like to view. The default Campaigns view shows the last 30 days of performance."
+        "On the Campaigns page, update the date dropdown menu to the date range you want to see. The default view shows the last 30 days of performance.",
+        "Click on the campaign that you would like to view.",
+        "Click Add filter to view specific filtered data about your campaign."
       ],
       "source": "https://support.google.com/google-ads/answer/2404036?hl=en"
     },

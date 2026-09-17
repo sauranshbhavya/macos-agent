@@ -18,6 +18,7 @@
       "startURL": "https://app.manychat.com/",
       "steps": [
         "Go to Settings, then General, and click Clone This Account.",
+        "Cloning requires the destination account to be on a plan compatible with the source account's.",
         "Select one of the accounts you manage in the drop-down menu. New automations will be attached to the destination account's Welcome Message, Default Reply and conflicting keywords, and your old automations stay available in the Automation section.",
         "Click the Clone button. The system returns a note explaining that cloned content cannot easily be uninstalled afterwards, though it can still be deleted manually.",
         "Click Clone Now to proceed. The Cloning Successful! prompt means the content reached the receiving account.",

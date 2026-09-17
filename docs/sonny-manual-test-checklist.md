@@ -5255,7 +5255,7 @@ when you return to this build, and those three are gone for good.
 ### Deep skill packs for marketing and growth sites (new 2026-09-16, SONNY-503)
 
 Twelve more packs carry task flows, each step taken from the site's own public help page: Bitly, Google
-Ads, Google Business Profile, Google Search Console, LinkedIn, ManyChat, Pinterest, Product Hunt,
+Ads, Google Business Profile, Google Search Console, LinkedIn, Manychat, Pinterest, Product Hunt,
 SocialPilot, Sprout Social, X and YouTube Studio. The rest of this group's twenty-four sites still carry
 only the facts about the site, and that is not a finding — their help centres could not be opened in a
 browser this session, and they are named on SONNY-503. The ads packs deliberately carry no flow that

@@ -30,7 +30,7 @@
       "steps": [
         "Visit your Profile page.",
         "Locate the post you want to delete.",
-        "Click the icon.",
+        "Click the icon on the post that opens its menu.",
         "Click Delete post."
       ],
       "source": "https://help.x.com/en/using-x/delete-posts"

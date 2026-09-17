@@ -32,7 +32,7 @@
       "steps": [
         "Go to your Page super admin view.",
         "Click Settings in the left menu and select Manage admins.",
-        "Click the Page admins or Paid media admins tab.",
+        "Click the Page admins tab to give someone a role on the Page itself, or the Paid media admins tab to give them an advertising role. Only one Page admin role can be assigned per person, while more than one paid media admin role can be.",
         "Click the Add admin button.",
         "Enter the name of the member, associated employee, or advertiser you would like to add in the Search for a member field.",
         "Select the admin's name from the list that appears.",
