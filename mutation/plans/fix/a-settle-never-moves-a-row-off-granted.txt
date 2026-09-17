@@ -1,10 +1,16 @@
 # SONNY-435 — a top-up settle writes an answer onto a resolvable row (attempted, unconfirmed) and
 # never onto a closed one, so a settle arriving after the grant cannot move a paid row off granted.
 #
-# SERVER HALF, DATABASE SUITE. The killers need a Postgres; run this plan as
+# SERVER HALF, DATABASE SUITE. scripts/mutate-all reads this plan's `>>> file` paths, finds every
+# one under server/, and runs it against the whole vitest suite, `cd server && npx vitest run`, never
+# the flagged swift test (SONNY-455). T1 to T4 are killed only in test/topup.db.test.ts, and the
+# server's database suites skip themselves when DATABASE_URL is unset, so without a database this
+# plan's run would report T1 to T4 SURVIVED with no test having seen them. That is why
+# scripts/mutate-all runs a server plan only with DATABASE_URL set, and otherwise skips it by name
+# under SKIPPED (no database) (founders' decision on SONNY-455, 2026-09-13). WORKFLOW.md's Weekly
+# battery section starts the database. To run this plan alone by hand, with a lane database up
+# (CLAUDE.md's recipe):
 #   MUTATE_TEST_CMD='cd server && DATABASE_URL="postgres://postgres:postgres@localhost:<lane port>/postgres" npx vitest run test/topup.db.test.ts' scripts/mutate mutation/plans/fix/a-settle-never-moves-a-row-off-granted.txt
-# with a lane database up (CLAUDE.md's recipe). Under scripts/mutate-all's default command every
-# mutant here reports SURVIVED with no test having seen it (SONNY-455).
 #
 # Killers, each measured by applying the mutant by hand at the fix round's tree (PR #236, 2026-09-11),
 # all in test/topup.db.test.ts: T1 by seven — "a settle that arrives after the grant leaves the grant

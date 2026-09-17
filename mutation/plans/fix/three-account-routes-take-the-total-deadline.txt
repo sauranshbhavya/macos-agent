@@ -3,11 +3,15 @@
 # the budget answers 504 provider.timeout; the budget handed to Postgres is the row's total minus
 # what elapsed, across every lease in the handler; outside a declared budget a lease is untouched.
 #
-# SERVER HALF. The suite that kills these is vitest, not the flagged swift test, so this plan is run as
+# SERVER HALF. scripts/mutate-all reads this plan's `>>> file` paths, finds every one under server/,
+# and runs it against the whole vitest suite, `cd server && npx vitest run`, never the flagged swift
+# test (SONNY-455). It runs a server plan only with DATABASE_URL set; with it unset this plan is
+# skipped by name under SKIPPED (no database) (founders' decision on SONNY-455, 2026-09-13), and
+# WORKFLOW.md's Weekly battery section starts the database. This plan would not need one: every
+# mutant below has a killer in test/account-deadline.test.ts, and only M8, M9 and M10 also have one
+# in the database file. The command the unit-file killers were measured with, and the way to run
+# this plan alone by hand, is
 #   MUTATE_TEST_CMD='cd server && npx vitest run test/account-deadline.test.ts' scripts/mutate mutation/plans/fix/three-account-routes-take-the-total-deadline.txt
-# scripts/mutate-all runs every plan under the one suite command it is given, so a weekly battery
-# that runs this plan under the default Swift command reports every mutant here SURVIVED without a
-# test having seen it (SONNY-455 records the gap).
 #
 # Killers, each measured by applying the mutant by hand at the fix round's tree 1f022a65 (PR #235,
 # 2026-09-11), under the command above for the unit file and, where a line names the database file,
