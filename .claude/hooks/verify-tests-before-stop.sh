@@ -128,11 +128,14 @@ fi
 # edge of it: step 7 has the entry written AND committed before the PR opens, so on the last turn
 # of the branch whose entry is at issue the tree is clean and a dirty-file trigger fires never.
 #
-# WHY ABOVE THE SUITE: about a tenth of a second, and no build. Measured 2026-08-30 at `7f67e53`
-# over a 140-entry changelog, `/usr/bin/time -p scripts/changelog-order`, two sets of three
-# consecutive runs -> real 0.12/0.11/0.11 and 0.14/0.11/0.11. A COLD first run was 0.591s wall
-# (`time scripts/changelog-order`, 23% cpu), and that is the figure to quote if one is quoted,
-# because a stop hook fires on a machine that has not just run this.
+# WHY ABOVE THE SUITE: a fraction of a second, and no build. **Re-measured 2026-09-16 at
+# `4463e3d0`** after SONNY-500 added the two directory walks and a `git for-each-ref`:
+# `/usr/bin/time -p scripts/changelog-order`, three consecutive runs -> real 0.38/0.33/0.30 over
+# a 223-entry archive. The earlier reading, kept because a figure that decays should say when it
+# was true: 2026-08-30 at `7f67e53` over a 140-entry changelog, two sets of three consecutive
+# runs -> real 0.12/0.11/0.11 and 0.14/0.11/0.11, with a COLD first run at 0.591s wall
+# (`time scripts/changelog-order`, 23% cpu). The cold figure is the one to quote if one is
+# quoted, because a stop hook fires on a machine that has not just run this.
 #
 # WHAT IT WILL NOT DO is go red on a branch that legitimately wrote its own entry. The check
 # allows exactly one entry to name a branch that has not merged, because step 7 writes the entry
