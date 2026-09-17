@@ -6,8 +6,36 @@
   "category": "ai_assistants",
   "summary": "AI image generation.",
   "signInURL": "https://midjourney.com/login",
-  "triggers": ["midjourney", "midjourney.com"],
+  "triggers": [
+    "midjourney",
+    "midjourney.com"
+  ],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Write a prompt that gets the image you meant",
+      "startURL": "https://www.midjourney.com/",
+      "steps": [
+        "Describe what you want to see in a short, clear phrase. Long lists and detailed instructions confuse the process more than they help.",
+        "Choose precise words — huge, gigantic or enormous rather than big — and give numbers, such as three cats rather than cats, or a collective noun such as a flock of birds.",
+        "Describe what you do want rather than what you do not: a prompt that mentions no cake can still produce a cake.",
+        "Name the details that matter to you — subject, medium, environment, lighting, colour, mood and composition. Fewer details give more variety and less control.",
+        "Beyond text, a prompt can carry image prompts, style references and parameters, which are added at the end of the prompt."
+      ],
+      "source": "https://docs.midjourney.com/hc/en-us/articles/32023408776205-Prompt-Basics"
+    },
+    {
+      "title": "Change an image you have already made",
+      "startURL": "https://www.midjourney.com/",
+      "steps": [
+        "Click your image on the Create or Organize page to open it and reveal the Creation Actions. If a button is missing, click More options and tick it.",
+        "Vary makes other versions of the image, subtly or strongly different; the Edit Model changes an image from plain-language instructions and reference images.",
+        "Upscale enlarges it — Creative Upscale also adds small improvements, Subtle Upscale enlarges without altering the image.",
+        "Remix iterates by changing the prompt text and parameters. The Editor holds Pan, Zoom Out and Vary Region, the erase tool, in one interface for several changes at once.",
+        "The Use buttons carry the image into a new prompt as an image prompt or style reference, or put its prompt text back in the Imagine bar; Animate turns it into a five-second video."
+      ],
+      "source": "https://docs.midjourney.com/hc/en-us/articles/33329329805581-Modifying-Your-Creations"
+    }
+  ]
 }

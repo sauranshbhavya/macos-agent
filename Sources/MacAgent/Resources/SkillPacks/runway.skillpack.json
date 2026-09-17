@@ -6,8 +6,35 @@
   "category": "ai_assistants",
   "summary": "AI video generation and editing.",
   "signInURL": "https://app.runwayml.com/login",
-  "triggers": ["runwayml.com"],
+  "triggers": [
+    "runwayml.com"
+  ],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Start an Agent session and generate from it",
+      "startURL": "https://app.runwayml.com/",
+      "steps": [
+        "Select Agent in the left sidebar of your Dashboard, or go to app.runwayml.com/agent, and choose New chat. New timeline opens the timeline editor for footage you already have instead.",
+        "Click into the message box at the top of the panel and describe in plain language what you want to start creating. A single simple sentence works well; Agent asks for more detail when it needs it. Typing / in the message box starts an Agent Skill such as Ad Campaign or Mood Board.",
+        "Send the first message. Agent analyses the request, builds a plan and may ask questions.",
+        "Review the plan and either tell Agent to go ahead or work the concept over with it in the chat first.",
+        "Everything made in the session collects in the Generations tab, filterable by asset type or favourited status; a multi-shot video is assembled in the Final Cut tab, where clips can be split, trimmed and rearranged."
+      ],
+      "source": "https://help.runwayml.com/hc/en-us/articles/51601639579667-Creating-with-Runway-Agent"
+    },
+    {
+      "title": "Split an image into editable layers",
+      "startURL": "https://app.runwayml.com/",
+      "steps": [
+        "From the left navigation bar, click Tool.",
+        "Select the Image tab at the top of the generation panel.",
+        "Click the model dropdown at the bottom of the panel and find Seedream 5.0 Layers.",
+        "Upload the image to split. A prompt is optional — add one to control how the layers are split or to isolate a smaller element, describing the elements you want separated.",
+        "Generate. The layer editor opens in the session, where each layer can be selected, hidden, reordered, moved, resized or rotated, and the result downloaded or exported for another editor."
+      ],
+      "source": "https://help.runwayml.com/hc/en-us/articles/54653749389971-Editing-images-with-Seedream-5-0-Layers"
+    }
+  ]
 }

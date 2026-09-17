@@ -6,8 +6,35 @@
   "category": "ai_assistants",
   "summary": "AI marketing content platform.",
   "signInURL": "https://app.jasper.ai/login",
-  "triggers": ["jasper.ai"],
+  "triggers": [
+    "jasper.ai"
+  ],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Set the workspace's default language",
+      "startURL": "https://app.jasper.ai/",
+      "steps": [
+        "Click the workspace name in the top left corner.",
+        "Click Workspace Settings.",
+        "Click AI settings.",
+        "Under Default Workspace Language, select the language you want from the drop-down menu.",
+        "Click Save. Each Agent also carries its own language option, so one agent can work in another language."
+      ],
+      "source": "https://help.jasper.ai/hc/en-us/articles/18618624802203-Default-Workspace-Language"
+    },
+    {
+      "title": "Change a team member's role",
+      "startURL": "https://app.jasper.ai/",
+      "steps": [
+        "Click the workspace name in the top left corner.",
+        "Click Workspace Settings.",
+        "Click the Team tab.",
+        "Click the ... to the right of the person's name and select Change role.",
+        "Choose the new role from the dropdown menu and click Confirm. The roles are Admin, Manager, Developer and Members, and they set what a person reaches in the workspace."
+      ],
+      "source": "https://help.jasper.ai/hc/en-us/articles/34717712762139-Changing-Roles"
+    }
+  ]
 }
