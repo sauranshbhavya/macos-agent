@@ -6,8 +6,41 @@
   "category": "marketing_growth",
   "summary": "Link shortener and QR codes.",
   "signInURL": "https://bitly.com/a/sign_in",
-  "triggers": ["bitly", "bitly.com"],
+  "triggers": [
+    "bitly",
+    "bitly.com"
+  ],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Create a short link",
+      "startURL": "https://app.bitly.com/",
+      "steps": [
+        "Click Create new in the left sidebar and select Shorten a link. You can also press L on your keyboard as a shortcut.",
+        "Enter your destination URL.",
+        "If you have a custom domain, select it, or use bit.ly from the dropdown.",
+        "Enter a custom back-half to make your link more unique, and optionally add a title to make your link easier to find later on.",
+        "Toggle the QR Code option if you want a Bitly Code for this link.",
+        "If you would like the link to expire, toggle the Link Expiration switch and set the time and date.",
+        "Click Create your link."
+      ],
+      "source": "https://support.bitly.com/hc/en-us/articles/230897128-How-do-I-create-links-with-Bitly"
+    },
+    {
+      "title": "Create a Bitly Page",
+      "startURL": "https://app.bitly.com/",
+      "steps": [
+        "Click Create new in the top-left corner and select Page.",
+        "Claim the URL for your Bitly Page. This is the link you will use to share it, and it is case-sensitive.",
+        "Click Create your page.",
+        "Answer a quick question about your goals, then click Continue.",
+        "Select a template and click Use this template, or select Start from scratch.",
+        "Click + Add to add content, or Design to customize the design.",
+        "Reorder link buttons, YouTube videos and inline images by dragging and dropping them in the list.",
+        "Changes are saved as a draft. When you are ready for them to go live, click Publish changes."
+      ],
+      "source": "https://support.bitly.com/hc/en-us/articles/11513559140109-How-do-I-create-a-Bitly-Page"
+    }
+  ]
 }

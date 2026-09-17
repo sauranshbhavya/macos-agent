@@ -6,8 +6,26 @@
   "category": "marketing_growth",
   "summary": "Social media management platform.",
   "signInURL": "https://app.sproutsocial.com/login",
-  "triggers": ["sprout social", "sproutsocial.com"],
+  "triggers": [
+    "sprout social",
+    "sproutsocial.com"
+  ],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Bulk schedule posts from a CSV",
+      "startURL": "https://app.sproutsocial.com/",
+      "steps": [
+        "Navigate to Publishing, then Calendar.",
+        "Click the three-dot menu in the top-right corner of the screen, then click Bulk Import. The Import Posts popup appears.",
+        "Select the profiles you want to schedule messages for. Only X, Facebook, Instagram and LinkedIn are supported, and only one X profile can be selected at a time.",
+        "Drag your .CSV into the window or browse for the .CSV on your device.",
+        "Select the date format you want to use, U.S. format mm/dd/yyyy or International dd/mm/yyyy.",
+        "Optionally enter the tags you want applied to all posts, and optionally select Schedule posts as Drafts.",
+        "Click Start Import."
+      ],
+      "source": "https://support.sproutsocial.com/hc/en-us/articles/115005864203-How-do-I-use-bulk-scheduling"
+    }
+  ]
 }

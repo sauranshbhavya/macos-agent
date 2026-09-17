@@ -6,8 +6,23 @@
   "category": "marketing_growth",
   "summary": "Social media scheduling and management.",
   "signInURL": "https://auth.socialpilot.co/login",
-  "triggers": ["socialpilot", "socialpilot.co"],
+  "triggers": [
+    "socialpilot",
+    "socialpilot.co"
+  ],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Enable Instagram message access",
+      "startURL": "https://app.socialpilot.co/",
+      "steps": [
+        "Select the Instagram Business profile you want to manage and access Message Settings.",
+        "Go to Privacy, then Messages.",
+        "Toggle on Allow access to Message.",
+        "Once this is enabled, SocialPilot retrieves your Instagram DMs and Story Mentions from that profile."
+      ],
+      "source": "https://help.socialpilot.co/article/639-how-to-enable-instagram-direct-messages-dm-story-mentions-from-the-settings"
+    }
+  ]
 }
