@@ -32,6 +32,8 @@ HOOK_SRC="$SRC_ROOT/.claude/hooks/verify-tests-before-stop.sh"
 ORDER_SRC="$SRC_ROOT/scripts/changelog-order"
 BATTERY_SRC="$SRC_ROOT/scripts/lib/battery-state.sh"
 CHANGELOG_REL="docs/sonny-v1-implementation-changelog.md"
+ENTRY_DIR="docs/changelog"
+MANUAL_DIR="docs/manual-tests"
 BOUNDARY="feature/vision-actions"
 
 for f in "$HOOK_SRC" "$ORDER_SRC" "$BATTERY_SRC"; do
@@ -81,8 +83,22 @@ new_fixture() {
     git -C "$repo" checkout -q main
     git -C "$repo" merge -q --no-ff -m "Merge pull request #$pr from ns/$branch" "$branch"
   done
+  # A second branch with a ref and no merge. One entry may name an unmerged branch — the
+  # branch being worked on — so a fault needs two, and a fixture with only one cannot build it.
+  git -C "$repo" branch other/unmerged main
   git -C "$repo" checkout -q -b docs/fixture-branch
   printf '%s' "$repo"
+}
+
+# write_entry <repo> <dir> <branch>   — one branch's own file, the way a branch writes it now.
+write_entry() {
+  local repo="$1" dir="$2" branch="$3"
+  mkdir -p "$repo/$dir/$(dirname "$branch")"
+  if [ "$dir" = "$ENTRY_DIR" ]; then
+    entry "$branch" > "$repo/$dir/$branch.md"
+  else
+    printf '# %s\n\nNo rows owed.\n' "$branch" > "$repo/$dir/$branch.md"
+  fi
 }
 
 # run_hook <repo> <stop_hook_active> — the real script, real argv, real stdin. No pipe between
@@ -185,7 +201,83 @@ assert "a misplaced entry left UNCOMMITTED is caught" 2 "uncommitted in the work
 # ---------------------------------------------------------------------------------------------
 run_hook "$repo" true
 assert "stop_hook_active does not block a second time" 0 - -
-assert "  ...and still says the changelog is out of order" 0 "out of merge order" -
+assert "  ...and still says the tool has findings" 0 "has findings" -
+
+# ---------------------------------------------------------------------------------------------
+# The directories (SONNY-500). A branch writes its entry in a file of its own now, so the hook's
+# trigger has to reach those paths — and a trigger that misses them is silent, which is the one
+# failure mode a stop hook has. Each case below touches ONLY the directory, never the archive.
+# ---------------------------------------------------------------------------------------------
+repo="$(new_fixture)"
+write_entry "$repo" "$ENTRY_DIR" docs/fixture-branch
+write_entry "$repo" "$MANUAL_DIR" docs/fixture-branch
+run_hook "$repo" false
+assert "a branch cut from main that wrote its own entry files passes silently" 0 - "changelog"
+
+# The same branch, one difference: a second entry naming a branch that never merged.
+write_entry "$repo" "$ENTRY_DIR" other/unmerged
+write_entry "$repo" "$MANUAL_DIR" other/unmerged
+run_hook "$repo" false
+assert "a second unmerged entry, UNCOMMITTED in the directory, is caught" \
+  2 "only one may" -
+assert "  ...and the trigger names the directory reading, not the archive" \
+  2 "uncommitted in the working tree" -
+
+# And committed, which is the state the last turn of a branch is actually in: step 7 has the
+# entry written AND committed before the PR opens, so a dirty-file-only trigger fires never.
+git -C "$repo" add -A >/dev/null && git -C "$repo" commit -q -m "entries"
+run_hook "$repo" false
+assert "the same fault COMMITTED in the directory is caught, with the archive untouched" \
+  2 "only one may" -
+assert "  ...and the hook says it read a committed change" 2 "committed on this branch" -
+
+# ---------------------------------------------------------------------------------------------
+# ONE PATH EACH, which is the pair that actually pins the trigger list (PR #259's review, F2).
+#
+# Every case above writes BOTH directories, so `docs/manual-tests` alone keeps the trigger firing
+# and no case holds `docs/changelog`. Measured: dropping `docs/changelog` from `changelog_paths`
+# passed all 24 cases, while dropping either of the other two killed it — the shipped code being
+# right and the test not holding it. The failure it would let through is an entry-only branch,
+# which `WORKFLOW.md` step 7 names explicitly as owing an entry (#122 and #123 are corrections to
+# the record and touched nothing else), finishing a turn with a real finding unreported.
+#
+# So: one case whose only changed path is under `docs/changelog`, one whose only changed path is
+# under `docs/manual-tests`, each carrying a fault that only that directory can produce, and each
+# asserting the other directory is absent so neither can drift back into touching both.
+# ---------------------------------------------------------------------------------------------
+
+# only_one_directory <repo> <dir that must exist> <dir that must not>
+only_one_directory() {
+  local repo="$1" present="$2" absent="$3"
+  cases=$((cases + 1))
+  if [ -d "$repo/$present" ] && [ ! -e "$repo/$absent" ] &&
+     [ -n "$(git -C "$repo" status --porcelain -- "$present")" ] &&
+     [ -z "$(git -C "$repo" status --porcelain -- "$absent")" ]; then
+    printf '  ok    ...and its only changed path is under %s\n' "$present"
+  else
+    printf '  FAIL  the case meant to touch only %s also touched %s\n' "$present" "$absent"
+    failures=$((failures + 1))
+  fi
+}
+
+# docs/changelog alone. The fault is one only an entry file can carry: its heading naming a
+# different branch from its filename.
+repo="$(new_fixture)"
+mkdir -p "$repo/$ENTRY_DIR/docs"
+entry new/a > "$repo/$ENTRY_DIR/docs/fixture-branch.md"
+run_hook "$repo" false
+assert "a fault reachable only through docs/changelog is caught" \
+  2 "the heading names 'new/a' and the path names 'docs/fixture-branch'" -
+only_one_directory "$repo" "$ENTRY_DIR" "$MANUAL_DIR"
+
+# docs/manual-tests alone. The fault is one a manual-test file can carry on its own: a name that
+# matches no merge and no ref.
+repo="$(new_fixture)"
+write_entry "$repo" "$MANUAL_DIR" never/existed
+run_hook "$repo" false
+assert "a fault reachable only through docs/manual-tests is caught" \
+  2 "docs/manual-tests/never/existed.md: names a branch that does not exist" -
+only_one_directory "$repo" "$MANUAL_DIR" "$ENTRY_DIR"
 
 # ---------------------------------------------------------------------------------------------
 # The two battery states. Neither is this ticket's work; both are what it had to not break.
@@ -234,9 +326,9 @@ printf '# fixture changelog\n\nnothing the tool can map\n' > "$repo/$CHANGELOG_R
 run_hook "$repo" false
 assert "a refusal to measure is reported to the SESSION, and blocks nothing" \
   0 "exited 1 without measuring" - err
-assert "  ...and says on stderr, plainly, that the order has not been checked" \
-  0 "has NOT been checked" - err
-assert "  ...and the user is told the same on stdout" 0 "has NOT been checked" - out
+assert "  ...and says on stderr, plainly, that the entries have not been checked" \
+  0 "have NOT been checked" - err
+assert "  ...and the user is told the same on stdout" 0 "have NOT been checked" - out
 assert_journal "  ...and the journal records which check did not run" \
   "$repo" "stop-hook/changelog-order"
 

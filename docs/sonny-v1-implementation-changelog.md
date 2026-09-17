@@ -141,7 +141,28 @@ Notes on sequencing decisions behind this table:
 - **Branch 17 (`feature/mcp-client-integration`)** is new, added 2026-07-15 during `feature/v1-strategy-replan`'s Phase 4 — Raycast and other competitors now ship MCP client support, and Sonny has no equivalent. Locked now, non-negotiable: every MCP tool call is a `CapabilityAdapter` like any other capability, routing through `AgentRunner`'s existing risk-tier/approval gate with no parallel or bypassing trust path — this is the rule the whole product's trust story depends on and it must not be relitigated at implementation time. Explicitly left open for build time: which MCP servers/tools ship first, server-configuration UI, and initial risk-tier defaults for MCP tools pending real usage data — that ecosystem moves too fast to lock specifics now. Sequenced immediately before Power Mode; both the placement and its rationale are confirmed (2026-07-15): MCP is simply lower-risk and simpler than Power Mode, so it ships first to close the real competitive gap (Raycast and others already have this) sooner — not as a deliberate rehearsal for Power Mode. Do not scope additional branch-17 requirements around "stress-testing approval-flow edge cases for Power Mode's benefit" — that framing was considered and rejected, not left open. If Power Mode's own branch later finds real lessons in how MCP's approval flow held up, that's a natural look-back at that time, not a goal to design MCP around now.
 - The kill switch (§20.9) is folded into branch 18 (Power Mode) rather than given its own branch, since it's tightly coupled to Power Mode's emergency-stop work (§13.5).
 
-## Entry Template (v2, 2026-08-02)
+## Entry Template (v2, 2026-08-02; superseded 2026-09-16 — see the note directly below)
+
+**This file is the archive and takes no new entries (2026-09-16, SONNY-500).** A branch now
+writes its entry at `docs/changelog/<branch-name>.md`, a slash in the branch name becoming a
+folder, so two branches never write to one file — which is what every conflict in wave 9 was, and
+the only thing that made a stack of pull requests necessary. `docs/changelog/README.md` is the
+live template and the live rule about what a branch owes; everything in this section is kept
+verbatim as the record of what it said, and is no longer where an entry goes.
+
+**Nothing here moved, and nothing here will.** Every entry below keeps every word it had, at the
+position it had, which is why this file was left whole rather than split into per-branch files:
+the citations, doc comments and `file:line` pointers across the tree that already reach into it
+keep reaching the same bytes. The one way to read the whole branch-by-branch history in order is
+
+```
+scripts/changelog-order read | less
+```
+
+which prints every per-branch file newest-first, by merge commit, and then this file from its
+`## Entries` line down. `scripts/changelog-order` still checks this file's ordering, because one
+fault can still reach it: a session appending an entry here out of habit raises no rebase
+conflict, so the clean merge is the tell.
 
 Copy this for each completed branch. Fill every field — "none" is a valid answer, a blank field is not. Product context, constraints, and non-negotiables already live permanently in the spec (§1-§26); do not restate them here, only reference section numbers. The one field marked **(required, no blanket claims)** — `Behavior preserved` — exists because a vague answer there is exactly how a later chat regresses something silently, and the two marked **(required, write "none" if true)** are there for the same reason. (This said "the two fields marked (required, no blanket claims)" until SONNY-290; exactly one field carries that marker.) Per-ticket history (what each ticket did, closing comments, blocked findings) lives on the Plane tickets, not here — this entry is the branch-level architectural record. The v1 template's `Implementing agent`/`Reviewing agent` fields and its kickoff-prompt block are retired: session handoff now happens through ticket descriptions and closing comments per `WORKFLOW.md`. **Every figure in the entry carries the SHA it was measured at, and that SHA is the head that merges** (`CLAUDE.md`, Claims and evidence): the entry is written before the PR opens, so when a fix round or a rebase moves the head afterwards, re-measure each figure at the new head or drop it — never carry one forward on the strength of the old head alone. The one thing that lets a figure cross a moved head is `WORKFLOW.md` step 5's tree-identity proof, covering every path that figure depends on: with the proof beside it the figure is a measurement *of* the new head rather than a stale one re-stamped at it. No proof, no carry. Once the entry has merged, `git merge-base --is-ancestor <sha> origin/main` exits 0 for every SHA it cites; a SHA that fails that check is a timestamp on a branch, not a tree a reader can fetch.
 
@@ -170,6 +191,10 @@ Next branch: feature/<name> (per roadmap above, or state the reordering and why)
 ``
 
 ## Entries
+
+**Closed 2026-09-16 (SONNY-500). New entries go to `docs/changelog/<branch-name>.md`, never
+here.** Read the whole history, this file included and in order, with
+`scripts/changelog-order read | less`.
 
 ### Branch: chore/signal-guard-has-a-selftest-arm
 Status: complete; rebased onto PR #250's final head `9adc21bd` 2026-09-16, with every figure re-measured there

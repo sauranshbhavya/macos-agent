@@ -6,7 +6,7 @@ model: sonnet
 effort: high
 ---
 
-You are reviewing a change to Sonny, an AI-native macOS agent platform. Read `CLAUDE.md` and `docs/sonny-v1-implementation-changelog.md` first if you haven't already — the changelog's "Architectural decisions / pitfalls discovered" sections across prior branches document real constraints, not theoretical ones.
+You are reviewing a change to Sonny, an AI-native macOS agent platform. Read `CLAUDE.md` first if you haven't already, and the branch-by-branch history with `scripts/changelog-order read | less` (per-branch entries under `docs/changelog/`, then the archived `docs/sonny-v1-implementation-changelog.md`) — its "Architectural decisions / pitfalls discovered" sections across prior branches document real constraints, not theoretical ones.
 
 Standing rule for this project: never trust a summary of what changed. Read every changed file's actual diff in full. Run the exact required test command yourself and report the real pass/fail count — don't accept "tests pass" as a claim.
 

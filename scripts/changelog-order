@@ -1,36 +1,63 @@
 #!/usr/bin/env python3
-"""scripts/changelog-order — prove the changelog's entries are in merge order, and that each
-one is an entry rather than a fragment of one.
+"""scripts/changelog-order — prove every branch's changelog entry is present, resolvable, and
+readable in merge order, and assemble the branch-by-branch history for a person to read.
 
 Run it from anywhere inside the repository:
 
-    scripts/changelog-order              # check the working tree's changelog
-    scripts/changelog-order check <path> # check some other copy of it — a `git show` of an
-                                         # older tree, say, which is how a finding count is
-                                         # quoted as evidence and re-derived by a reviewer
+    scripts/changelog-order              # check this working tree
+    scripts/changelog-order check <path> # check some other copy of the ARCHIVE file — a
+                                         # `git show` of an older tree, say, which is how a
+                                         # finding count is quoted as evidence and re-derived
+                                         # by a reviewer. The two directories are still read
+                                         # from this checkout.
+    scripts/changelog-order read         # the whole branch-by-branch history, in order, on
+                                         # stdout — pipe it to a pager
+    scripts/changelog-order manual-tests # the whole manual-test checklist, in order
     scripts/changelog-order selftest     # re-prove every arm still fires
 
 Exit 0 clean, 2 findings, 1 when no trustworthy measurement was made — a run that cannot
 resolve a mainline, finds local `main` and `origin/main` diverged, cannot find `## Entries`, or
-maps no entry at all reports that rather than printing a reassuring zero. A search whose engine
+maps no merge at all reports that rather than printing a reassuring zero. A search whose engine
 cannot see the bytes you mean answers a clean zero, and a clean zero is the one answer that
 looks like good news (CLAUDE.md, Claims and evidence).
 
-WHY THIS EXISTS. An entry written into the wrong place raises no rebase conflict — nobody
-else is editing that spot — so the clean merge is the tell, and five misplaced entries were
-recorded before anything checked. Three more defects at the same boundary were found by hand
-on 2026-08-29 (SONNY-329) and none of them is an ordering defect at all, which is why the
-structural arm is here beside the ordering one: a heading glued to the end of the previous
-entry's last line by a lost newline, a bodiless second copy of that same heading added two
-positions away by a later branch, and a figure in prose that no command had ever answered.
+ONE FILE PER BRANCH (SONNY-500). A branch writes its entry at `docs/changelog/<branch>.md` and
+its manual-test rows at `docs/manual-tests/<branch>.md`, a slash in the branch name becoming a
+folder exactly as `mutation/plans/` already does. Two branches therefore never write to one
+file, which is the whole reason this exists: across wave 9's thirteen branches no code
+conflicted anywhere — 0 of 44 differing paths on PR #244, 0 of 34 on PR #250, 0 of 3 on PR #248
+— and every conflict in the wave was one of two documents every branch inserted into.
+
+WHAT THAT DID TO THIS TOOL'S JOB, which is unchanged from a reader's point of view. Order used
+to be a property of where an entry sat in a file, and this checked it. With one file per branch
+there is no position to get wrong: the order is each branch's merge commit, and `read` derives
+it rather than checking it. What replaces the ordering arm is a completeness arm — a branch that
+merged and wrote no entry is now the fault that a misplaced entry used to be, and it is just as
+quiet, because nothing else in this repository ever goes red on a missing record.
+
+THE ARCHIVE. `docs/sonny-v1-implementation-changelog.md` keeps every word it had and takes no
+new entries; `docs/sonny-manual-test-checklist.md` likewise. Splitting them was the other
+option and was not taken — see this branch's own entry for why. The archive is frozen, so its
+ordering arms below can never go red on honest work again, and they are kept for the one thing
+that can still happen: a session appending an entry to it out of habit. That is the exact fault
+they were written for, and it raises no rebase conflict either.
+
+WHERE THE NEW ERA BEGINS. `DIRECTORY_ERA_BRANCH` below names the branch whose merge starts it.
+Every branch merging at or after that point owes a file in each directory; everything merged
+before it is the archive's and is not checked for completeness — about thirty branches merged
+before this rule existed and wrote no entry, some of them rightly (WORKFLOW.md step 7 names
+which, and why no back-entries were written). Before that branch merges the era is empty and the
+completeness arm has nothing to say, which is a clean zero, so every run prints what it resolved
+the boundary to. A boundary that never resolves — the branch renamed, say — would switch the arm
+off silently otherwise.
 
 WHICH MAINLINE. The merge log is read from whichever of local `main` and `origin/main`
 contains the other, and every run prints which one it read and its SHA, on the line beginning
 `changelog-order: mainline is`, so a reading can be told apart from a stale one. It never
 fetches. `resolve_mainline` below has the reason (SONNY-480).
 
-THE TWO ERAS. The file is newest-first from `feature/vision-actions` (PR #50) upward and
-oldest-first from PR #3 up to PR #49 below it, the two runs meeting exactly at that entry.
+THE ARCHIVE'S TWO ERAS. That file is newest-first from `feature/vision-actions` (PR #50) upward
+and oldest-first from PR #3 up to PR #49 below it, the two runs meeting exactly at that entry.
 That is deliberate and documented in the changelog's own Entry Template preamble; moving the
 older run would create a defect rather than fix one. So the boundary is named here, and its
 entry's absence is itself a finding — a check that silently loses its boundary would pass a
@@ -49,17 +76,28 @@ import tempfile
 from typing import NamedTuple
 
 CHANGELOG = "docs/sonny-v1-implementation-changelog.md"
+CHECKLIST = "docs/sonny-manual-test-checklist.md"
+ENTRY_DIR = "docs/changelog"
+MANUAL_DIR = "docs/manual-tests"
 ENTRIES_MARKER = "## Entries"
 HEADING = "### Branch: "
 STATUS = "Status:"
 
-# The entry where the file's two eras meet. Everything at or above it is newest-first;
+# The one filename in either directory that is not a branch's file. It is skipped by exact
+# name at the directory's root and nowhere else, so `docs/changelog/feature/README.md` would
+# still be read as an entry for a branch called `feature/README` — which is a name nothing
+# creates, and the alternative is a rule that quietly hides a real file.
+DIRECTORY_README = "README.md"
+
+# The branch whose merge starts the one-file-per-branch era. Every branch merging at or after
+# it owes `docs/changelog/<branch>.md` and `docs/manual-tests/<branch>.md`.
+DIRECTORY_ERA_BRANCH = "chore/an-entry-is-a-file-of-its-own"
+
+# The entry where the archive's two eras meet. Everything at or above it is newest-first;
 # everything below it is oldest-first. See the changelog's Entry Template preamble.
 ERA_BOUNDARY = "feature/vision-actions"
 
 MERGE_RE = re.compile(r"^Merge pull request #(\d+) from [^/]+/(.+)$")
-
-
 class Unmeasurable(Exception):
     """Raised when the run cannot produce a trustworthy answer. Never a silent zero."""
 
@@ -209,51 +247,246 @@ def entries(text: str) -> list[tuple[int, str, list[str]]]:
     return out
 
 
-def check(path: str, cwd: str, mainline: Mainline | None = None) -> list[str]:
+def ref_branches(cwd: str) -> set[str]:
+    """Every branch name this clone holds a ref for, local or remote-tracking.
+
+    It is what separates the two unresolvable-entry faults from each other. An entry naming a
+    branch with a ref but no merge is work that has not landed — the branch under review is
+    exactly that shape, which is why one of them is allowed. An entry naming a name with no ref
+    anywhere and no merge is a typo or a rename nobody followed, and is never allowed.
+
+    Refs are enumerated and matched by name rather than probed with `git rev-parse <branch>`,
+    because that resolves `refs/remotes/<branch>` and not `refs/remotes/<remote>/<branch>` — so
+    a branch that exists only on the remote, which is every branch in a fresh clone, would read
+    as not existing at all.
+    """
+    out = subprocess.run(["git", "for-each-ref", "--format=%(refname)",
+                          "refs/heads", "refs/remotes"],
+                         capture_output=True, text=True, cwd=cwd)
+    if out.returncode != 0:
+        raise Unmeasurable("git for-each-ref failed: " + out.stderr.strip())
+    names: set[str] = set()
+    for ref in out.stdout.splitlines():
+        if ref.startswith("refs/heads/"):
+            names.add(ref[len("refs/heads/"):])
+        elif ref.startswith("refs/remotes/"):
+            rest = ref[len("refs/remotes/"):]
+            if "/" in rest:
+                remote, branch = rest.split("/", 1)
+                if branch != "HEAD":
+                    names.add(branch)
+    return names
+
+
+class DirEntry(NamedTuple):
+    """One branch's file in one of the two directories."""
+    path: str     # repo-relative, e.g. docs/changelog/chore/a-name.md
+    branch: str   # the path with its directory and `.md` stripped: chore/a-name
+    lines: list[str]
+
+
+def directory_entries(cwd: str, directory: str) -> tuple[list[DirEntry], list[str]]:
+    """Every branch file under `directory`, plus findings about files that are not one.
+
+    A missing directory is zero files rather than a refusal. Before the era boundary merges
+    that is the honest state, and after it the completeness arm below turns a deleted
+    directory into a finding per missing entry, which names what is gone instead of refusing
+    to measure anything at all.
+
+    THE POPULATION IS GIT'S, NOT THE FILESYSTEM'S (PR #259's review, F3). This used to walk the
+    directory with `os.walk`, which reads everything on disk — including files git ignores. These
+    two directories are now where a founder goes to read the records, so a Finder window over one
+    of them writes a `.DS_Store` into it, and the arm below then exited 2, blocked the stop hook,
+    and advised renaming that file to `<branch>.md`: a session stopped for something it did not
+    do, by advice nobody can act on, which is how `CLAUDE.md` describes a check becoming one
+    people turn off. `git ls-files --cached --others --exclude-standard` is the fix and not merely
+    a filter on the symptom: it is exactly the set of files git tracks or would track, so
+    everything the arm can now fire on is a file somebody really did add, and the advice is true
+    whenever it is given. Untracked files are included, because a branch writes its entry before
+    it commits it and a population of tracked files alone would read a just-written entry as
+    absent. A tracked path whose file is gone from the working tree is dropped rather than opened,
+    since what the tree holds is what a reader gets.
+    """
+    root = os.path.join(cwd, directory)
+    found: list[DirEntry] = []
+    findings: list[str] = []
+    if not os.path.isdir(root):
+        return found, findings
+    listed = subprocess.run(["git", "ls-files", "--cached", "--others", "--exclude-standard",
+                             "-z", "--", directory],
+                            capture_output=True, text=True, cwd=cwd)
+    if listed.returncode != 0:
+        # Never an empty list: a search whose engine cannot see the bytes you mean answers a
+        # clean zero, and a clean zero is the one answer that looks like good news.
+        raise Unmeasurable("git ls-files failed over %s: %s"
+                           % (directory, listed.stderr.strip()))
+    for rel in sorted({r for r in listed.stdout.split("\0") if r}):
+        full = os.path.join(cwd, rel)
+        if not os.path.isfile(full):
+            continue
+        name = os.path.basename(rel)
+        if os.path.dirname(rel) == directory and name == DIRECTORY_README:
+            continue
+        if not name.endswith(".md"):
+            # Silently skipping it is the clean zero this repository keeps being caught
+            # by: the file is one git tracks or would track, sitting where entries live, and
+            # nothing would ever read it.
+            findings.append(
+                "%s: not a .md file, so nothing under %s reads it as a branch's file — "
+                "rename it to <branch>.md or move it out of this directory. (Files git ignores "
+                "are not in this population, so this names something somebody added.)"
+                % (rel, directory))
+            continue
+        with open(full, encoding="utf-8") as fh:
+            text = fh.read()
+        branch = rel[len(directory) + 1:-len(".md")]
+        found.append(DirEntry(rel, branch, text.split("\n")))
+    found.sort(key=lambda e: e.path)
+    return found, findings
+
+
+def _structure(where: str, line: int, branch: str, body: list[str]) -> list[str]:
+    """Exactly one `Status:` line per entry. Zero is a heading with no entry under it; two is
+    an entry whose own heading no line-anchored search can see, because a lost newline glued it
+    to the line above."""
+    n = sum(1 for l in body if l.startswith(STATUS))
+    if n == 1:
+        return []
+    return ["%s:%d: entry %r has %d %r lines between its heading and the next, expected 1 — %s"
+            % (where, line, branch, n, STATUS,
+               "a heading with no entry beneath it" if n == 0 else
+               "an entry whose heading is not at the start of its own line, or a duplicated "
+               "heading")]
+
+
+def check(path: str, cwd: str, mainline: Mainline | None = None,
+          index: dict[str, tuple[int, int]] | None = None,
+          entry_dir: str = ENTRY_DIR, manual_dir: str = MANUAL_DIR) -> list[str]:
     # Findings name the file that was read, never the constant — in the selftest they are
     # different files, and a finding that names a file nobody checked is not evidence.
     where = os.path.relpath(path, cwd) if path.startswith(cwd) else path
     with open(path, encoding="utf-8") as fh:
         text = fh.read()
-    found = entries(text)
-    index = merge_index(mainline or resolve_mainline(cwd), cwd)
+    archive = entries(text)
+    if index is None:
+        index = merge_index(mainline or resolve_mainline(cwd), cwd)
+    refs = ref_branches(cwd)
     findings: list[str] = []
 
-    # Arm 1 — structure. Exactly one Status: line between one heading and the next. Zero is a
-    # heading with no entry under it; two is an entry whose own heading no line-anchored
-    # search can see, because a lost newline glued it to the line above.
-    for line, branch, body in found:
-        n = sum(1 for l in body if l.startswith(STATUS))
-        if n != 1:
-            findings.append(
-                "%s:%d: entry %r has %d %r lines between its heading and the next, expected 1 — "
-                "%s" % (where, line, branch, n, STATUS,
-                        "a heading with no entry beneath it" if n == 0 else
-                        "an entry whose heading is not at the start of its own line, or a "
-                        "duplicated heading"))
+    entry_files, entry_findings = directory_entries(cwd, entry_dir)
+    manual_files, manual_findings = directory_entries(cwd, manual_dir)
+    findings.extend(entry_findings)
+    findings.extend(manual_findings)
 
-    # Arm 2 — resolvable. An entry naming a branch that never merged is a finding of its own:
-    # it may be a typo, or an entry written for a branch that has not landed.
-    # The one entry allowed to name no merge is the first, and only the first: step 7 has the
-    # branch write its entry before the PR opens, so on the branch under review the newest
-    # entry is by construction not on the mainline yet. Any other unmatched entry is a typo, a
-    # renamed branch, or an entry for work that never landed. Without this exemption the check
-    # would be red on every branch that writes an entry, which is how a check becomes one
-    # people learn to skip — the failure this tool exists to avoid (CLAUDE.md, SONNY-64).
+    # Arm 1 — structure, in the archive and in each entry file alike.
+    for line, branch, body in archive:
+        findings.extend(_structure(where, line, branch, body))
+    for entry in entry_files:
+        heads = [i for i, l in enumerate(entry.lines) if l.startswith(HEADING)]
+        if len(heads) != 1:
+            findings.append(
+                "%s: has %d %r headings, expected exactly 1 — one file is one entry, and a "
+                "file holding two entries hides one of them from every count"
+                % (entry.path, len(heads), HEADING.strip()))
+            continue
+        named = entry.lines[heads[0]][len(HEADING):].strip()
+        if named != entry.branch:
+            # The path is what every other arm reads, so a heading that disagrees with it is an
+            # entry filed under one branch and describing another — the shape a copied entry
+            # takes, and one nothing else here could see.
+            findings.append(
+                "%s:%d: the heading names %r and the path names %r — an entry's heading and "
+                "its filename are the same branch, or one of the two is somebody else's"
+                % (entry.path, heads[0] + 1, named, entry.branch))
+        findings.extend(_structure(entry.path, heads[0] + 1, entry.branch,
+                                   entry.lines[heads[0] + 1:]))
+
+    # Arm 2 — resolvable. Every entry, in the archive or in the directory, names a branch that
+    # merged on the mainline. Two faults hide under that one sentence and they are told apart
+    # by whether the name has a ref at all:
+    #
+    #   * a ref but no merge — work that has not landed. Exactly one entry may be this, and it
+    #     is the branch being worked on: WORKFLOW.md step 7 has the entry written and committed
+    #     before the PR opens, so on the branch under review its own entry names no merge yet.
+    #     Without that allowance the check would be red on every branch that writes an entry,
+    #     which is how a check becomes one people learn to skip (CLAUDE.md, SONNY-64).
+    #   * no ref and no merge — a typo, or a branch renamed after its entry was written. Never
+    #     allowed, at any count, because it cannot be the branch anyone is standing on.
+    #
+    # The allowance is a count rather than a position or a `git rev-parse HEAD` reading, so it
+    # gives the same answer in a lane, in a reviewer's detached worktree and in a fresh clone.
+    unmerged: list[tuple[str, str]] = []   # (where, branch)
     positioned = []
-    for n, (line, branch, _) in enumerate(found):
-        if branch not in index:
-            if n == 0:
-                continue
-            findings.append(
-                "%s:%d: entry %r matches no 'Merge pull request #N from <ns>/%s' on the "
-                "mainline, and it is not the first entry — only the newest may be unmerged, "
-                "because step 7 writes it before the PR opens"
-                % (where, line, branch, branch))
+    for line, branch, _ in archive:
+        if branch in index:
+            positioned.append(("%s:%d" % (where, line), branch) + index[branch])
+        elif branch in refs:
+            unmerged.append(("%s:%d" % (where, line), branch))
         else:
-            positioned.append((line, branch) + index[branch])
+            findings.append(
+                "%s:%d: entry %r names a branch that does not exist — no 'Merge pull request "
+                "#N from <ns>/%s' on the mainline, and no local or remote-tracking ref of that "
+                "name in this clone" % (where, line, branch, branch))
+    for entry in entry_files:
+        if entry.branch in index:
+            continue
+        if entry.branch in refs:
+            unmerged.append((entry.path, entry.branch))
+        else:
+            findings.append(
+                "%s: names a branch that does not exist — no 'Merge pull request #N from "
+                "<ns>/%s' on the mainline, and no local or remote-tracking ref of that name in "
+                "this clone" % (entry.path, entry.branch))
+    for manual in manual_files:
+        if manual.branch in index or manual.branch in refs:
+            continue
+        findings.append(
+            "%s: names a branch that does not exist — no 'Merge pull request #N from "
+            "<ns>/%s' on the mainline, and no local or remote-tracking ref of that name in "
+            "this clone" % (manual.path, manual.branch))
+    if len(unmerged) > 1:
+        findings.append(
+            "%d entries name a branch that has not merged, and only one may — %s. On a branch "
+            "cut from main that is one entry, its own; a short stack of two or three carries "
+            "this finding until each merge clears it, which is its expected cost (WORKFLOW.md, "
+            "Pull requests in flight)."
+            % (len(unmerged), ", ".join("%s (%s)" % (w, b) for w, b in unmerged)))
 
-    # Arm 3 — order, per era.
+    # Arm 3 — completeness, over the one-file-per-branch era only. Everything merged before the
+    # boundary is the archive's, and about thirty of those branches wrote no entry at all.
+    era = index.get(DIRECTORY_ERA_BRANCH)
+    if era is None:
+        # The boundary has not merged. That makes this arm vacuous, which is a clean zero, so
+        # the one state that would keep it vacuous forever — the constant gone stale because
+        # the branch was renamed — is caught by its own symptom: entries for branches that
+        # merged after a boundary that never resolves.
+        merged_entries = sorted(e.branch for e in entry_files if e.branch in index)
+        if merged_entries:
+            findings.append(
+                "the one-file-per-branch era's boundary %r has not merged, yet %d entry file(s) "
+                "name branches that have — %s. Either that constant in this script is stale "
+                "(the branch was renamed) or those entries were written before the rule "
+                "existed; nothing is being checked for completeness until it resolves."
+                % (DIRECTORY_ERA_BRANCH, len(merged_entries), ", ".join(merged_entries)))
+    else:
+        era_position = era[0]
+        have_entries = {e.branch for e in entry_files}
+        have_manual = {m.branch for m in manual_files}
+        for branch, (position, pr) in sorted(index.items(), key=lambda kv: kv[1][0]):
+            if position < era_position:
+                continue
+            for directory, have in ((entry_dir, have_entries), (manual_dir, have_manual)):
+                if branch not in have:
+                    findings.append(
+                        "%s/%s.md: missing — PR #%d merged %r at mainline position %d, in the "
+                        "one-file-per-branch era, and every branch that merges in it writes "
+                        "this file. A branch that owes nothing writes one line saying so; a "
+                        "missing file and a deliberate 'none' are the same silence otherwise."
+                        % (directory, branch, pr, branch, position))
+
+    # Arm 4 — the archive's order, per era. It takes no new entries, so this can no longer go
+    # red on honest work; what it still catches is an entry appended to it out of habit, which
+    # raises no rebase conflict and would otherwise be found by nothing.
     boundary = [i for i, e in enumerate(positioned) if e[1] == ERA_BOUNDARY]
     if not boundary:
         findings.append(
@@ -268,9 +501,9 @@ def check(path: str, cwd: str, mainline: Mainline | None = None) -> list[str]:
     for a, b in zip(newest_first, newest_first[1:]):
         if not a[2] > b[2]:
             findings.append(
-                "%s:%d: PR #%d (mainline position %d) is above PR #%d (position %d), and this "
+                "%s: PR #%d (mainline position %d) is above PR #%d (position %d), and this "
                 "run of the file is newest-first — %r belongs above %r"
-                % (where, a[0], a[3], a[2], b[3], b[2], b[1], a[1]))
+                % (a[0], a[3], a[2], b[3], b[2], b[1], a[1]))
     # The oldest-first run is a closed historical range: it ends where the boundary entry
     # begins, so every entry in it merged before the boundary did. Without this, an entry
     # appended at the file's end — the exact mistake five entries have made, and a quiet one
@@ -278,20 +511,88 @@ def check(path: str, cwd: str, mainline: Mainline | None = None) -> list[str]:
     # of that run with the highest index of all and satisfies "increasing" perfectly. The
     # selftest found that hole in this check's first draft rather than a reader finding it in
     # a year (SONNY-329).
-    for line, branch, position, pr in oldest_first:
+    for at, branch, position, pr in oldest_first:
         if position > newest_first[-1][2]:
             findings.append(
-                "%s:%d: PR #%d (mainline position %d) sits below %r, in the run that ends at "
+                "%s: PR #%d (mainline position %d) sits below %r, in the run that ends at "
                 "PR #%d — an entry that merged after the boundary belongs in the newest-first "
                 "run at the top of the file, not appended at its end"
-                % (where, line, pr, position, ERA_BOUNDARY, newest_first[-1][3]))
+                % (at, pr, position, ERA_BOUNDARY, newest_first[-1][3]))
     for a, b in zip(oldest_first, oldest_first[1:]):
         if not a[2] < b[2]:
             findings.append(
-                "%s:%d: PR #%d (mainline position %d) is above PR #%d (position %d), and the "
+                "%s: PR #%d (mainline position %d) is above PR #%d (position %d), and the "
                 "run below %r is oldest-first — %r belongs above %r"
-                % (where, a[0], a[3], a[2], b[3], b[2], ERA_BOUNDARY, b[1], a[1]))
+                % (a[0], a[3], a[2], b[3], b[2], ERA_BOUNDARY, b[1], a[1]))
     return findings
+
+
+# --------------------------------------------------------------------------------------
+# read / manual-tests — the one way to read the history in order
+# --------------------------------------------------------------------------------------
+
+def reading_order(files: list[DirEntry], index: dict[str, tuple[int, int]]) -> list[DirEntry]:
+    """Newest first: whatever has not merged yet, then every merged branch by its merge,
+    latest first. Unmerged files sort by path so the answer does not depend on the filesystem."""
+    unmerged = sorted((f for f in files if f.branch not in index), key=lambda f: f.path)
+    merged = sorted((f for f in files if f.branch in index),
+                    key=lambda f: index[f.branch][0], reverse=True)
+    return unmerged + merged
+
+
+def assemble(cwd: str, mainline: Mainline, directory: str, archive_rel: str,
+             from_marker: bool) -> str:
+    """Every branch's file in merge order, then the archive it continues, as one stream.
+
+    This is what keeps one file per branch from costing a reader the one document they used to
+    open. `from_marker` prints the archive from `## Entries` down, which is the changelog's
+    history proper — its roadmap and template preamble sit above that line and are not history.
+    """
+    index = merge_index(mainline, cwd)
+    files, _ = directory_entries(cwd, directory)
+    ordered = reading_order(files, index)
+    out = [mainline.line(),
+           "changelog-order: %d file(s) under %s, newest first, then %s."
+           % (len(ordered), directory, archive_rel), ""]
+    for f in ordered:
+        at = index.get(f.branch)
+        out.append("<!-- %s — %s -->"
+                   % (f.path, "PR #%d, mainline position %d" % (at[1], at[0]) if at
+                      else "not merged yet"))
+        out.append("\n".join(f.lines).rstrip("\n"))
+        out.append("")
+    archive_path = os.path.join(cwd, archive_rel)
+    with open(archive_path, encoding="utf-8") as fh:
+        text = fh.read()
+    if from_marker:
+        lines = text.split("\n")
+        try:
+            start = next(i for i, l in enumerate(lines) if l.rstrip() == ENTRIES_MARKER)
+        except StopIteration:
+            raise Unmeasurable("no %r line in %s, so the archive's history cannot be found"
+                               % (ENTRIES_MARKER, archive_rel))
+        text = "\n".join(lines[start:])
+    out.append("<!-- %s — the archive, everything before the one-file-per-branch era -->"
+               % archive_rel)
+    out.append(text.rstrip("\n"))
+    return "\n".join(out)
+
+
+def era_line(index: dict[str, tuple[int, int]]) -> str:
+    """What the completeness arm resolved its boundary to, printed on every run.
+
+    A boundary that stops resolving switches that arm off without any output changing, which is
+    the clean-zero failure this repository keeps being caught by. So the resolution is stated
+    rather than assumed, on every run, clean or not.
+    """
+    era = index.get(DIRECTORY_ERA_BRANCH)
+    if era is None:
+        return ("changelog-order: the one-file-per-branch era has not begun — %r is not on the "
+                "mainline, so no branch is checked for a missing file yet."
+                % DIRECTORY_ERA_BRANCH)
+    return ("changelog-order: the one-file-per-branch era begins at PR #%d (%s), mainline "
+            "position %d — every branch merging at or after it owes %s/<branch>.md and "
+            "%s/<branch>.md." % (era[1], DIRECTORY_ERA_BRANCH, era[0], ENTRY_DIR, MANUAL_DIR))
 
 
 # --------------------------------------------------------------------------------------
@@ -321,13 +622,19 @@ def _point_mainline_refs(repo: str, main: str | None, origin: str | None) -> Non
             _git(repo, "update-ref", name, sha)
 
 
-def _fixture_repo(tmp: str, merges: list[tuple[int, str]]) -> str:
-    """A repository whose mainline holds one merge per (PR number, branch), in list order."""
+def _fixture_repo(tmp: str, merges: list[tuple[int, str]], unmerged: list[str] = ()) -> str:
+    """A repository whose mainline holds one merge per (PR number, branch), in list order,
+    plus a ref for each branch in `unmerged` that has no merge at all — the shape a branch
+    under review has, and the thing that tells a typo apart from work that has not landed."""
     _git(tmp, "init", "-q", "-b", "main")
     _git(tmp, "config", "user.email", "selftest@example.invalid")
     _git(tmp, "config", "user.name", "selftest")
     open(os.path.join(tmp, "seed"), "w").write("seed\n")
-    _git(tmp, "add", "seed")
+    # This repository ignores `.DS_Store` repo-wide, and the fixture has to as well or the case
+    # below proves nothing: a file that is not ignored anywhere cannot demonstrate that ignored
+    # files are out of the population.
+    open(os.path.join(tmp, ".gitignore"), "w").write(".DS_Store\n")
+    _git(tmp, "add", "seed", ".gitignore")
     _git(tmp, "commit", "-q", "-m", "seed")
     for pr, branch in merges:
         _git(tmp, "checkout", "-q", "-b", branch)
@@ -337,6 +644,8 @@ def _fixture_repo(tmp: str, merges: list[tuple[int, str]]) -> str:
         _git(tmp, "checkout", "-q", "main")
         _git(tmp, "merge", "-q", "--no-ff", "-m",
              "Merge pull request #%d from ns/%s" % (pr, branch), branch)
+    for branch in unmerged:
+        _git(tmp, "branch", branch, "main")
     return tmp
 
 
@@ -349,45 +658,82 @@ def _write(tmp: str, entry_branches: list[str], mangle=None) -> str:
     return path
 
 
+def _put(repo: str, directory: str, branch: str, text: str, suffix: str = ".md") -> str:
+    """Write one branch's file into one of the fixture's directories."""
+    path = os.path.join(repo, directory, branch + suffix)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    open(path, "w", encoding="utf-8").write(text)
+    return path
+
+
+def _clear(repo: str) -> None:
+    for directory in (ENTRY_DIR, MANUAL_DIR):
+        shutil.rmtree(os.path.join(repo, directory), ignore_errors=True)
+    # Some cases stage files to make a path tracked; the index has to go back with them, or the
+    # next case measures a population a previous one built.
+    _git(repo, "reset", "-q")
+
+
+def _full(repo: str, branches: list[str]) -> None:
+    """Both directories populated for every branch named — the state a clean era is in."""
+    for branch in branches:
+        _put(repo, ENTRY_DIR, branch, GOOD_ENTRY % branch)
+        _put(repo, MANUAL_DIR, branch, "# %s\n\nNo rows owed.\n" % branch)
+
+
 def selftest() -> int:
-    # Mainline order: PR #3 .. #5 (the oldest-first era), then the boundary, then #51 .. #53.
+    # Mainline order: PR #3 .. #5 (the archive's oldest-first era), the archive's era boundary,
+    # then #51 .. #53. `this/branch` and `also/unmerged` have refs and no merge.
     merges = [(3, "old/a"), (4, "old/b"), (5, "old/c"), (50, ERA_BOUNDARY),
               (51, "new/a"), (52, "new/b"), (53, "new/c")]
     # In-file order: newest-first down to the boundary, then oldest-first below it.
     good = ["new/c", "new/b", "new/a", ERA_BOUNDARY, "old/a", "old/b", "old/c"]
+    loose = ["this/branch", "also/unmerged"]
 
     cases: list[tuple[str, object, object, str]] = []
 
     def case(name, entry_branches, mangle, expect):
         cases.append((name, entry_branches, mangle, expect))
 
-    case("a file in order passes", good, None, "")
+    case("an archive in order passes", good, None, "")
     case("a newest-first entry out of order is caught",
          ["new/b", "new/c", "new/a", ERA_BOUNDARY, "old/a", "old/b", "old/c"], None,
          "belongs above")
     case("an oldest-first entry out of order is caught",
          ["new/c", "new/b", "new/a", ERA_BOUNDARY, "old/b", "old/a", "old/c"], None,
          "oldest-first")
-    case("an entry appended at the file's end is caught",
+    case("an entry appended at the archive's end is caught",
          ["new/c", "new/b", ERA_BOUNDARY, "old/a", "old/b", "old/c", "new/a"], None,
          "not appended at its end")
-    case("the branch's own unmerged entry, written first, passes",
+    case("one unmerged entry — the branch's own — passes",
          ["this/branch"] + good, None, "")
-    case("an unmerged entry that is not the first is caught",
-         good + ["never/merged"], None, "matches no 'Merge pull request")
+    case("FAULT 1: a second unmerged entry is caught",
+         ["this/branch"] + good + ["also/unmerged"], None,
+         "name a branch that has not merged, and only one may")
+    # The phrase alone is produced by three separate loops — the archive's, the entry
+    # directory's and the manual directory's — so asserting it bare is satisfied by any of them,
+    # and a mutant disabling the entry directory's copy survived exactly that way before these
+    # two cases were anchored. Only the archive's finding carries `entry '<name>'`, which is what
+    # separates it; the directory cases below anchor on their own paths.
+    case("FAULT 3: an entry naming a branch that does not exist is caught",
+         good + ["never/existed"], None,
+         "entry 'never/existed' names a branch that does not exist")
+    case("  ...and it is caught even when it is the only unmerged entry",
+         ["never/existed"] + good, None,
+         "entry 'never/existed' names a branch that does not exist")
     case("a bodiless heading is caught", good,
          lambda b: b.replace("### Branch: new/b", "### Branch: stray/heading\n\n### Branch: new/b"),
          "has 0 'Status:' lines")
     case("a heading glued to the previous line by a lost newline is caught", good,
          lambda b: b.replace("body\n\n### Branch: new/b", "body### Branch: new/b"),
          "has 2 'Status:' lines")
-    case("the era boundary going missing stops the check rather than passing it",
+    case("the archive's era boundary going missing stops the check rather than passing it",
          [b for b in good if b != ERA_BOUNDARY], None,
          "era boundary")
 
     with tempfile.TemporaryDirectory() as tmp:
         repo = _fixture_repo(os.path.join(tmp, "repo") if os.makedirs(
-            os.path.join(tmp, "repo"), exist_ok=True) is None else tmp, merges)
+            os.path.join(tmp, "repo"), exist_ok=True) is None else tmp, merges, loose)
         failures = 0
         for name, entry_branches, mangle, expect in cases:
             path = _write(tmp, entry_branches, mangle)
@@ -395,6 +741,11 @@ def selftest() -> int:
                 findings = check(path, repo)
             except Unmeasurable as exc:
                 print("  FAIL  %s — the check refused to measure: %s" % (name, exc))
+                failures += 1
+                continue
+            except Exception as exc:  # noqa: BLE001 — see the note above this block
+                print("  FAIL  %s — the check raised %s: %s"
+                      % (name, type(exc).__name__, exc))
                 failures += 1
                 continue
             if expect == "":
@@ -408,7 +759,188 @@ def selftest() -> int:
                     print("        got: " + f)
                 if expect:
                     print("        expected a finding containing: " + expect)
+        ran = len(cases)
 
+        # ----------------------------------------------------------------------------------
+        # The directories. Everything above ran with neither of them present, which is the
+        # state before the era begins and is itself one of the arms below.
+        # ----------------------------------------------------------------------------------
+        def dir_case(name, expect, build):
+            nonlocal failures, ran
+            ran += 1
+            _clear(repo)
+            build()
+            try:
+                findings = check(_write(tmp, good), repo)
+            except Unmeasurable as exc:
+                print("  FAIL  %s — the check refused to measure: %s" % (name, exc))
+                failures += 1
+                return
+            except Exception as exc:  # noqa: BLE001 — a raise is one case's failure, not the run's
+                print("  FAIL  %s — the check raised %s: %s"
+                      % (name, type(exc).__name__, exc))
+                failures += 1
+                return
+            ok = (not findings) if expect == "" else any(expect in f for f in findings)
+            print("  %s  %s" % ("ok  " if ok else "FAIL", name))
+            if not ok:
+                failures += 1
+                for f in findings:
+                    print("        got: " + f)
+                if expect:
+                    print("        expected a finding containing: " + expect)
+
+        dir_case("an entry file for the branch being worked on passes", "",
+                 lambda: _full(repo, ["this/branch"]))
+        dir_case("FAULT 1: an entry file for a branch that never merged, beside another, "
+                 "is caught", "name a branch that has not merged, and only one may",
+                 lambda: _full(repo, ["this/branch", "also/unmerged"]))
+        dir_case("FAULT 3: an entry file named for a branch that does not exist is caught",
+                 "docs/changelog/never/existed.md: names a branch that does not exist",
+                 lambda: _put(repo, ENTRY_DIR, "never/existed",
+                              GOOD_ENTRY % "never/existed"))
+        dir_case("  ...and so is a manual-test file named for one",
+                 "docs/manual-tests/never/existed.md: names a branch that does not exist",
+                 lambda: _put(repo, MANUAL_DIR, "never/existed", "# rows\n"))
+        dir_case("an entry whose heading names a different branch is caught",
+                 "the heading names 'new/a' and the path names 'this/branch'",
+                 lambda: (_full(repo, ["this/branch"]),
+                          _put(repo, ENTRY_DIR, "this/branch", GOOD_ENTRY % "new/a")))
+        dir_case("an entry file holding two entries is caught",
+                 "has 2 '### Branch:' headings",
+                 lambda: (_full(repo, ["this/branch"]),
+                          _put(repo, ENTRY_DIR, "this/branch",
+                               (GOOD_ENTRY % "this/branch") + "\n" + (GOOD_ENTRY % "new/a"))))
+        dir_case("an entry file with no Status line is caught", "has 0 'Status:' lines",
+                 lambda: (_full(repo, ["this/branch"]),
+                          _put(repo, ENTRY_DIR, "this/branch",
+                               "### Branch: this/branch\nDate: 2026-01-01\n\nbody\n")))
+        dir_case("a file that is not .md is caught rather than skipped",
+                 "not a .md file",
+                 lambda: _put(repo, ENTRY_DIR, "this/branch", "x\n", suffix=".txt"))
+        # PR #259's review, F3. macOS writes `.DS_Store` into any directory a Finder window
+        # opens, and these two directories are now where a founder goes to read the records — so
+        # before this, opening one of them in Finder made the tool exit 2, blocked the stop hook,
+        # and advised renaming that file to `<branch>.md`. The case above is this one's control:
+        # a non-`.md` file git does NOT ignore is still a finding, so what changed is the
+        # population and not the arm.
+        dir_case("a file git ignores is not in the population at all", "",
+                 lambda: (_full(repo, ["this/branch"]),
+                          _put(repo, ENTRY_DIR, ".DS_Store", "macos junk", suffix=""),
+                          _put(repo, MANUAL_DIR, ".DS_Store", "macos junk", suffix="")))
+        dir_case("a README at a directory's root is not read as a branch's file", "",
+                 lambda: (_full(repo, ["this/branch"]),
+                          _put(repo, ENTRY_DIR, "README", "# how to write one\n"),
+                          _put(repo, MANUAL_DIR, "README", "# how to write one\n")))
+        # The stale-boundary guard: the era's own branch has not merged in this fixture, so an
+        # entry naming a branch that HAS merged is the symptom of a renamed boundary.
+        dir_case("an entry for a merged branch, with the boundary unresolved, is caught",
+                 "has not merged, yet 1 entry file(s) name branches that have",
+                 lambda: _full(repo, ["new/a"]))
+        _clear(repo)
+
+        # ----------------------------------------------------------------------------------
+        # The era, resolved. A second fixture whose mainline merges the boundary branch itself,
+        # then two more branches after it — every one of which owes both files.
+        # ----------------------------------------------------------------------------------
+        era_repo = os.path.join(tmp, "era")
+        os.makedirs(era_repo, exist_ok=True)
+        _fixture_repo(era_repo, merges + [(54, DIRECTORY_ERA_BRANCH), (55, "wave/one"),
+                                          (56, "wave/two")], loose)
+        era_archive = os.path.join(tmp, "era-changelog.md")
+        shutil.copy(_write(tmp, good), era_archive)
+
+        def era_case(name, expect, build):
+            nonlocal failures, ran
+            ran += 1
+            _clear(era_repo)
+            build()
+            try:
+                findings = check(era_archive, era_repo)
+            except Unmeasurable as exc:
+                print("  FAIL  %s — the check refused to measure: %s" % (name, exc))
+                failures += 1
+                return
+            except Exception as exc:  # noqa: BLE001 — a raise is one case's failure, not the run's
+                print("  FAIL  %s — the check raised %s: %s"
+                      % (name, type(exc).__name__, exc))
+                failures += 1
+                return
+            ok = (not findings) if expect == "" else any(expect in f for f in findings)
+            print("  %s  %s" % ("ok  " if ok else "FAIL", name))
+            if not ok:
+                failures += 1
+                for f in findings:
+                    print("        got: " + f)
+                if expect:
+                    print("        expected a finding containing: " + expect)
+
+        era_all = [DIRECTORY_ERA_BRANCH, "wave/one", "wave/two"]
+        era_case("every branch in the era carrying both files passes, and branches merged "
+                 "before it owe nothing", "", lambda: _full(era_repo, era_all))
+        era_case("FAULT 2: a merged branch with no entry file is caught",
+                 "docs/changelog/wave/two.md: missing — PR #56 merged 'wave/two'",
+                 lambda: _full(era_repo, [DIRECTORY_ERA_BRANCH, "wave/one"]))
+        era_case("  ...and a merged branch with no manual-test file is caught too",
+                 "docs/manual-tests/wave/two.md: missing",
+                 lambda: (_full(era_repo, era_all),
+                          os.remove(os.path.join(era_repo, MANUAL_DIR, "wave/two.md"))))
+        era_case("deleting the whole directory names every entry it lost, rather than refusing",
+                 "docs/changelog/wave/one.md: missing",
+                 lambda: _full(era_repo, []))
+        # A file git has in its index but the working tree no longer holds. `git ls-files
+        # --cached` still names it, so without the `isfile` guard the read raises and the run
+        # dies with a traceback instead of reporting the entry as gone — and a deleted entry file
+        # is exactly what the completeness arm exists to see. What a reader gets is what the tree
+        # holds, so the path is dropped and the branch reads as missing its record.
+        era_case("an entry file staged but deleted from the working tree reads as missing",
+                 "docs/changelog/wave/two.md: missing",
+                 lambda: (_full(era_repo, era_all),
+                          _git(era_repo, "add", "-A"),
+                          os.remove(os.path.join(era_repo, ENTRY_DIR, "wave/two.md"))))
+        ran += 1
+        era_index = merge_index(resolve_mainline(era_repo), era_repo)
+        if ("begins at PR #54" in era_line(era_index)
+                and "has not begun" in era_line(merge_index(resolve_mainline(repo), repo))):
+            print("  ok    every run says what it resolved the era boundary to, either way")
+        else:
+            print("  FAIL  the era line does not state the boundary both ways\n"
+                  "        got: %s | %s" % (era_line(era_index),
+                                            era_line(merge_index(resolve_mainline(repo), repo))))
+            failures += 1
+
+        # ----------------------------------------------------------------------------------
+        # `read` — the one way a person reads the history in order. It must carry every file,
+        # newest first, and the archive behind them.
+        # ----------------------------------------------------------------------------------
+        _clear(era_repo)
+        _full(era_repo, era_all + ["this/branch"])
+        ran += 1
+        text = assemble(era_repo, resolve_mainline(era_repo), ENTRY_DIR, era_archive,
+                        from_marker=True)
+        order = [l for l in text.split("\n") if l.startswith("<!-- docs/changelog/")]
+        want = ["<!-- docs/changelog/this/branch.md — not merged yet -->",
+                "<!-- docs/changelog/wave/two.md — PR #56, mainline position 9 -->",
+                "<!-- docs/changelog/wave/one.md — PR #55, mainline position 8 -->"]
+        if order[:3] == want and "### Branch: wave/two" in text and ENTRIES_MARKER in text:
+            print("  ok    `read` prints every file newest first, unmerged first, then the "
+                  "archive")
+        else:
+            print("  FAIL  `read` did not assemble in merge order\n        got: %s"
+                  % order[:3])
+            failures += 1
+
+        # A `read` that silently loses files is the clean zero this whole tool is against, so
+        # the count it prints is checked against what is on disk.
+        ran += 1
+        if "4 file(s) under docs/changelog" in text:
+            print("  ok    `read` says how many files it assembled")
+        else:
+            print("  FAIL  `read` did not count the files it assembled\n        got: %s"
+                  % text.split("\n")[1])
+            failures += 1
+
+        # ----------------------------------------------------------------------------------
         # `check <path>` must actually read that path. An argument silently ignored would
         # check the repository's own changelog — here the fixture's, which does not exist — and
         # never report the findings of the file it was handed; a finding count quoted as
@@ -416,12 +948,13 @@ def selftest() -> int:
         # line, not through check(), and inside the fixture rather than this checkout: this
         # checkout's own `main` and `origin/main` can legitimately have diverged, which is a
         # refusal (exit 1), and this arm is not about which mainline gets read.
+        # ----------------------------------------------------------------------------------
+        _clear(repo)
         bad = _write(tmp, ["new/b", "new/c", "new/a", ERA_BOUNDARY, "old/a", "old/b", "old/c"])
         proc = subprocess.run([sys.executable, os.path.abspath(__file__), "check", bad],
                               capture_output=True, text=True, cwd=repo)
-        # Not "new/b" alone: that is the fixture's first entry, which this check deliberately
-        # exempts from needing a merge. The ordering finding names both.
         named = os.path.basename(bad) in proc.stdout and "new/c" in proc.stdout
+        ran += 1
         if proc.returncode == 2 and named:
             print("  ok    `check <path>` reads the path it is given")
         else:
@@ -436,6 +969,7 @@ def selftest() -> int:
                         if l.startswith("changelog-order: mainline is main at %s"
                                         % _git(repo, "rev-parse", "main")[:8])), None)
         finding_at = next((i for i, l in enumerate(out) if os.path.basename(bad) in l), None)
+        ran += 1
         if proc.returncode == 2 and None not in (line_at, finding_at) and line_at < finding_at:
             print("  ok    a run with findings prints the mainline line above them")
         else:
@@ -444,12 +978,61 @@ def selftest() -> int:
                   % (proc.returncode, line_at, finding_at, proc.stdout.strip()))
             failures += 1
 
+        # A branch that merged twice keeps its LATEST merge, which is the position its entry
+        # describes. `merge_index`'s docstring has always said so and no fixture exercised it, so
+        # a mutant keeping the FIRST merge survived the whole selftest (PR #259's review). This
+        # repository's own mainline has one such branch, so the case is reachable rather than
+        # theoretical. Its own repository, because a second merge moves every position after it.
+        twice = os.path.join(tmp, "twice")
+        os.makedirs(twice, exist_ok=True)
+        _fixture_repo(twice, [(3, "old/a"), (4, "again/x"), (5, "old/b")])
+        _git(twice, "checkout", "-q", "again/x")
+        open(os.path.join(twice, "more"), "w").write("more\n")
+        _git(twice, "add", "-A")
+        _git(twice, "commit", "-q", "-m", "more work on again/x")
+        _git(twice, "checkout", "-q", "main")
+        _git(twice, "merge", "-q", "--no-ff", "-m",
+             "Merge pull request #6 from ns/again/x", "again/x")
+        ran += 1
+        twice_index = merge_index(resolve_mainline(twice), twice)
+        if twice_index.get("again/x") == (3, 6):
+            print("  ok    a branch merged twice keeps its latest merge, not its first")
+        else:
+            print("  FAIL  a branch merged twice did not keep its latest merge\n"
+                  "        got: %r, wanted (3, 6)" % (twice_index.get("again/x"),))
+            failures += 1
+
+        # The merged stream, which is what the stop hook captures and shows. stdout is buffered
+        # and stderr is not, so an unflushed run hands the reader its finding COUNT before the
+        # mainline line, the era line and the findings it counts.
+        merged = subprocess.run(
+            "%s %s check %s 2>&1" % (shlex.quote(sys.executable),
+                                     shlex.quote(os.path.abspath(__file__)), shlex.quote(bad)),
+            shell=True, capture_output=True, text=True, cwd=repo)
+        ml = merged.stdout.split("\n")
+        at_main = next((i for i, l in enumerate(ml) if l.startswith("changelog-order: mainline")),
+                       None)
+        at_era = next((i for i, l in enumerate(ml) if "one-file-per-branch era" in l), None)
+        at_find = next((i for i, l in enumerate(ml) if os.path.basename(bad) in l), None)
+        at_count = next((i for i, l in enumerate(ml) if "finding(s)." in l), None)
+        ran += 1
+        if (merged.returncode == 2 and None not in (at_main, at_era, at_find, at_count)
+                and at_main < at_era < at_find < at_count):
+            print("  ok    stdout and stderr merged, as the stop hook reads them, stay in order")
+        else:
+            print("  FAIL  the merged stream is out of order (exit %d, mainline %s, era %s, "
+                  "finding %s, count %s)\n        got: %s"
+                  % (merged.returncode, at_main, at_era, at_find, at_count,
+                     merged.stdout.strip()))
+            failures += 1
+
         # A refusal rather than a clean zero, proved rather than asserted.
         empty = os.path.join(tmp, "empty.md")
         open(empty, "w").write("# nothing here\n")
         for name, path, cwd in (("a file with no '## Entries' refuses", empty, repo),
                                 ("a directory that is not a repository refuses",
                                  _write(tmp, good), tempfile.gettempdir())):
+            ran += 1
             try:
                 check(path, cwd)
             except Unmeasurable as exc:
@@ -457,7 +1040,6 @@ def selftest() -> int:
             else:
                 print("  FAIL  %s — it returned an answer instead" % name)
                 failures += 1
-        ran = len(cases) + 4
 
         # Which mainline is read (SONNY-480). Every worktree shares one local `main`, and nothing
         # moves it when a pull request merges on GitHub, so between a merge and somebody's pull
@@ -520,6 +1102,13 @@ def selftest() -> int:
         else:
             print("  FAIL  a clean run did not print %r (exit %d)\n        got: %s"
                   % (want, proc.returncode, (proc.stdout + proc.stderr).strip()))
+            failures += 1
+        ran += 1
+        if proc.returncode == 0 and "the one-file-per-branch era has not begun" in proc.stdout:
+            print("  ok    a clean run prints the era boundary it resolved")
+        else:
+            print("  FAIL  a clean run did not print the era line (exit %d)\n        got: %s"
+                  % (proc.returncode, proc.stdout.strip()))
             failures += 1
         _point_mainline_refs(repo, stray, tip)
         proc = subprocess.run([sys.executable, os.path.abspath(__file__), "check",
@@ -597,23 +1186,45 @@ def selftest() -> int:
     return 0 if failures == 0 else 2
 
 
+USAGE = "usage: scripts/changelog-order [check [<path>] | read | manual-tests | selftest]"
+
+
 def main(argv: list[str]) -> int:
+    # Help is read off the RAW argv, before the filter below (PR #259's review). That filter drops
+    # anything starting with `-`, so `--help` never reached the branch that answers it and the
+    # tool silently checked the tree instead — exit 0 and a clean report, which reads exactly like
+    # a help request that worked. It matters more now than it did: this command is the documented
+    # front door to the whole branch-by-branch history.
+    if any(a in ("-h", "--help", "help") for a in argv[1:]):
+        print(__doc__)
+        print(USAGE)
+        return 0
     args = [a for a in argv[1:] if not a.startswith("-")]
     if args and args[0] == "selftest":
         return selftest()
-    if args and args[0] not in ("check",):
+    if args and args[0] not in ("check", "read", "manual-tests"):
         print(__doc__)
-        return 0 if args[0] in ("help", "--help") else 1
+        print(USAGE, file=sys.stderr)
+        return 1
+    command = args[0] if args else "check"
     mainline = None
     try:
         root = repo_root()
-        # `check <path>` reads some other copy of the file — an older tree written out with
+        # `check <path>` reads some other copy of the archive — an older tree written out with
         # `git show`, most usefully — against this repository's merge log. The default is the
         # working tree's own. Ordering is a property of the file *and* the mainline, so the
-        # log always comes from the repository this is run in.
-        path = os.path.abspath(args[1]) if len(args) > 1 else os.path.join(root, CHANGELOG)
+        # log always comes from the repository this is run in, and so do the two directories.
+        path = os.path.abspath(args[1]) if command == "check" and len(args) > 1 \
+            else os.path.join(root, CHANGELOG)
         mainline = resolve_mainline(root)
-        findings = check(path, root, mainline)
+        if command == "read":
+            print(assemble(root, mainline, ENTRY_DIR, CHANGELOG, from_marker=True))
+            return 0
+        if command == "manual-tests":
+            print(assemble(root, mainline, MANUAL_DIR, CHECKLIST, from_marker=False))
+            return 0
+        index = merge_index(mainline, root)
+        findings = check(path, root, mainline, index=index)
     except Unmeasurable as exc:
         # The reason first: the stop hook quotes a refusal only as far as `cut -c1-200` reaches.
         print("changelog-order: no measurement was made — %s" % exc, file=sys.stderr)
@@ -621,15 +1232,27 @@ def main(argv: list[str]) -> int:
             print(mainline.line(), file=sys.stderr)
         return 1
     print(mainline.line())
+    print(era_line(index))
     if findings:
         for f in findings:
             print(f)
-        print("\n%d finding(s). The changelog's Entry Template preamble states where an entry "
-              "goes and why the file has two eras." % len(findings), file=sys.stderr)
+        # The stop hook captures this with `2>&1`, and Python buffers stdout while stderr is
+        # unbuffered — so without this flush the summary reaches the hook's transcript ABOVE the
+        # mainline line, the era line and the findings themselves, and a reader is handed a count
+        # before anything it counts. PR #243's F1 put the mainline line above the findings for
+        # exactly this reason and the merged stream was still undoing it.
+        sys.stdout.flush()
+        print("\n%d finding(s). docs/changelog/README.md states where an entry goes and what "
+              "it owes; WORKFLOW.md step 7 is the process around it." % len(findings),
+              file=sys.stderr)
         return 2
     shown = os.path.relpath(path, root) if path.startswith(root) else path
-    print("changelog-order: %s is in merge order, %d entries, both eras."
-          % (shown, len(entries(open(path, encoding='utf-8').read()))))
+    entry_files, _ = directory_entries(root, ENTRY_DIR)
+    manual_files, _ = directory_entries(root, MANUAL_DIR)
+    print("changelog-order: %d entry file(s) under %s and %d under %s resolve, and %s's %d "
+          "archived entries are in merge order across both its eras."
+          % (len(entry_files), ENTRY_DIR, len(manual_files), MANUAL_DIR, shown,
+             len(entries(open(path, encoding='utf-8').read()))))
     return 0
 
 
