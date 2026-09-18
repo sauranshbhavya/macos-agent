@@ -5,7 +5,7 @@
   "domain": "chatwork.com",
   "category": "communication",
   "summary": "Business chat app.",
-  "signInURL": "https://chatwork.com/login",
+  "signInURL": "https://www.chatwork.com/",
   "triggers": ["chatwork", "chatwork.com"],
   "sections": [],
   "depth": "deep",
