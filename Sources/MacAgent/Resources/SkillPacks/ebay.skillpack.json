@@ -6,8 +6,36 @@
   "category": "websites_apps_commerce",
   "summary": "Online marketplace.",
   "signInURL": "https://signin.ebay.com/",
-  "triggers": ["ebay", "ebay.com"],
+  "triggers": [
+    "ebay",
+    "ebay.com"
+  ],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Save a search and view its listings",
+      "startURL": "https://www.ebay.com/",
+      "steps": [
+        "Search eBay for the item.",
+        "Select Save this search at the top of the search results page. eBay then emails an alert when new items matching the search are listed.",
+        "To see the listings later, go to Saved searches — under Saved on the eBay homepage — and choose View items.",
+        "To edit a saved search, select it, add or remove filters, then select Save this search. Editing creates a new saved search with the filters you chose.",
+        "To delete a saved search, select the blue heart on it."
+      ],
+      "source": "https://www.ebay.com/help/buying/search-tips/saved-searches?id=4051"
+    },
+    {
+      "title": "View and tidy your Watchlist",
+      "startURL": "https://www.ebay.com/",
+      "steps": [
+        "Go to My eBay and select Watching.",
+        "Use the Sort dropdown to sort the listings by most relevant, time left, price, seller ID or date added.",
+        "Active and ended listings show together by default. Use the dropdown beside Status to see them separately.",
+        "To remove items, tick the box beside each one and select Delete. Several can be removed at once.",
+        "To add an item from a listing, select Add to Watchlist on the listing, or the heart symbol under an item on a search results page."
+      ],
+      "source": "https://www.ebay.com/help/buying/search-tips/watchlist?id=4046"
+    }
+  ]
 }

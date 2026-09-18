@@ -6,45 +6,8 @@
   "category": "websites_apps_commerce",
   "summary": "No-code app builder from Google.",
   "signInURL": "https://www.appsheet.com/Template/Apps",
-  "triggers": [
-    "appsheet",
-    "appsheet.com"
-  ],
+  "triggers": ["appsheet", "appsheet.com"],
   "sections": [],
-  "depth": "deep",
-  "flows": [
-    {
-      "title": "Create an app from the My Apps page",
-      "startURL": "https://www.appsheet.com/Template/Apps",
-      "steps": [
-        "Once signed in to AppSheet, the My Apps page is displayed by default. To get back to it later, click My Apps in the top navigation.",
-        "Click + Create, then choose how to start: with your own data, from a sample app template, with a blank app, or by using Gemini.",
-        "The app opens. Try out the live app in the welcome modal, then click Customize with AppSheet to go to the AppSheet app editor."
-      ],
-      "source": "https://support.google.com/appsheet/answer/11980957?hl=en"
-    },
-    {
-      "title": "Create an AppSheet database by importing a Google Sheet",
-      "startURL": "https://www.appsheet.com/Template/Apps",
-      "steps": [
-        "In AppSheet, select Create > Database > Import from Sheets.",
-        "Navigate to and select the Sheet to import. A new AppSheet database is created from the Sheet's data and opened in the database editor, named after the Sheet.",
-        "If pop-ups are blocked in your browser, the database may not open by itself. Click Databases in the top navigation, then click the new database to open it.",
-        "Each of the Sheet's tables appears as a tab in the database editor. Select a table's tab to view and manage its columns and rows."
-      ],
-      "source": "https://support.google.com/appsheet/answer/14009539?hl=en"
-    },
-    {
-      "title": "Add a view to an app",
-      "startURL": "https://www.appsheet.com/Template/Apps",
-      "steps": [
-        "Open the app in the AppSheet app editor, then select Apps > Views in the navigation bar. The Views page is displayed.",
-        "In the navigation pane, click + next to Primary Navigation. The Add a new view dialog is displayed.",
-        "Click Create a new view.",
-        "Edit the new view: change the View name field, choose the table in the For this data drop-down, and choose a View type such as deck.",
-        "In the top toolbar, click Save to save the changes to your app."
-      ],
-      "source": "https://support.google.com/appsheet/answer/14009539?hl=en"
-    }
-  ]
+  "depth": "shallow",
+  "flows": []
 }
