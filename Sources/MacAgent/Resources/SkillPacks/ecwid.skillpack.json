@@ -6,8 +6,34 @@
   "category": "websites_apps_commerce",
   "summary": "Ecommerce store builder.",
   "signInURL": "https://my.ecwid.com/",
-  "triggers": ["ecwid", "ecwid.com"],
+  "triggers": [
+    "ecwid",
+    "ecwid.com"
+  ],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Search and filter your customers",
+      "startURL": "https://my.ecwid.com/",
+      "steps": [
+        "From your Ecwid admin, go to My Sales → Customers.",
+        "Search for a full name or email address, or click Filter in the upper left corner and select the filters and conditions you want, such as tax-exempt status, whether they accept email marketing, or number of orders.",
+        "The customers matching the filters are shown. Move between pages if there are several.",
+        "To remove the filters, clear the name you entered or unselect a filter."
+      ],
+      "source": "https://support.ecwid.com/hc/en-us/articles/115003429065-Managing-customers"
+    },
+    {
+      "title": "Add a customer by hand",
+      "startURL": "https://my.ecwid.com/",
+      "steps": [
+        "From your Ecwid admin, go to My Sales → Customers.",
+        "Click + Add New Customer.",
+        "Fill out the customer's name, email, phone number, shipping address and other data. The page notes you may need the customer's clear consent before adding their personal information.",
+        "Save the changes."
+      ],
+      "source": "https://support.ecwid.com/hc/en-us/articles/115003429065-Managing-customers"
+    }
+  ]
 }

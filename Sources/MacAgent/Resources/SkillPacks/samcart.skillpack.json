@@ -6,8 +6,24 @@
   "category": "websites_apps_commerce",
   "summary": "Checkout pages and online sales platform.",
   "signInURL": "https://app.samcart.com/auth/login",
-  "triggers": ["samcart", "samcart.com"],
+  "triggers": [
+    "samcart",
+    "samcart.com"
+  ],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Connect a webhook from the App Marketplace",
+      "startURL": "https://app.samcart.com/auth/login",
+      "steps": [
+        "Click Apps in the left-hand navigation bar to open the App Marketplace.",
+        "Search for Webhooks and click Install.",
+        "In the popup window, enter the endpoint you want SamCart to send an HTTP POST to in the box labeled Notify URL, including https://.",
+        "Click Connect. You land on the Installed tab of the App Marketplace, which lists every installed app.",
+        "Click Webhooks to see the new connection. From the Webhooks page, + Add New Rule sets which events are sent to it."
+      ],
+      "source": "https://help.samcart.com/support/solutions/articles/60000506436-using-webhooks-on-samcart"
+    }
+  ]
 }
