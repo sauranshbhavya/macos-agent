@@ -15,18 +15,28 @@ Same packaged app. Sign in to Kajabi yourself first.
 - [ ] Ask it to add a tag to one contact in Kajabi. It opens the contact from the Contacts tab and uses Add Tag, then Save.
 - [ ] Nothing in either proposal touches Offers, payments or a purchase.
 
-### The six new packs' start pages are sign-in pages, not sign-up pages (new 2026-09-17, SONNY-504)
+### Sonny follows an eBay flow it now knows (new 2026-09-18, SONNY-504)
 
-No app needed — a browser signed out of everything, which is what Sonny meets on a fresh Mac. Each was measured once in this branch's session; if a page has moved, note what it now shows.
+Same packaged app. Sign in to eBay yourself first.
 
-- [ ] `https://be.contentful.com/login/` — "Log in to your Contentful account", email and password, Sign up is not the form.
-- [ ] `https://www.appsheet.com/Template/Apps` — redirects to AppSheet's "Sign in with:" page listing Google, Microsoft, Apple, Dropbox, Smartsheet, Box and Salesforce, under the line "By signing in, you agree to the terms of service and privacy policy". No account-creation form.
-- [ ] `https://app.unbounce.com/users/sign_in` — "Sign into your Unbounce account", with Create an account as a link.
-- [ ] `https://account.squarespace.com/` — sends you to login.squarespace.com, "Log into Squarespace", with Create Account demoted.
-- [ ] `https://id.kajabi.com/u/login` — "Sign in to your account", with Sign up here as a link.
-- [ ] `https://app.samcart.com/auth/login` — "Login | SamCart", email and password, Sign Up a link to the pricing page.
-- [ ] For contrast, the reason Zoho Creator was left out: `https://creator.zoho.com/` sends a signed-out visitor to `https://www.zoho.com/creator/`, a marketing page carrying an account-creation form with a password box and an "I agree to the Terms of Service" checkbox.
+- [ ] Ask Sonny to save an eBay search for something you look for often. It searches, then selects Save this search at the top of the results — it does not open a listing or offer to bid or buy.
+- [ ] Ask it to tidy your eBay Watchlist. It goes to My eBay → Watching, and offers Sort, the Status dropdown, and tick-and-Delete.
 
-### This group's other sites still carrying facts alone is not a finding (new 2026-09-17, SONNY-503, SONNY-504)
+### The nine new packs' start pages are sign-in pages or a shop front, not sign-up pages (new 2026-09-18, SONNY-504)
 
-- [ ] linkedin_ads, tiktok_ads, metricool, ebay, etsy, ecwid, clickfunnels, thrivecart, bubble, glide and zoho_creator are still shallow packs after this branch — named on SONNY-503 and SONNY-504 with the reason for each. Skip them when checking deep flows.
+No app needed — a browser signed out of everything, which is what Sonny meets on a fresh Mac. Each was measured once on this branch; if a page has moved, note what it now shows.
+
+- [ ] `https://be.contentful.com/login/` — "Log in to your Contentful account", email and password.
+- [ ] `https://app.unbounce.com/users/sign_in` — "Sign into your Unbounce account", Create an account a link.
+- [ ] `https://account.squarespace.com/` — goes to login.squarespace.com, "Log into Squarespace", Create Account demoted.
+- [ ] `https://id.kajabi.com/u/login` — "Sign in to your account", Sign up here a link.
+- [ ] `https://app.samcart.com/auth/login` — "Login | SamCart", Sign Up a link to the pricing page.
+- [ ] `https://www.ebay.com/` — the homepage: a search box, Sign in and register as links, a My eBay menu.
+- [ ] `https://www.etsy.com/` — the shop homepage with its search box and Sign in. A cookie notice may show at the bottom right; leave it alone. It is the one agreement text on the page, and it was ruled not to be a terms acceptance bound to a flow's control.
+- [ ] `https://app.clickfunnels.com/users/sign_in` — "ClickFunnels - Login", Sign Up a link, no agreement text.
+- [ ] `https://thrivecart.com/signin/` — email, password and Sign In, no sign-up form.
+- [ ] For contrast, the held ones should still show what held them: `https://www.appsheet.com/Template/Apps` ("By signing in, you agree…" under its provider buttons), `https://my.ecwid.com/` ("By continuing, you agree…"), `https://www.linkedin.com/login` (the same, under Continue with Google), `https://app.bubble.io/login` (a sign-up form), and `https://creator.zoho.com/` (a www.zoho.com sign-up form).
+
+### This group's remaining sites still carrying facts alone is not a finding (new 2026-09-18, SONNY-503, SONNY-504)
+
+- [ ] appsheet, ecwid, bubble, glide, zoho_creator, linkedin_ads, metricool and tiktok_ads are still shallow packs after this branch — each named on SONNY-503 or SONNY-504 with the start-page or flow reason. Skip them when checking deep flows.
