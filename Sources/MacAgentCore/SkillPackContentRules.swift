@@ -33,9 +33,12 @@ struct SkillWords {
     /// before this array existed. The shape is not exotic, and the count depends on which
     /// punctuation is called a boundary, so the instrument is named with the number:
     /// `python3 -c "import json,glob,re; steps=[s for f in glob.glob('Sources/MacAgent/Resources/SkillPacks/' + '*.skillpack.json') for fl in json.load(open(f))['flows'] for s in fl['steps']]; print(len(steps), sum(1 for s in steps if re.search(r'[.:;!?]\s+\S', s)), sum(1 for s in steps if re.search(r'[.!?]\s+\S', s)))"`
-    /// → `1767 495 381` at `9ae00161`, after this branch's one hop onto a `main` three pack
-    /// branches had grown under it. The figure reads the shipped pack resources only, which no commit
-    /// on this branch touches. (The glob is written as two joined strings for the reason
+    /// → `1767 495 381` at `18f125fe`. The figure reads the shipped pack resources only, and
+    /// `Sources/MacAgent/Resources/SkillPacks` is one tree hash at that commit and at this branch's
+    /// head, so it is a reading of both. **It is stamped at a commit on `main` rather than at a
+    /// branch head on purpose**: this branch hopped twice while it was open, and each hop orphaned
+    /// every head it had stamped — `git merge-base --is-ancestor` exits 1 on them now — while a
+    /// commit `main` holds stays fetchable for good. (The glob is written as two joined strings for the reason
     /// `CLAUDE.md` gives: a slash-star in a line comment opens a block-comment span that
     /// `MacAgentSource.read` never closes, and everything below it vanishes from every source scan in
     /// the tree. Writing the number with its command is what put it there, which is the trap that

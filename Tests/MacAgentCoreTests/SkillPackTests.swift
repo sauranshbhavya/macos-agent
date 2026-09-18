@@ -577,10 +577,12 @@ struct SkillPackTests {
     /// **A flow that ends in a purchase does not load either** (SONNY-506). The founders' rule is
     /// that no flow moves money, and buying is money leaving the user — but the rule's first two
     /// tests were built for money *movement*, so barely a purchase word sat on any list until this
-    /// table did: **15 of the 17 rows it then held loaded** at `981c6e56` — this file *as it stood at
-    /// `c36c8107`*, before review-268 added the last five rows, run against that tree's
+    /// table did: **15 of the 17 rows it then held loaded** at `981c6e56` — this file as it stood
+    /// *before review-268 added the last five rows*, run against that tree's
     /// `SkillPackContentRules.swift` and `SkillGuidance.swift`, where it records 15 issues, every one
-    /// of them `did not refuse as moving money: nil`. The five rows added after that measurement have
+    /// of them `did not refuse as moving money: nil`. (That intermediate state is described rather
+    /// than cited: it was a head on this branch, and two hops onto `main` have since orphaned every
+    /// one of those. `981c6e56` is on `main` and still resolves.) The five rows added after that measurement have
     /// a control of their own and a sharper one: delete the list entry each exists for and exactly
     /// that row turns red, naming the word. The two that did not are "Pick a courier",
     /// whose "Confirm and pay" refuses on test 1's `pay`, and "Top up the balance", whose title is a
@@ -697,8 +699,8 @@ struct SkillPackTests {
     /// pack lane owes is therefore writing down where the flow leaves the user, not finding better
     /// words for the button.
     ///
-    /// Run against `981c6e56` — this test as it stood at `c36c8107` — it records exactly **one**
-    /// issue, and it is the header assertion below: both expectations about the money rule already
+    /// Run against `981c6e56` — this test as it stood before review-268's round — it records
+    /// exactly **one** issue, and it is the header assertion below: both expectations about the money rule already
     /// held there, unchanged by everything SONNY-506 added. That is what "the rule cannot see it" means, measured rather than
     /// asserted.
     ///
@@ -797,7 +799,7 @@ struct SkillPackTests {
     /// The rule refused that clause, so the pack shipped without it rather than renaming a control
     /// nobody could then find. SONNY-492 answered the same question the same way in the trigger
     /// check: teach the check the words. Run against `981c6e56` the same way — this test as it stood
-    /// at `c36c8107`, before review-268 added the boundary table — it records **6 issues**: every row
+    /// before review-268 added the boundary table — it records **6 issues**: every row
     /// of the first table, and **none** of the second, which is what says the change is a narrowing
     /// of one word rather than a loosening of the rule.
     ///
