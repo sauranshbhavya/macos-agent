@@ -3,6 +3,8 @@ import {
   ProviderRejected,
   ProviderUnavailable,
   type AuthProvider,
+  type OAuthProviderName,
+  type OAuthSession,
   type SentCode,
   type VerifiedSession,
 } from "./provider.js";
@@ -176,6 +178,42 @@ const sessionResponse = z.object({
     .passthrough(),
 });
 
+/**
+ * The identities GoTrue returns on a session's `user`, as far as `exchangeOAuthCode` reads them.
+ *
+ * **`id` is the provider's own id and `identity_id` is GoTrue's row id**, a naming GoTrue keeps for
+ * backward compatibility with its own client library (`internal/models/identity.go`: `ProviderID
+ * string json:"id"`, `ID uuid.UUID json:"identity_id"`). So `id` is Google's `sub`, which is the
+ * subject the identity rule keys on. `identity_data` is the provider's own claim set: `sub` there
+ * should equal `id`, and `email_verified` is read only when it is a real boolean, because a missing
+ * or oddly typed value must fall to "unverified" — the direction in which rule 2 neither links nor
+ * flags.
+ */
+const identitiesResponse = z.object({
+  user: z
+    .object({
+      identities: z
+        .array(
+          z
+            .object({
+              id: z.string().min(1),
+              provider: z.string().min(1),
+              identity_data: z
+                .object({
+                  sub: z.string().optional(),
+                  email: z.string().optional(),
+                  email_verified: z.unknown().optional(),
+                })
+                .passthrough()
+                .nullish(),
+            })
+            .passthrough(),
+        )
+        .nullish(),
+    })
+    .passthrough(),
+});
+
 /** GoTrue's `/user`. Only the id is read; the rest of the row is the provider's business. */
 const userResponse = z.object({ id: z.string().min(1) }).passthrough();
 
@@ -237,6 +275,9 @@ const CALLER_REJECTED_CODES: ReadonlySet<string> = new Set([
   "invalid_credentials",
   "flow_state_not_found",
   "flow_state_expired",
+  // The PKCE exchange's own refusal: the verifier does not hash to the challenge the flow started
+  // with (SONNY-129). A 400 either way; named so the reason is on record.
+  "bad_code_verifier",
 ]);
 
 /**
@@ -359,6 +400,76 @@ export class SupabaseAuthProvider implements AuthProvider {
       bearer: accessToken,
       signal,
     });
+  }
+
+  /**
+   * `GET /authorize?provider=…` with a PKCE challenge — built, never fetched (SONNY-129).
+   *
+   * **This is GoTrue's PKCE flow and not the implicit one**, and the difference is the whole of why a
+   * public client may use it: with `code_challenge` present GoTrue stores the challenge, redirects to
+   * `redirect_to` with a one-time `code` in the query rather than tokens in the fragment, and will
+   * exchange that code only for the verifier the challenge was derived from. `s256` is the method
+   * GoTrue's own client sends and is the only one the gateway offers; `plain` would put the verifier
+   * in the URL.
+   *
+   * No `apikey` in the URL: `/authorize` is navigated by a browser, which cannot add a header, and is
+   * served without one.
+   */
+  oauthAuthorizeUrl(provider: OAuthProviderName, redirectTo: string, codeChallenge: string): string {
+    const query = new URLSearchParams({
+      provider,
+      redirect_to: redirectTo,
+      code_challenge: codeChallenge,
+      code_challenge_method: "s256",
+    });
+    return `${this.#authUrl}/authorize?${query.toString()}`;
+  }
+
+  /**
+   * `POST /token?grant_type=pkce` — the code the browser brought back, and its verifier, for a session.
+   *
+   * **The identity comes from `user.identities`, and it is the one for `provider` — never the user's
+   * primary address and never the first identity in the list.** Supabase links sign-ins with the same
+   * verified address into one user, so the user this returns may carry an `email` identity from an
+   * earlier sign-in beside the `google` one this exchange produced; reading the wrong one would resolve
+   * the account by the wrong `(provider, subject)`. Exactly one identity for the provider is required:
+   * none, or two, is a response this adapter does not understand, and it fails as unavailable rather
+   * than choosing — the rule this file's header gives for a 200 it cannot read.
+   */
+  async exchangeOAuthCode(
+    provider: OAuthProviderName,
+    authCode: string,
+    codeVerifier: string,
+    signal?: AbortSignal,
+  ): Promise<OAuthSession> {
+    const body = await this.#call("exchangeOAuthCode", "/token?grant_type=pkce", {
+      method: "POST",
+      key: this.#anonKey,
+      json: { auth_code: authCode, code_verifier: codeVerifier },
+      signal,
+    });
+    const session = this.#session("exchangeOAuthCode", body);
+    const parsed = identitiesResponse.safeParse(body);
+    const matching = parsed.success
+      ? (parsed.data.user.identities ?? []).filter((identity) => identity.provider === provider)
+      : [];
+    const identity = matching.length === 1 ? matching[0]! : undefined;
+    const claimedSub = identity?.identity_data?.sub;
+    if (identity === undefined || (claimedSub !== undefined && claimedSub !== identity.id)) {
+      throw new ProviderUnavailable(
+        `supabase exchangeOAuthCode returned no single readable ${provider} identity`,
+      );
+    }
+    const data = identity.identity_data ?? {};
+    return {
+      ...session,
+      identity: {
+        provider,
+        subject: identity.id,
+        email: data.email === undefined || data.email === "" ? undefined : data.email,
+        emailVerified: data.email_verified === true,
+      },
+    };
   }
 
   /**

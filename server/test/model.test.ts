@@ -13,6 +13,7 @@ import { testConfig } from "./support/config.js";
 import { fakeEntitlementStore } from "./support/entitlement.js";
 import { accessTokenFor } from "./support/tokens.js";
 import { signedInConnectionTo } from "./support/connection.js";
+import { WithoutOAuth } from "./support/without-oauth.js";
 
 /**
  * The four credential-bearing routes SONNY-130 moved behind this gateway.
@@ -32,7 +33,7 @@ import { signedInConnectionTo } from "./support/connection.js";
 const SUPABASE_USER = "0f6c2c4e-8f2a-4a0f-9a11-2b6f5f2a77aa";
 const ACCOUNT = "8a1d0c8e-1c5a-4a9f-9f6b-2b6f5f2a77ab";
 
-class UnusedAuthProvider implements AuthProvider {
+class UnusedAuthProvider extends WithoutOAuth implements AuthProvider {
   async sendEmailCode() {
     return { providerRequestId: undefined };
   }

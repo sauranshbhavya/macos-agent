@@ -28,6 +28,7 @@ import { testConfig } from "./support/config.js";
 import { fakeEntitlementStore } from "./support/entitlement.js";
 import { accessTokenFor } from "./support/tokens.js";
 import { signedInConnectionTo } from "./support/connection.js";
+import { WithoutOAuth } from "./support/without-oauth.js";
 
 /**
  * Topping up happens only if you asked (SONNY-215).
@@ -781,7 +782,7 @@ describe("a top-up raises the allowance rather than lowering the draw", () => {
 
 // ── The routes ────────────────────────────────────────────────────────────────────────────────
 
-class UnusedAuthProvider implements AuthProvider {
+class UnusedAuthProvider extends WithoutOAuth implements AuthProvider {
   async sendEmailCode() {
     return { providerRequestId: undefined };
   }

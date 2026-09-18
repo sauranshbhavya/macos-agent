@@ -16,6 +16,7 @@ import {
 import { owedByAccount } from "../src/revocations.js";
 import { rebuildSchema } from "./support/schema.js";
 import { afterAllUnderHangBackstop, beforeAllUnderHangBackstop, beforeEachUnderHangBackstop, itUnderHangBackstop } from "./support/backstop.js";
+import { WithoutOAuth } from "./support/without-oauth.js";
 
 /**
  * The identity lifecycle's provider-side half: what happens to a `supabase_user_id` that stops being
@@ -40,7 +41,7 @@ const SECOND = "aaaaaaaa-0000-4000-8000-000000000002";
 const THIRD = "aaaaaaaa-0000-4000-8000-000000000003";
 
 /** Records what it was asked to revoke; fails for whatever the test names. */
-class RecordingProvider implements AuthProvider {
+class RecordingProvider extends WithoutOAuth implements AuthProvider {
   revokedUsers: string[] = [];
   failFor = new Set<string>();
   rejectFor = new Set<string>();

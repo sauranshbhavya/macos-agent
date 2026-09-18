@@ -13,6 +13,7 @@ import { testConfig } from "./support/config.js";
 import { fakeEntitlementStore } from "./support/entitlement.js";
 import { accessTokenFor } from "./support/tokens.js";
 import { signedInConnectionTo } from "./support/connection.js";
+import { WithoutOAuth } from "./support/without-oauth.js";
 
 /**
  * Contract §9.2, driven through the whole real app (SONNY-300).
@@ -34,7 +35,7 @@ const OTHER_SUPABASE_USER = "1a1a1a1a-2b2b-4c4c-8d8d-3e3e3e3e3e3e";
 const OTHER_ACCOUNT = "9b9b9b9b-4c4c-4d4d-8e8e-5f5f5f5f5f5f";
 const KEY = "6f1b8a2c-0000-4000-8000-abcdefabcdef";
 
-class UnusedAuthProvider implements AuthProvider {
+class UnusedAuthProvider extends WithoutOAuth implements AuthProvider {
   async sendEmailCode() {
     return { providerRequestId: undefined };
   }

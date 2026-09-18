@@ -27,6 +27,7 @@ import { catalogueOf, fakeCreditStore, TEST_CREDIT_PLANS } from "./support/credi
 import { fakeEntitlementStore } from "./support/entitlement.js";
 import { accessTokenFor } from "./support/tokens.js";
 import { signedInConnectionTo } from "./support/connection.js";
+import { WithoutOAuth } from "./support/without-oauth.js";
 
 /**
  * The credit/allowance model, and the one number a user tracks (SONNY-212).
@@ -461,7 +462,7 @@ describe("which plan an account draws against", () => {
   });
 });
 
-class UnusedAuthProvider implements AuthProvider {
+class UnusedAuthProvider extends WithoutOAuth implements AuthProvider {
   async sendEmailCode() {
     return { providerRequestId: undefined };
   }

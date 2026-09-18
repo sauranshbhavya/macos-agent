@@ -56,6 +56,14 @@ export function signedInConnectionTo(options: SignedInConnectionOptions): WithCo
         if (text.includes("FROM sonny.revoked_provider_session")) {
           return { rows: [] };
         }
+        // Every caller in these suites signed in through this gateway, so every session is one it
+        // started (SONNY-129). The gate asks after attribution, keyed on the session, the user and the
+        // account attribution just answered — so answering yes here admits exactly the caller the
+        // identity arm below admits and no one else. A suite about a session the gateway did NOT start
+        // drives a real database: `gateway-session.db.test.ts`.
+        if (text.includes("FROM sonny.gateway_session")) {
+          return { rows: [{ "?column?": 1 }] };
+        }
         if (!text.includes("FROM sonny.identity")) {
           throw new Error(`unexpected query ${options.where}: ${text}`);
         }

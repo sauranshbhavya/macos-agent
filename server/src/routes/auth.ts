@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import type pg from "pg";
 import { z } from "zod";
 import {
   CODE_LIFETIME_SECONDS, callerOriginatedLatestCode, classifyFailure, consumeLatest, issueCode,
@@ -8,19 +9,31 @@ import { accountForSupabaseUser } from "../auth/attribution.js";
 import { expiryFields } from "../auth/clock.js";
 import { denylistedUntil, revokeProviderSession } from "../auth/denylist.js";
 import { callerOf } from "../auth/gate.js";
-import { looksLikeEmail, normalizeEmail, rateLimitEmailKey, resolve } from "../auth/identity.js";
-import { ProviderRejected, ProviderUnavailable, type AuthProvider } from "../auth/provider.js";
+import {
+  isGatewaySession, mintedSessionOf, recordGatewaySession, type SignInMethod,
+} from "../auth/gateway-session.js";
+import {
+  looksLikeEmail, normalizeEmail, rateLimitEmailKey, resolve, type Assertion,
+} from "../auth/identity.js";
+import {
+  AUTH_CODE_PATTERN, CODE_CHALLENGE_PATTERN, CODE_VERIFIER_PATTERN, OAUTH_REDIRECT_URL,
+} from "../auth/oauth.js";
+import {
+  ProviderRejected, ProviderUnavailable, type AuthProvider, type VerifiedSession,
+} from "../auth/provider.js";
 import { drainOwedRevocations, type RevocationOutcome } from "../auth/revocation.js";
 import {
   CODE_REQUEST_PER_ADDRESS, CODE_REQUEST_PER_SOURCE, CODE_VERIFY_PER_ADDRESS,
-  CODE_VERIFY_PER_SOURCE,
+  CODE_VERIFY_PER_SOURCE, OAUTH_EXCHANGE_PER_SOURCE,
   bucketKey, consume,
 } from "../auth/ratelimit.js";
+import { signInGuardVerdict, withProviderUserLock } from "../auth/signin-guard.js";
+import type { SupabaseJwtPolicy } from "../auth/token.js";
 import { errorBody } from "../errors.js";
 import { DEADLINE_MS } from "../model/limits.js";
 import { sendUpstreamFailure, withDeadlines } from "../model/routing.js";
 import { ProviderTimedOut } from "../model/upstream.js";
-import type { Config } from "../config.js";
+import { requireSupabaseJwtPolicy, type Config } from "../config.js";
 import { deleteContentForAccount, type DeletionOutcome } from "../content/store.js";
 import { deleteStoredResponsesForAccount } from "../idempotency/store.js";
 import type { WithConnection } from "../db/connection.js";
@@ -41,6 +54,11 @@ export interface AuthDeps {
 
 const startBody = z.object({ email: z.string() });
 const verifyBody = z.object({ email: z.string(), code: z.string() });
+const oauthStartBody = z.object({ code_challenge: z.string().regex(CODE_CHALLENGE_PATTERN) });
+const oauthExchangeBody = z.object({
+  auth_code: z.string().regex(AUTH_CODE_PATTERN),
+  code_verifier: z.string().regex(CODE_VERIFIER_PATTERN),
+});
 
 /** Source identity for the per-source limit. Never logged raw, never stored raw. */
 function sourceOf(request: FastifyRequest): string {
@@ -138,6 +156,115 @@ function timedOut(request: FastifyRequest, reply: FastifyReply, error: unknown):
 export function registerAuth(app: FastifyInstance, config: Config, deps: AuthDeps): void {
   const now = deps.now ?? (() => new Date());
   const salt = config.rateLimitSalt;
+  // **The gate's own policy, built the gate's own way** (SONNY-129). A sign-in verifies the token it
+  // was just handed with exactly what `auth/gate.ts` will verify every later token of that session
+  // with, so the two cannot disagree about whether a session is one this gateway can honour.
+  const policy: SupabaseJwtPolicy = requireSupabaseJwtPolicy(config, now());
+
+  /**
+   * End a provider session this gateway will not hand out (SONNY-129). **Best-effort, and after any
+   * lock is released**: it is one provider call under §12's deadline, a failure is logged and
+   * otherwise ignored, and the caller's answer does not depend on it. `signOut` is `scope=local`, so
+   * it ends this one session and never the provider-side user's others — which matters most in the
+   * case that calls it most, where that user's other sessions belong to someone's existing account.
+   */
+  async function endUnissuedSession(request: FastifyRequest, session: VerifiedSession): Promise<void> {
+    try {
+      await withDeadlines(AUTH_DEADLINES, (signal) => deps.provider.signOut(session.accessToken, signal));
+    } catch (error) {
+      request.log.warn(
+        { requestId: request.id, err_name: (error as Error)?.name },
+        "a provider session this gateway refused to hand out could not be ended; it lives until it expires",
+      );
+    }
+  }
+
+  /**
+   * Everything both sign-in routes do once the provider has minted a session (SONNY-129): read the
+   * session, refuse a sign-in that would split a provider-side user across two accounts, resolve the
+   * account, record the session, answer §3.2.
+   *
+   * **Why one function.** `email/verify` and `oauth/google` differ in how they reach a session and in
+   * nothing after it. The two properties this ticket adds — the guard and the session record — are
+   * security properties of *every* sign-in, and two copies of them are the shape where one gets
+   * hardened and the other does not.
+   *
+   * **The order is the argument.** The session is read and verified first, because a token this
+   * gateway cannot verify must not become an account row. The guard, `resolve()` and the record then
+   * run under one lock on the provider-side user, so a concurrent sign-in for the same user cannot
+   * slip between the guard's answer and the account it permits. The refused session is ended after
+   * the lock is released, because that is a network call and nothing holding a lock waits on one.
+   */
+  async function completeSignIn(
+    client: pg.Client,
+    request: FastifyRequest,
+    reply: FastifyReply,
+    session: VerifiedSession,
+    assertion: Assertion,
+    method: SignInMethod,
+    shownEmail: string | undefined,
+  ): Promise<FastifyReply> {
+    const minted = mintedSessionOf(session.accessToken, session.supabaseUserId, policy, now());
+    if (minted === undefined) {
+      // A token the gate would refuse on every request. Logged as a deployment fault — the usual
+      // cause is a project whose signing key is not the one `SUPABASE_JWT_SECRET` holds — and never
+      // handed out, so the user is told sign-in failed rather than told they are signed in.
+      request.log.error(
+        { requestId: request.id, method },
+        "the provider minted a session whose access token this gateway cannot verify or read a " +
+          "session from; check that the project signs with the key SUPABASE_JWT_SECRET holds",
+      );
+      await endUnissuedSession(request, session);
+      return reply.status(500).send(
+        errorBody("server.error", "Sign-in could not be completed.", request.id, { retryable: true }),
+      );
+    }
+
+    const outcome = await withProviderUserLock(client, minted.supabaseUserId, async () => {
+      const verdict = await signInGuardVerdict(
+        client, minted.supabaseUserId, assertion.provider, assertion.subject,
+      );
+      if (!verdict.proceed) return verdict;
+      const resolution = await resolve(client, assertion);
+      await recordGatewaySession(client, minted, resolution.accountId, method);
+      return { proceed: true as const, resolution };
+    });
+
+    if (!outcome.proceed) {
+      await endUnissuedSession(request, session);
+      request.log.info(
+        { requestId: request.id, method, reason: outcome.reason },
+        "sign-in refused: its provider-side user belongs to an account this sign-in would not land on",
+      );
+      if (outcome.reason === "already_ambiguous") {
+        // What the gate and refresh answer for the same state, so the three cannot disagree.
+        return reply.status(401).send(
+          errorBody("auth.token_revoked", "This session cannot be attributed to a single account.", request.id),
+        );
+      }
+      return reply.status(409).send(
+        errorBody(
+          "auth.account_exists",
+          "This sign-in belongs to an account that was reached another way.",
+          request.id,
+        ),
+      );
+    }
+
+    const { resolution } = outcome;
+    const issued = now();
+    return reply.status(200).send({
+      access_token: session.accessToken,
+      token_type: "Bearer",
+      ...expiryFields(issued, session.expiresIn),
+      refresh_token: session.refreshToken,
+      ...(session.refreshExpiresIn !== undefined
+        ? { refresh_expires_at: expiryFields(issued, session.refreshExpiresIn).expires_at }
+        : {}),
+      user: { id: resolution.accountId, ...(shownEmail !== undefined ? { email: shownEmail } : {}) },
+      ...(resolution.linkHint ? { link_hint: resolution.linkHint } : {}),
+    });
+  }
 
   /**
    * `POST /v1/auth/email/start` — request a sign-in code.
@@ -337,26 +464,118 @@ export function registerAuth(app: FastifyInstance, config: Config, deps: AuthDep
       );
     }
 
-    const resolution = await resolve(client, {
-      provider: "email",
-      subject: email,
-      email,
-      emailVerified: true, // possession of the mailbox is what this flow proves
-      supabaseUserId: session.supabaseUserId,
+    // **Refused here too, not only on the Google route** (SONNY-129, founders' option A). The reverse
+    // order reaches the same lockout: someone who signed up with Google and later asks for an email
+    // code on that address is signed in by Supabase as the Google-created user, and rule 2 would file
+    // a second account under it. The code is already consumed at this point, which is right — the
+    // provider accepted it, so it is spent at the provider too.
+    return completeSignIn(
+      client,
+      request,
+      reply,
+      session,
+      {
+        provider: "email",
+        subject: email,
+        email,
+        emailVerified: true, // possession of the mailbox is what this flow proves
+        supabaseUserId: session.supabaseUserId,
+      },
+      "email",
+      undefined,
+    );
     });
+  });
 
-    const issued = now();
+  /**
+   * `POST /v1/auth/oauth/google/start` — the address to send a browser to (SONNY-129, §3.6).
+   *
+   * **The Mac supplies only the PKCE challenge.** The redirect is `OAUTH_REDIRECT_URL`, fixed, and the
+   * provider address is this gateway's configuration, so the Mac never learns the auth provider's URL
+   * except inside the link it opens. Nothing is stored and nothing is called: the answer is a string
+   * built from the request, which is why this needs no connection and no rate limit — a flood of it
+   * costs this process string formatting and nothing else.
+   */
+  app.post("/v1/auth/oauth/google/start", async (request, reply) => {
+    const parsed = oauthStartBody.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send(
+        errorBody("request.invalid", "A PKCE S256 code challenge is required.", request.id),
+      );
+    }
     return reply.status(200).send({
-      access_token: session.accessToken,
-      token_type: "Bearer",
-      ...expiryFields(issued, session.expiresIn),
-      refresh_token: session.refreshToken,
-      ...(session.refreshExpiresIn !== undefined
-        ? { refresh_expires_at: expiryFields(issued, session.refreshExpiresIn).expires_at }
-        : {}),
-      user: { id: resolution.accountId },
-      ...(resolution.linkHint ? { link_hint: resolution.linkHint } : {}),
+      authorize_url: deps.provider.oauthAuthorizeUrl("google", OAUTH_REDIRECT_URL, parsed.data.code_challenge),
     });
+  });
+
+  /**
+   * `POST /v1/auth/oauth/google` — the code the browser brought back, and the verifier behind the
+   * challenge, for the §3.2 token response (SONNY-129).
+   *
+   * **Not retry-safe, like `email/verify`** (§9.3): the code is single-use at the provider, so the
+   * idempotency record returns the original result and a genuine second attempt is refused.
+   *
+   * **Three refusals a caller can see, each for a different reason.** A body that is not a code and
+   * a verifier is `400 request.invalid`. A pair the provider refuses — an expired or spent flow, a
+   * verifier that does not match — is `400 auth.code_invalid`; GoTrue does not say which, so neither
+   * does this. And a sign-in whose provider-side user already belongs to another account is
+   * `409 auth.account_exists`, from `completeSignIn`.
+   */
+  app.post("/v1/auth/oauth/google", async (request, reply) => {
+    const parsed = oauthExchangeBody.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send(
+        errorBody("request.invalid", "An authorization code and its PKCE verifier are required.", request.id),
+      );
+    }
+    return deps.withConnection(async (client) => {
+      const bySource = await consume(
+        client, bucketKey("oauthsrc", sourceOf(request), salt), OAUTH_EXCHANGE_PER_SOURCE, now());
+      if (!bySource.allowed) {
+        return reply
+          .status(429)
+          .header("Retry-After", String(bySource.retryAfterSeconds))
+          .send(errorBody("limit.rate", "Too many sign-in attempts from this source.", request.id, {
+            retryable: true, retryAfterSeconds: bySource.retryAfterSeconds,
+          }));
+      }
+
+      let session;
+      try {
+        session = await withDeadlines(AUTH_DEADLINES, (signal) =>
+          deps.provider.exchangeOAuthCode(
+            "google", parsed.data.auth_code, parsed.data.code_verifier, signal,
+          ),
+        );
+      } catch (error) {
+        if (error instanceof ProviderRejected) {
+          return reply.status(400).send(
+            errorBody("auth.code_invalid", "Sign-in with Google was not accepted.", request.id),
+          );
+        }
+        if (error instanceof ProviderUnavailable) {
+          return providerUnavailable(request, reply, "Sign-in is temporarily unavailable.");
+        }
+        if (error instanceof ProviderTimedOut) return timedOut(request, reply, error);
+        throw error;
+      }
+
+      const { identity } = session;
+      return completeSignIn(
+        client,
+        request,
+        reply,
+        session,
+        {
+          provider: identity.provider,
+          subject: identity.subject,
+          email: identity.email,
+          emailVerified: identity.emailVerified,
+          supabaseUserId: session.supabaseUserId,
+        },
+        "google",
+        identity.email,
+      );
     });
   });
 
@@ -443,6 +662,18 @@ export function registerAuth(app: FastifyInstance, config: Config, deps: AuthDep
       );
     }
     const accountId = owner.accountId;
+
+    // **A session this gateway did not start is not refreshed here either** (SONNY-129). The gate
+    // refuses its tokens, so rotating them would hand back a pair that opens nothing — and would make
+    // this route a way to keep a session minted at the provider directly alive through Sonny. A
+    // refresh keeps the provider's session id, so the question is the same one the gate asks, of the
+    // token the provider just rotated to, verified the gate's way.
+    const minted = mintedSessionOf(session.accessToken, session.supabaseUserId, policy, now());
+    if (minted === undefined || !(await isGatewaySession(client, minted.sessionId, minted.supabaseUserId, accountId))) {
+      return reply.status(401).send(
+        errorBody("auth.token_revoked", "This session was not started by this gateway.", request.id),
+      );
+    }
 
     const issued = now();
     return reply.status(200).send({

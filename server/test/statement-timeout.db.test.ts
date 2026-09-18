@@ -9,6 +9,7 @@ import { itUnderHangBackstop } from "./support/backstop.js";
 import { testConfig } from "./support/config.js";
 import { rebuildSchema } from "./support/schema.js";
 import { accessTokenFor } from "./support/tokens.js";
+import { WithoutOAuth } from "./support/without-oauth.js";
 
 /**
  * The pool's `statement_timeout`, against a real Postgres (SONNY-427).
@@ -65,15 +66,22 @@ const ANSWER_OR_ADMIT_HUNG_MS = 30_000;
 const BLOCK_OBSERVED_MS = 10_000;
 
 /** Enough provider to sign someone in. Everything this file asserts happens after that. */
-class SigningInProvider implements AuthProvider {
+class SigningInProvider extends WithoutOAuth implements AuthProvider {
   session: VerifiedSession = {
     supabaseUserId: SESSION_USER,
     email: "u@example.com", emailVerified: true,
     accessToken: "provider-issued", refreshToken: "rt", expiresIn: 3600,
   };
   async sendEmailCode(_email: string) { return { providerRequestId: "p1" }; }
-  async verifyEmailCode(_email: string, _code: string): Promise<VerifiedSession> { return this.session; }
-  async refresh(_token: string): Promise<VerifiedSession> { return this.session; }
+  // A real signed token for the current user, with that user's default session id (SONNY-129): a
+  // sign-in route now verifies the token it hands out and records its session, which is the session
+  // every `accessTokenFor(user)` in this file names.
+  async verifyEmailCode(_email: string, _code: string): Promise<VerifiedSession> {
+    return { ...this.session, accessToken: accessTokenFor(this.session.supabaseUserId) };
+  }
+  async refresh(_token: string): Promise<VerifiedSession> {
+    return { ...this.session, accessToken: accessTokenFor(this.session.supabaseUserId) };
+  }
   async signOut(_accessToken: string) {}
   async userFromAccessToken(_accessToken: string): Promise<string> {
     throw new ProviderRejected("the gate verifies locally; this seam is not on the request path");

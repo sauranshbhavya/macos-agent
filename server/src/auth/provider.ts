@@ -46,6 +46,34 @@ export interface VerifiedSession {
   readonly refreshExpiresIn?: number | undefined;
 }
 
+/**
+ * The providers a browser can be sent to (SONNY-129). **Google alone**: Sign in with Apple was
+ * dropped from v1 on 2026-09-18 (SONNY-521), and the identity model's `apple` value stays only
+ * because the account model is not this ticket's to reshape.
+ */
+export const oauthProviders = ["google"] as const;
+export type OAuthProviderName = (typeof oauthProviders)[number];
+
+/**
+ * The provider's own identity for the person who just signed in — what `resolve()` keys on.
+ *
+ * **`subject` is the provider's stable id** (Google's `sub`), never the address. `email` and
+ * `emailVerified` are the provider's assertion about the address, carried for rule 2's flag and for
+ * display, and `emailVerified` is `true` only when the provider said so in so many words: an
+ * unverified assertion neither links nor flags, which is the safe direction for a missing value.
+ */
+export interface OAuthIdentity {
+  readonly provider: OAuthProviderName;
+  readonly subject: string;
+  readonly email: string | undefined;
+  readonly emailVerified: boolean;
+}
+
+/** A session from an OAuth sign-in, plus the identity that produced it. */
+export interface OAuthSession extends VerifiedSession {
+  readonly identity: OAuthIdentity;
+}
+
 export class ProviderRejected extends Error {}
 export class ProviderUnavailable extends Error {}
 
@@ -79,6 +107,25 @@ export interface AuthProvider {
   refresh(refreshToken: string, signal?: AbortSignal): Promise<VerifiedSession>;
   /** Revoke this session's family server-side. */
   signOut(accessToken: string, signal?: AbortSignal): Promise<void>;
+  /**
+   * The address a browser is sent to, to sign in with `provider` (SONNY-129). **Pure: no network.**
+   *
+   * The flow is PKCE: the caller's `codeChallenge` travels in the URL, the verifier it was derived
+   * from never does until `exchangeOAuthCode`, so a code intercepted on its way back to the Mac
+   * cannot be spent by whoever intercepted it. `redirectTo` is where the provider sends that code.
+   */
+  oauthAuthorizeUrl(provider: OAuthProviderName, redirectTo: string, codeChallenge: string): string;
+  /**
+   * Exchange the code a browser brought back, and the verifier behind its challenge, for a session.
+   * `ProviderRejected` when the provider refuses the pair — an expired or already-used flow, or a
+   * verifier that does not match.
+   */
+  exchangeOAuthCode(
+    provider: OAuthProviderName,
+    authCode: string,
+    codeVerifier: string,
+    signal?: AbortSignal,
+  ): Promise<OAuthSession>;
   /**
    * The provider-side user this access token belongs to, or `ProviderRejected`.
    *

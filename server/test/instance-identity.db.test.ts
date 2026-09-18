@@ -16,6 +16,7 @@ import {
 } from "./support/backstop.js";
 import { testDatabaseUrl } from "./support/database.js";
 import { rebuildSchema } from "./support/schema.js";
+import { WithoutOAuth } from "./support/without-oauth.js";
 
 /**
  * One shape twice: an operation that cannot tell which instance of a thing it is acting on
@@ -51,7 +52,7 @@ const FIRST = "bbbbbbbb-0000-4000-8000-000000000001";
 const SECOND = "bbbbbbbb-0000-4000-8000-000000000002";
 
 /** Records what it was asked to revoke, and can run one write in the middle of the call. */
-class RecordingProvider implements AuthProvider {
+class RecordingProvider extends WithoutOAuth implements AuthProvider {
   revokedUsers: string[] = [];
   /**
    * Runs **inside** `signOutAllForUser`, before the call is recorded, and clears itself so it fires

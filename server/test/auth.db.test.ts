@@ -16,6 +16,7 @@ import { accessTokenFor } from "./support/tokens.js";
 import { testConfig } from "./support/config.js";
 import { rebuildSchema } from "./support/schema.js";
 import { afterAllUnderHangBackstop, beforeAllUnderHangBackstop, beforeEachUnderHangBackstop, itUnderHangBackstop } from "./support/backstop.js";
+import { WithoutOAuth } from "./support/without-oauth.js";
 
 const url = process.env["DATABASE_URL"];
 const describeDb = url ? describe : describe.skip;
@@ -74,7 +75,7 @@ const PINNED_NOW = new Date("2026-08-21T10:37:30Z");
 const EXPIRED_AT = new Date(PINNED_NOW.getTime() - 60_000);
 
 /** A provider that records what it was asked and answers however the test needs. */
-class FakeProvider implements AuthProvider {
+class FakeProvider extends WithoutOAuth implements AuthProvider {
   sent: string[] = [];
   accept = true;
   session: VerifiedSession = {
@@ -162,7 +163,7 @@ class FakeProvider implements AuthProvider {
     if (this.unreachable) throw new ProviderUnavailable("supabase verifyEmailCode could not be reached");
     if (!this.accept) throw new ProviderRejected("Token has expired or is invalid");
     this.liveRefreshToken = this.session.refreshToken;
-    return this.session;
+    return this.minted();
   }
   async refresh(presented: string): Promise<VerifiedSession> {
     if (this.unreachable) throw new ProviderUnavailable("supabase refresh could not be reached");
@@ -171,7 +172,32 @@ class FakeProvider implements AuthProvider {
       throw new ProviderRejected("refresh token was already rotated away");
     }
     this.liveRefreshToken = this.session.refreshToken;
-    return this.session;
+    return this.minted();
+  }
+  /**
+   * The access token this fake last handed a route, so a test can assert the route passed it through.
+   *
+   * **A real signed token, minted per call, and that is SONNY-129's doing.** A sign-in route now
+   * verifies the token it is about to hand out and records the session it belongs to, and refresh
+   * checks that record, so a placeholder string would fail both. It is minted for the fake's *current*
+   * user with `accessTokenFor`'s default session id — the one every token the tests mint for that user
+   * carries — so a session a sign-in records here is the session those tokens name, and a test that
+   * swaps `session.supabaseUserId` gets a token for the user it swapped in.
+   */
+  lastMintedAccessToken: string | undefined;
+  /**
+   * The provider session id the next minted token carries, when a test needs one other than the
+   * user's default. **A real provider never reuses a session id across sign-ins**, and the gateway's
+   * record refuses one session for two accounts — so a test that signs the same user in a second time
+   * onto a different account sets a fresh id here, the way the provider would have minted one.
+   */
+  nextSessionId: string | undefined;
+  private minted(): VerifiedSession {
+    this.lastMintedAccessToken = accessTokenFor(
+      this.session.supabaseUserId,
+      this.nextSessionId === undefined ? {} : { sessionId: this.nextSessionId },
+    );
+    return { ...this.session, accessToken: this.lastMintedAccessToken };
   }
   revokedUsers: string[] = [];
   /** Provider-side users whose revocation raises a TRANSIENT error — not `ProviderRejected`. */
@@ -428,7 +454,7 @@ describeDb("the auth endpoints", () => {
       expect(response.statusCode).toBe(200);
       const body = response.json();
       expect(body.token_type).toBe("Bearer");
-      expect(body.access_token).toBe("at");
+      expect(body.access_token).toBe(provider.lastMintedAccessToken);
       expect(body.refresh_token).toBe("rt");
       expect(body.expires_in).toBe(3600);
       expect(body.expires_at).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
@@ -473,11 +499,17 @@ describeDb("the auth endpoints", () => {
       await app.close();
     });
 
-    itUnderHangBackstop("two addresses one Supabase user covers stay two accounts here", async () => {
-      // The consequence of the line above, stated as behaviour rather than as a column value. Both
-      // sign-ins verify against the SAME provider-side user — which is exactly what automatic
-      // linking produces — and must still resolve to two distinct Sonny accounts, because merging
-      // two accounts is the failure the linking rule exists to prevent.
+    itUnderHangBackstop("two addresses one Supabase user covers do NOT become two accounts: the second sign-in is refused", async () => {
+      // **This test asserted two accounts until SONNY-129, and two accounts is a lockout.** Both
+      // sign-ins verify against the SAME provider-side user — which is exactly what automatic linking
+      // produces — and the old assertion was that each resolved to its own Sonny account, because
+      // merging two accounts is the failure the linking rule exists to prevent. That part still holds:
+      // nothing here merges. What the old outcome also did was leave one Supabase user naming two live
+      // accounts, and `accountForSupabaseUser` answers `ambiguous` for that, so the gate and refresh
+      // refused every token that user held — both people locked out, with no route able to recover it.
+      // SONNY-129 reproduced it on the Google route, where it is the ordinary case rather than a corner.
+      // The founders' option A (2026-09-18) refuses the second sign-in instead: `409
+      // auth.account_exists`, nothing created, the first account untouched and still attributable.
       const app = build();
       provider.session = {
         ...provider.session,
@@ -490,13 +522,20 @@ describeDb("the auth endpoints", () => {
       const second = await verify(app, "123456", "two@example.com");
 
       expect(first.statusCode).toBe(200);
-      expect(second.statusCode).toBe(200);
-      expect(first.json().user.id).not.toBe(second.json().user.id);
+      expect(second.statusCode).toBe(409);
+      expect(second.json().error.code).toBe("auth.account_exists");
       const { rows } = await client.query<{ n: number }>(
         "SELECT count(*)::int AS n FROM sonny.identity WHERE supabase_user_id = $1",
         ["33333333-3333-3333-3333-333333333333"],
       );
-      expect(rows[0]!.n).toBe(2);
+      expect(rows[0]!.n).toBe(1);
+      // The first account is still the one this user attributes to — the property the old outcome
+      // destroyed. Asserted through the query the gate itself runs.
+      const { accountForSupabaseUser } = await import("../src/auth/attribution.js");
+      expect(await accountForSupabaseUser(client, "33333333-3333-3333-3333-333333333333"))
+        .toEqual({ accountId: first.json().user.id });
+      // The refused session was ended at the provider rather than left live and unclaimed.
+      expect(provider.signedOutTokens).toHaveLength(1);
       await app.close();
     });
 
@@ -827,7 +866,10 @@ describeDb("the auth endpoints", () => {
       expect(identities.rows.every((r: { account_closed: boolean }) => r.account_closed)).toBe(true);
       expect(identities.rows.map((r: { link_method: string }) => r.link_method)).toEqual(["explicit", "primary"]);
 
-      // And the address is free again.
+      // And the address is free again. The provider starts a new session for the new sign-in, as it
+      // always does; reusing the first one's id would be a session the gateway already recorded for
+      // the account that was just closed.
+      provider.nextSessionId = "7a0c1e2f-5b3d-4c6e-8f90-a1b2c3d4e5f6";
       await app.inject({ method: "POST", url: "/v1/auth/email/start", payload: { email: "gone@example.com" } });
       const again = await app.inject({ method: "POST", url: "/v1/auth/email/verify", payload: { email: "gone@example.com", code: "1" } });
       expect(again.json().user.id).not.toBe(accountId);

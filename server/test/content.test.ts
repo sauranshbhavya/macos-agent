@@ -32,6 +32,7 @@ import type { WithConnection } from "../src/db/connection.js";
 import { CONTENT_DELETION_DEADLINE_MS } from "../src/model/limits.js";
 import { withDatabaseDeadline } from "../src/model/routing.js";
 import { ProviderTimedOut } from "../src/model/upstream.js";
+import { WithoutOAuth } from "./support/without-oauth.js";
 
 /**
  * Contract §10's content store, driven through the whole real app (SONNY-134).
@@ -59,7 +60,7 @@ import { ProviderTimedOut } from "../src/model/upstream.js";
 const SUPABASE_USER = "0f6c2c4e-8f2a-4a0f-9a11-2b6f5f2a77aa";
 const ACCOUNT = "8a1d0c8e-1c5a-4a9f-9f6b-2b6f5f2a77ab";
 
-class UnusedAuthProvider implements AuthProvider {
+class UnusedAuthProvider extends WithoutOAuth implements AuthProvider {
   async sendEmailCode() {
     return { providerRequestId: undefined };
   }
@@ -1056,6 +1057,8 @@ function stallingConnection(record: string[]): WithConnection {
           void values;
           return { rows: [{ account_id: ACCOUNT }] };
         }
+        // SONNY-129's started-here check, answered as `support/connection.ts` answers it.
+        if (text.includes("FROM sonny.gateway_session")) return { rows: [{ "?column?": 1 }] };
         // **The route's own work, and this is where the wiring is pinned.** A statement under a
         // `statement_timeout` is the one a real backend cancels; a statement under none runs to
         // completion however long it takes. So an unwired route reaches the second branch, answers

@@ -10,6 +10,7 @@ import { testConfig } from "./support/config.js";
 import { fakeEntitlementStore } from "./support/entitlement.js";
 import { accessTokenFor } from "./support/tokens.js";
 import { signedInConnectionTo } from "./support/connection.js";
+import { WithoutOAuth } from "./support/without-oauth.js";
 
 /**
  * §12's deadlines on the auth routes (SONNY-425), for the two of them that reach the provider with
@@ -45,10 +46,12 @@ const ACCOUNT = "8a1d0c8e-1c5a-4a9f-9f6b-2b6f5f2a77ab";
  * `ProviderUnavailable`, which is what that adapter maps an aborted fetch to. The two together are
  * what tell the two deadlines apart.
  */
-class StallingProvider implements AuthProvider {
+class StallingProvider extends WithoutOAuth implements AuthProvider {
   /** The signal each wrapped call was handed, in call order. `undefined` means it was given none. */
   readonly signals: (AbortSignal | undefined)[] = [];
-  constructor(private readonly mode: "stalls" | "abortsOnSignal") {}
+  constructor(private readonly mode: "stalls" | "abortsOnSignal") {
+    super();
+  }
 
   #stall<T>(signal?: AbortSignal): Promise<T> {
     this.signals.push(signal);

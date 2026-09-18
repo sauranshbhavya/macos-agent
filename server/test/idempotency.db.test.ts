@@ -20,7 +20,9 @@ import {
 } from "../src/idempotency/store.js";
 import { testConfig } from "./support/config.js";
 import { accessTokenFor } from "./support/tokens.js";
+import { recordSessionTheGatewayStarted } from "./support/gateway-session.js";
 import { afterAllUnderHangBackstop, beforeAllUnderHangBackstop, beforeEachUnderHangBackstop, itUnderHangBackstop } from "./support/backstop.js";
+import { WithoutOAuth } from "./support/without-oauth.js";
 
 /**
  * The SQL under contract §9.2, against a real Postgres (SONNY-300).
@@ -496,7 +498,7 @@ describeDb("contract §9.2 end to end, over a real Postgres", () => {
     }
   };
 
-  class GateOnlyProvider implements AuthProvider {
+  class GateOnlyProvider extends WithoutOAuth implements AuthProvider {
     async sendEmailCode() {
       return { providerRequestId: undefined };
     }
@@ -540,6 +542,8 @@ describeDb("contract §9.2 end to end, over a real Postgres", () => {
        VALUES ($1, 'email', $2, 'signed-in@example.com', true, false, $3, 'primary')`,
       [ACCOUNT, SUPABASE_USER, SUPABASE_USER],
     );
+    // Signed in through the gateway, which is what makes the token below one it honours (SONNY-129).
+    await recordSessionTheGatewayStarted(client, SUPABASE_USER, ACCOUNT);
     upstreamCalls = 0;
     vi.unstubAllGlobals();
     vi.stubGlobal("fetch", async () => {

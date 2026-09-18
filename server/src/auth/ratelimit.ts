@@ -80,6 +80,19 @@ export const CODE_VERIFY_PER_ADDRESS: Limit = { max: 5, windowSeconds: 15 * 60 }
 export const CODE_VERIFY_PER_SOURCE: Limit = { max: 30, windowSeconds: 60 * 60 };
 
 /**
+ * `POST /v1/auth/oauth/google`, per source (SONNY-129).
+ *
+ * **Not an anti-guessing limit, and the difference decides the number.** An authorization code is a
+ * provider-minted one-time value bound to a PKCE verifier, so there is nothing here to enumerate the
+ * way a six-digit email code can be. What each attempt does spend is one provider call against the
+ * project's quota and one database round trip, from a route anybody can reach — so it carries the
+ * same ceiling `email/verify` does for the same reason, in a bucket of its own, because two limits
+ * counted against one counter would be whichever is smaller. The CGNAT and unset-`TRUSTED_PROXIES`
+ * residuals `CODE_VERIFY_PER_SOURCE` records apply here unchanged.
+ */
+export const OAUTH_EXCHANGE_PER_SOURCE: Limit = { max: 30, windowSeconds: 60 * 60 };
+
+/**
  * How many requests one signed-in account may make in a minute: **120**.
  *
  * **This is an abuse ceiling, not an allowance** (SONNY-135). The distinction is what keeps it out
@@ -114,7 +127,7 @@ export const ACCOUNT_REQUESTS: Limit = { max: 120, windowSeconds: 60 };
  * rainbow-table lookup away from the address itself.
  */
 export function bucketKey(
-  kind: "addr" | "src" | "verify" | "verifysrc" | "acct",
+  kind: "addr" | "src" | "verify" | "verifysrc" | "oauthsrc" | "acct",
   value: string,
   salt: string,
 ): string {
@@ -214,6 +227,7 @@ export const ALL_LIMITS: readonly Limit[] = [
   CODE_REQUEST_PER_SOURCE,
   CODE_VERIFY_PER_ADDRESS,
   CODE_VERIFY_PER_SOURCE,
+  OAUTH_EXCHANGE_PER_SOURCE,
   ACCOUNT_REQUESTS,
 ];
 
