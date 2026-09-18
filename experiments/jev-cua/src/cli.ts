@@ -35,7 +35,7 @@ function treeStamp(): { sha: string; dirty: boolean } {
 function summarise(report: RunReport): string {
   const t = report.totals;
   const lines = [
-    `${report.task.id}: ${report.status.toUpperCase()} — ${report.reason}`,
+    `${report.task.id} (judge: ${config.JUDGE}): ${report.status.toUpperCase()} — ${report.reason}`,
     `  wall ${report.wallMs} ms | actions ${t.actions} | coordinator ${t.coordinatorCalls} calls / ${t.coordinatorMs} ms | jev ${t.jevCalls} calls / ${t.jevMs} ms | text ${t.textCalls} calls / ${t.textMs} ms | driver ${t.driverMs} ms | observe ${t.observeMs} ms`,
     `  rungs: ax ${t.rungs.ax}, px ${t.rungs.px}, foreground ${t.rungs.foreground}; exhausted ${t.exhausted}; truncated snapshots ${t.truncatedSnapshots}`,
     `  human check: ${report.task.humanCheck}`,
@@ -67,7 +67,8 @@ try {
       textHelper: new OpenAITextHelper(openai, config.TEXT_MODEL),
       settings: {
         maxActions: config.MAX_ACTIONS,
-        minOperationConfidence: config.MIN_OPERATION_CONFIDENCE,
+        // jev-ultrafast acts on the argmax; the floor exists to hand control to a coordinator, and there is none.
+        minOperationConfidence: config.JUDGE === "jev" ? 0 : config.MIN_OPERATION_CONFIDENCE,
         waitMs: 500,
         settleMs: 150,
       },
@@ -78,11 +79,11 @@ try {
       driver,
       coordinator: new OpenAICoordinator(openai, config.COORDINATOR_MODEL),
       executor,
-      settings: { maxCoordinatorTurns: config.MAX_COORDINATOR_TURNS, windowWaitMs: 10_000, frontAtLaunch: true },
+      settings: { judge: config.JUDGE, maxCoordinatorTurns: config.MAX_COORDINATOR_TURNS, windowWaitMs: 10_000, frontAtLaunch: true },
       log: (line) => console.log(line),
     });
     const file = resolve(runsDir, `${task.id}-${startedAt}.json`);
-    writeFileSync(file, JSON.stringify({ tree: stamp, models: { coordinator: config.COORDINATOR_MODEL, text: config.TEXT_MODEL, jev: config.TYPESAFE_MODEL }, ...report }, null, 2));
+    writeFileSync(file, JSON.stringify({ tree: stamp, judge: config.JUDGE, models: { coordinator: config.COORDINATOR_MODEL, text: config.TEXT_MODEL, jev: config.TYPESAFE_MODEL }, ...report }, null, 2));
     console.log(`\n${summarise(report)}\n  report: ${file}\n`);
   }
 } finally {

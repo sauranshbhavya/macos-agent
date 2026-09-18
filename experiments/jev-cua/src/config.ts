@@ -14,7 +14,13 @@ const schema = z.object({
   /** Hard ceiling on driver actions per run; the coordinator's own budget sits inside it. */
   MAX_ACTIONS: z.coerce.number().int().positive().default(60),
   MAX_COORDINATOR_TURNS: z.coerce.number().int().positive().default(12),
-  /** Jev's operation confidence below which the executor asks the coordinator instead of acting. */
+  /**
+   * Who judges progress. `jev` (default, jev-ultrafast's shape): Jev sees the whole goal every
+   * step, its DONE ends the run, BLOCKED or a stall fails it, and no coordinator is called.
+   * `coordinator`: the OpenAI model plans instructions and judges after each one.
+   */
+  JUDGE: z.enum(["jev", "coordinator"]).default("jev"),
+  /** Coordinator mode only: Jev's operation confidence below which the executor asks the coordinator instead of acting. */
   MIN_OPERATION_CONFIDENCE: z.coerce.number().min(0).max(1).default(0.35),
   /** Where run reports land. */
   RUNS_DIR: z.string().min(1).default("runs"),

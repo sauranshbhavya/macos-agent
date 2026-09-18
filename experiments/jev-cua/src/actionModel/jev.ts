@@ -30,9 +30,19 @@ export interface ActionModelInput {
   readonly instruction: string;
   readonly goal: string;
   readonly window: { readonly app: string | null; readonly title: string | null };
+  /**
+   * The words on screen — jev-ultrafast's `page.text`. Without it Jev judges from the control
+   * table and its own history alone: it pressed Calculator's "4" twice, unable to see the "4"
+   * already on the display, and called System Settings DONE with "Wallpaper" as the pane title
+   * (SONNY-517, first Jev-as-judge runs). DONE needs evidence, and the evidence is the text.
+   */
+  readonly visibleText: string;
   readonly space: ActionSpace;
   readonly recentActions: readonly RecentAction[];
 }
+
+/** Text past this is cut before the request is fitted; a page's tail rarely decides a step. */
+export const MAX_VISIBLE_TEXT_CHARS = 6000;
 
 export interface Decision {
   readonly operation: Operation;
@@ -136,7 +146,7 @@ export function buildRequest(input: ActionModelInput): {
   const state: EntryType = {
     instruction: input.instruction,
     goal: input.goal,
-    window: { app: input.window.app, title: input.window.title },
+    window: { app: input.window.app, title: input.window.title, visible_text: input.visibleText.slice(0, MAX_VISIBLE_TEXT_CHARS) },
     // Only what Jev can pick: a candidate past every cap cannot be chosen, so listing it is tokens
     // for nothing — 1,122 of them on Wikipedia's main page blew the request past Jev's budget.
     elements: offeredCandidates(space).map((c) => ({

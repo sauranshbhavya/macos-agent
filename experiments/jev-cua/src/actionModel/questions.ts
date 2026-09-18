@@ -14,6 +14,7 @@ Do not toggle a checkbox, switch or radio button that is already in the requeste
 PRESS_RETURN submits or confirms the focused field or dialog; PRESS_ESCAPE closes an open menu, sheet or dialog.
 SCROLL_DOWN or SCROLL_UP only when the control the instruction needs is not offered here and is plausibly off screen.
 WAIT only when the needed control is absent or disabled, or a submitted action is still loading. Recent WAIT actions are not evidence of loading.
+An action whose previous attempt changed nothing on screen has failed: do not repeat it, reach the same place another way (a search field, a menu, a different control).
 If a Search, Submit, OK or Done control is visible and the required fields are ready, CLICK it immediately.
 DONE requires visible evidence that the current instruction is fully satisfied. BLOCKED means no offered operation can make progress.`;
 

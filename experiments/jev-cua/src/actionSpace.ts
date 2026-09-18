@@ -171,6 +171,17 @@ function fillTargets(candidates: readonly Candidate[], maxTargets: number): Acti
   return { candidates, targets, truncated };
 }
 
+/**
+ * The same space without the named keys — how a target whose ladder was just exhausted is kept
+ * off the next step's menu. Jev repeated System Settings' dead "Displays" sidebar row three times
+ * to a stall with the failure in plain view in its history (SONNY-517, Jev-as-judge run); code
+ * owning the workflow means code withholds the option rather than hoping the rules are read.
+ */
+export function withoutTargets(space: ActionSpace, keys: ReadonlySet<string>, maxTargets: number = MAX_TARGETS_PER_OPERATION): ActionSpace {
+  if (keys.size === 0) return space;
+  return fillTargets(space.candidates.filter((c) => !keys.has(c.key)), maxTargets);
+}
+
 /** The candidates Jev can actually pick — those in at least one target head — in tree order. */
 export function offeredCandidates(space: ActionSpace): Candidate[] {
   const offered = new Set<string>();

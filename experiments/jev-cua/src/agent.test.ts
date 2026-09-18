@@ -33,7 +33,7 @@ function outcome(status: InstructionOutcome["status"], actionsSpent = 1): Instru
     note: status,
     actionsSpent,
     state: windowState([element({ element_index: 1 })]),
-    steps: [{ step: 1, instruction: "i", operation: "CLICK", targetKey: "1", targetLabel: "Element 1", confidence: 0.9, targetConfidence: 0.8, topOperations: [], modelMs: 20, text: null, attempts: [{ rung: "ax", effect: "confirmed", route: null, escalation: null, verdict: "settled: confirmed", driverMs: 30, }], outcome: "settled", windowChanged: true, observeMs: 40, candidates: 1, truncated: 0, offered: { CLICK: 1, TYPE_TEXT: 0 }, note: null }],
+    steps: [{ step: 1, instruction: "i", withheld: [], operation: "CLICK", targetKey: "1", targetLabel: "Element 1", confidence: 0.9, targetConfidence: 0.8, topOperations: [], modelMs: 20, text: null, attempts: [{ rung: "ax", effect: "confirmed", route: null, escalation: null, verdict: "settled: confirmed", driverMs: 30, }], outcome: "settled", windowChanged: true, observeMs: 40, candidates: 1, truncated: 0, offered: { CLICK: 1, TYPE_TEXT: 0 }, note: null }],
   };
 }
 
@@ -52,7 +52,7 @@ class FakeExecutor {
 }
 
 const plan: Plan = { understanding: "u", instructions: ["open it", "press it"], success_criteria: "pressed" };
-const settings = { maxCoordinatorTurns: 5, windowWaitMs: 100, frontAtLaunch: false };
+const settings = { judge: "coordinator" as const, maxCoordinatorTurns: 5, windowWaitMs: 100, frontAtLaunch: false };
 
 describe("runTask", () => {
   it("launches, plans, runs instructions in order and stops when the coordinator says done", async () => {
@@ -177,6 +177,34 @@ describe("runTask", () => {
     };
     const crashed = await runTask(task, { driver: throwing, coordinator: new FakeCoordinator(plan, []), executor: new FakeExecutor([]) as unknown as Executor, settings, sleep: instantSleep });
     expect(crashed).toMatchObject({ status: "error", reason: "daemon not running" });
+  });
+});
+
+describe("runTask with Jev as the judge", () => {
+  const jev = { ...settings, judge: "jev" as const };
+
+  it("hands the whole goal to the executor once and never calls the coordinator", async () => {
+    const driver = new FakeDriver([windowState([element({ element_index: 1 })])]);
+    const coordinator = new FakeCoordinator(plan, []);
+    const executor = new FakeExecutor([outcome("done", 4)]);
+    const report = await runTask(task, { driver, coordinator, executor: executor as unknown as Executor, settings: jev, sleep: instantSleep });
+    expect(report.status).toBe("done");
+    expect(report.plan).toBeNull();
+    expect(executor.contexts).toEqual([expect.objectContaining({ instruction: "do the thing", goal: "do the thing", actionsUsed: 0 })]);
+    expect(coordinator.reviews).toHaveLength(0);
+    expect(report.totals).toMatchObject({ actions: 4, coordinatorCalls: 0, coordinatorMs: 0, jevCalls: 1 });
+  });
+
+  it.each([
+    ["blocked", "failed"],
+    ["stalled", "failed"],
+    ["low_confidence", "failed"],
+    ["budget", "action_budget"],
+    ["refused", "error"],
+  ] as const)("maps an executor outcome of %s to a run status of %s", async (status, expected) => {
+    const driver = new FakeDriver([windowState([])]);
+    const report = await runTask(task, { driver, coordinator: new FakeCoordinator(plan, []), executor: new FakeExecutor([outcome(status)]) as unknown as Executor, settings: jev, sleep: instantSleep });
+    expect(report.status).toBe(expected);
   });
 });
 

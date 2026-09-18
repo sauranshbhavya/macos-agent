@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { TypeSafeClient } from "@typesafe-ai/sdk";
 import { buildActionSpace } from "./actionSpace.ts";
 import { fitToBudget, validateChoice } from "./actionModel/jev.ts";
+import { visibleText } from "./executor.ts";
 import { loadConfig } from "./config.ts";
 import { windowStateSchema } from "./driver/types.ts";
 
@@ -17,7 +18,7 @@ if (!file || !instruction) {
 const config = loadConfig();
 const state = windowStateSchema.parse(JSON.parse(readFileSync(file, "utf8")));
 const space = buildActionSpace(state.elements);
-const { request, input } = fitToBudget({ instruction, goal: goal ?? instruction, window: { app: state.app_name ?? null, title: state.window_title ?? null }, space, recentActions: [] });
+const { request, input } = fitToBudget({ instruction, goal: goal ?? instruction, window: { app: state.app_name ?? null, title: state.window_title ?? null }, visibleText: visibleText(state), space, recentActions: [] });
 console.log(`elements ${state.elements.length} | candidates ${space.candidates.length} | offered CLICK ${Object.keys(input.space.targets.CLICK).length}, TYPE_TEXT ${Object.keys(input.space.targets.TYPE_TEXT).length} | truncated ${JSON.stringify(space.truncated)}`);
 console.log(`request chars: state ${JSON.stringify(request.state).length}, questions ${Object.entries(request.questions).map(([k, q]) => `${k} ${JSON.stringify(q).length}`).join(", ")}`);
 

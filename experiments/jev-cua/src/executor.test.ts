@@ -31,6 +31,16 @@ describe("Executor.runInstruction", () => {
     ]);
   });
 
+  it("observes once per action, reusing the snapshot the ladder verified against", async () => {
+    const changed = windowState([button, element({ element_index: 4, label: "Results" })]);
+    const driver = new FakeDriver([windowState([button]), changed]);
+    const { run, actionModel } = executor(driver, [{ operation: "CLICK", targetKey: "3" }, { operation: "DONE" }]);
+    await run.runInstruction(context);
+    // One initial observation, one after the click; the second decision saw the post-click tree.
+    expect(driver.calls.filter((c) => c.tool === "get_window_state")).toHaveLength(2);
+    expect(actionModel.inputs[1]?.space.candidates.map((c) => c.key)).toEqual(["3", "4"]);
+  });
+
   it("climbs from ax to px when the driver could not verify and nothing on screen moved", async () => {
     const driver = new FakeDriver([windowState([button])], [windowRecord({ bounds: { x: 0, y: 0, width: 800, height: 600 } })]);
     driver.results["click"] = [actionResult("unverifiable"), actionResult("confirmed")];
@@ -61,6 +71,18 @@ describe("Executor.runInstruction", () => {
     expect(outcome.status).toBe("blocked");
     expect(outcome.steps[0]?.outcome).toBe("exhausted");
     expect(outcome.steps[0]?.attempts.map((a) => a.rung)).toEqual(["ax", "px", "foreground"]);
+  });
+
+  it("withholds a target whose ladder was just exhausted from the next step, and only the next step", async () => {
+    const other = element({ element_index: 5, label: "Search" });
+    const driver = new FakeDriver([windowState([button, other])]);
+    driver.results["click"] = [actionResult("suspected_noop"), actionResult("suspected_noop"), actionResult("suspected_noop"), actionResult("confirmed")];
+    const { run, actionModel } = executor(driver, [{ operation: "CLICK", targetKey: "3" }, { operation: "CLICK", targetKey: "5" }, { operation: "DONE" }]);
+    const outcome = await run.runInstruction(context);
+    expect(outcome.steps[0]?.outcome).toBe("exhausted");
+    expect(Object.keys(actionModel.inputs[1]?.space.targets.CLICK ?? {})).toEqual(["5"]);
+    expect(outcome.steps[1]?.withheld).toEqual(["3"]);
+    expect(Object.keys(actionModel.inputs[2]?.space.targets.CLICK ?? {})).toEqual(["3", "5"]);
   });
 
   it("types through the helper, selects existing text first, and settles when the fresh value holds the text", async () => {
@@ -241,6 +263,13 @@ describe("Executor.runInstruction", () => {
     const outcome = await run.runInstruction(context);
     expect(outcome.status).toBe("refused");
     expect(outcome.note).toContain("permissions_pending");
+  });
+
+  it("hands the action model the words on screen", async () => {
+    const driver = new FakeDriver([windowState([button], { tree_markdown: '- [0] AXWindow\n    - AXStaticText = "16,576"' })]);
+    const { run, actionModel } = executor(driver, [{ operation: "DONE" }]);
+    await run.runInstruction(context);
+    expect(actionModel.inputs[0]?.visibleText).toContain("16,576");
   });
 
   it("feeds the recent-action history, including effects and screen changes, back to the action model", async () => {

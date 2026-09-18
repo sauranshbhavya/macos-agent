@@ -31,7 +31,7 @@ describe("buildRequest", () => {
     element({ element_index: 3, label: "Search" }),
     element({ element_index: 9, role: "AXTextField", actions: null, label: "From", value: "ZRH" }),
   ]);
-  const input = { instruction: "Search flights", goal: "Find a flight", window: { app: "Safari", title: "Flights" }, space, recentActions: [] };
+  const input = { instruction: "Search flights", goal: "Find a flight", window: { app: "Safari", title: "Flights" }, visibleText: "Flights\nFrom ZRH", space, recentActions: [] };
 
   it("offers a targeted operation only when it has targets, plus every control operation", () => {
     const { questions, operations } = buildRequest(input);
@@ -50,10 +50,11 @@ describe("buildRequest", () => {
     expect(typeTarget?.criteria["9"]).toEqual({ element: "[9] textfield: From", current_value: "ZRH" });
   });
 
-  it("puts the indexed element table and the recent actions in state", () => {
+  it("puts the words on screen, the indexed element table and the recent actions in state", () => {
     const { state } = buildRequest({ ...input, recentActions: [{ operation: "CLICK", target: "Search", text: null, effect: "confirmed", windowChanged: true }] });
     expect(state).toMatchObject({
       instruction: "Search flights",
+      window: { title: "Flights", visible_text: "Flights\nFrom ZRH" },
       elements: [{ index: "3", role: "button", label: "Search", operations: ["CLICK"] }, { index: "9", value: "ZRH" }],
       recent_actions: [{ operation: "CLICK", target: "Search", window_changed: true }],
     });
@@ -62,7 +63,7 @@ describe("buildRequest", () => {
 
 describe("JevActionModel.choose", () => {
   const space = buildActionSpace([element({ element_index: 3, label: "Search" }), element({ element_index: 9, role: "AXTextField", actions: null, label: "From" })]);
-  const input = { instruction: "i", goal: "g", window: { app: null, title: null }, space, recentActions: [] };
+  const input = { instruction: "i", goal: "g", window: { app: null, title: null }, visibleText: "", space, recentActions: [] };
 
   function client(answers: Record<string, unknown>): TypeSafeClient {
     return { systemOne: async () => ({ model: "jev-test", answers, usage: { input_tokens: 1, output_tokens: 1 } }) } as unknown as TypeSafeClient;
@@ -105,7 +106,12 @@ describe("JevActionModel.choose", () => {
 
 describe("fitToBudget", () => {
   const big = buildActionSpace(Array.from({ length: 200 }, (_, i) => element({ element_index: i + 1, label: `Link number ${i + 1} with a longer label` })));
-  const input = { instruction: "i", goal: "g", window: { app: null, title: null }, space: big, recentActions: [] };
+  const input = { instruction: "i", goal: "g", window: { app: null, title: null }, visibleText: "", space: big, recentActions: [] };
+
+  it("cuts the visible text at its cap", () => {
+    const { state } = buildRequest({ ...input, visibleText: "x".repeat(10_000) });
+    expect((state as { window: { visible_text: string } }).window.visible_text).toHaveLength(6000);
+  });
 
   it("leaves a request under budget untouched", () => {
     const { input: fitted } = fitToBudget(input, 1_000_000);

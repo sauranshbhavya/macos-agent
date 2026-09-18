@@ -1,4 +1,4 @@
-import { buildActionSpace, type Candidate, type Operation } from "./actionSpace.ts";
+import { buildActionSpace, withoutTargets, type Candidate, type Operation } from "./actionSpace.ts";
 import type { ActionModel, Decision, RecentAction } from "./actionModel/jev.ts";
 import type { TextHelper } from "./actionModel/textHelper.ts";
 import type { ActionTarget, Driver } from "./driver/driver.ts";
@@ -24,6 +24,8 @@ export interface AttemptRecord {
 export interface StepRecord {
   readonly step: number;
   readonly instruction: string;
+  /** Target keys withheld from this step because their ladder was exhausted in the step before. */
+  readonly withheld: readonly string[];
   readonly operation: Operation;
   readonly targetKey: string | null;
   readonly targetLabel: string | null;
@@ -109,22 +111,25 @@ export class Executor {
     let actionsUsed = context.actionsUsed;
     let state = await this.#observe(context.pid, windowId);
 
+    // A target whose every rung failed on the previous step stays off this step's menu.
+    let withheld = new Set<string>();
     for (;;) {
       windowId = state.window_id;
       this.#observed += 1;
       this.#onObserve(state, this.#observed);
-      const space = buildActionSpace(state.elements);
+      const space = withoutTargets(buildActionSpace(state.elements), withheld);
       const window = { app: state.app_name ?? null, title: state.window_title ?? null };
       const modelStarted = performance.now();
       const decision = await this.#actionModel.choose({
         instruction: context.instruction,
         goal: context.goal,
         window,
+        visibleText: visibleText(state),
         space,
         recentActions: history,
       });
       const modelMs = Math.round(performance.now() - modelStarted);
-      const base = stepBase(steps.length + 1, context.instruction, decision, modelMs, space.candidates.length, space.truncated.CLICK + space.truncated.TYPE_TEXT);
+      const base = stepBase(steps.length + 1, context.instruction, decision, modelMs, space.candidates.length, space.truncated.CLICK + space.truncated.TYPE_TEXT, [...withheld]);
 
       if (decision.confidence < this.#settings.minOperationConfidence && decision.operation !== "DONE") {
         steps.push({ ...base, outcome: "control", note: `operation confidence ${decision.confidence.toFixed(2)} below floor` });
@@ -148,6 +153,9 @@ export class Executor {
       let attempts: AttemptRecord[] = [];
       let outcome: StepRecord["outcome"] = "settled";
       let note: string | null = null;
+      // The snapshot the ladder verified its last attempt against; reused as the next decision's
+      // state rather than observed again (one `get_window_state` per action, not two).
+      let fresh: WindowState | null = null;
 
       try {
         if (decision.operation === "WAIT") {
@@ -170,7 +178,7 @@ export class Executor {
             note = "the text helper found nothing in the goal to type";
           } else {
             const value = helper.text;
-            ({ attempts, outcome } = await this.#climb(
+            ({ attempts, outcome, fresh } = await this.#climb(
               state,
               field.element,
               (target, delivery) => this.#typeInto(target, field, value, delivery),
@@ -180,10 +188,10 @@ export class Executor {
         } else if (decision.operation === "CLICK") {
           const target = decision.target;
           if (target === null) throw new Error("CLICK without a target");
-          ({ attempts, outcome } = await this.#climb(state, target.element, (t, delivery) => this.#driver.click(t, delivery)));
+          ({ attempts, outcome, fresh } = await this.#climb(state, target.element, (t, delivery) => this.#driver.click(t, delivery)));
         } else if (decision.operation === "PRESS_RETURN" || decision.operation === "PRESS_ESCAPE") {
           const key = decision.operation === "PRESS_RETURN" ? "return" : "escape";
-          ({ attempts, outcome } = await this.#climb(state, null, (t, delivery) => this.#driver.pressKey(t, key, delivery)));
+          ({ attempts, outcome, fresh } = await this.#climb(state, null, (t, delivery) => this.#driver.pressKey(t, key, delivery)));
         } else {
           const direction = decision.operation === "SCROLL_DOWN" ? "down" : "up";
           const target: ActionTarget = { kind: "focused", pid: state.pid, windowId: state.window_id };
@@ -201,13 +209,18 @@ export class Executor {
       }
 
       actionsUsed += 1;
-      if (decision.operation !== "WAIT") await this.#sleep(this.#settings.settleMs);
       const observeStarted = performance.now();
-      state = await this.#observe(context.pid, windowId);
+      if (fresh === null) {
+        if (decision.operation !== "WAIT") await this.#sleep(this.#settings.settleMs);
+        state = await this.#observe(context.pid, windowId);
+      } else {
+        state = fresh;
+      }
       const observeMs = Math.round(performance.now() - observeStarted);
       const windowChanged = fingerprint(state) !== before;
 
       steps.push({ ...base, text, attempts, outcome, windowChanged, observeMs, note });
+      withheld = outcome === "exhausted" && decision.target !== null && !windowChanged ? new Set([decision.target.key]) : new Set();
       history.push({
         operation: decision.operation,
         target: decision.target?.label ?? null,
@@ -230,11 +243,12 @@ export class Executor {
     element: Element | null,
     act: (target: ActionTarget, delivery: "background" | "foreground") => Promise<ActionResult>,
     expectedValue: string | null = null,
-  ): Promise<{ attempts: AttemptRecord[]; outcome: "settled" | "exhausted" }> {
+  ): Promise<{ attempts: AttemptRecord[]; outcome: "settled" | "exhausted"; fresh: WindowState | null }> {
     const attempts: AttemptRecord[] = [];
     const before = fingerprint(state);
     let window: WindowRecord | null = null;
     let rung: Rung = "ax";
+    let fresh: WindowState | null = null;
     for (;;) {
       if (rung === "px" && window === null) {
         window = (await this.#driver.listWindows(state.pid)).find((w) => w.window_id === state.window_id) ?? null;
@@ -243,7 +257,7 @@ export class Executor {
       if (target === null) {
         // No geometry for the px rung (or no element for a key press): skip it, do not aim at a guess.
         const next: Rung | undefined = RUNGS[RUNGS.indexOf(rung) + 1];
-        if (next === undefined) return { attempts, outcome: "exhausted" };
+        if (next === undefined) return { attempts, outcome: "exhausted", fresh };
         rung = next;
         continue;
       }
@@ -258,18 +272,19 @@ export class Executor {
         if (!(error instanceof DriverRefusal)) throw error;
         attempts.push({ rung, effect: "refused", route: null, escalation: null, verdict: `refused: ${error.message.replace(/^\w+ refused: /, "")}`.slice(0, 200), driverMs: Math.round(performance.now() - started) });
         const next: Rung | undefined = RUNGS[RUNGS.indexOf(rung) + 1];
-        if (next === undefined) return { attempts, outcome: "exhausted" };
+        if (next === undefined) return { attempts, outcome: "exhausted", fresh };
         rung = next;
         continue;
       }
-      const fresh = await this.#observe(state.pid, state.window_id);
+      await this.#sleep(this.#settings.settleMs);
+      fresh = await this.#observe(state.pid, state.window_id);
       const verdict = nextRung(rung, result, {
         windowChanged: fingerprint(fresh) !== before,
         valueMatches: element !== null && expectedValue !== null && valueReflects(fresh, element, expectedValue),
       });
       attempts.push(attempt(rung, result, describe(verdict), started));
-      if (verdict.kind === "settled") return { attempts, outcome: "settled" };
-      if (verdict.kind === "exhausted") return { attempts, outcome: "exhausted" };
+      if (verdict.kind === "settled") return { attempts, outcome: "settled", fresh };
+      if (verdict.kind === "exhausted") return { attempts, outcome: "exhausted", fresh };
       rung = verdict.to;
     }
   }
@@ -371,10 +386,11 @@ function topOperations(decision: Decision): Array<[string, number]> {
     .map(([k, v]) => [k, Math.round(v * 100) / 100]);
 }
 
-function stepBase(step: number, instruction: string, decision: Decision, modelMs: number, candidates: number, truncated: number) {
+function stepBase(step: number, instruction: string, decision: Decision, modelMs: number, candidates: number, truncated: number, withheld: string[]) {
   return {
     step,
     instruction,
+    withheld,
     operation: decision.operation,
     targetKey: decision.target?.key ?? null,
     targetLabel: decision.target?.label ?? null,

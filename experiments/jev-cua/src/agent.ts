@@ -54,6 +54,8 @@ export interface RunTotals {
 }
 
 export interface AgentSettings {
+  /** `jev`: no coordinator; the goal is the instruction and Jev's DONE is the verdict. `coordinator`: plan, run, judge, repeat. */
+  readonly judge: "jev" | "coordinator";
   readonly maxCoordinatorTurns: number;
   readonly windowWaitMs: number;
   /**
@@ -109,6 +111,24 @@ export async function runTask(task: Task, deps: AgentDeps): Promise<RunReport> {
     if (first === null) return finish("error", `${task.app.bundleId} launched (pid ${launched.pid}) but none of its windows resolved to an accessibility tree`);
     lastState = first;
     log(`launched ${task.app.bundleId} pid ${launched.pid} window ${first.window_id} (${first.elements.length} elements)`);
+
+    if (deps.settings.judge === "jev") {
+      // jev-ultrafast's loop: the whole goal every step, no reasoning model anywhere in it.
+      const outcome = await deps.executor.runInstruction({ pid: launched.pid, windowId: first.window_id, goal: task.goal, instruction: task.goal, actionsUsed: 0, history: [] });
+      lastState = outcome.state;
+      instructions.push({ turn: 1, instruction: task.goal, outcome, review: null });
+      log(`  ${outcome.status}: ${outcome.note} (${outcome.steps.length} steps, ${outcome.actionsSpent} actions)`);
+      switch (outcome.status) {
+        case "done":
+          return finish("done", outcome.note);
+        case "budget":
+          return finish("action_budget", outcome.note);
+        case "refused":
+          return finish("error", outcome.note);
+        default:
+          return finish("failed", outcome.note);
+      }
+    }
 
     plan = await deps.coordinator.plan(task.goal, screenSummary(lastState));
     log(`plan (${plan.call.latencyMs} ms): ${plan.plan.instructions.map((i, n) => `${n + 1}. ${i}`).join(" | ")}`);
