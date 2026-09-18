@@ -11,34 +11,6 @@
     "producthunt.com"
   ],
   "sections": [],
-  "depth": "deep",
-  "flows": [
-    {
-      "title": "Post a product",
-      "startURL": "https://www.producthunt.com/",
-      "steps": [
-        "Click the Post button in the top right and submit the product's URL to begin.",
-        "Enter the name of the product only, with no description or emojis unless they are part of the name.",
-        "Write a tagline, a very short description of the product.",
-        "Choose the topics that most strongly relate to the product.",
-        "Add a thumbnail. A square image is best, 240x240 recommended.",
-        "Upload images to the gallery. The recommended size is 1270x760, and the gallery needs two or more images before it is viewable.",
-        "Write the description, within 260 characters.",
-        "Add the makers by their Product Hunt username.",
-        "Write the first comment to start the conversation.",
-        "Schedule your launch for a future date, or select Create draft if you are not ready to choose a date."
-      ],
-      "source": "https://help.producthunt.com/en/articles/479557-how-to-post-a-product"
-    }
-  ],
-  "startPages": [
-    {
-      "url": "https://www.producthunt.com/",
-      "landedURL": "https://www.producthunt.com/",
-      "title": "Product Hunt – The best new products in tech.",
-      "heading": "See what builders are making with GPT-6 Astra",
-      "offers": "product",
-      "read": "2026-09-18"
-    }
-  ]
+  "depth": "shallow",
+  "flows": []
 }

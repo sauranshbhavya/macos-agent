@@ -40,7 +40,10 @@
     {
       "url": "https://otter.ai/home",
       "landedURL": "https://otter.ai/signin",
-      "title": "Otter.ai - Access real-time and shareable meeting notes",
+      "title": "Sign In: Otter Voice Meeting Notes - Otter.ai",
+      "otherTitles": [
+        "Otter.ai - Access real-time and shareable meeting notes"
+      ],
       "heading": "Sign in",
       "offers": "sign-in",
       "read": "2026-09-18"

@@ -11,40 +11,6 @@
     "chat.mistral.ai"
   ],
   "sections": [],
-  "depth": "deep",
-  "flows": [
-    {
-      "title": "Pick the mode a task belongs in",
-      "startURL": "https://chat.mistral.ai/",
-      "steps": [
-        "Le Chat is now Vibe, and chat.mistral.ai is still the way in: your plan, history and settings came with it.",
-        "Choose Work for multi-stage professional tasks across your apps and tools — research, drafts, summaries, scheduled runs.",
-        "Choose Code for development work, in your terminal, in VS Code, or as remote cloud sessions.",
-        "Choose Chat for quick turn-based conversations and the features Le Chat had: Agents, Think mode, Code Interpreter and Memories. Deep Research moved to Work as a Skill."
-      ],
-      "source": "https://docs.mistral.ai/vibe"
-    },
-    {
-      "title": "Hand a multi-step task to Work",
-      "startURL": "https://chat.mistral.ai/",
-      "steps": [
-        "Open Vibe and select Work in the sidebar from the mode selector. If the sidebar is closed, click the drawer icon or press Cmd+Shift+B on a Mac, or Ctrl+Shift+B on Windows and Linux. Vibe reopens whichever tab you used last, so check the mode before starting.",
-        "Describe the outcome you want, and say what source material or tools it should use, who the output is for, and any constraints such as length, tone, format or a deadline.",
-        "Point it at context where it matters: connectors for approved external tools, Libraries for indexed document collections, Skills for a repeatable method, uploaded files and Canvas, or web search and Open URL for a specific page.",
-        "Follow the live todos panel on the right, answer follow-up questions, approve or deny the actions it asks about, and press the stop button — the black square — if it goes the wrong way.",
-        "Read the result as a draft: check facts, tables, dates, names and sources against the original before using or sharing it."
-      ],
-      "source": "https://docs.mistral.ai/vibe/work/get-started"
-    }
-  ],
-  "startPages": [
-    {
-      "url": "https://chat.mistral.ai/",
-      "landedURL": "https://chat.mistral.ai/chat",
-      "title": "Vibe Chat",
-      "heading": "",
-      "offers": "product",
-      "read": "2026-09-17"
-    }
-  ]
+  "depth": "shallow",
+  "flows": []
 }

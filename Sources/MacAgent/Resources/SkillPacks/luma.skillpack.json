@@ -10,34 +10,6 @@
     "luma.com"
   ],
   "sections": [],
-  "depth": "deep",
-  "flows": [
-    {
-      "title": "Create an event",
-      "startURL": "https://luma.com/create",
-      "steps": [
-        "Go to luma.com/create, or click Create Event from your home page.",
-        "Enter a clear, descriptive title for your event. This will be the main headline that guests see when browsing events.",
-        "Select the date and time for your event and choose the appropriate timezone. For multi-day events, set both start and end dates.",
-        "Choose the type of event you're hosting: In-Person for a physical gathering at a specific location, Online for a virtual event, or Hybrid for both.",
-        "For an In-Person event, enter the venue name or address, which will appear on a map on your event page. For an Online event, add your meeting link, and Luma will create unique join links for each guest to track attendance.",
-        "Write a description covering what the event is about, who should attend, and what guests can expect.",
-        "Choose a cover image from Luma's curated gallery or upload your own, and pick one of the themes from categories like Minimal, Confetti, Emoji, Pattern and Seasonal.",
-        "Every event belongs to a calendar. Use your personal calendar, which is the default, select an existing team calendar you manage, or create a new calendar.",
-        "Choose who can see and register: Public events are shown on your calendar and can be indexed by search engines, Private events are unlisted so only people with the link can register, and Member-Only events are shown to active members of your calendar membership.",
-        "Click Create Event. Your event is created instantly and you are taken to the event management page."
-      ],
-      "source": "https://help.luma.com/p/creating-an-event"
-    }
-  ],
-  "startPages": [
-    {
-      "url": "https://luma.com/create",
-      "landedURL": "https://luma.com/create",
-      "title": "Create Event · Luma",
-      "heading": "",
-      "offers": "product",
-      "read": "2026-09-17"
-    }
-  ]
+  "depth": "shallow",
+  "flows": []
 }
