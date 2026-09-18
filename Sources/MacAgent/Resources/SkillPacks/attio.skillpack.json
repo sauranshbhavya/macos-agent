@@ -41,5 +41,15 @@
       ],
       "source": "https://attio.com/help/reference/productivity-collaborating/notes"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://app.attio.com/",
+      "landedURL": "https://app.attio.com/auth/sign-in",
+      "title": "Attio",
+      "heading": "",
+      "offers": "sign-in",
+      "read": "2026-09-17"
+    }
   ]
 }

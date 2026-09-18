@@ -33,5 +33,15 @@
       ],
       "source": "https://docs.twenty.com/user-guide/views-pipelines/how-tos/set-up-a-sales-pipeline"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://app.twenty.com",
+      "landedURL": "https://app.twenty.com/welcome",
+      "title": "Sign in or Create an account",
+      "heading": "",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
   ]
 }

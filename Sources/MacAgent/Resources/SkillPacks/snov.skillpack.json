@@ -44,5 +44,15 @@
       ],
       "source": "https://snov.io/knowledgebase/how-to-find-someones-email-address-by-name-and-company-website/"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://app.snov.io/",
+      "landedURL": "https://app.snov.io/login",
+      "title": "Snov.io",
+      "heading": "Log In to your account",
+      "offers": "sign-in",
+      "read": "2026-09-17"
+    }
   ]
 }

@@ -30,5 +30,15 @@
       ],
       "source": "https://help.producthunt.com/en/articles/479557-how-to-post-a-product"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://www.producthunt.com/",
+      "landedURL": "https://www.producthunt.com/",
+      "title": "Product Hunt – The best new products in tech.",
+      "heading": "Top Products Launching Today",
+      "offers": "product",
+      "read": "2026-09-17"
+    }
   ]
 }

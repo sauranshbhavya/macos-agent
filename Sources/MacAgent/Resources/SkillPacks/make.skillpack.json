@@ -36,5 +36,15 @@
       ],
       "source": "https://help.make.com/step-10-schedule-your-scenario"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://www.make.com/en/login",
+      "landedURL": "https://www.make.com/en/login",
+      "title": "Sign in | Make HQ",
+      "heading": "Sign in",
+      "offers": "sign-in",
+      "read": "2026-09-17"
+    }
   ]
 }

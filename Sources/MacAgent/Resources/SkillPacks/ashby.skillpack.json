@@ -43,5 +43,15 @@
       ],
       "source": "https://docs.ashbyhq.com/how-do-i-provision-new-users-in-my-ashby-account-manually"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://app.ashbyhq.com/",
+      "landedURL": "https://app.ashbyhq.com/signin",
+      "title": "Sign In • Ashby",
+      "heading": "Welcome Back",
+      "offers": "sign-in",
+      "read": "2026-09-17"
+    }
   ]
 }

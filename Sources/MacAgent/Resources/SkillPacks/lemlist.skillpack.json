@@ -45,5 +45,15 @@
       ],
       "source": "https://help.lemlist.com/en/articles/4494101-search-and-edit-leads"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://app.lemlist.com/",
+      "landedURL": "https://app.lemlist.com/login",
+      "title": "lemlist",
+      "heading": "Welcome back!",
+      "offers": "sign-in",
+      "read": "2026-09-17"
+    }
   ]
 }

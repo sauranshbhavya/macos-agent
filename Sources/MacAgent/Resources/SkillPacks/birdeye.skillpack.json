@@ -28,5 +28,15 @@
       ],
       "source": "https://support.birdeye.com/en/articles/12653001-how-do-i-respond-to-reviews-from-my-birdeye-account"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://app.birdeye.com/",
+      "landedURL": "https://app.birdeye.com/sign-in/",
+      "title": "Business Reputation Management |",
+      "heading": "Sign in easily",
+      "offers": "sign-in",
+      "read": "2026-09-17"
+    }
   ]
 }

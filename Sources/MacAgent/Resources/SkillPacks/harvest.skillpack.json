@@ -52,5 +52,15 @@
       ],
       "source": "https://support.getharvest.com/hc/en-us/articles/360048181592-Members-Reports"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://id.getharvest.com/harvest/sign_in",
+      "landedURL": "https://id.getharvest.com/harvest/sign_in",
+      "title": "Sign in - Harvest",
+      "heading": "Sign in to Harvest",
+      "offers": "sign-in",
+      "read": "2026-09-17"
+    }
   ]
 }

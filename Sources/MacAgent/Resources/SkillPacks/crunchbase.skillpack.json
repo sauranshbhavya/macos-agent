@@ -12,7 +12,7 @@
   "flows": [
     {
       "title": "Search for companies or people",
-      "startURL": "https://www.crunchbase.com/",
+      "startURL": "https://crunchbase.com/login",
       "steps": [
         "Open the Advanced Search dropdown in the top global navigation bar, then select the type of search you want to build.",
         "Refine your search using the categorized Filters at the top of the page; your results update in real time.",
@@ -22,7 +22,7 @@
     },
     {
       "title": "Save a search",
-      "startURL": "https://www.crunchbase.com/",
+      "startURL": "https://crunchbase.com/login",
       "steps": [
         "Create the search first; this flow starts from a search that is already built.",
         "Click the blue Save Search icon in the upper right-hand corner.",
@@ -33,7 +33,7 @@
     },
     {
       "title": "Create a list from a search",
-      "startURL": "https://www.crunchbase.com/",
+      "startURL": "https://crunchbase.com/login",
       "steps": [
         "Start by creating a search, then select the entries to add by checking their boxes on the left individually, or check the top box in the Name column to reveal a Select All Results button.",
         "Click the blue Save To List button that appears.",
@@ -41,6 +41,16 @@
         "Selecting Create New List opens a pop-up, where you name the list, update its privacy settings and choose the type and frequency of its email alerts."
       ],
       "source": "https://support.crunchbase.com/hc/en-us/articles/25315654766355-Create-a-List"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://crunchbase.com/login",
+      "landedURL": "https://www.crunchbase.com/login",
+      "title": "Log In | Crunchbase",
+      "heading": "Log In",
+      "offers": "sign-in",
+      "read": "2026-09-18"
     }
   ]
 }

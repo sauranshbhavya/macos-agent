@@ -46,5 +46,15 @@
       ],
       "source": "https://helpcenter.smartlead.ai/en/articles/100-main-dashboard-analytics-explanation"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://app.smartlead.ai/",
+      "landedURL": "https://app.smartlead.ai/login",
+      "title": "Login | Smartlead",
+      "heading": "Welcome back.",
+      "offers": "sign-in",
+      "read": "2026-09-17"
+    }
   ]
 }

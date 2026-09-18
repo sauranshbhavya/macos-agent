@@ -12,7 +12,7 @@
   "flows": [
     {
       "title": "Create a board",
-      "startURL": "https://trello.com/",
+      "startURL": "https://trello.com/login",
       "steps": [
         "Select Create in the header, then Create Board.",
         "Enter a title for the board.",
@@ -22,7 +22,7 @@
     },
     {
       "title": "Add a card",
-      "startURL": "https://trello.com/",
+      "startURL": "https://trello.com/login",
       "steps": [
         "Select Add a card at the bottom of a list.",
         "Type a name for the card.",
@@ -32,7 +32,7 @@
     },
     {
       "title": "Move a card",
-      "startURL": "https://trello.com/",
+      "startURL": "https://trello.com/login",
       "steps": [
         "Within a board, click and drag the card up or down its list, or to another list.",
         "To move it to a different board, click the context menu in the top right of the card and choose Move. Or open the card, click the actions menu (…) at the top, and select Move."
@@ -41,12 +41,22 @@
     },
     {
       "title": "Search for cards",
-      "startURL": "https://trello.com/",
+      "startURL": "https://trello.com/login",
       "steps": [
         "Type in the search box at the very top of the page.",
         "For more filters, click Advanced search at the bottom of the search window, or go to trello.com/search."
       ],
       "source": "https://support.atlassian.com/trello/docs/searching-for-cards-all-boards/"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://trello.com/login",
+      "landedURL": "https://id.atlassian.com/login",
+      "title": "Log in with Atlassian account",
+      "heading": "Log in to continue",
+      "offers": "sign-in",
+      "read": "2026-09-18"
     }
   ]
 }

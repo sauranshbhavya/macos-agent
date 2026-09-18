@@ -44,5 +44,23 @@
       ],
       "source": "https://loops.so/docs/contacts/mailing-lists"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://app.loops.so/audience",
+      "landedURL": "https://app.loops.so/",
+      "title": "Loops",
+      "heading": "Sign in to Loops",
+      "offers": "sign-in",
+      "read": "2026-09-17"
+    },
+    {
+      "url": "https://app.loops.so/settings?page=lists",
+      "landedURL": "https://app.loops.so/",
+      "title": "Loops",
+      "heading": "Sign in to Loops",
+      "offers": "sign-in",
+      "read": "2026-09-17"
+    }
   ]
 }

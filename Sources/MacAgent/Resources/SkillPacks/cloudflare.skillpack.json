@@ -43,5 +43,23 @@
       ],
       "source": "https://developers.cloudflare.com/cache/how-to/purge-cache/purge-everything/"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://dash.cloudflare.com/?to=/:account/:zone/dns/records",
+      "landedURL": "https://dash.cloudflare.com/login",
+      "title": "Cloudflare Dashboard | Manage Your Account",
+      "heading": "Sign in to Cloudflare",
+      "offers": "sign-in",
+      "read": "2026-09-17"
+    },
+    {
+      "url": "https://dash.cloudflare.com/?to=/:account/:zone/caching/configuration",
+      "landedURL": "https://dash.cloudflare.com/login",
+      "title": "Cloudflare Dashboard | Manage Your Account",
+      "heading": "Sign in to Cloudflare",
+      "offers": "sign-in",
+      "read": "2026-09-17"
+    }
   ]
 }

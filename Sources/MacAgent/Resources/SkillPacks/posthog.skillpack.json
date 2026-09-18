@@ -44,5 +44,15 @@
       ],
       "source": "https://posthog.com/docs/session-replay/how-to-watch-recordings"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://app.posthog.com/",
+      "landedURL": "https://us.posthog.com/login",
+      "title": "PostHog",
+      "heading": "Log in to @PostHog",
+      "offers": "sign-in",
+      "read": "2026-09-17"
+    }
   ]
 }

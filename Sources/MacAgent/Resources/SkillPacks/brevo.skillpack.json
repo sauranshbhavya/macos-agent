@@ -56,5 +56,15 @@
       ],
       "source": "https://help.brevo.com/hc/en-us/articles/19764406559506-Analyze-and-export-your-email-campaign-report"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://app.brevo.com/",
+      "landedURL": "https://login.brevo.com/",
+      "title": "Login - Brevo",
+      "heading": "",
+      "offers": "sign-in",
+      "read": "2026-09-17"
+    }
   ]
 }

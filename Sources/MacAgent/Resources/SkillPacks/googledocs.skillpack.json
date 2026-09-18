@@ -5,7 +5,7 @@
   "domain": "docs.google.com",
   "category": "documents_storage",
   "summary": "Google's online documents.",
-  "signInURL": "https://docs.google.com/",
+  "signInURL": "https://accounts.google.com/ServiceLogin?continue=https%3A%2F%2Fdocs.google.com%2Fdocument%2F",
   "triggers": ["google docs", "docs.google.com"],
   "sections": [],
   "depth": "deep",
@@ -41,6 +41,16 @@
         "Type the comment, then click Comment."
       ],
       "source": "https://support.google.com/docs/answer/65129?hl=en&co=GENIE.Platform%3DDesktop"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://docs.google.com/document/",
+      "landedURL": "https://accounts.google.com/v3/signin/accountchooser",
+      "title": "Google Docs: Sign-in",
+      "heading": "Choose an account",
+      "offers": "sign-in",
+      "read": "2026-09-17"
     }
   ]
 }

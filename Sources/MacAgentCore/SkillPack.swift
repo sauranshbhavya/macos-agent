@@ -69,6 +69,11 @@ import Foundation
 /// or a subdomain of it, so a copy-paste slip between two pack files cannot send one site's task to
 /// another. Citations and the sign-in page are deliberately not held to it — a site's help centre and
 /// its sign-in host often live elsewhere (`notion.com` for `notion.so`, `accounts.google.com`).
+///
+/// **And a flow's start page is recorded where it lands** (SONNY-510): that rule reads the string a
+/// pack declares, and what decides where Sonny arrives is where the string lands, so a pack with flows
+/// carries `startPages`, a signed-out reading of each start URL, and the loader holds it —
+/// `SkillPackStartPage` has the rule, what it catches and what it cannot.
 public struct SkillPack: Equatable, Sendable, Identifiable {
     /// The one format this build reads. A pack declaring another does not load rather than being
     /// read under rules it was not written for.
@@ -95,6 +100,9 @@ public struct SkillPack: Equatable, Sendable, Identifiable {
     public let sections: [String]
     public let depth: SkillPackDepth
     public let flows: [SkillPackFlow]
+    /// One signed-out reading per distinct start URL the flows use; empty for a pack with no flows.
+    /// Evidence for whoever reads the pack next, never part of `guidance`.
+    public let startPages: [SkillPackStartPage]
 
     public init(
         id: String,
@@ -106,7 +114,8 @@ public struct SkillPack: Equatable, Sendable, Identifiable {
         triggers: [String],
         sections: [String],
         depth: SkillPackDepth,
-        flows: [SkillPackFlow]
+        flows: [SkillPackFlow],
+        startPages: [SkillPackStartPage]
     ) {
         self.id = id
         self.name = name
@@ -118,6 +127,7 @@ public struct SkillPack: Equatable, Sendable, Identifiable {
         self.sections = sections
         self.depth = depth
         self.flows = flows
+        self.startPages = startPages
     }
 
     /// The text this pack adds to a planning request when a command names it.
@@ -185,6 +195,15 @@ public enum SkillPackLoadError: Error, Equatable, Sendable {
     case flowHasNoSteps(flow: String)
     case flowHasNoCitation(flow: String)
     case startPageOffSite(flow: String, host: String)
+    /// The start-page records (`SkillPackStartPage`). Each `url` is the start URL the record is for,
+    /// except `startPageCreatesAnAccount`'s, which is whichever URL named account creation.
+    case startPageNotRecorded(flow: String)
+    case startPageRecordedTwice(url: String)
+    case startPageUnused(url: String)
+    case startPageNotAStartPage(url: String, offers: String)
+    case landedURLCarriesQuery(url: String)
+    case landedOffSite(url: String, host: String)
+    case startPageCreatesAnAccount(url: String)
     /// `field` is `summary`, `sections[n]` or `flows[n]`; `words` is what moved money — a money verb,
     /// or an action verb and its money object ("create + payout").
     case movesMoney(field: String, words: String)
@@ -291,9 +310,10 @@ public struct SkillPackCatalog: Equatable, Sendable {
 public enum SkillPackDecoder {
     static let packFields: Set<String> = [
         "format", "id", "name", "domain", "category", "summary", "signInURL",
-        "triggers", "sections", "depth", "flows"
+        "triggers", "sections", "depth", "flows", "startPages"
     ]
     static let flowFields: Set<String> = ["title", "startURL", "steps", "source"]
+    static let startPageFields: Set<String> = ["url", "landedURL", "title", "heading", "offers", "read"]
 
     public static func decode(_ data: Data) throws -> SkillPack {
         guard let object = try? JSONSerialization.jsonObject(with: data),
@@ -343,6 +363,9 @@ public enum SkillPackDecoder {
             break
         }
 
+        let startPages = try decodeStartPages(root["startPages"], hasFlows: !flows.isEmpty)
+        try SkillPackStartPageRule.check(flows: flows, startPages: startPages, domain: domain, signInURL: signInURL)
+
         // The money rule reads everything that reaches the planner as description of the site: each
         // flow as one unit (its money act is often split between title and steps), the summary, and
         // each section on its own, so two section labels cannot pair into a refusal.
@@ -377,7 +400,8 @@ public enum SkillPackDecoder {
             triggers: triggers,
             sections: sections,
             depth: depth,
-            flows: flows
+            flows: flows,
+            startPages: startPages
         )
         let bytes = pack.guidance.utf8.count
         guard bytes <= SkillPack.guidanceByteLimit else {
@@ -392,8 +416,7 @@ public enum SkillPackDecoder {
         let title: String = try requiredText(flow, "title", prefix: prefix)
         let startURL = try requiredHTTPSURL(flow, "startURL", prefix: prefix)
         let startHost = (startURL.host ?? "").lowercased()
-        let siteDomain = domain.lowercased()
-        guard startHost == siteDomain || startHost.hasSuffix("." + siteDomain) else {
+        guard isOnSite(host: startHost, domain: domain) else {
             throw SkillPackLoadError.startPageOffSite(flow: title, host: startHost)
         }
         guard let rawSource = flow["source"] as? String,
@@ -406,6 +429,53 @@ public enum SkillPackDecoder {
             throw SkillPackLoadError.flowHasNoSteps(flow: title)
         }
         return SkillPackFlow(title: title, startURL: startURL, steps: steps, source: source)
+    }
+
+    /// The pack's own site: its domain, or a subdomain of it. `host` is already lowercased.
+    static func isOnSite(host: String, domain: String) -> Bool {
+        let siteDomain = domain.lowercased()
+        return host == siteDomain || host.hasSuffix("." + siteDomain)
+    }
+
+    /// `startPages` is required of a pack with flows and optional for one without, so none of the
+    /// shallow packs has to say it has nothing to record. Whether each record matches a flow is
+    /// `SkillPackStartPageRule`'s; this reads only its shape.
+    private static func decodeStartPages(_ raw: Any?, hasFlows: Bool) throws -> [SkillPackStartPage] {
+        guard let raw else {
+            if hasFlows {
+                throw SkillPackLoadError.missingField("startPages")
+            }
+            return []
+        }
+        guard let objects = raw as? [[String: Any]] else {
+            throw SkillPackLoadError.wrongType("startPages")
+        }
+        return try objects.enumerated().map { index, object in
+            let prefix = "startPages[\(index)]."
+            try refuseUnknownKeys(in: object, allowed: startPageFields, prefix: prefix)
+            let url = try requiredHTTPSURL(object, "url", prefix: prefix)
+            let landedURL = try requiredHTTPSURL(object, "landedURL", prefix: prefix)
+            // Both present, and both allowed to be empty: a page with no title or no heading is
+            // recorded as having none rather than being given one (X's log-in page has no title).
+            let title: String = try required(object, "title", prefix: prefix)
+            let heading: String = try required(object, "heading", prefix: prefix)
+            let offersText = try requiredText(object, "offers", prefix: prefix)
+            guard let offers = SkillPackStartPageOffer(rawValue: offersText) else {
+                throw SkillPackLoadError.startPageNotAStartPage(url: url.absoluteString, offers: offersText)
+            }
+            let read = try requiredText(object, "read", prefix: prefix)
+            guard read.range(of: "^[0-9]{4}-[0-9]{2}-[0-9]{2}$", options: .regularExpression) != nil else {
+                throw SkillPackLoadError.wrongType(prefix + "read")
+            }
+            return SkillPackStartPage(
+                url: url,
+                landedURL: landedURL,
+                title: title.trimmingCharacters(in: .whitespacesAndNewlines),
+                heading: heading.trimmingCharacters(in: .whitespacesAndNewlines),
+                offers: offers,
+                read: read
+            )
+        }
     }
 
     private static func refuseUnknownKeys(in object: [String: Any], allowed: Set<String>, prefix: String) throws {

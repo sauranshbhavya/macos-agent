@@ -6,41 +6,11 @@
   "category": "documents_storage",
   "summary": "Microsoft's cloud file storage.",
   "signInURL": "https://www.office.com/launch/onedrive",
-  "triggers": ["onedrive", "onedrive.live.com"],
+  "triggers": [
+    "onedrive",
+    "onedrive.live.com"
+  ],
   "sections": [],
-  "depth": "deep",
-  "flows": [
-    {
-      "title": "Upload files",
-      "startURL": "https://onedrive.live.com/",
-      "steps": [
-        "On onedrive.com, browse to the location to add the files.",
-        "Select Upload.",
-        "Select the files to upload, then select Open."
-      ],
-      "source": "https://support.microsoft.com/en-us/onedrive/upload-photos-and-files-to-onedrive"
-    },
-    {
-      "title": "Share a file or folder with people",
-      "startURL": "https://onedrive.live.com/",
-      "steps": [
-        "Select the file or folder's circle icon, then select Share at the top of the page.",
-        "To change who the link works for, select the settings gear icon, choose the settings, and select Apply.",
-        "In the Name, group or email field, start typing the email addresses or contact names of the people to share with.",
-        "Include a message if you want, then select Send."
-      ],
-      "source": "https://support.microsoft.com/en-us/onedrive/share-files-and-folders-in-microsoft-onedrive"
-    },
-    {
-      "title": "Move a file or folder",
-      "startURL": "https://onedrive.live.com/",
-      "steps": [
-        "Browse to the file or folder to move.",
-        "Select it by checking its circle. Several items can be selected and moved together.",
-        "In the top navigation, select Move to.",
-        "In the Move to pane, browse to the destination folder and select Move. Select New folder to create one to move it into."
-      ],
-      "source": "https://support.microsoft.com/en-us/office/sort-rename-or-move-photos-and-files-in-onedrive-01628e6d-9d2c-4298-a1f0-933e5b20a8bf"
-    }
-  ]
+  "depth": "shallow",
+  "flows": []
 }

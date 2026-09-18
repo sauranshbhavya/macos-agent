@@ -48,5 +48,15 @@
       ],
       "source": "https://docs.usepylon.com/pylon-docs/broadcasts/create-a-broadcast"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://app.usepylon.com/",
+      "landedURL": "https://app.usepylon.com/signin",
+      "title": "Sign In – Pylon",
+      "heading": "",
+      "offers": "sign-in",
+      "read": "2026-09-17"
+    }
   ]
 }

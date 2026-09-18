@@ -39,5 +39,15 @@
       ],
       "source": "https://support.thinkific.com/hc/en-us/articles/360030738133-Publishing-Your-Products"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://courses.thinkific.com/onboarding/signin",
+      "landedURL": "https://courses.thinkific.com/onboarding/signin",
+      "title": "Sign in to Thinkific - Creator Login",
+      "heading": "Sign In",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
   ]
 }

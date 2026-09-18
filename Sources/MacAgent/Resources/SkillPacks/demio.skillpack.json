@@ -33,5 +33,15 @@
       ],
       "source": "https://help.demio.com/en/articles/937102-invite-attendees-on-stage-and-manage-attendee-devices-webcam-microphone"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://my.demio.com/",
+      "landedURL": "https://my.demio.com/login",
+      "title": "Login - Demio",
+      "heading": "",
+      "offers": "sign-in",
+      "read": "2026-09-17"
+    }
   ]
 }

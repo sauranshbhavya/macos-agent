@@ -5,7 +5,7 @@
   "domain": "sheets.google.com",
   "category": "documents_storage",
   "summary": "Google's online spreadsheets.",
-  "signInURL": "https://docs.google.com/spreadsheets/",
+  "signInURL": "https://accounts.google.com/ServiceLogin?continue=https%3A%2F%2Fdocs.google.com%2Fspreadsheets%2F",
   "triggers": ["google sheets", "sheets.google.com"],
   "sections": [],
   "depth": "deep",
@@ -39,6 +39,16 @@
         "To change the chart type, double-click the chart, click Setup on the right, and choose a type under Chart type."
       ],
       "source": "https://support.google.com/docs/answer/63824?hl=en&co=GENIE.Platform%3DDesktop"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://sheets.google.com/",
+      "landedURL": "https://accounts.google.com/v3/signin/accountchooser",
+      "title": "Google Sheets: Sign-in",
+      "heading": "Choose an account",
+      "offers": "sign-in",
+      "read": "2026-09-17"
     }
   ]
 }

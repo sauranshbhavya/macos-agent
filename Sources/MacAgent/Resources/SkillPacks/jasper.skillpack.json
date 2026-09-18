@@ -36,5 +36,15 @@
       ],
       "source": "https://help.jasper.ai/hc/en-us/articles/34717712762139-Changing-Roles"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://app.jasper.ai/",
+      "landedURL": "https://app.jasper.ai/auth/login",
+      "title": "Jasper",
+      "heading": "Log in to Jasper",
+      "offers": "sign-in",
+      "read": "2026-09-17"
+    }
   ]
 }

@@ -5,7 +5,7 @@
   "domain": "v0.app",
   "category": "ai_assistants",
   "summary": "AI app builder from Vercel.",
-  "signInURL": "https://v0.app/api/auth/login?next=%2F",
+  "signInURL": "https://vercel.com/login/v0",
   "triggers": [
     "v0.app"
   ],
@@ -14,7 +14,7 @@
   "flows": [
     {
       "title": "Share a chat",
-      "startURL": "https://v0.app/",
+      "startURL": "https://v0.app/api/auth/login?next=%2F",
       "steps": [
         "Click Invite in the top-right of the chat header to open the Invite dialog.",
         "Set who the chat is open to: Private or Only people with access, Everyone at your team, Anyone with the link, or Anyone on the web.",
@@ -26,7 +26,7 @@
     },
     {
       "title": "Find a chat or a project",
-      "startURL": "https://v0.app/",
+      "startURL": "https://v0.app/api/auth/login?next=%2F",
       "steps": [
         "Open the Projects tab in the v0 sidebar to see your Projects.",
         "Press Cmd+K on a Mac, or Ctrl+K on Windows or Linux, to open the command palette and search across every chat and Vercel Project.",
@@ -37,7 +37,7 @@
     },
     {
       "title": "Publish a chat as a template",
-      "startURL": "https://v0.app/",
+      "startURL": "https://v0.app/api/auth/login?next=%2F",
       "steps": [
         "From the chat header, follow Project menu ... then Settings then Template.",
         "Click Publish in the Publish as Template section.",
@@ -46,6 +46,16 @@
         "Published templates are listed in the v0 Templates gallery and reviewed by the v0 team."
       ],
       "source": "https://v0.app/docs/templates"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://v0.app/api/auth/login?next=%2F",
+      "landedURL": "https://vercel.com/login/v0",
+      "title": "Login – Vercel",
+      "heading": "Sign in to v0",
+      "offers": "sign-in",
+      "read": "2026-09-18"
     }
   ]
 }

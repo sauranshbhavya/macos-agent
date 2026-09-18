@@ -5,14 +5,14 @@
   "domain": "postman.com",
   "category": "developer_platforms",
   "summary": "API development and testing platform.",
-  "signInURL": "https://www.postman.com/_pm/handover/?to=https%3A%2F%2Fidentity.getpostman.com%2Flogin",
+  "signInURL": "https://identity.getpostman.com/login",
   "triggers": ["postman.com"],
   "sections": [],
   "depth": "deep",
   "flows": [
     {
       "title": "Send an HTTP request",
-      "startURL": "https://www.postman.com/",
+      "startURL": "https://www.postman.com/_pm/handover/?to=https%3A%2F%2Fidentity.getpostman.com%2Flogin",
       "steps": [
         "The steps below are in the Postman app, which a signed-in person reaches at https://www.postman.com/_pm/handover/?to=https%3A%2F%2Fidentity.getpostman.com%2Flogin.",
         "Click Create new request in the workbench, click the request icon, and select HTTP as the request type. With an HTTP collection already open, Add request next to the collection in the sidebar does the same.",
@@ -24,7 +24,7 @@
     },
     {
       "title": "Create a collection",
-      "startURL": "https://www.postman.com/",
+      "startURL": "https://www.postman.com/_pm/handover/?to=https%3A%2F%2Fidentity.getpostman.com%2Flogin",
       "steps": [
         "The steps below are in the Postman app, which a signed-in person reaches at https://www.postman.com/_pm/handover/?to=https%3A%2F%2Fidentity.getpostman.com%2Flogin.",
         "In the sidebar, click the Add icon and select Collection. In a new workspace, expanding Collections in the sidebar and clicking Create does the same.",
@@ -35,7 +35,7 @@
     },
     {
       "title": "Share a request",
-      "startURL": "https://www.postman.com/",
+      "startURL": "https://www.postman.com/_pm/handover/?to=https%3A%2F%2Fidentity.getpostman.com%2Flogin",
       "steps": [
         "The steps below are in the Postman app, which a signed-in person reaches at https://www.postman.com/_pm/handover/?to=https%3A%2F%2Fidentity.getpostman.com%2Flogin.",
         "Open the request and click Share in the upper right corner.",
@@ -43,6 +43,16 @@
         "Click Invite. Copying a link to the request is another way to share it."
       ],
       "source": "https://learning.postman.com/docs/use/send-requests/create-requests/request-basics/"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://www.postman.com/_pm/handover/?to=https%3A%2F%2Fidentity.getpostman.com%2Flogin",
+      "landedURL": "https://identity.getpostman.com/login",
+      "title": "Postman - Sign In",
+      "heading": "Sign in to Postman",
+      "offers": "sign-in",
+      "read": "2026-09-18"
     }
   ]
 }

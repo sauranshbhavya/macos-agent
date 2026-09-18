@@ -41,5 +41,15 @@
       ],
       "source": "https://support.mercury.com/hc/en-us/articles/28768764276756-Downloading-monthly-statements"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://app.mercury.com/",
+      "landedURL": "https://app.mercury.com/login",
+      "title": "Mercury | Banking for Startups",
+      "heading": "Log in",
+      "offers": "sign-in",
+      "read": "2026-09-17"
+    }
   ]
 }

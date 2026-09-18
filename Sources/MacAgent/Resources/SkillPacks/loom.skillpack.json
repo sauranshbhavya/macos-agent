@@ -39,5 +39,15 @@
       ],
       "source": "https://support.atlassian.com/loom/docs/how-do-i-move-a-folder-or-video-into-a-space/"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://www.loom.com/looms",
+      "landedURL": "https://www.loom.com/login",
+      "title": "Log into Loom | Loom",
+      "heading": "Log in to Loom",
+      "offers": "sign-in",
+      "read": "2026-09-17"
+    }
   ]
 }

@@ -45,5 +45,15 @@
       ],
       "source": "https://support.peopledatalabs.com/hc/en-us/articles/27548020405147-Usage-Alerts"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://dashboard.peopledatalabs.com/",
+      "landedURL": "https://auth.peopledatalabs.com/u/login/identifier",
+      "title": "Log In | People Data Labs",
+      "heading": "Log In",
+      "offers": "sign-in",
+      "read": "2026-09-17"
+    }
   ]
 }

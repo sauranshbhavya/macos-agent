@@ -5,7 +5,7 @@
   "domain": "mail.google.com",
   "category": "email_calendar",
   "summary": "Google's email service.",
-  "signInURL": "https://mail.google.com/",
+  "signInURL": "https://accounts.google.com/ServiceLogin?continue=https%3A%2F%2Fmail.google.com%2F",
   "triggers": ["gmail", "mail.google.com"],
   "sections": [],
   "depth": "deep",
@@ -40,6 +40,16 @@
         "To label an email, check the box next to it, click Labels at the top, and select the label."
       ],
       "source": "https://support.google.com/mail/answer/118708?hl=en&co=GENIE.Platform%3DDesktop"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://mail.google.com/",
+      "landedURL": "https://accounts.google.com/v3/signin/accountchooser",
+      "title": "Gmail",
+      "heading": "Choose an account",
+      "offers": "sign-in",
+      "read": "2026-09-17"
     }
   ]
 }

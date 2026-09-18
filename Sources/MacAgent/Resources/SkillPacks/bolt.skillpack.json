@@ -46,5 +46,15 @@
       ],
       "source": "https://support.bolt.new/best-practices/manage-context"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://bolt.new/",
+      "landedURL": "https://bolt.new/",
+      "title": "Bolt AI builder: Websites, apps & prototypes",
+      "heading": "What will you build today?",
+      "offers": "product",
+      "read": "2026-09-17"
+    }
   ]
 }

@@ -12,7 +12,7 @@
   "flows": [
     {
       "title": "Create and send an email campaign",
-      "startURL": "https://www.klaviyo.com/",
+      "startURL": "https://www.klaviyo.com/login",
       "steps": [
         "On the Campaigns tab, choose Create, choose Email, then click Continue.",
         "Give the campaign a name (required), then click Continue to move to the Recipients screen.",
@@ -24,7 +24,7 @@
     },
     {
       "title": "Create a segment",
-      "startURL": "https://www.klaviyo.com/",
+      "startURL": "https://www.klaviyo.com/login",
       "steps": [
         "Navigate to Audience > Lists & segments in your account.",
         "Click Create New in the upper right corner, then select Create segment.",
@@ -35,7 +35,7 @@
     },
     {
       "title": "Import contacts to a list",
-      "startURL": "https://www.klaviyo.com/",
+      "startURL": "https://www.klaviyo.com/login",
       "steps": [
         "Navigate to Audience > Lists & segments and select the list to add contacts to, or select Create New > Create list to make a new one first.",
         "Open the Manage List dropdown in the upper right and choose Import contacts.",
@@ -44,6 +44,16 @@
         "If the file has no consent column and Klaviyo asks whether these contacts subscribed to messaging, select Yes only when every contact gave explicit consent, and check the types of consent to apply. Then click Import."
       ],
       "source": "https://help.klaviyo.com/hc/en-us/articles/115005251128"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://www.klaviyo.com/login",
+      "landedURL": "https://www.klaviyo.com/login",
+      "title": "Log In | Klaviyo",
+      "heading": "Your next campaign starts with a prompt",
+      "offers": "sign-in",
+      "read": "2026-09-18"
     }
   ]
 }

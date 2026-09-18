@@ -15,7 +15,7 @@
   "flows": [
     {
       "title": "Check a piece of writing in the Grammarly Editor",
-      "startURL": "https://app.grammarly.com/",
+      "startURL": "https://www.grammarly.com/signin",
       "steps": [
         "Open the Grammarly Editor at app.grammarly.com, where documents can be written and edited in the browser with nothing else installed.",
         "Write or paste the text. Grammarly underlines some critical suggestions as you go.",
@@ -37,7 +37,7 @@
     },
     {
       "title": "Rework a piece of text where you are typing",
-      "startURL": "https://www.grammarly.com/",
+      "startURL": "https://www.grammarly.com/signin",
       "steps": [
         "Inline Intelligence works in the Superhuman browser extension for Chrome, on editable text anywhere on the web — an email draft, a document, a text field.",
         "Highlight the text. The Superhuman icon appears at the lower-right edge of your selection.",
@@ -46,6 +46,24 @@
         "The result arrives in a rewrite card next to your original, so nothing changes until you have read it and applied it."
       ],
       "source": "https://support.grammarly.com/hc/en-us/articles/47686551174029-Get-started-with-Inline-Intelligence"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://www.grammarly.com/signin",
+      "landedURL": "https://www.grammarly.com/signin",
+      "title": "Login | Grammarly",
+      "heading": "Sign in",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    },
+    {
+      "url": "https://account.grammarly.com/customize",
+      "landedURL": "https://www.grammarly.com/signin",
+      "title": "Login | Grammarly",
+      "heading": "Sign in",
+      "offers": "sign-in",
+      "read": "2026-09-17"
     }
   ]
 }

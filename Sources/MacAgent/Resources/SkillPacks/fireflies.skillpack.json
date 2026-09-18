@@ -42,5 +42,15 @@
       ],
       "source": "https://guide.fireflies.ai/articles/2474667467-how-to-share-meeting-transcripts-and-summaries-with-everyone"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://app.fireflies.ai/",
+      "landedURL": "https://app.fireflies.ai/login",
+      "title": "Notebook - Fireflies.ai | #1 AI Teammate",
+      "heading": "",
+      "offers": "sign-in",
+      "read": "2026-09-17"
+    }
   ]
 }

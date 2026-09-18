@@ -51,5 +51,15 @@
       ],
       "source": "https://support.discord.com/hc/en-us/articles/115000468588-How-to-Use-Search-on-Discord"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://discord.com/channels/@me",
+      "landedURL": "https://discord.com/login",
+      "title": "Discord",
+      "heading": "Welcome back!",
+      "offers": "sign-in",
+      "read": "2026-09-17"
+    }
   ]
 }

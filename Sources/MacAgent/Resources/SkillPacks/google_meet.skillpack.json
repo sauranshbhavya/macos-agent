@@ -38,5 +38,15 @@
       ],
       "source": "https://support.google.com/meet/answer/10090454?hl=en"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://meet.google.com/landing",
+      "landedURL": "https://accounts.google.com/v3/signin/accountchooser",
+      "title": "Sign in - Google Accounts",
+      "heading": "Choose an account",
+      "offers": "sign-in",
+      "read": "2026-09-17"
+    }
   ]
 }

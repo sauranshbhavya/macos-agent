@@ -36,5 +36,15 @@
       ],
       "source": "https://telegram.org/tour/chat-folders"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://web.telegram.org/",
+      "landedURL": "https://web.telegram.org/a/",
+      "title": "Telegram",
+      "heading": "Log in to Telegram by QR Code",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
   ]
 }

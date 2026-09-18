@@ -48,5 +48,15 @@
       ],
       "source": "https://help.heygen.com/en/articles/7842596-how-to-create-explainer-videos-on-heygen"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://app.heygen.com/",
+      "landedURL": "https://auth.heygen.com/",
+      "title": "HeyGen - Login",
+      "heading": "",
+      "offers": "sign-in",
+      "read": "2026-09-17"
+    }
   ]
 }

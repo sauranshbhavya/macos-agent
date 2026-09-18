@@ -44,5 +44,15 @@
       ],
       "source": "https://help.instantly.ai/en/articles/6602310-analytics"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://app.instantly.ai/",
+      "landedURL": "https://app.instantly.ai/auth/login",
+      "title": "Login - Instantly",
+      "heading": "",
+      "offers": "sign-in",
+      "read": "2026-09-17"
+    }
   ]
 }

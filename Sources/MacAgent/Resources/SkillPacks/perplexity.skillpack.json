@@ -48,5 +48,23 @@
       ],
       "source": "https://www.perplexity.ai/help-center/en/articles/13914413-how-to-use-computer-skills"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://www.perplexity.ai/",
+      "landedURL": "https://www.perplexity.ai/",
+      "title": "Perplexity",
+      "heading": "Cookie Policy",
+      "offers": "product",
+      "read": "2026-09-17"
+    },
+    {
+      "url": "https://www.perplexity.ai/library",
+      "landedURL": "https://www.perplexity.ai/library",
+      "title": "Perplexity Library",
+      "heading": "Cookie Policy",
+      "offers": "sign-in",
+      "read": "2026-09-17"
+    }
   ]
 }

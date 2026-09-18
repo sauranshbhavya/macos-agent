@@ -34,5 +34,15 @@
       ],
       "source": "https://support.microsoft.com/en-us/microsoft-365-copilot/get-started-with-agents-in-the-microsoft-365-copilot-app"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://copilot.microsoft.com/",
+      "landedURL": "https://copilot.microsoft.com/",
+      "title": "Microsoft Copilot: Your AI companion",
+      "heading": "Sign in to Copilot",
+      "offers": "sign-in",
+      "read": "2026-09-17"
+    }
   ]
 }

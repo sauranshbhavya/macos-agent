@@ -41,5 +41,15 @@
       ],
       "source": "https://amplitude.com/docs/analytics/charts/build-charts-add-events"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://app.amplitude.com/",
+      "landedURL": "https://app.amplitude.com/login",
+      "title": "Amplitude",
+      "heading": "Log in or Sign up",
+      "offers": "sign-in",
+      "read": "2026-09-17"
+    }
   ]
 }

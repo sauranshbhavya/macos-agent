@@ -47,5 +47,15 @@
       ],
       "source": "https://help.front.com/en/articles/2131"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://front.com/login",
+      "landedURL": "https://app.frontapp.com/signin",
+      "title": "Front",
+      "heading": "",
+      "offers": "sign-in",
+      "read": "2026-09-17"
+    }
   ]
 }

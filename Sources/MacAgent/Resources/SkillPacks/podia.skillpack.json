@@ -36,5 +36,15 @@
       ],
       "source": "https://help.podia.com/en/articles/11370361-creating-an-online-course"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://app.podia.com/login",
+      "landedURL": "https://app.podia.com/login",
+      "title": "Podia: Login",
+      "heading": "Login to Podia",
+      "offers": "sign-in",
+      "read": "2026-09-17"
+    }
   ]
 }

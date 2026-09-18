@@ -5,7 +5,7 @@
   "domain": "drive.google.com",
   "category": "documents_storage",
   "summary": "Google's cloud file storage.",
-  "signInURL": "https://drive.google.com/drive/?dmr=1",
+  "signInURL": "https://accounts.google.com/ServiceLogin?continue=https%3A%2F%2Fdrive.google.com%2F",
   "triggers": ["google drive", "drive.google.com"],
   "sections": [],
   "depth": "deep",
@@ -40,6 +40,16 @@
         "Click Send or Share. Each email address gets an email."
       ],
       "source": "https://support.google.com/docs/answer/2494822?hl=en&co=GENIE.Platform%3DDesktop"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://drive.google.com/",
+      "landedURL": "https://accounts.google.com/v3/signin/accountchooser",
+      "title": "Google Drive: Sign-in",
+      "heading": "Choose an account",
+      "offers": "sign-in",
+      "read": "2026-09-17"
     }
   ]
 }

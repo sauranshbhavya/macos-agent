@@ -43,5 +43,15 @@
       ],
       "source": "https://help.salesforce.com/s/articleView?id=sales.leads_assign.htm&type=5"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://salesforce.com/login",
+      "landedURL": "https://login.salesforce.com/",
+      "title": "Login | Salesforce",
+      "heading": "Salesforce login",
+      "offers": "sign-in",
+      "read": "2026-09-17"
+    }
   ]
 }

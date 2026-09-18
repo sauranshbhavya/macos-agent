@@ -48,5 +48,15 @@
       ],
       "source": "https://help.synthesia.io/en/articles/6341783-how-do-i-import-powerpoint-slides-into-synthesia"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://app.synthesia.io/",
+      "landedURL": "https://app.synthesia.io/#/welcome",
+      "title": "Synthesia",
+      "heading": "",
+      "offers": "sign-in",
+      "read": "2026-09-17"
+    }
   ]
 }

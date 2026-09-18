@@ -317,7 +317,7 @@ struct SkillPackTests {
         #expect(pack.guidance.contains("(steps from https://www.example.com/help/create)"))
     }
 
-    @Test(arguments: ["format", "id", "name", "domain", "category", "summary", "signInURL", "triggers", "sections", "depth", "flows"])
+    @Test(arguments: ["format", "id", "name", "domain", "category", "summary", "signInURL", "triggers", "sections", "depth", "flows", "startPages"])
     func aPackMissingAFieldDoesNotLoad(field: String) throws {
         var object = SkillPackFixtures.object()
         object.removeValue(forKey: field)
@@ -958,6 +958,7 @@ struct SkillPackTests {
         flow = SkillPackFixtures.flow()
         flow["startURL"] = "https://www.notion.so/help#sharing"
         object["flows"] = [flow]
+        object["startPages"] = [SkillPackFixtures.startPage(url: "https://www.notion.so/help#sharing")]
         #expect(Self.error(object) == nil)
     }
 
@@ -986,8 +987,242 @@ struct SkillPackTests {
             flow["startURL"] = startURL
             flow["source"] = "https://www.notion.com/help/create-your-first-page"
             object["flows"] = [flow]
+            object["startPages"] = [SkillPackFixtures.startPage(url: startURL)]
             #expect(Self.error(object) == nil, "\(startURL) was refused")
         }
+    }
+
+    // MARK: - A flow's start page is recorded where it lands (SONNY-510)
+
+    /// **The five shapes SONNY-510 recorded, each as a pack a person would write after reading it
+    /// honestly, and each refused by the loader.** Every sample is JSON decoded through
+    /// `SkillPackDecoder.decode`, so the rule is on the path of every one of them (SONNY-388: a sample
+    /// entering downstream of the mechanism it holds tests only what already works). The first two are
+    /// refused by what the record *says* — the landed URL — even with `sign-in` written beside it, which
+    /// is a reader getting the page wrong; the last three are refused by the word a reader who got it
+    /// right would have to write.
+    @Test
+    func aStartPageThatLandsWhereAFlowMayNotBeginDoesNotLoad() throws {
+        // 1. Ghost: the bare origin redirects to account creation on the site's own host.
+        #expect(Self.landing(
+            start: "https://account.ghost.org/", landed: "https://account.ghost.org/signup",
+            domain: "ghost.org", signIn: "https://account.ghost.org/signin/"
+        ) == .startPageCreatesAnAccount(url: "https://account.ghost.org/signup"))
+        // 2. Google Ads: the declared host is the site's, the landed host is another site's.
+        #expect(Self.landing(
+            start: "https://ads.google.com/", landed: "https://business.google.com/us/google-ads/",
+            domain: "ads.google.com", signIn: "https://ads.google.com/nav/login"
+        ) == .landedOffSite(url: "https://ads.google.com/", host: "business.google.com"))
+        // 3. StreamYard: nothing moved, and the page is itself the sign-up.
+        #expect(Self.landing(
+            start: "https://streamyard.com/", landed: "https://streamyard.com/", offers: "sign-up", domain: "streamyard.com"
+        ) == .startPageNotAStartPage(url: "https://streamyard.com/", offers: "sign-up"))
+        // 4. Mattermost: a self-hosted product's vendor site cannot reach a channel at all.
+        #expect(Self.landing(
+            start: "https://mattermost.com/", landed: "https://mattermost.com/", offers: "unreachable", domain: "mattermost.com", signIn: nil
+        ) == .startPageNotAStartPage(url: "https://mattermost.com/", offers: "unreachable"))
+        // 5. n8n: the own-domain rule leaves only the marketing homepage, and it is one.
+        #expect(Self.landing(
+            start: "https://n8n.io/", landed: "https://n8n.io/", offers: "marketing", domain: "n8n.io", signIn: "https://app.n8n.cloud/login"
+        ) == .startPageNotAStartPage(url: "https://n8n.io/", offers: "marketing"))
+    }
+
+    /// The controls for the test above, through the same decoder: what an ordinary start page's record
+    /// looks like loads, including the two cases the host rule exists to allow — a landing on a subdomain
+    /// of the site, and one on the pack's own sign-in host when that host is another domain, which is how
+    /// a Google product lands on `accounts.google.com`. Without the second, every Google pack in the tree
+    /// would be refused for landing exactly where its own `signInURL` says it signs in.
+    @Test
+    func anOrdinaryStartPageRecordLoads() throws {
+        #expect(Self.landing(start: "https://www.notion.so/", landed: "https://www.notion.so/login") == nil)
+        #expect(Self.landing(start: "https://notion.so/", landed: "https://app.notion.so/sign-in") == nil)
+        #expect(Self.landing(
+            start: "https://meet.google.com/landing", landed: "https://accounts.google.com/v3/signin/identifier",
+            domain: "meet.google.com", signIn: "https://accounts.google.com/ServiceLogin"
+        ) == nil)
+        #expect(Self.landing(start: "https://www.notion.so/", landed: "https://www.notion.so/", offers: "product") == nil)
+        // A single-page app's route lives in the fragment, and a fragment is recorded as it is.
+        #expect(Self.landing(start: "https://app.notion.so/#/home", landed: "https://app.notion.so/#/login") == nil)
+        // A page with no heading or no title records an empty one rather than leaving the field out or
+        // being given one — X's log-in page has no title.
+        var untitled = Self.startPageObject(start: "https://www.notion.so/", landed: "https://www.notion.so/login")
+        var page = try #require((untitled["startPages"] as? [[String: Any]])?.first)
+        page["heading"] = ""
+        page["title"] = ""
+        untitled["startPages"] = [page]
+        #expect(Self.error(untitled) == nil)
+    }
+
+    /// **The landed host, held on both sides of its line.** It is the pack's own site or the pack's own
+    /// sign-in host and nothing else: not a look-alike ending in the domain's letters, not a subdomain of
+    /// the sign-in host (the allowance is that host, exactly), and — for a pack with no sign-in page — not
+    /// any other host at all.
+    @Test
+    func aLandingOnAnotherSiteIsRefusedWhateverTheRecordSays() throws {
+        #expect(Self.landing(start: "https://www.notion.so/", landed: "https://notnotion.so/login")
+            == .landedOffSite(url: "https://www.notion.so/", host: "notnotion.so"))
+        #expect(Self.landing(
+            start: "https://meet.google.com/landing", landed: "https://evil.accounts.google.com/signin",
+            domain: "meet.google.com", signIn: "https://accounts.google.com/ServiceLogin"
+        ) == .landedOffSite(url: "https://meet.google.com/landing", host: "evil.accounts.google.com"))
+        #expect(Self.landing(
+            start: "https://www.notion.so/", landed: "https://accounts.google.com/signin", signIn: nil
+        ) == .landedOffSite(url: "https://www.notion.so/", host: "accounts.google.com"))
+        // `offers: product` buys nothing here: the host rule reads the URL, not the reader's word.
+        #expect(Self.landing(start: "https://ads.google.com/", landed: "https://business.google.com/", offers: "product", domain: "ads.google.com")
+            == .landedOffSite(url: "https://ads.google.com/", host: "business.google.com"))
+    }
+
+    /// Every spelling of account creation `accountCreationParts` folds together, in the landed path, in
+    /// a single-page app's fragment, and in the declared URL itself — and the near misses a sign-in or
+    /// meeting page really uses still load, so the list is held from both sides.
+    @Test
+    func aStartPageWhosePathNamesAccountCreationDoesNotLoad() throws {
+        for landed in [
+            "https://www.notion.so/signup", "https://www.notion.so/sign-up", "https://www.notion.so/sign_up",
+            "https://www.notion.so/SignUp", "https://www.notion.so/register", "https://www.notion.so/users/registration",
+            "https://www.notion.so/create-account", "https://www.notion.so/handshake/signup/", "https://www.notion.so/#/signup"
+        ] {
+            #expect(Self.landing(start: "https://www.notion.so/", landed: landed) == .startPageCreatesAnAccount(url: landed), "\(landed)")
+        }
+        #expect(Self.landing(start: "https://www.notion.so/signup", landed: "https://www.notion.so/login")
+            == .startPageCreatesAnAccount(url: "https://www.notion.so/signup"))
+        for landed in [
+            "https://www.notion.so/signin", "https://www.notion.so/sign-in", "https://www.notion.so/users/sign_in",
+            "https://www.notion.so/login", "https://www.notion.so/join", "https://www.notion.so/registered-users"
+        ] {
+            #expect(Self.landing(start: "https://www.notion.so/", landed: landed) == nil, "\(landed) was refused")
+        }
+    }
+
+    /// **Only two words load**, and a near miss of either is not one of them — so a reader who has to
+    /// write down a page that was not a start page has no word to write it in.
+    @Test
+    func onlySignInAndProductAreWordsAStartPageMayOffer() throws {
+        for offers in ["sign-up", "marketing", "unreadable", "account-creation", "Sign-in", "sign in", "signin", "products"] {
+            #expect(Self.landing(start: "https://www.notion.so/", landed: "https://www.notion.so/login", offers: offers)
+                == .startPageNotAStartPage(url: "https://www.notion.so/", offers: offers), "\(offers)")
+        }
+        #expect(Self.landing(start: "https://www.notion.so/", landed: "https://www.notion.so/login", offers: " ")
+            == .missingField("startPages[0].offers"))
+    }
+
+    /// **One record per start URL, for every start URL and for nothing else.** A flow whose start page
+    /// nobody opened does not load, and the match is the exact URL — a trailing slash is another page,
+    /// which is what makes adding one a change somebody has to read. A record no flow uses is refused too,
+    /// or a start URL could change beside a reading of its predecessor and both would look recorded.
+    @Test
+    func everyStartURLHasExactlyOneRecordAndEveryRecordAFlow() throws {
+        var unrecorded = Self.startPageObject(start: "https://www.notion.so/", landed: "https://www.notion.so/login")
+        var second = SkillPackFixtures.flow(title: "Share a page")
+        second["startURL"] = "https://www.notion.so/share"
+        unrecorded["flows"] = [SkillPackFixtures.flow(), second]
+        #expect(Self.error(unrecorded) == .startPageNotRecorded(flow: "Share a page"))
+
+        #expect(Self.landing(start: "https://www.notion.so", recordedAs: "https://www.notion.so/", landed: "https://www.notion.so/login")
+            == .startPageNotRecorded(flow: "Create a page"))
+
+        var unused = Self.startPageObject(start: "https://www.notion.so/", landed: "https://www.notion.so/login")
+        unused["startPages"] = [
+            SkillPackFixtures.startPage(url: "https://www.notion.so/"),
+            SkillPackFixtures.startPage(url: "https://www.notion.so/old")
+        ]
+        #expect(Self.error(unused) == .startPageUnused(url: "https://www.notion.so/old"))
+
+        var twice = Self.startPageObject(start: "https://www.notion.so/", landed: "https://www.notion.so/login")
+        twice["startPages"] = [SkillPackFixtures.startPage(url: "https://www.notion.so/"), SkillPackFixtures.startPage(url: "https://www.notion.so/")]
+        #expect(Self.error(twice) == .startPageRecordedTwice(url: "https://www.notion.so/"))
+
+        // Two flows sharing one start page need one record, not two.
+        var shared = Self.startPageObject(start: "https://www.notion.so/", landed: "https://www.notion.so/login")
+        shared["flows"] = [SkillPackFixtures.flow(), SkillPackFixtures.flow(title: "Share a page")]
+        #expect(Self.error(shared) == nil)
+
+        // A pack with no flows owes no record, and a record on one is a record no flow uses.
+        var shallow = SkillPackFixtures.object(depth: "shallow")
+        #expect(shallow["startPages"] == nil)
+        #expect(Self.error(shallow) == nil)
+        shallow["startPages"] = []
+        #expect(Self.error(shallow) == nil)
+        shallow["startPages"] = [SkillPackFixtures.startPage()]
+        #expect(Self.error(shallow) == .startPageUnused(url: "https://www.notion.so/"))
+    }
+
+    /// The shape of a record, field by field: a landing is a page and not a session, so a query is
+    /// refused; `read` is a date; the key set is closed, like every other object in a pack.
+    @Test
+    func aStartPageRecordHoldsItsShape() throws {
+        #expect(Self.landing(start: "https://www.notion.so/", landed: "https://www.notion.so/login?next=%2Fhome")
+            == .landedURLCarriesQuery(url: "https://www.notion.so/"))
+        #expect(Self.landing(start: "https://www.notion.so/", landed: "http://www.notion.so/login")
+            == .notHTTPS(field: "startPages[0].landedURL"))
+
+        func withField(_ key: String, _ value: Any?) -> SkillPackLoadError? {
+            var object = Self.startPageObject(start: "https://www.notion.so/", landed: "https://www.notion.so/login")
+            var page = (object["startPages"] as? [[String: Any]])?.first ?? [:]
+            page[key] = value
+            object["startPages"] = [page]
+            return Self.error(object)
+        }
+        for key in ["url", "landedURL", "title", "heading", "offers", "read"] {
+            #expect(withField(key, nil) == .missingField("startPages[0].\(key)"), "\(key)")
+        }
+        for read in ["18 September 2026", "2026-9-18", "2026-09-18T10:00", "20260918"] {
+            #expect(withField("read", read) == .wrongType("startPages[0].read"), "\(read)")
+        }
+        #expect(withField("signedIn", true) == .unknownField("startPages[0].signedIn"))
+
+        var notAList = SkillPackFixtures.object()
+        notAList["startPages"] = SkillPackFixtures.startPage()
+        #expect(Self.error(notAList) == .wrongType("startPages"))
+    }
+
+    /// **Every shipped deep pack records where each of its start pages landed**, and the walk reached
+    /// them. The loader already refuses a pack that does not — `everyShippedPackLoads…` holds that — so
+    /// what this adds is the control that the population is not empty: a rule that no shipped pack ever
+    /// met would pass exactly as warmly with the check deleted.
+    @Test
+    func everyShippedDeepPackRecordsWhereItsStartPagesLanded() throws {
+        let catalogue = SkillPackCatalog.load(fileURLs: SkillPackCatalog.packFileURLs(in: Self.shippedPacksDirectory))
+        let deep = catalogue.packs.filter { $0.depth == .deep }
+        #expect(deep.count >= 3)
+        for pack in deep {
+            #expect(!pack.startPages.isEmpty, "\(pack.id) is deep and records no start page")
+            #expect(Set(pack.startPages.map(\.url)) == Set(pack.flows.map(\.startURL)), "\(pack.id)")
+        }
+        for pack in catalogue.packs where pack.depth == .shallow {
+            #expect(pack.startPages.isEmpty, "\(pack.id) is shallow and records a start page")
+        }
+    }
+
+    /// A deep fixture pack whose one flow starts at `start` and whose record says it landed on `landed`.
+    static func startPageObject(
+        start: String,
+        recordedAs: String? = nil,
+        landed: String,
+        offers: String = "sign-in",
+        domain: String = "notion.so",
+        signIn: String? = "https://notion.so/login"
+    ) -> [String: Any] {
+        var object = SkillPackFixtures.object(domain: domain)
+        object["signInURL"] = signIn.map { $0 as Any } ?? NSNull()
+        var flow = SkillPackFixtures.flow(on: domain)
+        flow["startURL"] = start
+        object["flows"] = [flow]
+        object["startPages"] = [SkillPackFixtures.startPage(url: recordedAs ?? start, landedURL: landed, offers: offers)]
+        return object
+    }
+
+    /// What the loader says about `startPageObject`'s pack.
+    static func landing(
+        start: String,
+        recordedAs: String? = nil,
+        landed: String,
+        offers: String = "sign-in",
+        domain: String = "notion.so",
+        signIn: String? = "https://notion.so/login"
+    ) -> SkillPackLoadError? {
+        error(startPageObject(start: start, recordedAs: recordedAs, landed: landed, offers: offers, domain: domain, signIn: signIn))
     }
 
     // MARK: - Bounds and identity

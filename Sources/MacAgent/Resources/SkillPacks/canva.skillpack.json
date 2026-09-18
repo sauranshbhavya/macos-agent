@@ -12,7 +12,7 @@
   "flows": [
     {
       "title": "Create a design from a template",
-      "startURL": "https://www.canva.com/",
+      "startURL": "https://www.canva.com/login/",
       "steps": [
         "Signed in, canva.com opens your Canva homepage and every step below is on it. Signed out the same address shows the marketing page instead, whose top row reads Design, Product, Plans, Business, Education, Help, Sign up and Log in, and which carries none of these controls.",
         "On the homepage search bar, type your keywords and press Enter. Selecting Templates above the search bar leaves only templates in the results.",
@@ -24,7 +24,7 @@
     },
     {
       "title": "Start a design from scratch at a custom size",
-      "startURL": "https://www.canva.com/",
+      "startURL": "https://www.canva.com/login/",
       "steps": [
         "These steps are on the Canva homepage, which canva.com opens once you are signed in — not on the signed-out marketing page at the same address.",
         "On the homepage banner, click Custom size.",
@@ -33,6 +33,16 @@
         "Select Create new design to open the editor at that size."
       ],
       "source": "https://www.canva.com/help/design-from-scratch/"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://www.canva.com/login/",
+      "landedURL": "https://www.canva.com/en_gb/login/",
+      "title": "Login to your Canva account",
+      "heading": "Digital design",
+      "offers": "sign-in",
+      "read": "2026-09-18"
     }
   ]
 }

@@ -12,7 +12,7 @@
   "flows": [
     {
       "title": "Create a repository",
-      "startURL": "https://github.com/",
+      "startURL": "https://github.com/login",
       "steps": [
         "In the upper-right corner of any page, open the menu and click New repository.",
         "Use the Owner dropdown menu to pick the account that will own the repository.",
@@ -24,7 +24,7 @@
     },
     {
       "title": "Open an issue",
-      "startURL": "https://github.com/",
+      "startURL": "https://github.com/login",
       "steps": [
         "Go to the repository's main page, and under the repository name click Issues.",
         "Click New issue. If the repository uses issue templates, click Get started next to the kind of issue, or click Open a blank issue.",
@@ -35,7 +35,7 @@
     },
     {
       "title": "Open a pull request",
-      "startURL": "https://github.com/",
+      "startURL": "https://github.com/login",
       "steps": [
         "Go to the repository's main page and, in the Branch menu, choose the branch that holds your commits.",
         "Above the list of files, in the yellow banner, click Compare & pull request.",
@@ -44,6 +44,16 @@
         "Click Create Pull Request. For a draft, pick Create Draft Pull Request from the drop-down, then click Draft Pull Request."
       ],
       "source": "https://docs.github.com/en/pull-requests/how-tos/create-pull-requests/creating-a-pull-request"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://github.com/login",
+      "landedURL": "https://github.com/login",
+      "title": "Sign in to GitHub · GitHub",
+      "heading": "Sign in to GitHub",
+      "offers": "sign-in",
+      "read": "2026-09-18"
     }
   ]
 }

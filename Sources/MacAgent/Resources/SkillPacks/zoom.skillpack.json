@@ -12,7 +12,7 @@
   "flows": [
     {
       "title": "Schedule a meeting",
-      "startURL": "https://zoom.us/",
+      "startURL": "https://zoom.us/signin",
       "steps": [
         "Sign in to the Zoom web portal. In the top-right corner, click the Zoom Products icon, then click Meetings. Meetings opens in a new browser tab.",
         "Click Schedule a Meeting.",
@@ -34,7 +34,7 @@
     },
     {
       "title": "Find a cloud recording",
-      "startURL": "https://zoom.us/",
+      "startURL": "https://zoom.us/signin",
       "steps": [
         "Sign in to the Zoom web portal and click Recordings & Transcripts in the navigation menu.",
         "Click the Cloud recordings tab. It lists the cloud recordings you started that have finished processing.",
@@ -42,6 +42,24 @@
         "A recording that is not there may be in the trash folder, where a cloud recording can be recovered within 30 days."
       ],
       "source": "https://support.zoom.com/hc/en/article?id=zm_kb&sysparm_article=KB0058006"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://zoom.us/signin",
+      "landedURL": "https://zoom.us/signin",
+      "title": "Sign In | Zoom",
+      "heading": "Sign in",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    },
+    {
+      "url": "https://join.zoom.us/",
+      "landedURL": "https://zoom.us/join",
+      "title": "Join Meeting | Zoom",
+      "heading": "Join Meeting",
+      "offers": "product",
+      "read": "2026-09-18"
     }
   ]
 }

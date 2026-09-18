@@ -45,5 +45,15 @@
       ],
       "source": "https://mailchimp.com/help/create-and-send-regular-email/"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://admin.mailchimp.com/",
+      "landedURL": "https://login.mailchimp.com/",
+      "title": "Login | Mailchimp",
+      "heading": "Log in to Mailchimp",
+      "offers": "sign-in",
+      "read": "2026-09-17"
+    }
   ]
 }

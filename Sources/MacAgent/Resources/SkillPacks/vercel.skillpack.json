@@ -43,5 +43,15 @@
       ],
       "source": "https://vercel.com/docs/instant-rollback"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://vercel.com/dashboard",
+      "landedURL": "https://vercel.com/login",
+      "title": "Login – Vercel",
+      "heading": "Log in to Vercel",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
   ]
 }

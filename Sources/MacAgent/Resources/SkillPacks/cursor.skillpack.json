@@ -5,7 +5,7 @@
   "domain": "cursor.com",
   "category": "ai_assistants",
   "summary": "AI code editor.",
-  "signInURL": "https://cursor.com/dashboard",
+  "signInURL": "https://authenticator.cursor.sh/",
   "triggers": [
     "cursor.com"
   ],
@@ -14,7 +14,7 @@
   "flows": [
     {
       "title": "Plan a change before Agent writes any code",
-      "startURL": "https://cursor.com/",
+      "startURL": "https://cursor.com/dashboard",
       "steps": [
         "In Cursor, press Shift+Tab from the chat input to rotate to Plan Mode. Cursor also offers it when your wording suggests a complex task, and the mode picker dropdown in Agent switches modes too.",
         "Answer Agent's clarifying questions. It researches the codebase to gather context and writes a full implementation plan.",
@@ -26,7 +26,7 @@
     },
     {
       "title": "Give Agent standing instructions with rules",
-      "startURL": "https://cursor.com/",
+      "startURL": "https://cursor.com/dashboard",
       "steps": [
         "Decide which kind of rule fits: a project rule, version-controlled in .cursor/rules and scoped to that codebase; a user rule, global to your Cursor environment and used by Agent in chat; a team rule managed from the dashboard on Team and Enterprise plans; or an AGENTS.md file in the project root.",
         "For a project rule, write an .mdc file in .cursor/rules — a plain .md there is ignored, because it carries no frontmatter.",
@@ -35,6 +35,16 @@
         "Whatever the kind, the rule's contents go in at the start of the model's context, and team, project and user rules are merged in that order."
       ],
       "source": "https://cursor.com/docs/rules"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://cursor.com/dashboard",
+      "landedURL": "https://authenticator.cursor.sh/",
+      "title": "Sign in",
+      "heading": "Sign in",
+      "offers": "sign-in",
+      "read": "2026-09-18"
     }
   ]
 }

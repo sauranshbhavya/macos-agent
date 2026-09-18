@@ -14,7 +14,7 @@
   "flows": [
     {
       "title": "Invite someone to collaborate on a task",
-      "startURL": "https://manus.im/",
+      "startURL": "https://manus.im/login",
       "steps": [
         "Open the task the collaboration is for.",
         "Find the share button on that task.",
@@ -25,7 +25,7 @@
     },
     {
       "title": "Set up Mail Manus so an email becomes a task",
-      "startURL": "https://manus.im/",
+      "startURL": "https://manus.im/login",
       "steps": [
         "Go to Settings, then Mail Manus.",
         "Under Base Emails, configure the Approved senders — the addresses you send from, capped at ten — and note Manus's Email, the address that turns what it receives into a task.",
@@ -34,6 +34,16 @@
         "Anyone added as a recipient or cc joins the task as a collaborator."
       ],
       "source": "https://help.manus.im/en/articles/12059745-how-can-i-use-mail-manus"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://manus.im/login",
+      "landedURL": "https://manus.im/login",
+      "title": "Login",
+      "heading": "Sign in or sign up",
+      "offers": "sign-in",
+      "read": "2026-09-18"
     }
   ]
 }

@@ -38,5 +38,15 @@
       ],
       "source": "https://help.simpletexting.com/en/articles/2599128-creating-templates-and-duplicating-campaigns"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://app.simpletexting.com/",
+      "landedURL": "https://app2.simpletexting.com/auth",
+      "title": "Login",
+      "heading": "Log in to SimpleTexting",
+      "offers": "sign-in",
+      "read": "2026-09-17"
+    }
   ]
 }

@@ -33,5 +33,15 @@
       ],
       "source": "https://www.framer.com/help/articles/publishing-your-framer-website/"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://www.framer.com/projects/",
+      "landedURL": "https://framer.com/login/",
+      "title": "Login – Framer",
+      "heading": "Welcome to Framer",
+      "offers": "sign-in",
+      "read": "2026-09-17"
+    }
   ]
 }

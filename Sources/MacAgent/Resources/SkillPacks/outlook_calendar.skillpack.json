@@ -5,7 +5,7 @@
   "domain": "outlook.office.com",
   "category": "email_calendar",
   "summary": "Microsoft's calendar in Outlook on the web.",
-  "signInURL": "https://outlook.office365.com",
+  "signInURL": "https://login.microsoftonline.com/",
   "triggers": ["outlook calendar"],
   "sections": [],
   "depth": "deep",
@@ -44,6 +44,16 @@
         "To add a person's calendar instead, select Calendar, then Add calendar, then Add a person's calendar. Type the name of the person, group or resource, and select Save."
       ],
       "source": "https://support.microsoft.com/en-us/outlook/add-a-calendar-in-outlook-on-the-web"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://outlook.office.com/calendar/",
+      "landedURL": "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
+      "title": "Sign in to your account",
+      "heading": "",
+      "offers": "sign-in",
+      "read": "2026-09-17"
     }
   ]
 }

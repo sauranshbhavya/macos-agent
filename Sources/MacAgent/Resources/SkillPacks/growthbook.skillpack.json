@@ -6,40 +6,11 @@
   "category": "developer_platforms",
   "summary": "Open-source feature flagging and experimentation.",
   "signInURL": "https://app.growthbook.io/",
-  "triggers": ["growthbook", "growthbook.io"],
+  "triggers": [
+    "growthbook",
+    "growthbook.io"
+  ],
   "sections": [],
-  "depth": "deep",
-  "flows": [
-    {
-      "title": "Create a feature flag",
-      "startURL": "https://app.growthbook.io/",
-      "steps": [
-        "Go to the Features page and create a feature flag.",
-        "Enter the Feature Key, which is what the application references. It cannot be changed later.",
-        "Once the feature is created, GrowthBook shows instructions for using it in the application. Cmd+K opens the command palette to jump to any feature."
-      ],
-      "source": "https://docs.growthbook.io/quick-start"
-    },
-    {
-      "title": "Create an experiment",
-      "startURL": "https://app.growthbook.io/",
-      "steps": [
-        "Go to the Experiments page and click Add → Create New Experiment.",
-        "In the creation modal, enter the Name and the Hypothesis, and choose the Assignment Attribute. A Project, a Template and a Holdout are optional; a Template pre-fills settings.",
-        "GrowthBook creates the experiment as a draft with two default variations.",
-        "On the draft's Overview tab, work through the pre-launch checklist: select a data source and experiment assignment table, add at least one goal metric, and add a linked Feature Flag, Visual Editor change or URL Redirect."
-      ],
-      "source": "https://docs.growthbook.io/app/experiment-configuration"
-    },
-    {
-      "title": "Import an experiment run elsewhere",
-      "startURL": "https://app.growthbook.io/",
-      "steps": [
-        "On the Experiment page, select Create Experiment, then Import. This needs a connected data warehouse with experiment assignment queries.",
-        "GrowthBook lists the experiments it finds in those queries. If one is missing, deselect Hide Imported, or click Full Refresh in the bottom right.",
-        "Choose Import for the experiment, then review and confirm its metadata: the name, the variations and their splits, and the start date."
-      ],
-      "source": "https://docs.growthbook.io/app/importing-experiments"
-    }
-  ]
+  "depth": "shallow",
+  "flows": []
 }

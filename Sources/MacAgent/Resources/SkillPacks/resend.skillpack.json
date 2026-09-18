@@ -43,5 +43,31 @@
       ],
       "source": "https://resend.com/docs/dashboard/emails/email-suppressions"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://resend.com/domains",
+      "landedURL": "https://resend.com/login",
+      "title": "Resend",
+      "heading": "Log in to Resend",
+      "offers": "sign-in",
+      "read": "2026-09-17"
+    },
+    {
+      "url": "https://resend.com/logs",
+      "landedURL": "https://resend.com/login",
+      "title": "Resend",
+      "heading": "Log in to Resend",
+      "offers": "sign-in",
+      "read": "2026-09-17"
+    },
+    {
+      "url": "https://resend.com/emails/suppressions",
+      "landedURL": "https://resend.com/login",
+      "title": "Resend",
+      "heading": "Log in to Resend",
+      "offers": "sign-in",
+      "read": "2026-09-17"
+    }
   ]
 }

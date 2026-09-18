@@ -40,5 +40,15 @@
       ],
       "source": "https://help.ahrefs.com/en/articles/3864845-how-to-access-edit-your-site-audit-settings"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://app.ahrefs.com/",
+      "landedURL": "https://app.ahrefs.com/user/login",
+      "title": "User login - Ahrefs",
+      "heading": "Sign in to your account",
+      "offers": "sign-in",
+      "read": "2026-09-17"
+    }
   ]
 }

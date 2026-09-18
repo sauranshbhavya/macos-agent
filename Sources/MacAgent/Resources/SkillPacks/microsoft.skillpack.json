@@ -6,43 +6,11 @@
   "category": "it_accounts_security",
   "summary": "Microsoft's home for Word, Excel, Outlook and other apps.",
   "signInURL": "https://www.microsoft365.com/",
-  "triggers": ["microsoft 365", "microsoft365.com"],
+  "triggers": [
+    "microsoft 365",
+    "microsoft365.com"
+  ],
   "sections": [],
-  "depth": "deep",
-  "flows": [
-    {
-      "title": "Add a user in the admin center",
-      "startURL": "https://www.microsoft365.com/",
-      "steps": [
-        "Open the Microsoft 365 admin center. In Dashboard view, go to Users > Active users and select Add a user; in Simplified view, select Add user.",
-        "Fill in the basics: first name, family name, display name and username, and choose the domain for the user's account. Select Next.",
-        "Select the location and the product license for the user. Expand Roles to make them an admin, or Profile info to add more about them.",
-        "Review the new user's settings and select Finish adding."
-      ],
-      "source": "https://learn.microsoft.com/en-us/microsoft-365/admin/add-users/add-users?view=o365-worldwide"
-    },
-    {
-      "title": "Create a Microsoft 365 group",
-      "startURL": "https://www.microsoft365.com/",
-      "steps": [
-        "In the Microsoft 365 admin center, expand Teams & groups and select Active teams & groups.",
-        "Select Add Microsoft 365 group. On the Basics page, type a name and an optional description, and select Next.",
-        "On the Owners page, choose the people who manage the group; on the Members page, choose its members. Select Next after each.",
-        "On the Settings page, type a unique email address for the group, choose a privacy option and whether to add Microsoft Teams, and select Next.",
-        "Review the settings, select Create group, then select Close."
-      ],
-      "source": "https://learn.microsoft.com/en-us/microsoft-365/admin/create-groups/create-groups?view=o365-worldwide"
-    },
-    {
-      "title": "Add members to a group",
-      "startURL": "https://www.microsoft365.com/",
-      "steps": [
-        "In the Microsoft 365 admin center, go to Active teams & groups and select the group's name.",
-        "On the Membership tab, select Members.",
-        "Select Add members, select the users, and select Save.",
-        "Select Close three times. The group appears in Outlook with those members."
-      ],
-      "source": "https://learn.microsoft.com/en-us/microsoft-365/admin/create-groups/create-groups?view=o365-worldwide"
-    }
-  ]
+  "depth": "shallow",
+  "flows": []
 }

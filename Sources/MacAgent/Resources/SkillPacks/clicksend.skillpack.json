@@ -35,5 +35,15 @@
       ],
       "source": "https://help.clicksend.com/en/articles/42196-sms-templates"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://dashboard.clicksend.com/",
+      "landedURL": "https://dashboard.clicksend.com/login",
+      "title": "ClickSend Login",
+      "heading": "Login",
+      "offers": "sign-in",
+      "read": "2026-09-17"
+    }
   ]
 }

@@ -32,5 +32,15 @@
       ],
       "source": "https://www.twilio.com/docs/messaging/features/messaging-insights/dashboards"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://console.twilio.com/",
+      "landedURL": "https://www.twilio.com/login",
+      "title": "Twilio",
+      "heading": "Welcome",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
   ]
 }

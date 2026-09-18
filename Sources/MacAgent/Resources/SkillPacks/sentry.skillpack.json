@@ -12,7 +12,7 @@
   "flows": [
     {
       "title": "Create a project",
-      "startURL": "https://sentry.io/",
+      "startURL": "https://sentry.io/auth/login/",
       "steps": [
         "Click your organization's icon in the top left navigation and select Projects from the menu.",
         "Click Create Project.",
@@ -24,7 +24,7 @@
     },
     {
       "title": "Create an alert",
-      "startURL": "https://sentry.io/",
+      "startURL": "https://sentry.io/auth/login/",
       "steps": [
         "Go to the Alerts page and click Create Alert.",
         "Choose the alert's sources, one or more projects or monitors, and the environments it evaluates. By default it runs across all environments.",
@@ -36,7 +36,7 @@
     },
     {
       "title": "Find and inspect issues",
-      "startURL": "https://sentry.io/",
+      "startURL": "https://sentry.io/auth/login/",
       "steps": [
         "Open the Issues page. Its tabs list All Unresolved, For Review, Regressed, Archived and Escalating issues.",
         "Filter by properties such as browser, device, impacted users, or whether an error is unhandled.",
@@ -44,6 +44,16 @@
         "To keep a query for later, use the Saved Searches button in the header."
       ],
       "source": "https://docs.sentry.io/product/issues/"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://sentry.io/auth/login/",
+      "landedURL": "https://sentry.io/auth/login/",
+      "title": "Sign In | Sentry",
+      "heading": "",
+      "offers": "sign-in",
+      "read": "2026-09-18"
     }
   ]
 }

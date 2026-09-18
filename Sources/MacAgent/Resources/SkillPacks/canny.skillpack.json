@@ -37,5 +37,23 @@
       ],
       "source": "https://help.canny.io/en/articles/673583-changing-the-status-of-a-post"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://canny.io/redirect?to=%2Fadmin",
+      "landedURL": "https://canny.io/login",
+      "title": "Canny",
+      "heading": "Log in to your account",
+      "offers": "sign-in",
+      "read": "2026-09-17"
+    },
+    {
+      "url": "https://canny.io/redirect?to=%2Fadmin%2Fsettings%2Fboards",
+      "landedURL": "https://canny.io/login",
+      "title": "Canny",
+      "heading": "Log in to your account",
+      "offers": "sign-in",
+      "read": "2026-09-17"
+    }
   ]
 }

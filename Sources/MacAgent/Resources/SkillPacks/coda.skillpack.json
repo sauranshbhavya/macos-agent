@@ -12,7 +12,7 @@
   "flows": [
     {
       "title": "Create a doc or a page",
-      "startURL": "https://coda.io/",
+      "startURL": "https://coda.io/login",
       "steps": [
         "To create a doc, click the new doc button on the workspace home.",
         "To add a page to a doc, click the new page option in the sidebar on the left."
@@ -21,7 +21,7 @@
     },
     {
       "title": "Share a doc with someone",
-      "startURL": "https://coda.io/",
+      "startURL": "https://coda.io/login",
       "steps": [
         "Click the Share icon in the upper right corner of the doc.",
         "Type the name or email address of the person to share with.",
@@ -31,12 +31,22 @@
     },
     {
       "title": "Add a table",
-      "startURL": "https://coda.io/",
+      "startURL": "https://coda.io/login",
       "steps": [
         "In the doc, type /table, or use the insert panel in the top-right corner, to add a blank table.",
         "To edit a column, right-click it and select Edit column."
       ],
       "source": "https://coda.io/resources/guides/introduction-to-tables"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://coda.io/login",
+      "landedURL": "https://coda.io/signin",
+      "title": "Superhuman Docs | Welcome back",
+      "heading": "Welcome back",
+      "offers": "sign-in",
+      "read": "2026-09-18"
     }
   ]
 }

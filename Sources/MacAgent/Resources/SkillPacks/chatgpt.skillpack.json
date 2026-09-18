@@ -48,5 +48,15 @@
       ],
       "source": "https://help.openai.com/en/articles/7925741-chatgpt-shared-links"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://chatgpt.com/",
+      "landedURL": "https://chatgpt.com/",
+      "title": "ChatGPT: Chat, Work, Create & Code with AI",
+      "heading": "Get responses tailored to you",
+      "offers": "product",
+      "read": "2026-09-17"
+    }
   ]
 }

@@ -43,5 +43,15 @@
       ],
       "source": "https://support.pagerduty.com/main/docs/manage-users"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://app.pagerduty.com/",
+      "landedURL": "https://identity.pagerduty.com/global/authn/authentication/PagerDutyGlobalLogin/enter_email",
+      "title": "PagerDuty Sign In",
+      "heading": "Sign in to your account",
+      "offers": "sign-in",
+      "read": "2026-09-17"
+    }
   ]
 }

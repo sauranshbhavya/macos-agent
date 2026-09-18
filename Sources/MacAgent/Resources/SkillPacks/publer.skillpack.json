@@ -28,5 +28,15 @@
       ],
       "source": "https://publer.com/help/en/article/how-to-generate-text-with-ai-assist-hsx8fq/"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://app.publer.com/",
+      "landedURL": "https://app.publer.com/users/sign_in",
+      "title": "Publer",
+      "heading": "Welcome back",
+      "offers": "sign-in",
+      "read": "2026-09-17"
+    }
   ]
 }

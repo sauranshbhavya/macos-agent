@@ -1,0 +1,118 @@
+# SONNY-510 — a flow's start page is recorded where it lands, and the loader holds the record.
+# Swift half only; no file under server/ changes on this branch.
+#
+# Every mutant below narrows the rule back toward what it replaced, in the direction that lets a pack
+# through that the branch claims is refused — except M3, which widens a refusal and is here because
+# every Google pack in the tree lands on accounts.google.com, so an allowance nobody holds is one a
+# later session deletes as dead. M1 is the kickoff's "returns the check to the own-domain test alone"
+# and M2 its "accepts a recorded landing whose host differs from the declared one".
+#
+# The samples that kill these are JSON decoded through SkillPackDecoder.decode, never values built
+# downstream of it (SONNY-388), so each mutant is on the path of the tests that hold it.
+
+>>> mutant M1 the start-page record is read and ignored: the own-domain test on the declared URL is the only check left
+>>> file Sources/MacAgentCore/SkillPack.swift
+>>> from
+        let startPages = try decodeStartPages(root["startPages"], hasFlows: !flows.isEmpty)
+        try SkillPackStartPageRule.check(flows: flows, startPages: startPages, domain: domain, signInURL: signInURL)
+>>> to
+        let startPages: [SkillPackStartPage] = []
+>>> end
+
+>>> mutant M2 a recorded landing on another host loads: ads.google.com landing on business.google.com is accepted
+>>> file Sources/MacAgentCore/SkillPackStartPages.swift
+>>> from
+            guard SkillPackDecoder.isOnSite(host: landedHost, domain: domain) || landedHost == signInHost else {
+                throw SkillPackLoadError.landedOffSite(url: url, host: landedHost)
+            }
+>>> to
+>>> end
+
+>>> mutant M3 the pack's own sign-in host stops counting: a Google product landing on accounts.google.com is refused
+>>> file Sources/MacAgentCore/SkillPackStartPages.swift
+>>> from
+            guard SkillPackDecoder.isOnSite(host: landedHost, domain: domain) || landedHost == signInHost else {
+>>> to
+            guard SkillPackDecoder.isOnSite(host: landedHost, domain: domain) else {
+>>> end
+
+>>> mutant M4 any word loads as what a page offered: a record saying sign-up or marketing is accepted
+>>> file Sources/MacAgentCore/SkillPack.swift
+>>> from
+            guard let offers = SkillPackStartPageOffer(rawValue: offersText) else {
+                throw SkillPackLoadError.startPageNotAStartPage(url: url.absoluteString, offers: offersText)
+            }
+>>> to
+            let offers = SkillPackStartPageOffer(rawValue: offersText) ?? .signIn
+>>> end
+
+>>> mutant M5 signup stops naming account creation: Ghost's /signup landing loads
+>>> file Sources/MacAgentCore/SkillPackStartPages.swift
+>>> from
+    static let accountCreationParts: Set<String> = ["signup", "register", "registration", "createaccount"]
+>>> to
+    static let accountCreationParts: Set<String> = ["register", "registration", "createaccount"]
+>>> end
+
+>>> mutant M6 the fragment is not read: a single-page app's #/signup route loads
+>>> file Sources/MacAgentCore/SkillPackStartPages.swift
+>>> from
+        let text = (components?.path ?? "") + "/" + (components?.fragment ?? "")
+>>> to
+        let text = components?.path ?? ""
+>>> end
+
+>>> mutant M7 the declared URL is not read for account creation, only the landing: a start URL of /signup loads
+>>> file Sources/MacAgentCore/SkillPackStartPages.swift
+>>> from
+            for named in [page.url, page.landedURL] where namesAccountCreation(named) {
+>>> to
+            for named in [page.landedURL] where namesAccountCreation(named) {
+>>> end
+
+>>> mutant M8 a flow whose start page nobody recorded loads
+>>> file Sources/MacAgentCore/SkillPackStartPages.swift
+>>> from
+        for flow in flows where recorded[flow.startURL.absoluteString] == nil {
+            throw SkillPackLoadError.startPageNotRecorded(flow: flow.title)
+        }
+>>> to
+>>> end
+
+>>> mutant M9 a record no flow uses loads: a start URL can change beside its predecessor's reading
+>>> file Sources/MacAgentCore/SkillPackStartPages.swift
+>>> from
+            guard started.contains(url) else {
+                throw SkillPackLoadError.startPageUnused(url: url)
+            }
+>>> to
+>>> end
+
+>>> mutant M10 a landed URL carrying a query loads: a sign-in redirect's session state reaches the tree
+>>> file Sources/MacAgentCore/SkillPackStartPages.swift
+>>> from
+            guard page.landedURL.query == nil else {
+                throw SkillPackLoadError.landedURLCarriesQuery(url: url)
+            }
+>>> to
+>>> end
+
+>>> mutant M11 two records for one start URL load
+>>> file Sources/MacAgentCore/SkillPackStartPages.swift
+>>> from
+        for page in startPages where recorded[page.url.absoluteString, default: []].count > 1 {
+            throw SkillPackLoadError.startPageRecordedTwice(url: page.url.absoluteString)
+        }
+>>> to
+>>> end
+
+>>> mutant M12 a pack with flows may leave startPages out, and is refused later for an unrecorded flow instead of a missing field
+>>> file Sources/MacAgentCore/SkillPack.swift
+>>> from
+            if hasFlows {
+                throw SkillPackLoadError.missingField("startPages")
+            }
+            return []
+>>> to
+            return []
+>>> end

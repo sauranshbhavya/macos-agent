@@ -39,5 +39,15 @@
       ],
       "source": "https://support.streamyard.com/hc/en-us/articles/360043291412-Connect-a-Facebook-Page"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://streamyard.com/dashboard",
+      "landedURL": "https://streamyard.com/login",
+      "title": "StreamYard",
+      "heading": "Log in to your account",
+      "offers": "sign-in",
+      "read": "2026-09-17"
+    }
   ]
 }

@@ -12,7 +12,7 @@
   "flows": [
     {
       "title": "Share a file or folder with people",
-      "startURL": "https://www.dropbox.com/",
+      "startURL": "https://www.dropbox.com/login",
       "steps": [
         "On dropbox.com, hover over the file or folder and click Share.",
         "Click Add people.",
@@ -24,7 +24,7 @@
     },
     {
       "title": "Create a folder",
-      "startURL": "https://www.dropbox.com/",
+      "startURL": "https://www.dropbox.com/login",
       "steps": [
         "On dropbox.com, click New folder under the search bar at the top.",
         "Under Name, enter a name for the folder.",
@@ -35,13 +35,23 @@
     },
     {
       "title": "Upload files or a folder",
-      "startURL": "https://www.dropbox.com/",
+      "startURL": "https://www.dropbox.com/login",
       "steps": [
         "On dropbox.com, click Upload under the search bar at the top.",
         "For files, select as many as you like, then click Open.",
         "For a folder, select it, then click Upload."
       ],
       "source": "https://help.dropbox.com/create-upload/add-files"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://www.dropbox.com/login",
+      "landedURL": "https://www.dropbox.com/login",
+      "title": "Log in or Sign Up – Dropbox",
+      "heading": "Log in or sign up for free",
+      "offers": "sign-in",
+      "read": "2026-09-18"
     }
   ]
 }

@@ -31,5 +31,15 @@
       ],
       "source": "https://www.semrush.com/kb/1191-track-your-rankings"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://www.semrush.com/login/",
+      "landedURL": "https://www.semrush.com/login/",
+      "title": "Log in – Semrush",
+      "heading": "Log in",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
   ]
 }

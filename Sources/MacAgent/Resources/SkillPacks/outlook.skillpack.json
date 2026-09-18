@@ -5,7 +5,7 @@
   "domain": "outlook.office.com",
   "category": "email_calendar",
   "summary": "Microsoft's email service on the web.",
-  "signInURL": "https://outlook.office365.com",
+  "signInURL": "https://login.microsoftonline.com/",
   "triggers": ["microsoft outlook"],
   "sections": [],
   "depth": "deep",
@@ -39,6 +39,16 @@
         "In the new folder box, enter a name for the folder, then press Enter."
       ],
       "source": "https://support.microsoft.com/en-us/office/working-with-message-folders-in-outlook-on-the-web-ae0f10d6-54e7-4f29-acd3-78cdc3fdcb9f"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://outlook.office.com/mail/",
+      "landedURL": "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
+      "title": "Sign in to your account",
+      "heading": "",
+      "offers": "sign-in",
+      "read": "2026-09-17"
     }
   ]
 }

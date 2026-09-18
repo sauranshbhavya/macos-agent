@@ -12,7 +12,7 @@
   "flows": [
     {
       "title": "Create a board",
-      "startURL": "https://miro.com/app/dashboard/",
+      "startURL": "https://miro.com/login",
       "steps": [
         "Open your dashboard. If you are a member of several teams, choose the team to save the board to; to create it in a particular space, open that space.",
         "Click + Create new. A menu opens.",
@@ -23,7 +23,7 @@
     },
     {
       "title": "Invite people to a board",
-      "startURL": "https://miro.com/app/dashboard/",
+      "startURL": "https://miro.com/login",
       "steps": [
         "Click the Share button in the top-right corner of the board. From the dashboard, select the three dots (...) for the board, then Share.",
         "Under the Invite tab, enter the invitees' email addresses, separated by spaces, and set their access rights.",
@@ -34,13 +34,23 @@
     },
     {
       "title": "Restore a deleted board",
-      "startURL": "https://miro.com/app/dashboard/",
+      "startURL": "https://miro.com/login",
       "steps": [
         "Open Trash by clicking your avatar in the upper right of the dashboard. Trash is on paid and Education plans, and a board can be restored within 90 days.",
         "Click the three dots (...) menu next to the board and click Restore. It returns to its original owner and team.",
         "On the Free plan, open the deleted board's link instead and click restore the board."
       ],
       "source": "https://help.miro.com/hc/en-us/articles/360017572614-How-to-restore-a-deleted-board"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://miro.com/login",
+      "landedURL": "https://miro.com/login/",
+      "title": "Sign in | Miro | The Visual Workspace for Innovation",
+      "heading": "Sign in to Miro",
+      "offers": "sign-in",
+      "read": "2026-09-18"
     }
   ]
 }

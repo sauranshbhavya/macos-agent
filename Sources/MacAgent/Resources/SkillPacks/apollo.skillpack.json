@@ -44,5 +44,23 @@
       ],
       "source": "https://knowledge.apollo.io/hc/en-us/articles/4409231193101-Create-a-Sequence"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://app.apollo.io/#/people",
+      "landedURL": "https://app.apollo.io/#/login",
+      "title": "Login - Apollo",
+      "heading": "1,000,000+",
+      "offers": "sign-in",
+      "read": "2026-09-17"
+    },
+    {
+      "url": "https://app.apollo.io/#/sequences",
+      "landedURL": "https://app.apollo.io/#/login",
+      "title": "Login - Apollo",
+      "heading": "1,000,000+",
+      "offers": "sign-in",
+      "read": "2026-09-17"
+    }
   ]
 }

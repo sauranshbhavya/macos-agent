@@ -31,7 +31,7 @@
     },
     {
       "title": "Add a host or manager to an event",
-      "startURL": "https://luma.com/",
+      "startURL": "https://luma.com/signin?next=%2Fhome",
       "steps": [
         "From your Luma home page, open the event you want and go to its manage page.",
         "Click on the Add Host button.",
@@ -43,6 +43,24 @@
         "You can add up to 5 hosts to any event on Luma. To add more, the calendar managing the event needs to be verified; once verified, you can add up to 70 hosts per event."
       ],
       "source": "https://help.luma.com/p/adding-hosts-and-managers-to-your-event"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://luma.com/create",
+      "landedURL": "https://luma.com/create",
+      "title": "Create Event · Luma",
+      "heading": "",
+      "offers": "product",
+      "read": "2026-09-17"
+    },
+    {
+      "url": "https://luma.com/signin?next=%2Fhome",
+      "landedURL": "https://luma.com/signin",
+      "title": "Sign In · Luma",
+      "heading": "",
+      "offers": "sign-in",
+      "read": "2026-09-18"
     }
   ]
 }

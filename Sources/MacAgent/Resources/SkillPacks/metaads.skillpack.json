@@ -42,5 +42,15 @@
       ],
       "source": "https://www.facebook.com/business/help/172764286113080"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://adsmanager.facebook.com/adsmanager/",
+      "landedURL": "https://business.facebook.com/business/loginpage/",
+      "title": "Meta for Business (formerly Facebook for Business)",
+      "heading": "",
+      "offers": "sign-in",
+      "read": "2026-09-17"
+    }
   ]
 }

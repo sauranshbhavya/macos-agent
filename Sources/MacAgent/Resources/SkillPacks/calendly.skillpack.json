@@ -12,7 +12,7 @@
   "flows": [
     {
       "title": "Create an event type",
-      "startURL": "https://calendly.com/",
+      "startURL": "https://calendly.com/login",
       "steps": [
         "Go to the Scheduling page.",
         "Select the + Create button and choose an event type.",
@@ -23,7 +23,7 @@
     },
     {
       "title": "Copy a scheduling link",
-      "startURL": "https://calendly.com/",
+      "startURL": "https://calendly.com/login",
       "steps": [
         "Go to Scheduling.",
         "Find the event type to share and hover over it to see more options.",
@@ -33,7 +33,7 @@
     },
     {
       "title": "Create an availability schedule",
-      "startURL": "https://calendly.com/",
+      "startURL": "https://calendly.com/login",
       "steps": [
         "Go to Scheduling, then select Manage availability.",
         "Open the Schedule dropdown menu and select + Create schedule.",
@@ -41,6 +41,16 @@
         "In List view, under Weekly hours, select + to add each day to be available, then set the start and end times for each time block."
       ],
       "source": "https://calendly.com/help/how-to-set-your-availability"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://calendly.com/login",
+      "landedURL": "https://calendly.com/login",
+      "title": "Welcome back to Calendly. Log in to your account here. | Calendly",
+      "heading": "Log in to your account",
+      "offers": "sign-in",
+      "read": "2026-09-18"
     }
   ]
 }
