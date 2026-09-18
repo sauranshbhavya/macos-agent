@@ -13,7 +13,7 @@ import type { Provider } from "./identity.js";
  * `ambiguous` for any user two live accounts name, so the gate and refresh refuse every token that
  * user holds. Signing in again lands on the same user and cannot help, and closing either account sits
  * behind the same gate. Reproduced against a real Postgres before this was written; the reverse
- * order, Google first and then an email code, reaches the same state, and `signin-guard.db.test.ts`
+ * order, Google first and then an email code, reaches the same state, and `oauth.db.test.ts`
  * holds both.
  *
  * **So the sign-in is refused instead, before anything is created.** The alternatives were on the

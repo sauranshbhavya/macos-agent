@@ -2,8 +2,8 @@ import type pg from "pg";
 import type { WithConnection } from "../../src/db/connection.js";
 
 /**
- * The three statements the auth path issues, faked, for the suites that have no database and are not
- * about the gate.
+ * The statements the auth path issues, faked, for the suites that have no database and are not
+ * about the gate — four since SONNY-129 added the started-here read, which is answered below.
  *
  * **Eleven files held a byte-identical copy of this before SONNY-237**, differing only in the words
  * of the error message, and one of them mapping two users to two accounts. Each answered
@@ -24,7 +24,7 @@ import type { WithConnection } from "../../src/db/connection.js";
  * that says so, matched on the `INSERT` and tested before the consult because the write's own text
  * contains the consult's table name.
  *
- * **The loudness is preserved and is the point.** Anything that is none of those three still throws,
+ * **The loudness is preserved and is the point.** Anything that is none of those four still throws,
  * naming the suite, so a route reaching for the database through this fake is a failure rather than
  * an empty result set. The `where` argument is that message's subject and is why it is required
  * rather than defaulted.
@@ -60,7 +60,7 @@ export function signedInConnectionTo(options: SignedInConnectionOptions): WithCo
         // started (SONNY-129). The gate asks after attribution, keyed on the session, the user and the
         // account attribution just answered — so answering yes here admits exactly the caller the
         // identity arm below admits and no one else. A suite about a session the gateway did NOT start
-        // drives a real database: `gateway-session.db.test.ts`.
+        // drives a real database: `oauth.db.test.ts`, "the gate honours only sessions the gateway started".
         if (text.includes("FROM sonny.gateway_session")) {
           return { rows: [{ "?column?": 1 }] };
         }

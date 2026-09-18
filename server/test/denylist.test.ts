@@ -49,7 +49,7 @@ function recordingConnection(
         }
         if (text.includes("FROM sonny.identity")) return { rows: [{ account_id: ACCOUNT }] };
         // SONNY-129's started-here check, which runs after attribution. Every session in this suite
-        // was started by the gateway; the suite is about the denylist, and `gateway-session.db.test.ts`
+        // was started by the gateway; the suite is about the denylist, and `oauth.db.test.ts`
         // is where a session the gateway did not start is refused.
         if (text.includes("FROM sonny.gateway_session")) return { rows: [{ "?column?": 1 }] };
         throw new Error(`unexpected query from the gate: ${text}`);

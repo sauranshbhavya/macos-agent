@@ -167,6 +167,15 @@ export function registerAuth(app: FastifyInstance, config: Config, deps: AuthDep
    * otherwise ignored, and the caller's answer does not depend on it. `signOut` is `scope=local`, so
    * it ends this one session and never the provider-side user's others — which matters most in the
    * case that calls it most, where that user's other sessions belong to someone's existing account.
+   *
+   * **One exception, recorded rather than guarded** (PR #275's review, finding 6). For a token carrying
+   * no `session_id` claim, GoTrue's `/logout` ignores the scope and signs the user out everywhere
+   * (`internal/api/logout.go:52`, read in migration 0022's header), and such a token reaches this
+   * function through `mintedSessionOf` refusing it. The same reading of GoTrue has it set the claim on
+   * every token it mints (`internal/tokens/service.go:726`), so no path here produces one. The two-line
+   * guard that would make the sentence above unconditional — skip the sign-out when the verified token
+   * had no session claim — is production code and was left out of a records-only round; SONNY-129
+   * carries the reasoning.
    */
   async function endUnissuedSession(request: FastifyRequest, session: VerifiedSession): Promise<void> {
     try {
@@ -492,9 +501,18 @@ export function registerAuth(app: FastifyInstance, config: Config, deps: AuthDep
    *
    * **The Mac supplies only the PKCE challenge.** The redirect is `OAUTH_REDIRECT_URL`, fixed, and the
    * provider address is this gateway's configuration, so the Mac never learns the auth provider's URL
-   * except inside the link it opens. Nothing is stored and nothing is called: the answer is a string
-   * built from the request, which is why this needs no connection and no rate limit — a flood of it
-   * costs this process string formatting and nothing else.
+   * except inside the link it opens. The handler calls nothing and stores nothing: the answer is a
+   * string built from the request.
+   *
+   * **The route as a whole does store something, and this comment used to say it did not** (PR #275's
+   * review, finding 1). The root idempotency hook claims a row in `sonny.idempotency_key` for every
+   * `POST` that carries an `Idempotency-Key`, and the Mac sends a fresh one on this call, so each
+   * keyed call costs a pooled connection, an insert and a stored response of about 217 bytes. The
+   * content sweep clears the payload after §9.2's twenty-four hours and keeps the row. That is the
+   * standing `POST /v1/auth/refresh` already has — public, no per-source limit, the same row — and it
+   * is why "no rate limit because a flood costs nothing" was the wrong reason to give. Whether this
+   * route should take `oauth/google`'s per-source bucket is SONNY-318's, which owns the growth of
+   * that table's unauthenticated rows.
    */
   app.post("/v1/auth/oauth/google/start", async (request, reply) => {
     const parsed = oauthStartBody.safeParse(request.body);
