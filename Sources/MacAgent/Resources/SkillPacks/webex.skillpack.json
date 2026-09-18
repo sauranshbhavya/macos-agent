@@ -6,8 +6,33 @@
   "category": "communication",
   "summary": "Video meetings and collaboration from Cisco.",
   "signInURL": "https://signin.webex.com/",
-  "triggers": ["webex", "webex.com"],
+  "triggers": [
+    "webex",
+    "webex.com"
+  ],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Create a space",
+      "startURL": "https://web.webex.com/",
+      "steps": [
+        "In the Webex web app, click the Add button in the app header, then choose Create a space.",
+        "Enter the names or emails of anyone you want to add, and give the space a name.",
+        "Click Create."
+      ],
+      "source": "https://help.webex.com/en-us/article/hk71r4/Webex-App-%7C-Create-a-space"
+    },
+    {
+      "title": "Add people to a space",
+      "startURL": "https://web.webex.com/",
+      "steps": [
+        "Go to Messaging, select the space, then click People.",
+        "Click Add people, type the first letters of someone's name or their email address, and pick them from the list. To take someone back out of your selection, click their profile picture.",
+        "If someone does not have a Webex App account yet, click Invite to add them.",
+        "Click Add. Everyone added gets a notification. Up to 50 people can be added at once by pasting email addresses separated by commas or semicolons."
+      ],
+      "source": "https://help.webex.com/en-us/article/n35gqwcb/Webex-App-%7C-Add-people-to-a-space"
+    }
+  ]
 }
