@@ -1,0 +1,119 @@
+# SONNY-129 — Sign in with Google on the Mac: PKCE, the callback, the address the Mac will open, the
+# exchange's single attempt, and the app's words for the gateway's refusal. SWIFT HALF, run against the
+# flagged swift test. The server half is mutation/plans/feature/row-12-social-signin-server.txt.
+#
+# Expected killers, named from reading the tests at the branch's code head and NOT measured — batteries
+# are founder-triggered and this branch ran none:
+#   W1  SonnyGoogleSignInTests.theChallengeIsRFC7636sOwnExample (and the generate test's challenge length)
+#   W2  SonnyGoogleSignInTests.signingInSendsOnlyTheChallengeFirst... ("the verifier never travels")
+#   W3  SonnyGoogleSignInTests.refusesACallbackThisFlowDidNotAskFor (the /elsewhere case)
+#   W4  SonnyGoogleSignInTests.readsAProviderRefusalAsDeclinedWhereverItArrives; aProviderThatDeclinedSendsNoExchange
+#   W5  SonnyGoogleSignInTests.opensOnlyAnAddressABrowserShouldBeHanded (http to a public host)
+#   W6  SonnyGoogleSignInTests.anAddressTheMacWillNotOpenNeverReachesTheBrowser
+#   W7  SignInSurfaceTests.closingTheBrowserShowsNothingAndStaysOnTheAddressStep
+#   W8  SignInCopyTests.aGoogleSignInsFailureMapsWithoutBlamingTheUsersTyping; SignInSurfaceTests.aRefusedGoogleCodeDoesNotBlameTheUsersTyping
+#   W9  SignInCopyTests.everyBackendCodeMapsToOneNamedFailure (auth.account_exists); SonnyGoogleSignInTests.aSignInRefusedAsAnExistingAccount...; SignInSurfaceTests.aSignInRefusedAsAnExistingAccount...
+#   W10 SonnyGoogleSignInTests.theExchangeIsNeverRetriedEvenOnARetryableFailure
+#   W11 SonnyGoogleSignInTests.signingInSendsOnlyTheChallengeFirst... (identity and stored address); SignInSurfaceTests.signingInWithGoogleLandsSignedInAndAnnouncesItOnce
+
+>>> mutant W1 the challenge is the verifier itself (PKCE's plain method): the verifier travels at start
+>>> file Sources/MacAgentCore/SonnyGoogleSignIn.swift
+>>> from
+        self.challenge = Self.base64URL(Data(SHA256.hash(data: Data(verifier.utf8))))
+>>> to
+        self.challenge = verifier
+>>> end
+
+>>> mutant W2 the verifier is sent with the challenge at start rather than only at the exchange
+>>> file Sources/MacAgentCore/SonnyAccountService.swift
+>>> from
+        let startBody = try JSONSerialization.data(withJSONObject: ["code_challenge": pkce.challenge])
+>>> to
+        let startBody = try JSONSerialization.data(withJSONObject: ["code_challenge": pkce.challenge, "code_verifier": pkce.verifier])
+>>> end
+
+>>> mutant W3 a callback under the scheme is accepted whatever its path
+>>> file Sources/MacAgentCore/SonnyGoogleSignIn.swift
+>>> from
+            components.path == "/callback"
+>>> to
+            !components.path.isEmpty
+>>> end
+
+>>> mutant W4 a provider's refusal in the callback is ignored and any code beside it is spent
+>>> file Sources/MacAgentCore/SonnyGoogleSignIn.swift
+>>> from
+        if (query + fragment).contains(where: { $0.name == "error" }) {
+>>> to
+        if (query + fragment).contains(where: { $0.name == "error" }) && !query.contains(where: { $0.name == "code" }) {
+>>> end
+
+>>> mutant W5 any plain-http address is handed to the browser, not only this machine's
+>>> file Sources/MacAgentCore/SonnyGoogleSignIn.swift
+>>> from
+            return ["localhost", "127.0.0.1", "::1"].contains(url.host?.lowercased() ?? "")
+>>> to
+            return url.host?.isEmpty == false
+>>> end
+
+>>> mutant W6 the authorize address is opened without checking it is one a browser should be handed
+>>> file Sources/MacAgentCore/SonnyAccountService.swift
+>>> from
+        guard SonnyGoogleSignIn.isOpenable(authorizeURL) else {
+>>> to
+        guard true else {
+>>> end
+
+>>> mutant W7 closing the browser is reported as a failure
+>>> file Sources/MacAgent/SignInView.swift
+>>> from
+        } catch SonnyGoogleSignInError.cancelled {
+            // The user closed the browser. Nothing to report.
+        } catch is SonnyGoogleSignInError {
+>>> to
+        } catch is SonnyGoogleSignInError {
+>>> end
+
+>>> mutant W8 a refused Google code reads as a code the user mistyped
+>>> file Sources/MacAgentCore/SignInCopy.swift
+>>> from
+           [.authCodeInvalid, .authCodeExpired, .authCodeUsed, .requestInvalid].contains(api.code) {
+>>> to
+           [SonnyBackendErrorCode]().contains(api.code) {
+>>> end
+
+>>> mutant W9 the gateway's account-exists refusal falls through to the generic sentence
+>>> file Sources/MacAgentCore/SignInCopy.swift
+>>> from
+        case .authAccountExists:
+            self = .accountExists
+>>> to
+        case .authAccountExists:
+            self = .unexpected
+>>> end
+
+>>> mutant W10 the exchange is marked retry-safe, so a single-use code can be sent twice
+>>> file Sources/MacAgentCore/SonnyAccountService.swift
+>>> from
+            path: "/v1/auth/oauth/google",
+            body: exchangeBody,
+            authentication: .none,
+            idempotencyKey: UUID(),
+            timeout: SonnyBackendTimeouts.auth,
+            isRetrySafe: false
+>>> to
+            path: "/v1/auth/oauth/google",
+            body: exchangeBody,
+            authentication: .none,
+            idempotencyKey: UUID(),
+            timeout: SonnyBackendTimeouts.auth,
+            isRetrySafe: true
+>>> end
+
+>>> mutant W11 the address Google asserted is dropped, so the Account row says only Signed in
+>>> file Sources/MacAgentCore/SonnyAccountService.swift
+>>> from
+            emailAddress: tokenResponse.user.email,
+>>> to
+            emailAddress: nil,
+>>> end

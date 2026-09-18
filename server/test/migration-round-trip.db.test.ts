@@ -13,6 +13,7 @@ import {
 } from "./support/backstop.js";
 import { testDatabaseUrl } from "./support/database.js";
 import { rebuildSchema } from "./support/schema.js";
+import { WithoutOAuth } from "./support/without-oauth.js";
 
 /**
  * What migrations 0016 and 0017 do to a database that already holds rows — applied, rolled back and
@@ -51,7 +52,7 @@ const SECOND = "bbbbbbbb-0000-4000-8000-000000000002";
  * Nothing here interleaves — the drain is used to put rows into the stamped state the round trip
  * then carries across a rollback — so a copy of the larger fixture would be borrowed complexity.
  */
-class SucceedingProvider implements AuthProvider {
+class SucceedingProvider extends WithoutOAuth implements AuthProvider {
   revokedUsers: string[] = [];
   async sendEmailCode(_email: string) { return { providerRequestId: undefined }; }
   async verifyEmailCode(_e: string, _c: string): Promise<VerifiedSession> {
@@ -130,6 +131,7 @@ describeDb("migrations 0016 and 0017 over a database that already holds rows", (
       // a step here**, and the failure it produces when one is forgotten is legible: the assertion
       // says the head was some other file. 0018 is SONNY-211's and is rolled back only to get past
       // it; nothing below is about it.
+      expect(await down(client)).toBe("0023_the_gate_honours_only_sessions_the_gateway_started");
       expect(await down(client)).toBe("0022_a_signed_out_session_stops_verifying");
       expect(await down(client)).toBe("0021_a_wipe_leaves_the_account_open");
       expect(await down(client)).toBe("0020_a_screenshot_can_be_deleted_without_the_task");
@@ -157,6 +159,7 @@ describeDb("migrations 0016 and 0017 over a database that already holds rows", (
         "0020_a_screenshot_can_be_deleted_without_the_task",
         "0021_a_wipe_leaves_the_account_open",
         "0022_a_signed_out_session_stops_verifying",
+        "0023_the_gate_honours_only_sessions_the_gateway_started",
       ]);
       // **Pin the MAPPING, not the set** (PR #171 review, F2). This asserted
       // `toEqual([1, 2, 3])` over the whole column, which checks that three numbers came out dense
@@ -209,6 +212,7 @@ describeDb("migrations 0016 and 0017 over a database that already holds rows", (
       // The rows have to predate the column, so this rolls 0017 back, writes them, and rolls
       // forward — the same door a deployment goes through, and the reason `issue_seq` is absent
       // from the INSERT below.
+      expect(await down(client)).toBe("0023_the_gate_honours_only_sessions_the_gateway_started");
       expect(await down(client)).toBe("0022_a_signed_out_session_stops_verifying");
       expect(await down(client)).toBe("0021_a_wipe_leaves_the_account_open");
       expect(await down(client)).toBe("0020_a_screenshot_can_be_deleted_without_the_task");
@@ -231,6 +235,7 @@ describeDb("migrations 0016 and 0017 over a database that already holds rows", (
         "0020_a_screenshot_can_be_deleted_without_the_task",
         "0021_a_wipe_leaves_the_account_open",
         "0022_a_signed_out_session_stops_verifying",
+        "0023_the_gate_honours_only_sessions_the_gateway_started",
       ]);
 
       // All three carry the sentinel, so `issue_seq` separates none of them and only the second key

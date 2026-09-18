@@ -597,9 +597,9 @@ retention: the table is bounded by the sign-outs of one token lifetime.
 stays reachable with a denylisted token: the row is written before the provider is called, so
 without that exemption a retry of a sign-out the provider answered `502` to would meet its own row
 at the gate and the provider-side revocation could never be reached. And Supabase declares
-`session_id` `omitempty` — a token carrying none cannot be keyed on, so it keeps verifying for the
-hour and thirty seconds above. The route logs when that happens rather than letting the sign-out look
-complete; GoTrue's own `/logout` handles the same shape by signing the user out globally.
+`session_id` `omitempty` — a token carrying none cannot be keyed on. That used to mean it kept
+verifying for the hour and thirty seconds above; **since SONNY-129 it is refused outright**, on every
+authenticated route, by the check the next section describes, and no sign-in route will hand one out.
 
 What *is* closed, on every single request: a token naming a **closed or deleted account** is refused,
 because attribution reads live state rather than remembering a decision. So `DELETE /v1/account`
@@ -619,6 +619,30 @@ The denylist above is what closed the rest of it (**SONNY-237**), and it was fil
 into SONNY-203 for the reason its own ticket gives: a table, a migration, and a dependency on
 Supabase's `session_id` claim, which is one thing more than "verify the token and gate every
 protected route".
+
+### Only sessions this gateway started are honoured (SONNY-129)
+
+**A valid Supabase token is no longer enough on its own.** Supabase joins sign-ins with the same
+verified address into one provider-side user, and it will mint a session for that user to anyone who
+asks it directly — the project's address is the `iss` of every token this gateway hands out, and its
+anon key is publishable by design. With Google enabled, that let the person who inherits a recycled
+mailbox sign in by email code *at Supabase*, receive a session for the Google-created user of the
+mailbox's previous owner, and present it here, and the gate attributed it to that owner's account.
+
+So every sign-in route records the session it starts in `sonny.gateway_session` (migration 0023),
+against the account it resolved to, and the gate and `POST /v1/auth/refresh` refuse `401
+auth.token_revoked` for any token whose session has no row naming the same provider-side user and
+account. A session minted at Supabase directly opens nothing here. **What that cost at deploy: every
+existing session signs in once more**, because nothing on record says which earlier sessions this
+gateway started.
+
+**The same joining is why a sign-in may be refused `409 auth.account_exists`.** Someone who signed up
+by email code and later presses Google on the same address comes back from Supabase as the same user;
+a second Sonny account under that user would make attribution ambiguous, and the gate refuses every
+token of an ambiguous user, which locked both accounts. Both sign-in routes now refuse that sign-in
+instead, under a per-user lock (`src/auth/signin-guard.ts`), and migration 0023 refuses to apply to a
+database where any Supabase user already backs two live accounts — so applying it is also the
+measurement that none does.
 
 **Rotating `SUPABASE_JWT_SECRET` no longer signs everyone out** (**SONNY-238**). It did until then —
 one secret was accepted, not an ordered list like the provider credentials below, so every token
@@ -1048,6 +1072,26 @@ run (a pattern beginning with a hyphen that `grep` parsed as options, so it sile
 `example` in the allowlist matching `db.example.com`) and a third on the next (a fix that would have
 exempted every PEM header in the tree, a real key included). It is not decoration. (This line said
 "two" while the changelog said three; the changelog was right — PR #85 cycle 1, R18.)
+
+### Turning on Sign in with Google (SONNY-129)
+
+**The gateway reads no Google credential and needs no new variable.** Supabase runs the exchange with
+Google, so the Google OAuth client lives in the Supabase project, and the gateway only builds the
+browser's address and swaps the code that comes back. Three settings, all founder-owned:
+
+1. **A Google Cloud OAuth client**, type *Web application*, whose one authorized redirect URI is the
+   project's own Supabase callback, `https://<project-ref>.supabase.co/auth/v1/callback`.
+2. **That client's ID and secret, in the Supabase dashboard** under Authentication → Providers →
+   Google, with the provider switched on. They go nowhere else: not a terminal, not `.env`, not this
+   repository.
+3. **The Mac's callback in Supabase's redirect allow-list**, Authentication → URL Configuration →
+   Redirect URLs: exactly `com.sonny.macagent://auth/callback` (`src/auth/oauth.ts`). Supabase refuses
+   to send a code anywhere that list does not name, so a missing entry shows up as the browser landing
+   on the project's Site URL instead of returning to Sonny.
+
+**Enabling the provider is only safe with migration 0023 applied**, which is what makes the gate refuse
+a session minted at Supabase directly — the section "Only sessions this gateway started are honoured"
+above has why. `npm run migrate -- status` says whether it is.
 
 ### Rotating the Supabase JWT secret with no sign-out
 

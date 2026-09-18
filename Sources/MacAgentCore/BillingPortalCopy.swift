@@ -67,9 +67,10 @@ public enum BillingPortalFailure: Equatable, Sendable, CaseIterable {
             self = .temporarilyUnavailable
         case .providerRejected, .limitSpend, .requestInvalid, .requestTooLarge, .resourceNotFound,
              .idempotencyConflict, .versionUnsupported, .authCodeInvalid, .authCodeExpired,
-             .authCodeUsed, .entitlementRequired, .entitlementExpired, .unknown:
+             .authCodeUsed, .authAccountExists, .entitlementRequired, .entitlementExpired, .unknown:
             // A code this build has never heard of is not something to guess at in front of a user,
-            // and the honest general answer here is the one that promises nothing.
+            // and the honest general answer here is the one that promises nothing. `authAccountExists`
+            // is a sign-in route's answer (SONNY-129) and never this route's.
             self = .cannotBeOpened
         }
     }

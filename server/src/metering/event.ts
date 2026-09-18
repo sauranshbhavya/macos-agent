@@ -76,7 +76,7 @@ export const METERED_ROUTES: ReadonlyMap<string, MeteredRoute> = new Map([
  * The `POST`s this gateway serves that deliberately meter nothing, and why each one does not.
  *
  * Auth routes cost this gateway a Supabase call and no provider tokens, they run before a caller has
- * an account to attribute anything to (three of the four are public), and §11's `route` enum has no
+ * an account to attribute anything to (five of the six are public), and §11's `route` enum has no
  * value for them. `DELETE /v1/account` is a `DELETE` and never reaches the hook. Listed rather than
  * left implicit so that the population scan can require *every* `POST` to be one thing or the other:
  * an unlisted new route is an unanswered question rather than a silent free one.
@@ -84,6 +84,10 @@ export const METERED_ROUTES: ReadonlyMap<string, MeteredRoute> = new Map([
 export const UNMETERED_POST_ROUTES: ReadonlySet<string> = new Set([
   "POST /v1/auth/email/start",
   "POST /v1/auth/email/verify",
+  // SONNY-129's two. The first builds a URL and calls nothing; the second is one Supabase call,
+  // exactly like `email/verify` beside it.
+  "POST /v1/auth/oauth/google/start",
+  "POST /v1/auth/oauth/google",
   "POST /v1/auth/refresh",
   "POST /v1/auth/signout",
   /**

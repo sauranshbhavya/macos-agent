@@ -48,6 +48,10 @@ function recordingConnection(
           return { rows: revoked.has(values[0] as string) ? [{ "?column?": 1 }] : [] };
         }
         if (text.includes("FROM sonny.identity")) return { rows: [{ account_id: ACCOUNT }] };
+        // SONNY-129's started-here check, which runs after attribution. Every session in this suite
+        // was started by the gateway; the suite is about the denylist, and `oauth.db.test.ts`
+        // is where a session the gateway did not start is refused.
+        if (text.includes("FROM sonny.gateway_session")) return { rows: [{ "?column?": 1 }] };
         throw new Error(`unexpected query from the gate: ${text}`);
       },
     };
@@ -109,10 +113,12 @@ describe("a signed-out session, at the gate", () => {
 
     expect(served.statusCode).toBe(200);
     expect(served.json().accountId).toBe(ACCOUNT);
-    // The consult ran and answered no; attribution then ran. Both, in that order, on one connection.
+    // The consult ran and answered no; attribution then ran; then SONNY-129's started-here check.
+    // All three, in that order, on one connection.
     expect(consults(asked)).toHaveLength(1);
     expect(attributions(asked)).toHaveLength(1);
-    expect(asked.map((q) => q.text.includes("FROM sonny.revoked_provider_session"))).toEqual([true, false]);
+    expect(asked.map((q) => q.text.includes("FROM sonny.revoked_provider_session"))).toEqual([true, false, false]);
+    expect(asked[2]?.text).toContain("FROM sonny.gateway_session");
     await app.close();
   });
 
@@ -138,24 +144,29 @@ describe("a signed-out session, at the gate", () => {
     await app.close();
   });
 
-  it("asks nothing of the denylist for a token that carries no session claim, and serves it", async () => {
-    // The residual, pinned in the direction that matters: this token is not denylistable, and the
-    // gate must not invent a lookup for it. GoTrue omits the claim (`omitempty`) and handles the
-    // absence itself, so this is a shape the provider mints rather than a malformed token.
+  it("asks nothing of the denylist for a token that carries no session claim, and refuses it", async () => {
+    // **This test served that token until SONNY-129, and pinned the residual that made it legal.**
+    // GoTrue omits the claim (`omitempty`), so the token is not denylistable and the gate must not
+    // invent a lookup for it — that half still holds and is still asserted. What changed is the
+    // answer: the gate now honours only sessions this gateway started, and a token with no session
+    // claim has nothing to look that up by, so it is refused rather than served. The refusal is
+    // `auth.token_revoked`, which opens sign-in, because signing in through the gateway is the fix.
     const asked: Recorded[] = [];
     const app = appWith(new Set([providerSessionFor(USER)]), asked);
 
-    const served = await app.inject({
+    const refused = await app.inject({
       method: "POST", url: "/v1/plan",
       headers: {
         authorization: `Bearer ${tokenWithClaims(USER, { session_id: undefined })}`,
       },
     });
 
-    expect(served.statusCode).toBe(200);
-    expect(served.json().providerSessionId).toBeUndefined();
+    expect(refused.statusCode).toBe(401);
+    expect(refused.json().error.code).toBe("auth.token_revoked");
     expect(consults(asked)).toHaveLength(0);
     expect(attributions(asked)).toHaveLength(1);
+    // Refused without a session lookup: there was no session to look up.
+    expect(asked.some((q) => q.text.includes("FROM sonny.gateway_session"))).toBe(false);
     await app.close();
   });
 

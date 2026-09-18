@@ -37,10 +37,12 @@ import { buildApp } from "../src/app.js";
 import type { AuthProvider, VerifiedSession } from "../src/auth/provider.js";
 import { testConfig } from "./support/config.js";
 import { accessTokenFor } from "./support/tokens.js";
+import { recordSessionTheGatewayStarted } from "./support/gateway-session.js";
 import { afterAllUnderHangBackstop, afterEachUnderHangBackstop, beforeAllUnderHangBackstop, beforeEachUnderHangBackstop, itUnderHangBackstop } from "./support/backstop.js";
+import { WithoutOAuth } from "./support/without-oauth.js";
 
 /** The gate verifies tokens locally, so no route driven here ever calls a provider. */
-class UnusedAuthProvider implements AuthProvider {
+class UnusedAuthProvider extends WithoutOAuth implements AuthProvider {
   async sendEmailCode() {
     return { providerRequestId: undefined };
   }
@@ -381,6 +383,8 @@ describeDb("the content store, its clocks, and what reaches training", () => {
          VALUES ($1, 'email', $2, 'primary', $3)`,
         [CONSENTING, "second-store@example.test", SUPABASE_USER],
       );
+      // Signed in through the gateway, which is what makes the tokens below ones it honours (SONNY-129).
+      await recordSessionTheGatewayStarted(client, SUPABASE_USER, CONSENTING);
       vi.stubGlobal("fetch", async () =>
         new Response(
           JSON.stringify({
@@ -490,6 +494,8 @@ describeDb("the content store, its clocks, and what reaches training", () => {
          VALUES ($1, 'email', $2, 'primary', $3)`,
         [CONSENTING, "guard-failure@example.test", SUPABASE_USER],
       );
+      // Signed in through the gateway, which is what makes the tokens below ones it honours (SONNY-129).
+      await recordSessionTheGatewayStarted(client, SUPABASE_USER, CONSENTING);
       vi.stubGlobal("fetch", async () =>
         new Response(
           JSON.stringify({ output_text: '{"steps":[]}', usage: { input_tokens: 1, output_tokens: 1 } }),
@@ -1084,6 +1090,9 @@ describeDb("the content store, its clocks, and what reaches training", () => {
           OTHER_SUPABASE_USER,
         ],
       );
+      // Both callers signed in through the gateway, so both hold sessions it honours (SONNY-129).
+      await recordSessionTheGatewayStarted(client, SUPABASE_USER, CONSENTING);
+      await recordSessionTheGatewayStarted(client, OTHER_SUPABASE_USER, OTHER);
     });
 
     const deleteTask = async (taskId: string, user = SUPABASE_USER) =>

@@ -22,6 +22,7 @@ import { testConfig } from "./support/config.js";
 import { fakeEntitlementStore } from "./support/entitlement.js";
 import { accessTokenFor } from "./support/tokens.js";
 import { signedInConnectionTo } from "./support/connection.js";
+import { WithoutOAuth } from "./support/without-oauth.js";
 
 /**
  * The subscription webhook and the checkout link, driven through the whole real app (SONNY-211).
@@ -52,7 +53,7 @@ const PRODUCT = "prod_screen_control";
 const SUBSCRIPTION = "sub_123";
 const NOW = new Date("2026-08-30T12:00:00Z");
 
-class UnusedAuthProvider implements AuthProvider {
+class UnusedAuthProvider extends WithoutOAuth implements AuthProvider {
   async sendEmailCode() {
     return { providerRequestId: undefined };
   }

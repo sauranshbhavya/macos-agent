@@ -3,6 +3,7 @@ import { errorBody } from "../errors.js";
 import type { WithConnection } from "../db/connection.js";
 import { accountForSupabaseUser } from "./attribution.js";
 import { isProviderSessionRevoked } from "./denylist.js";
+import { isGatewaySession } from "./gateway-session.js";
 import { verifyAccessToken, type SupabaseJwtPolicy, type TokenRefusal } from "./token.js";
 
 /**
@@ -37,10 +38,14 @@ import { verifyAccessToken, type SupabaseJwtPolicy, type TokenRefusal } from "./
  * and collapsing 404 into 401 would make every client's "no such route" indistinguishable from
  * "sign in again".
  *
- * **Three things are asked of the database, and the order is deliberate.** A Supabase access token
+ * **Four things are asked of the database, and the order is deliberate.** A Supabase access token
  * is self-contained, so this gateway verifies it without asking the provider — which is the point —
  * and equally cannot un-issue one. What it *can* know locally is what it has been told, and it is
- * told two things. `DELETE /v1/account` closes the account, and every later request with any token
+ * told three things. The third is SONNY-129's and is argued in full at the check below and in
+ * migration 0023: a sign-in route records every session it starts, and a token whose session has no
+ * such record — one minted at the provider directly — is refused after attribution, because a valid
+ * signature says the project minted the token and not that this gateway's sign-in rules ever ran.
+ * The other two are older. `DELETE /v1/account` closes the account, and every later request with any token
  * naming it is refused at the attribution step below. `POST /v1/auth/signout` revokes a session, and
  * `auth/denylist.ts` records it so that the token already in the user's hand stops verifying here —
  * that is SONNY-237, and it is consulted *before* attribution, because a signed-out session is
@@ -49,25 +54,27 @@ import { verifyAccessToken, type SupabaseJwtPolicy, type TokenRefusal } from "./
  * an active account". Both run inside the one connection this hook leases, and
  * `DENYLIST_EXEMPT_ROUTES` below is the one route the first of them is skipped for.
  *
- * **The residual, stated rather than papered over, and it is now narrow.** Supabase's `session_id`
- * claim is `omitempty`, and a token carrying none cannot be denylisted: it stays valid until its own
- * `exp` **plus `EXPIRY_SKEW_TOLERANCE_SECONDS`** — one hour on Supabase's default, and thirty
- * seconds more than that here. The tolerance is deliberate and `clock.ts` argues for it; naming
- * `exp` alone would understate the window by exactly the amount this gate itself adds (PR #104's
- * adversarial review, F9). `routes/auth.ts` logs a sign-out that had no session to record rather
- * than letting it look complete, and `server/README.md` states the window that is left.
+ * **The residual SONNY-237 recorded here is closed, by SONNY-129 and not by the denylist.**
+ * Supabase's `session_id` claim is `omitempty`, and a token carrying none cannot be denylisted; this
+ * paragraph used to say such a token stayed valid until its own `exp` plus
+ * `EXPIRY_SKEW_TOLERANCE_SECONDS`. It is now refused on every protected route, because the
+ * started-here check has nothing to look it up by and refuses rather than passing it. A sign-in
+ * route that receives one refuses to hand it out at all (`auth/gateway-session.ts`,
+ * `mintedSessionOf`), so no session this gateway honours can be one the denylist cannot reach.
  */
 
 /**
  * The routes that carry no `Authorization` header, taken from the contract's §4.1 `Auth` column,
  * which §2.2 names as the single source of truth for that question.
  *
- * Two of these have no handler yet — the two OAuth routes (SONNY-129). They are listed because this
- * list answers "is this route public", not "does this route exist": an entry for a route nobody has
- * written matches nothing, while an entry *missing* when its ticket lands means a public sign-in
- * route that answers 401 to the person who cannot yet have a token. **`GET /v1/meta` was the third
- * until SONNY-204 built it** (`routes/meta.ts`), and its entry needed no change when it landed,
- * which is the property this paragraph is claiming.
+ * This list answers "is this route public", not "does this route exist": an entry for a route nobody
+ * has written matches nothing, while an entry *missing* when its ticket lands means a public sign-in
+ * route that answers 401 to the person who cannot yet have a token. That is why the two OAuth routes
+ * sat here before SONNY-129 built either, and why `GET /v1/meta` needed no change here when SONNY-204
+ * built it. **SONNY-129 added `/start`, which the contract did not name until that ticket settled the
+ * flow, and removed `POST /v1/auth/oauth/apple`**: Sign in with Apple was dropped from v1 on
+ * 2026-09-18 (SONNY-521), and a public entry for a route that will not exist is an entry a later
+ * ticket could mount something under without thinking about authentication.
  *
  * `POST /v1/auth/refresh` is the subtle one and the contract explains it: it authenticates with the
  * refresh token in its body and deliberately sends no header, so that an expired or missing access
@@ -81,10 +88,10 @@ export const PUBLIC_ROUTES: ReadonlySet<string> = new Set([
   "GET /v1/health",
   "POST /v1/auth/email/start",
   "POST /v1/auth/email/verify",
+  "POST /v1/auth/oauth/google/start",
   "POST /v1/auth/oauth/google",
-  "POST /v1/auth/oauth/apple",
   "POST /v1/auth/refresh",
-  // **Not public in the sense the six above are: authenticated, by a different mechanism.** The
+  // **Not public in the sense the seven above are: authenticated, by a different mechanism.** The
   // payment provider signs each delivery with an HMAC over the exact request bytes and holds no
   // Supabase token to send, so this gateway cannot challenge it here — `routes/billing.ts` verifies
   // the signature before it reads a byte of the payload, and refuses with 401 when it fails. It is
@@ -304,8 +311,36 @@ export function registerAuthGate(app: FastifyInstance, deps?: GateDeps): void {
       if (consultDenylist && session !== undefined && (await isProviderSessionRevoked(client, session))) {
         return "session_revoked" as const;
       }
-      return accountForSupabaseUser(client, verdict.token.supabaseUserId);
+      const attributed = await accountForSupabaseUser(client, verdict.token.supabaseUserId);
+      if (!("accountId" in attributed)) return attributed;
+      // **The third question, and the one that makes the first two sufficient** (SONNY-129). A token
+      // the project signed, naming a user some live account holds, used to be that account's. But
+      // Supabase joins sign-ins with the same verified address into one user and will mint a session
+      // for that user to anyone who asks it directly, so a valid token is not evidence that this
+      // gateway's sign-in rules ever ran for it. Only a session one of this gateway's own sign-in
+      // routes started is honoured — migration 0023's header has the case. A token with no session
+      // claim is refused here too: there is nothing to look it up by, and before this check that
+      // shape was merely one the denylist could not reach.
+      if (
+        session === undefined ||
+        !(await isGatewaySession(client, session, verdict.token.supabaseUserId, attributed.accountId))
+      ) {
+        return "session_not_started_here" as const;
+      }
+      return attributed;
     });
+    if (owner === "session_not_started_here") {
+      // `auth.token_revoked`, for §7.2's reason: "clears the Keychain entry, opens sign-in" is exactly
+      // the recovery — a sign-in through this gateway starts a session it will honour — and
+      // refreshing would not help, because the refresh route asks the same question.
+      request.log.info(
+        { route: `${request.method} ${routeUrl}` },
+        "verified token belongs to a session this gateway did not start",
+      );
+      return reply.status(401).send(
+        errorBody("auth.token_revoked", "This session was not started by this gateway.", request.id),
+      );
+    }
     if (owner === "session_revoked") {
       // **`auth.token_revoked`, the same code a closed account gets, and for the same client
       // behaviour**: §7.2 makes it "clears the Keychain entry, opens sign-in", which is exactly

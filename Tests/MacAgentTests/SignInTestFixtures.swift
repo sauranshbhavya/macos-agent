@@ -29,7 +29,7 @@ func makeHermeticAccountModel(
     /// is absent — rather than a key set no release build holds.
     entitlementKeys: EntitlementKeySet = SonnyEntitlementKeys.shipped
 ) -> SonnyAccountModel {
-    SonnyAccountModel(
+    let model = SonnyAccountModel(
         client: makeHermeticBackendClient(
             environment: environment,
             keychain: keychain,
@@ -41,4 +41,33 @@ func makeHermeticAccountModel(
         entitlementStore: KeychainEntitlementStore(secretStore: keychain),
         entitlementKeys: entitlementKeys
     )
+    // **A browser that opens nothing** (SONNY-129). The model's own default is the system's web
+    // authentication session, which would open a real browser on the machine running the suite; a
+    // fixture that "reaches nothing on this Mac" cannot hand that out. A test about Google sign-in
+    // replaces this with a fake that answers.
+    model.webAuthenticator = UnopenableWebAuthenticator()
+    return model
+}
+
+/// The fixture's browser: every attempt fails as the system failing to run one, so a test that
+/// reaches it without meaning to fails loudly rather than opening a window.
+struct UnopenableWebAuthenticator: WebAuthenticating {
+    func authenticate(url: URL, callbackScheme: String) async throws -> URL {
+        throw SonnyGoogleSignInError.sessionFailed
+    }
+}
+
+/// A browser that comes back with a fixed answer, for the app target's Google sign-in tests.
+struct AnsweringWebAuthenticator: WebAuthenticating {
+    let outcome: Result<String, SonnyGoogleSignInError>
+
+    func authenticate(url: URL, callbackScheme: String) async throws -> URL {
+        switch outcome {
+        case .success(let raw):
+            guard let url = URL(string: raw) else { throw SonnyGoogleSignInError.malformedCallback }
+            return url
+        case .failure(let error):
+            throw error
+        }
+    }
 }

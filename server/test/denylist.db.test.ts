@@ -9,11 +9,13 @@ import {
 import type { Config } from "../src/config.js";
 import { rebuildSchema } from "./support/schema.js";
 import { accessTokenFor, claimsFor, providerSessionFor, signToken } from "./support/tokens.js";
+import { recordSessionTheGatewayStarted } from "./support/gateway-session.js";
 import { testConfig } from "./support/config.js";
 import {
   afterAllUnderHangBackstop, beforeAllUnderHangBackstop, beforeEachUnderHangBackstop,
   itUnderHangBackstop,
 } from "./support/backstop.js";
+import { WithoutOAuth } from "./support/without-oauth.js";
 
 /**
  * A sign-out stops the access token already in the user's hand (SONNY-237).
@@ -47,7 +49,7 @@ const withConnection = async <T,>(fn: (c: pg.Client) => Promise<T>): Promise<T> 
 const config: Config = testConfig({ databaseUrl: url });
 
 /** Enough provider to sign someone in and out, and to fail on demand. */
-class SigningProvider implements AuthProvider {
+class SigningProvider extends WithoutOAuth implements AuthProvider {
   signOutCalls: string[] = [];
   signOutFails: Error | undefined;
   session: VerifiedSession = {
@@ -56,8 +58,15 @@ class SigningProvider implements AuthProvider {
     accessToken: "provider-issued", refreshToken: "rt", expiresIn: 3600,
   };
   async sendEmailCode(_email: string) { return { providerRequestId: "p1" }; }
-  async verifyEmailCode(_email: string, _code: string): Promise<VerifiedSession> { return this.session; }
-  async refresh(_token: string): Promise<VerifiedSession> { return this.session; }
+  // A real signed token for the current user, with that user's default session id (SONNY-129): a
+  // sign-in route now verifies the token it hands out and records its session, which is the session
+  // every `accessTokenFor(user)` in this file names.
+  async verifyEmailCode(_email: string, _code: string): Promise<VerifiedSession> {
+    return { ...this.session, accessToken: accessTokenFor(this.session.supabaseUserId) };
+  }
+  async refresh(_token: string): Promise<VerifiedSession> {
+    return { ...this.session, accessToken: accessTokenFor(this.session.supabaseUserId) };
+  }
   async signOut(accessToken: string) {
     this.signOutCalls.push(accessToken);
     if (this.signOutFails) throw this.signOutFails;
@@ -125,7 +134,10 @@ describeDb("a sign-out, against a real denylist", () => {
     // reason the adapter asks Supabase for `?scope=local`, and the denylist has to agree with it or
     // the gateway undoes at its own gate what the provider was careful not to do.
     const app = build();
-    await signIn(app, "twodevices@example.com");
+    const accountId = await signIn(app, "twodevices@example.com");
+    // The second Mac signed in through the gateway too, which is what makes its session one the gate
+    // honours (SONNY-129) — the route records its own session and this records the other device's.
+    await recordSessionTheGatewayStarted(client, SESSION_USER, accountId, { sessionId: SECOND_DEVICE_SESSION });
     const thisMac = accessTokenFor(SESSION_USER);
     const otherMac = accessTokenFor(SESSION_USER, { sessionId: SECOND_DEVICE_SESSION });
 
@@ -196,7 +208,9 @@ describeDb("a sign-out, against a real denylist", () => {
     // out un-revokes every other signed-out session in the system, which is the same defect this
     // ticket exists to fix, arriving through the fix.
     const app = build();
-    await signIn(app, "bystander@example.com");
+    const accountId = await signIn(app, "bystander@example.com");
+    // Both sessions were started through the gateway (SONNY-129); see the test above.
+    await recordSessionTheGatewayStarted(client, SESSION_USER, accountId, { sessionId: SECOND_DEVICE_SESSION });
     const first = accessTokenFor(SESSION_USER, { sessionId: SECOND_DEVICE_SESSION });
     const second = accessTokenFor(SESSION_USER);
 
@@ -339,23 +353,29 @@ describeDb("a sign-out, against a real denylist", () => {
     await app.close();
   });
 
-  itUnderHangBackstop("cannot deny a token that carries no session claim, and says so", async () => {
-    // The residual, pinned in both directions rather than described. GoTrue omits `session_id`
-    // (`omitempty`) and handles the absence itself, so this is a token the provider mints. The
-    // sign-out succeeds, the provider is reached, nothing is recorded, and the token keeps working —
-    // which is the state before this ticket, surviving for exactly this shape.
+  itUnderHangBackstop("refuses a token that carries no session claim everywhere, sign-out included", async () => {
+    // **This test pinned a residual, and SONNY-129 closed it.** GoTrue omits `session_id`
+    // (`omitempty`), so such a token cannot be denylisted; this used to assert that its sign-out
+    // succeeded, recorded nothing, and left it working. The gate now honours only sessions the
+    // gateway started, and a token with no session claim has nothing to look that up by, so it is
+    // refused on every protected route before any of that — and no sign-in route will hand one out
+    // (`mintedSessionOf` refuses it), so a signed-in user cannot be holding one.
     const app = build();
     await signIn(app, "nosession@example.com");
     const claims = claimsFor(SESSION_USER);
     delete claims["session_id"];
     const token = signToken({ alg: "HS256", typ: "JWT" }, claims);
 
-    expect((await app.inject({ method: "POST", url: "/v1/auth/signout", headers: bearer(token) }))
-      .statusCode).toBe(204);
-
-    expect(provider.signOutCalls).toEqual([token]);
+    const signOut = await app.inject({ method: "POST", url: "/v1/auth/signout", headers: bearer(token) });
+    expect(signOut.statusCode).toBe(401);
+    expect(signOut.json().error.code).toBe("auth.token_revoked");
+    // Refused at the gate, so the route never ran: the provider was not asked and nothing was recorded.
+    expect(provider.signOutCalls).toEqual([]);
     expect(await revokedProviderSessionCount(client)).toBe(0);
-    expect((await protectedCall(app, token)).statusCode).toBe(200);
+    expect((await protectedCall(app, token)).statusCode).toBe(401);
+    // Control: the same user's ordinary token, from the sign-in above, still works — so the refusal
+    // is about the missing claim and not about the user.
+    expect((await protectedCall(app, accessTokenFor(SESSION_USER))).statusCode).toBe(200);
     await app.close();
   });
 });

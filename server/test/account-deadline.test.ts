@@ -11,6 +11,7 @@ import { leasingUnderTotalDeadline, underTotalDeadline } from "../src/model/rout
 import { ProviderTimedOut } from "../src/model/upstream.js";
 import { testConfig } from "./support/config.js";
 import { accessTokenFor } from "./support/tokens.js";
+import { WithoutOAuth } from "./support/without-oauth.js";
 
 /**
  * §12's total deadline on the three account routes whose slow work is the database (SONNY-434):
@@ -30,7 +31,7 @@ const SUPABASE_USER = "3f0b7f1c-6f21-4a0e-8d55-2b6f5f2a77c1";
 const ACCOUNT = "6d2c4a9e-1b3d-4f0a-9c77-2b6f5f2a77c2";
 const authorization = () => `Bearer ${accessTokenFor(SUPABASE_USER)}`;
 
-class UnusedAuthProvider implements AuthProvider {
+class UnusedAuthProvider extends WithoutOAuth implements AuthProvider {
   async sendEmailCode() {
     return { providerRequestId: undefined };
   }
@@ -104,6 +105,8 @@ function stallingConnection(
           void values;
           return { rows: [{ account_id: ACCOUNT }] };
         }
+        // SONNY-129's started-here check, answered as `support/connection.ts` answers it.
+        if (text.includes("FROM sonny.gateway_session")) return { rows: [{ "?column?": 1 }] };
         const answered = completing(text);
         if (answered !== undefined) return answered;
         // The route's own work: cancelled under a bound, completed under none.

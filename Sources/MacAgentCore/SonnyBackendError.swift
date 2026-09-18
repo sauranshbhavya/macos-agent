@@ -17,6 +17,14 @@ public enum SonnyBackendErrorCode: Equatable, Hashable, Sendable {
     case authCodeInvalid
     case authCodeExpired
     case authCodeUsed
+    /// The sign-in belongs to an account reached another way. §7.2's `auth.account_exists`, `409`, on
+    /// `email/verify` and `oauth/google` (SONNY-129).
+    ///
+    /// **Named because the one thing a user can do about it is specific**: sign in the way they did
+    /// before. The provider joined this sign-in to a user who already backs a different Sonny account,
+    /// and a second account under that user would lock both, so the gateway refuses it. Not retryable
+    /// — the same sign-in is refused the same way.
+    case authAccountExists
     case entitlementRequired
     case entitlementExpired
     /// The account holds no subscription to manage. §7.2's `entitlement.no_subscription`, on
@@ -60,6 +68,7 @@ public enum SonnyBackendErrorCode: Equatable, Hashable, Sendable {
         case "auth.code_invalid": self = .authCodeInvalid
         case "auth.code_expired": self = .authCodeExpired
         case "auth.code_used": self = .authCodeUsed
+        case "auth.account_exists": self = .authAccountExists
         case "entitlement.required": self = .entitlementRequired
         case "entitlement.expired": self = .entitlementExpired
         case "entitlement.no_subscription": self = .entitlementNoSubscription
@@ -88,6 +97,7 @@ public enum SonnyBackendErrorCode: Equatable, Hashable, Sendable {
         case .authCodeInvalid: return "auth.code_invalid"
         case .authCodeExpired: return "auth.code_expired"
         case .authCodeUsed: return "auth.code_used"
+        case .authAccountExists: return "auth.account_exists"
         case .entitlementRequired: return "entitlement.required"
         case .entitlementExpired: return "entitlement.expired"
         case .entitlementNoSubscription: return "entitlement.no_subscription"
@@ -159,7 +169,7 @@ public enum SonnyBackendErrorCode: Equatable, Hashable, Sendable {
         case .idempotencyConflict:
             return envelopeSaysRetryable
         case .authUnauthenticated, .authTokenExpired, .authTokenRevoked, .authCodeInvalid,
-             .authCodeExpired, .authCodeUsed, .entitlementRequired, .entitlementExpired,
+             .authCodeExpired, .authCodeUsed, .authAccountExists, .entitlementRequired, .entitlementExpired,
              .entitlementNoSubscription, .limitSpend, .requestInvalid, .requestTooLarge,
              .providerRejected, .resourceNotFound, .versionUnsupported, .unknown:
             // `entitlementNoSubscription` joins the not-retryable side: an account with no

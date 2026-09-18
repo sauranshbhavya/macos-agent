@@ -27,6 +27,8 @@ import {
 import { testConfig } from "./support/config.js";
 import { rebuildSchema } from "./support/schema.js";
 import { accessTokenFor } from "./support/tokens.js";
+import { recordSessionTheGatewayStarted } from "./support/gateway-session.js";
+import { WithoutOAuth } from "./support/without-oauth.js";
 
 /**
  * An account wipe and the record of it commit together or not at all (SONNY-436), and the wipe holds
@@ -142,7 +144,7 @@ const WIPE_WRITES = [
 ];
 
 /** The gate verifies tokens locally, and the account close's drain calls nothing that matters here. */
-class UnusedAuthProvider implements AuthProvider {
+class UnusedAuthProvider extends WithoutOAuth implements AuthProvider {
   async sendEmailCode() {
     return { providerRequestId: undefined };
   }
@@ -308,6 +310,8 @@ describeDb("an account wipe and the record of it commit together (SONNY-436)", (
        VALUES ($1, 'email', 'audit-row@example.test', 'primary', $2)`,
       [ACCOUNT, SUPABASE_USER],
     );
+    // Signed in through the gateway, which is what makes the token below one it honours (SONNY-129).
+    await recordSessionTheGatewayStarted(observer, SUPABASE_USER, ACCOUNT);
     for (let row = 0; row < CONTENT_ROWS; row += 1) {
       await insertRetainedContent(observer, content(`task-${row}`));
     }

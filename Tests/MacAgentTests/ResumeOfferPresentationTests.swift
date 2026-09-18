@@ -243,13 +243,16 @@ struct ResumeOfferPresentationTests {
         // And the routes into `performStart` that do not go through `dispatch`, counted across every
         // app source file: `dispatch`'s own, `submitClarification`'s, the vision envelope's, the
         // widget composer's, and three Allow controls that answer a pending approval rather than
-        // starting anything.
+        // starting anything. `webAuthenticationSession.start(` is excluded for the reason
+        // `audioRecorder.start(` is: it is the system browser session Sign in with Google opens
+        // (SONNY-129, `SystemWebAuthenticator`), a `start()` that is not a task run.
         var startCallSites = 0
         for file in try MacAgentSource.appSourceFiles() {
             let text = try MacAgentSource.read(file)
             startCallSites += MacAgentSource.count(of: "start(", inText: text)
                 - MacAgentSource.count(of: "func start(", inText: text)
                 - MacAgentSource.count(of: "audioRecorder.start(", inText: text)
+                - MacAgentSource.count(of: "webAuthenticationSession.start(", inText: text)
         }
         #expect(startCallSites == 7, "a route into performStart was added or removed — classify it above")
     }

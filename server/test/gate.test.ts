@@ -11,6 +11,7 @@ import { TEST_JWT_POLICY, accessTokenFor, tokenWithBrokenSignature, tokenWithCla
 import { testConfig } from "./support/config.js";
 import { fakeEntitlementStore } from "./support/entitlement.js";
 import { expectPopulationIsReal, registeredRoutes } from "./support/routes.js";
+import { WithoutOAuth } from "./support/without-oauth.js";
 
 /**
  * The gate as a routing decision, with no database in reach (SONNY-203).
@@ -25,7 +26,7 @@ const USER = "11111111-1111-1111-1111-111111111111";
 
 const config: Config = testConfig();
 
-class UnusedProvider implements AuthProvider {
+class UnusedProvider extends WithoutOAuth implements AuthProvider {
   async sendEmailCode() { return { providerRequestId: undefined }; }
   async verifyEmailCode(): Promise<VerifiedSession> { throw new Error("not used here"); }
   async refresh(): Promise<VerifiedSession> { throw new Error("not used here"); }
@@ -69,8 +70,9 @@ describe("which routes the gate challenges", () => {
       "GET /v1/meta",
       "POST /v1/auth/email/start",
       "POST /v1/auth/email/verify",
-      "POST /v1/auth/oauth/apple",
+      // SONNY-129: Google's start and exchange. Apple's entry is gone with Apple (SONNY-521).
       "POST /v1/auth/oauth/google",
+      "POST /v1/auth/oauth/google/start",
       "POST /v1/auth/refresh",
       // SONNY-211, and the one entry here that is not public in the sense the seven above are: the
       // payment provider authenticates with an HMAC signature over the raw body instead of a Bearer
