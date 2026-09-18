@@ -59,12 +59,16 @@ fetches. `resolve_mainline` below has the reason (SONNY-480).
 WHAT A CHECKOUT OWES (SONNY-516). The merge list comes from the mainline and the files come from
 this working tree, and those two are not the same tree on any branch whose base is older than the
 mainline — which is every branch that has not rebased since something else merged. So the
-completeness arm asks a checkout only for the records of merges it CONTAINS: a branch cannot hold
-a file written on a branch it does not contain. Every run prints how many of the era's merges the
-checkout contains and names the ones it does not, on the line beginning `changelog-order: this
-checkout contains`, so a merge that was not asked about is said rather than silently passed.
-`held_merges` below has the reasoning, including why the whole reading is not simply moved to the
-merge base, and the mirror case it refuses.
+completeness arm asks a checkout only for the records of branches whose work it CONTAINS, which
+is read as: the head that branch merged from is reachable from `HEAD`. That is not the same as
+the merge commit being reachable, and the difference is two ordinary checkouts — the upper branch
+of a short stack after the branch beneath merges, and a lane's own worktree after its own PR
+merges — which hold the branch's work and its records without the merge commit (PR #269's review,
+F1). Every run prints how many of the era's merged branches the checkout contains and names the
+ones it does not, on the line beginning `changelog-order: this checkout contains`, so a merge that
+was not asked about is said rather than silently passed. `reachable_from_head` below has the
+reasoning, including why the whole reading is not simply moved to the merge base, and the mirror
+case it refuses.
 
 THE ARCHIVE'S TWO ERAS. That file is newest-first from `feature/vision-actions` (PR #50) upward
 and oldest-first from PR #3 up to PR #49 below it, the two runs meeting exactly at that entry.
@@ -215,11 +219,12 @@ def resolve_mainline(cwd: str) -> Mainline:
 
 
 class Merge(NamedTuple):
-    """One branch's merge on the mainline. Indexable as (position, pr, sha), so the two fields
-    every older caller unpacks are still the first two."""
+    """One branch's merge on the mainline. Indexable as (position, pr, sha, head), so the two
+    fields every older caller unpacks are still the first two."""
     position: int  # index on the mainline, oldest first
     pr: int
-    sha: str       # the merge commit — what `held_merges` is compared against
+    sha: str       # the merge commit — whose own tree says whether the branch merged its records
+    head: str      # its second parent: the branch head that merged. What containment is read on.
 
 
 def merge_index(mainline: Mainline, cwd: str) -> dict[str, Merge]:
@@ -228,7 +233,7 @@ def merge_index(mainline: Mainline, cwd: str) -> dict[str, Merge]:
     A branch that merged more than once keeps its latest merge, which is the position the
     entry describes.
     """
-    out = subprocess.run(["git", "log", "--first-parent", "--merges", "--format=%H %s",
+    out = subprocess.run(["git", "log", "--first-parent", "--merges", "--format=%H%x00%P%x00%s",
                           mainline.sha], capture_output=True, text=True, cwd=cwd)
     if out.returncode != 0:
         raise Unmeasurable("git log failed on %s: %s" % (mainline.ref, out.stderr.strip()))
@@ -236,18 +241,20 @@ def merge_index(mainline: Mainline, cwd: str) -> dict[str, Merge]:
     lines = list(reversed(out.stdout.splitlines()))  # oldest first
     index: dict[str, Merge] = {}
     for position, line in enumerate(lines):
-        sha, _, subject = line.partition(" ")
+        sha, parents, subject = (line.split("\0") + ["", ""])[:3]
         m = MERGE_RE.match(subject)
         if m:
-            index[m.group(2)] = Merge(position, int(m.group(1)), sha)
+            # `--merges` guarantees a second parent; a pull request's merge has exactly two.
+            head = parents.split()[1] if len(parents.split()) > 1 else sha
+            index[m.group(2)] = Merge(position, int(m.group(1)), sha, head)
     if not index:
         raise Unmeasurable("parsed no 'Merge pull request #N from <ns>/<branch>' subject "
                            "out of %d merge commits on %s" % (len(lines), mainline.ref))
     return index
 
 
-def held_merges(cwd: str, mainline: Mainline) -> frozenset[str]:
-    """Every merge commit this checkout's HEAD contains — the merges whose records it can owe.
+def reachable_from_head(cwd: str, mainline: Mainline) -> frozenset[str]:
+    """Every commit this checkout's HEAD reaches — what `holds_branch` reads containment from.
 
     THE DEFECT THIS EXISTS FOR (SONNY-516). The merge list is read from the mainline and the files
     from the working tree. On a branch whose base is older than the mainline, every branch that
@@ -268,12 +275,25 @@ def held_merges(cwd: str, mainline: Mainline) -> frozenset[str]:
     nothing wrong. And a merge base that is a branch commit — which is exactly the stack's — is not
     on the mainline's first-parent line at all, so its "positions" are not the mainline's. So the
     list stays the mainline's for resolving and ordering, and only the arm whose question is "what
-    should be in this tree" is asked against the tree: a checkout owes the records of the merges it
-    contains, and nothing else.
+    should be in this tree" is asked against the tree: a checkout owes the records of the branches
+    whose work it contains, and nothing else.
+
+    CONTAINS MEANS THE BRANCH HEAD, NOT THE MERGE COMMIT (PR #269's review, F1). The first version
+    of this read containment on the merge commit, and two ordinary checkouts hold a branch's whole
+    work and its records without that commit: the upper branch of a short stack after the branch
+    beneath merges — which `WORKFLOW.md` calls the zero-hop case, since the upper branch never
+    rebases onto the lower one's merge — and a lane's own worktree just after its own PR merges.
+    Both were skipped, the skip was printed as "their files cannot be in this tree" while the
+    files sat in it, and the upper branch deleting the lower one's record passed silently where
+    `main`'s tool had caught it: this ticket's own defect, every clause true but the conclusion,
+    arriving through its fix. The branch head that merged is the merge's second parent, and it is
+    in both of those checkouts. A merge commit being reachable implies its second parent is, so
+    the head alone is the whole test; `holds_branch` is that test.
 
     CONTAINS MEANS REACHABLE, not first-parent. A branch brought up to date by merging `main` into
-    it holds the newer merges through that merge's second parent, and its tree holds their files;
-    a first-parent walk would miss both and skip a real fault.
+    it holds the newer branches through that merge's second parent, and its tree holds their
+    files; a first-parent walk would miss both and skip a real fault. The mirror check below reads
+    the same way, for the same reason (PR #269's review, F2).
 
     THE MIRROR, WHICH IS REFUSED RATHER THAN MEASURED. The same two trees can disagree the other
     way: a checkout holding pull-request merges the mainline it read lacks — a reviewer who ran
@@ -282,11 +302,10 @@ def held_merges(cwd: str, mainline: Mainline) -> frozenset[str]:
     branches never merged, and each reads as unmerged or as not existing — the same false finding
     pointed the other way. The tool never fetches (SONNY-480), so it says so and measures nothing.
     """
-    out = subprocess.run(["git", "rev-list", "--merges", "HEAD"],
-                         capture_output=True, text=True, cwd=cwd)
+    out = subprocess.run(["git", "rev-list", "HEAD"], capture_output=True, text=True, cwd=cwd)
     if out.returncode != 0:
-        raise Unmeasurable("git rev-list --merges HEAD failed: " + out.stderr.strip())
-    held = frozenset(out.stdout.split())
+        raise Unmeasurable("git rev-list HEAD failed: " + out.stderr.strip())
+    reachable = frozenset(out.stdout.split())
 
     ahead = subprocess.run(["git", "log", "--merges", "--format=%H %s", mainline.sha + "..HEAD"],
                            capture_output=True, text=True, cwd=cwd)
@@ -307,7 +326,12 @@ def held_merges(cwd: str, mainline: Mainline) -> frozenset[str]:
             "merges brought would read as a branch that never merged; nothing was measured and no "
             "ref was moved"
             % (_commits(len(newer), "pull-request merge"), "; ".join(newer)))
-    return held
+    return reachable
+
+
+def holds_branch(merge: Merge, reachable: frozenset[str]) -> bool:
+    """Whether this checkout contains the work of the branch `merge` landed — its merged head."""
+    return merge.head in reachable
 
 
 def entries(text: str) -> list[tuple[int, str, list[str]]]:
@@ -463,7 +487,7 @@ def _merge_tree_has(cwd: str, sha: str, rel: str) -> bool:
 
 
 def _missing_record(cwd: str, directory: str, branch: str, merge: Merge) -> str:
-    """The finding for a record absent from a tree that contains its branch's merge.
+    """The finding for a record absent from a tree that contains its branch's work.
 
     It says which of the two things happened rather than leaving the reader to infer one (SONNY-516).
     The old wording named a PR, a position and a rule, and nothing in it suggested the reader's own
@@ -471,6 +495,13 @@ def _missing_record(cwd: str, directory: str, branch: str, merge: Merge) -> str:
     merge commit's own tree settles it: if the file is there, the branch merged with its record and
     something on this checkout removed it since; if not, the branch merged without it. Both are real
     faults, and each sentence names the command that shows the reader it is true.
+
+    The command names the branch head rather than the merge commit, and that is legibility, not
+    correctness: the head is the fact this finding rests on — what the checkout is known to contain,
+    in both shapes — so the sentence and its command name the same commit. `<merge>..HEAD` would
+    find the same deleting commit, because the path filter keeps either range to the commits that
+    touched the file; a mutant swapping one for the other survives the selftest for exactly that
+    reason, and it is an equivalent mutant rather than a gap (PR #269's fix round).
     """
     rel = "%s/%s.md" % (directory, branch)
     if _merge_tree_has(cwd, merge.sha, rel):
@@ -478,42 +509,51 @@ def _missing_record(cwd: str, directory: str, branch: str, merge: Merge) -> str:
                 "working tree does not, so something on this checkout removed it since. `git log "
                 "--oneline %s..HEAD -- %s` names the commit; if it names none, the deletion is "
                 "uncommitted (`git status`)."
-                % (rel, merge.pr, branch, merge.sha[:8], merge.sha[:8], rel))
+                % (rel, merge.pr, branch, merge.sha[:8], merge.head[:8], rel))
     return ("%s: missing — PR #%d merged %r without it: the merge commit %s holds no such file, "
-            "and this checkout contains that merge, so this is not a base that predates it. Every "
-            "branch merging at or after the one-file-per-branch era's start writes this file; one "
-            "that owes nothing writes one line saying so, since a missing file and a deliberate "
-            "'none' are otherwise the same silence."
-            % (rel, merge.pr, branch, merge.sha[:8]))
+            "and this checkout contains the branch that merged (its head %s), so this is not a "
+            "base that predates it. Every branch merging at or after the one-file-per-branch era's "
+            "start writes this file; one that owes nothing writes one line saying so, since a "
+            "missing file and a deliberate 'none' are otherwise the same silence."
+            % (rel, merge.pr, branch, merge.sha[:8], merge.head[:8]))
 
 
-def coverage_line(index: dict[str, Merge], held: frozenset[str]) -> str | None:
-    """Which of the era's merges this checkout contains, printed on every run (SONNY-516).
+def coverage_line(index: dict[str, Merge], reachable: frozenset[str]) -> str | None:
+    """Which of the era's merged branches this checkout contains, printed on every run (SONNY-516).
 
-    The completeness arm skips a merge the checkout does not contain, and a skip that says nothing
+    The completeness arm skips a branch the checkout does not contain, and a skip that says nothing
     is the clean zero this repository keeps being caught by — so the skipped ones are named, as
     news and not as findings. None before the era begins, when `era_line` has already said that
     nothing is checked.
+
+    **It states what was measured and nothing past it** (PR #269's review, F1). It said "their files
+    cannot be in this tree" while its containment test was the merge commit, and a stack's upper
+    branch holds the files without that commit, so the sentence was false exactly where a reader
+    would act on it — and it advised a rebase the stack clause says the upper branch need not make.
+    What the tool knows is that the checkout holds neither the merge nor the head it merged from.
     """
     merges = era_merges(index)
     if not merges:
         return None
-    outside = [(b, m) for b, m in merges if m.sha not in held]
+    outside = [(b, m) for b, m in merges if not holds_branch(m, reachable)]
     if not outside:
-        return ("changelog-order: this checkout contains all %d of the era's merges, so each one "
-                "is asked for both its files." % len(merges))
-    return ("changelog-order: this checkout contains %d of the era's %d merges. The other %d — %s "
-            "— merged after this checkout's base, so their files cannot be in this tree and are "
-            "not asked of it; any checkout that contains them asks, and rebasing onto the mainline "
-            "brings them here."
-            % (len(merges) - len(outside), len(merges), len(outside),
-               ", ".join("PR #%d (%s)" % (m.pr, b) for b, m in outside)))
+        return ("changelog-order: this checkout contains all %d of the branches merged in the "
+                "one-file-per-branch era, so each one is asked for both its files." % len(merges))
+    one = len(outside) == 1
+    return ("changelog-order: this checkout contains %d of the %d branches merged in the "
+            "one-file-per-branch era. %s — %s — %s not asked for %s files: this checkout holds "
+            "neither %s merge nor the head %s merged from. Any checkout that holds either is asked."
+            % (len(merges) - len(outside), len(merges),
+               "The other one" if one else "The other %d" % len(outside),
+               ", ".join("PR #%d (%s)" % (m.pr, b) for b, m in outside),
+               "is" if one else "are", "its" if one else "their", "its" if one else "their",
+               "it" if one else "they"))
 
 
 def check(path: str, cwd: str, mainline: Mainline | None = None,
           index: dict[str, Merge] | None = None,
           entry_dir: str = ENTRY_DIR, manual_dir: str = MANUAL_DIR,
-          held: frozenset[str] | None = None) -> list[str]:
+          reachable: frozenset[str] | None = None) -> list[str]:
     # Findings name the file that was read, never the constant — in the selftest they are
     # different files, and a finding that names a file nobody checked is not evidence.
     where = os.path.relpath(path, cwd) if path.startswith(cwd) else path
@@ -529,8 +569,8 @@ def check(path: str, cwd: str, mainline: Mainline | None = None,
         mainline = resolve_mainline(cwd)
     if index is None:
         index = merge_index(mainline, cwd)
-    if held is None:
-        held = held_merges(cwd, mainline)
+    if reachable is None:
+        reachable = reachable_from_head(cwd, mainline)
     refs = ref_branches(cwd)
     findings: list[str] = []
 
@@ -630,14 +670,15 @@ def check(path: str, cwd: str, mainline: Mainline | None = None,
                 "existed; nothing is being checked for completeness until it resolves."
                 % (DIRECTORY_ERA_BRANCH, len(merged_entries), ", ".join(merged_entries)))
     else:
-        # Only the merges this checkout contains (SONNY-516). A merge after this checkout's base
-        # cannot have put its files in this tree, so it is not asked for them here — `main`, and
-        # any checkout that has rebased past it, asks instead. What was skipped is printed on
-        # every run by `coverage_line`, never passed over in silence.
+        # Only the branches whose work this checkout contains (SONNY-516), read on the head each
+        # one merged from rather than on its merge commit (PR #269's review, F1) — so a stack's
+        # upper branch and a lane just after its own merge are still asked. A branch whose head
+        # this checkout does not reach is not asked here; any checkout that reaches it is. What was
+        # skipped is printed on every run by `coverage_line`, never passed over in silence.
         have_entries = {e.branch for e in entry_files}
         have_manual = {m.branch for m in manual_files}
         for branch, merge in era_merges(index):
-            if merge.sha not in held:
+            if not holds_branch(merge, reachable):
                 continue
             for directory, have in ((entry_dir, have_entries), (manual_dir, have_manual)):
                 if branch not in have:
@@ -1074,14 +1115,21 @@ def selftest() -> int:
         # ----------------------------------------------------------------------------------
         era_tip = _git(era_repo, "rev-parse", "main")          # PR #56's merge, wave/two
         era_before = _git(era_repo, "rev-parse", "main~1")     # PR #55's merge — before wave/two
+        two_head = _git(era_repo, "rev-parse", "wave/two")     # the head PR #56 merged from
         without_two = [DIRECTORY_ERA_BRANCH, "wave/one", "this/branch"]
         never_written = "docs/changelog/wave/two.md: missing — PR #56 merged 'wave/two' without it"
+        manual_never_written = ("docs/manual-tests/wave/two.md: missing — PR #56 merged 'wave/two' "
+                                "without it")
 
         def head_at(sha):
             _git(era_repo, "checkout", "-q", "--detach", sha)
 
         def lane_on(base, name):
             _git(era_repo, "checkout", "-q", "-B", name, base)
+
+        def run_cli(repo):
+            return subprocess.run([sys.executable, os.path.abspath(__file__), "check", era_archive],
+                                  capture_output=True, text=True, cwd=repo)
 
         era_case("SONNY-516: a checkout whose base predates a merge is not asked for its files",
                  "", lambda: (head_at(era_before), _full(era_repo, without_two)))
@@ -1094,7 +1142,7 @@ def selftest() -> int:
                           _git(era_repo, "commit", "-q", "--allow-empty", "-m", "the lane's work"),
                           _full(era_repo, without_two)))
         # Contains means reachable, not first-parent: a branch brought level by merging `main`
-        # into it holds wave/two's merge only through that merge's second parent. The subject is
+        # into it holds wave/two's head only through that merge's second parent. The subject is
         # not a pull request's, so it is also the control for the mirror refusal below — a merge
         # this checkout holds beyond the mainline is refused only when it is a PR merge.
         era_case("  ...and on a branch brought level by merging main into it, it still fires",
@@ -1104,59 +1152,93 @@ def selftest() -> int:
                                "Merge branch 'main' into lane/merged-main", "main"),
                           _full(era_repo, without_two)))
 
+        # PR #269's review, F1. Containment is the head a branch merged from, not its merge commit,
+        # because two ordinary checkouts hold a branch's work and records without that commit: the
+        # upper branch of a short stack after the branch beneath merges (cut from `wave/two`'s own
+        # head, it never contains PR #56's merge), and a lane's own worktree just after its own PR
+        # merges (HEAD *is* that head). Each pair below is one tree and one difference. Before the
+        # fix the firing half of each passed silently, where `main`'s tool had caught it.
+        era_case("F1: a stack's upper branch, after the branch beneath merged, holding its records, "
+                 "passes", "",
+                 lambda: (lane_on(two_head, "lane/stacked"),
+                          _git(era_repo, "commit", "-q", "--allow-empty", "-m", "the upper work"),
+                          _full(era_repo, era_all)))
+        era_case("  ...and the same upper branch missing the lower branch's record is a finding",
+                 manual_never_written,
+                 lambda: (lane_on(two_head, "lane/stacked"),
+                          _git(era_repo, "commit", "-q", "--allow-empty", "-m", "the upper work"),
+                          _full(era_repo, era_all),
+                          os.remove(os.path.join(era_repo, MANUAL_DIR, "wave/two.md"))))
+        era_case("  ...and so is a lane's own worktree, just after its own merge, missing its entry",
+                 never_written,
+                 lambda: (head_at(two_head), _full(era_repo, without_two)))
+
         # What was not asked is said, on every run, by name — through the real command line.
         _clear(era_repo)
         head_at(era_before)
         _full(era_repo, without_two)
-        proc = subprocess.run([sys.executable, os.path.abspath(__file__), "check", era_archive],
-                              capture_output=True, text=True, cwd=era_repo)
+        proc = run_cli(era_repo)
         ran += 1
-        said = ("this checkout contains 2 of the era's 3 merges" in proc.stdout
-                and "PR #56 (wave/two)" in proc.stdout and "missing" not in proc.stdout)
+        said = ("this checkout contains 2 of the 3 branches merged" in proc.stdout
+                and "The other one — PR #56 (wave/two) — is not asked" in proc.stdout
+                and "missing" not in proc.stdout and "cannot be in" not in proc.stdout)
         if proc.returncode == 0 and said:
-            print("  ok    a checkout that does not contain a merge says which, and passes")
+            print("  ok    a checkout that does not contain a branch says which, and passes")
         else:
-            print("  FAIL  the skipped merge was not named on a clean run (exit %d)\n        got: %s"
+            print("  FAIL  the skipped branch was not named on a clean run (exit %d)\n        got: %s"
                   % (proc.returncode, (proc.stdout + proc.stderr).strip()))
             failures += 1
-        _clear(era_repo)
-        head_at(era_tip)
-        _full(era_repo, era_all)
-        proc = subprocess.run([sys.executable, os.path.abspath(__file__), "check", era_archive],
-                              capture_output=True, text=True, cwd=era_repo)
-        ran += 1
-        if proc.returncode == 0 and "contains all 3 of the era's merges" in proc.stdout:
-            print("  ok    a checkout containing every merge says so")
-        else:
-            print("  FAIL  a checkout containing every merge did not say so (exit %d)\n"
-                  "        got: %s" % (proc.returncode, (proc.stdout + proc.stderr).strip()))
-            failures += 1
+        for name, place in (("a checkout containing every merge says it contains every branch",
+                             lambda: head_at(era_tip)),
+                            ("  ...and so does a stack's upper branch that holds the lower's head "
+                             "without its merge", lambda: lane_on(two_head, "lane/stacked"))):
+            _clear(era_repo)
+            place()
+            _full(era_repo, era_all)
+            proc = run_cli(era_repo)
+            ran += 1
+            if proc.returncode == 0 and "contains all 3 of the branches merged" in proc.stdout:
+                print("  ok    " + name)
+            else:
+                print("  FAIL  %s (exit %d)\n        got: %s"
+                      % (name, proc.returncode, (proc.stdout + proc.stderr).strip()))
+                failures += 1
 
         # The mirror: a checkout holding a PR merge the mainline it read lacks. Its records are in
         # the tree while the mainline says the branch never merged, so it is refused, not measured.
-        _clear(era_repo)
-        head_at(era_tip)
-        _full(era_repo, era_all)
-        _point_mainline_refs(era_repo, era_before, era_before)
-        ran += 1
-        try:
-            check(era_archive, era_repo)
-        except Unmeasurable as exc:
-            text = str(exc)
-            ok = ("holds 1 pull-request merge the mainline it read lacks" in text
-                  and "PR #56 (wave/two" in text and "git fetch origin" in text)
-            detail = text
-        else:
-            ok, detail = False, "it measured instead of refusing"
-        print("  %s  a checkout newer than the mainline it read refuses rather than measuring"
-              % ("ok  " if ok else "FAIL"))
-        if not ok:
-            failures += 1
-            print("        got: " + detail)
+        # Twice: holding it on its first-parent line, and holding it only through a merge of `main`
+        # into the branch — which a first-parent read of the mirror cannot see, and on this
+        # repository's own history that read brought back ten false "does not exist" findings
+        # (PR #269's review, F2).
+        for name, place in (("a checkout newer than the mainline it read refuses rather than "
+                             "measuring", lambda: head_at(era_tip)),
+                            ("  ...and so does one holding the newer merge only through a merge of "
+                             "main into it", lambda: (lane_on(era_before, "lane/merged-main"),
+                                                      _git(era_repo, "merge", "-q", "--no-ff",
+                                                           "-m", "Merge branch 'main' into "
+                                                           "lane/merged-main", "main")))):
+            _clear(era_repo)
+            _point_mainline_refs(era_repo, era_tip, None)
+            place()
+            _full(era_repo, era_all)
+            _point_mainline_refs(era_repo, era_before, era_before)
+            ran += 1
+            try:
+                check(era_archive, era_repo)
+            except Unmeasurable as exc:
+                text = str(exc)
+                ok = ("holds 1 pull-request merge the mainline it read lacks" in text
+                      and "PR #56 (wave/two" in text and "git fetch origin" in text)
+                detail = text
+            else:
+                ok, detail = False, "it measured instead of refusing"
+            print("  %s  %s" % ("ok  " if ok else "FAIL", name))
+            if not ok:
+                failures += 1
+                print("        got: " + detail)
         # Through the command line, as the stop hook meets it: exit 1, which blocks nothing, with
         # the reason and the remedy inside the 200 bytes the hook quotes.
-        proc = subprocess.run([sys.executable, os.path.abspath(__file__), "check", era_archive],
-                              capture_output=True, text=True, cwd=era_repo)
+        proc = run_cli(era_repo)
         quoted = (proc.stdout + proc.stderr).replace("\n", " ").encode("utf-8")[:200]
         quoted = quoted.decode("utf-8", "ignore")
         ran += 1
@@ -1172,14 +1254,23 @@ def selftest() -> int:
 
         # Removed, as against never written. A fixture whose branches commit their records, so
         # every merge commit holds them: the finding must then say the checkout removed it, and
-        # the command it names must actually find the commit that did.
+        # the command it names — run exactly as the finding prints it — must find the commit.
         records = os.path.join(tmp, "records")
         os.makedirs(records, exist_ok=True)
         _fixture_repo(records, merges + [(54, DIRECTORY_ERA_BRANCH), (55, "wave/one"),
                                          (56, "wave/two")], loose, records=True)
         removed = "docs/changelog/wave/two.md: missing — PR #56 merged 'wave/two' with it"
         two = "docs/changelog/wave/two.md"
-        wave_two_merge = _git(records, "rev-parse", "main")
+
+        def named_command_finds(findings, repo, subject):
+            """Run the `git log` the finding names, verbatim, and say whether it names `subject`."""
+            for f in findings:
+                m = re.search(r"`(git log --oneline [^`]+)`", f)
+                if m:
+                    out = subprocess.run(shlex.split(m.group(1)), capture_output=True, text=True,
+                                         cwd=repo)
+                    return out.returncode == 0 and subject in out.stdout
+            return False
 
         ran += 1
         before = check(era_archive, records)
@@ -1193,19 +1284,28 @@ def selftest() -> int:
             print("        before: %s\n        after: %s" % (before, after))
         _git(records, "checkout", "-q", "--", two)
 
-        ran += 1
-        before = check(era_archive, records)
-        _git(records, "rm", "-q", two)
-        _git(records, "commit", "-q", "-m", "drops a record")
-        after = check(era_archive, records)
-        named = _git(records, "log", "--oneline", "%s..HEAD" % wave_two_merge, "--", two)
-        ok = (before == [] and any(removed in f and wave_two_merge[:8] in f for f in after)
-              and "drops a record" in named)
-        print("  %s  ...and so does one a commit removed, and the command it names finds that "
-              "commit" % ("ok  " if ok else "FAIL"))
-        if not ok:
-            failures += 1
-            print("        before: %s\n        after: %s\n        log: %r" % (before, after, named))
+        # On the mainline, and on a stack's upper branch cut from wave/two's head — the shape F1
+        # found silent. The command must work in both, which is why it names the branch head.
+        records_tip = _git(records, "rev-parse", "main")
+        for name, place in (("  ...and so does one a commit removed, and the command it names "
+                             "finds that commit", lambda: None),
+                            ("  ...and so does one a stack's upper branch removed, with the command "
+                             "finding it there too",
+                             lambda: _git(records, "checkout", "-q", "-B", "lane/stacked",
+                                          "wave/two"))):
+            _git(records, "checkout", "-q", "-B", "main", records_tip)
+            place()
+            ran += 1
+            before = check(era_archive, records)
+            _git(records, "rm", "-q", two)
+            _git(records, "commit", "-q", "-m", "drops a record")
+            after = check(era_archive, records)
+            ok = (before == [] and any(removed in f for f in after)
+                  and named_command_finds(after, records, "drops a record"))
+            print("  %s  %s" % ("ok  " if ok else "FAIL", name))
+            if not ok:
+                failures += 1
+                print("        before: %s\n        after: %s" % (before, after))
         ran += 1
         era_index = merge_index(resolve_mainline(era_repo), era_repo)
         if ("begins at PR #54" in era_line(era_index)
@@ -1534,8 +1634,8 @@ def main(argv: list[str]) -> int:
             print(assemble(root, mainline, MANUAL_DIR, CHECKLIST, from_marker=False))
             return 0
         index = merge_index(mainline, root)
-        held = held_merges(root, mainline)
-        findings = check(path, root, mainline, index=index, held=held)
+        reachable = reachable_from_head(root, mainline)
+        findings = check(path, root, mainline, index=index, reachable=reachable)
     except Unmeasurable as exc:
         # The reason first: the stop hook quotes a refusal only as far as `cut -c1-200` reaches.
         print("changelog-order: no measurement was made — %s" % exc, file=sys.stderr)
@@ -1544,7 +1644,7 @@ def main(argv: list[str]) -> int:
         return 1
     print(mainline.line())
     print(era_line(index))
-    coverage = coverage_line(index, held)
+    coverage = coverage_line(index, reachable)
     if coverage:
         print(coverage)
     if findings:

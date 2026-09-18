@@ -154,11 +154,14 @@ fi
 #             finding, so it is reported loudly and blocks nothing. Same for a missing or
 #             non-executable script.
 #
-# WHAT IT NO LONGER BLOCKS ON (SONNY-516): a merge this branch does not contain. A lane that has
-# not rebased since something else merged lacks that merge's records by construction, and the
-# tool used to report each one missing — two findings a branch, and a blocked turn, on a lane that
-# had done nothing wrong. The tool asks a checkout only for what it contains now, so this hook
-# needed no arm of its own for it: a finding it blocks on is one the checkout could have avoided.
+# WHAT IT NO LONGER BLOCKS ON (SONNY-516): a merged branch whose work this checkout does not
+# contain. A lane that has not rebased since something else merged lacks that merge's records by
+# construction, and the tool used to report each one missing — two findings a branch, and a
+# blocked turn, on a lane that had done nothing wrong. The tool asks a checkout only for the
+# branches whose merged head it reaches now, so this hook needed no arm of its own for it. What it
+# still blocks on includes a finding no lane caused: a branch on `main` that merged without its
+# record blocks every lane containing that merge, deliberately, because it is a real fault on
+# `main` and every such lane is where somebody will see it.
 # ---------------------------------------------------------------------------------------------
 # Every record `scripts/changelog-order` CHECKS, and only those. `docs/sonny-manual-test-checklist.md`
 # is deliberately absent: the tool reads it when it assembles the checklist for a reader, never

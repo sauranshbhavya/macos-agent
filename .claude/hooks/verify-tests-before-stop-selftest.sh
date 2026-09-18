@@ -332,6 +332,29 @@ run_hook "$repo" false
 assert "  ...and a lane that contains that merge and removed its record is blocked" \
   2 "docs/changelog/wave/two.md: missing — PR #56 merged 'wave/two' with it" -
 
+# A short stack's upper branch after the branch beneath merged (PR #269's review, F1). It is cut
+# from wave/two's own head, so it holds wave/two's work and records but never PR #56's merge
+# commit. The first fix read containment on that commit, skipped wave/two here, and let the upper
+# branch delete the lower one's record without a word, where `main`'s tool had blocked it.
+repo="$(new_era_fixture)"
+git -C "$repo" checkout -q -B docs/fixture-branch wave/two
+write_entry "$repo" "$ENTRY_DIR" docs/fixture-branch
+write_entry "$repo" "$MANUAL_DIR" docs/fixture-branch
+git -C "$repo" add -A >/dev/null && git -C "$repo" commit -q -m "entries"
+run_hook "$repo" false
+assert "a stack's upper branch, after the branch beneath merged, with every record, is not blocked" \
+  0 - "missing"
+
+repo="$(new_era_fixture)"
+git -C "$repo" checkout -q -B docs/fixture-branch wave/two
+write_entry "$repo" "$ENTRY_DIR" docs/fixture-branch
+write_entry "$repo" "$MANUAL_DIR" docs/fixture-branch
+git -C "$repo" rm -q "$MANUAL_DIR/wave/two.md"
+git -C "$repo" add -A >/dev/null && git -C "$repo" commit -q -m "entries"
+run_hook "$repo" false
+assert "  ...and the same upper branch deleting the lower branch's record is blocked" \
+  2 "docs/manual-tests/wave/two.md: missing — PR #56 merged 'wave/two' with it" -
+
 # ---------------------------------------------------------------------------------------------
 # The two battery states. Neither is this ticket's work; both are what it had to not break.
 # ---------------------------------------------------------------------------------------------
