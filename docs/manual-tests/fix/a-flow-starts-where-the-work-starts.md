@@ -4,8 +4,9 @@ The Skills page shows no depth, flows or start pages, so nothing on it changes. 
 Sonny goes when a command names one of these packs:
 - 38 start pages moved to the site's sign-in page.
 - 15 packs name a different sign-in page.
-- 25 packs have no task steps any more.
-- Luma and Perplexity each lost one flow.
+- 29 packs have no task steps any more.
+- Perplexity lost two flows.
+- OneDrive starts at its own sign-in page.
 - The 25 packs other wave-12 lanes made deep now carry the record, and all 25 keep their task steps.
 
 Run each row with the packaged app, with the named skill added on the Skills page, in a browser
@@ -24,7 +25,7 @@ Run each row with the packaged app, with the named skill added on the Skills pag
 - [ ] **SONNY-510 — a pack with no admissible start page has no task steps.** Ask Sonny to do an n8n
   task. It does not open `n8n.io`'s marketing homepage and try to follow numbered steps from there. The
   pack still tells Sonny what n8n is and where its sign-in page is. The same is true of Claude,
-  GrowthBook, Microsoft 365, OneDrive, Zoho Desk, Greenhouse, Midjourney, Pinterest and ShipStation.
+  GrowthBook, Microsoft 365, Zoho Desk, Greenhouse, Midjourney, Pinterest and ShipStation.
 - [ ] **SONNY-510 — a start page whose form also creates the account has no task steps.** Ask Sonny
   for a Canva task, for example "make a Canva poster". It does not open Canva's "Log in or sign up in
   seconds" page and follow numbered steps from there. The same is true of Airtable, Amplitude, Attio,
@@ -44,9 +45,17 @@ Run each row with the packaged app, with the named skill added on the Skills pag
 - [ ] **SONNY-510 — a marketplace starts on the product itself.** Ask Sonny to save an eBay search, for
   example "save an eBay search for vintage cameras". It opens `www.ebay.com/` and searches there,
   signed out, rather than going to a sign-in page first.
-- [ ] **SONNY-510 — a pack that lost one flow keeps its others.** Ask Sonny to create a Luma event.
-  It still starts at `luma.com/create`. No Luma task starts at `luma.com/signin`, whose form is
-  "Please sign in or sign up below".
+- [ ] **SONNY-510 — a product page whose first step needs an account has no task steps.** Ask Sonny
+  for a ChatGPT task, for example "set my ChatGPT custom instructions". It does not open `chatgpt.com`
+  and follow numbered steps from there: signed out, ChatGPT's Settings has no Personalization, and its
+  "Log in" opens one form for both logging in and signing up. The same is true of Bolt, Mistral,
+  Product Hunt and Luma, whose `luma.com/create` asks you to "sign in or sign up below" as it loads.
+- [ ] **SONNY-510 — Perplexity keeps its question flow only.** Ask Sonny a question in Perplexity. It
+  opens `www.perplexity.ai/` and asks in the "Ask anything" box, signed out. Asking Sonny to make a
+  Perplexity skill gets no numbered steps, because signed out there is no Skills page to start from.
+- [ ] **SONNY-510 — OneDrive starts at its own sign-in.** Ask Sonny to upload a file to OneDrive. It
+  opens `onedrive.live.com/login/`, which shows Microsoft's "Sign in" with "No account? Create one!"
+  as a separate link, and follows its steps from there.
 - [ ] **SONNY-510 — signed in, a moved start page still reaches the product.** Signed **in** to Miro
   in the browser, ask Sonny for a Miro task. `miro.com/login` should forward a signed-in user into the
   product. This branch read every start page signed out only, so this row is the one reading of the
