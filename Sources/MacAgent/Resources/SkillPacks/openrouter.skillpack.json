@@ -7,7 +7,20 @@
   "summary": "One API for many AI models.",
   "signInURL": "https://openrouter.ai/sign-in",
   "triggers": ["openrouter", "openrouter.ai"],
-  "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "sections": ["Models", "Benchmarks", "Chat", "Rankings", "Apps", "Ori", "Enterprise", "Docs"],
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Find a model in the catalogue",
+      "startURL": "https://openrouter.ai/models",
+      "steps": [
+        "Open openrouter.ai/models. The catalogue renders without signing in, so there is no step through the home page first.",
+        "Type part of a model's name into the Search models… box above the list.",
+        "Narrow the list with the checkboxes and the dropdowns beside that box.",
+        "The row of tabs beginning with All limits the list by what a model does: Text, Image, Video, Speech, Transcription, Embeddings and Rerank.",
+        "List and Table switch how the results are laid out. Select a model's name to open its own page."
+      ],
+      "source": "https://openrouter.ai/models"
+    }
+  ]
 }
