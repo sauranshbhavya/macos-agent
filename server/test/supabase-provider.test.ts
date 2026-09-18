@@ -601,6 +601,117 @@ describe("SupabaseAuthProvider — signOutAllForUser, which Supabase cannot do",
   });
 });
 
+describe("SupabaseAuthProvider — Sign in with Google (SONNY-129)", () => {
+  /** A PKCE exchange's body: a session whose user carries the identities GoTrue linked to it. */
+  const exchangeBody = (identities: unknown[]) => ({
+    ...SESSION_BODY,
+    user: { ...SESSION_BODY.user, identities },
+  });
+  const googleIdentity = (overrides: Record<string, unknown> = {}) => ({
+    identity_id: "0e9f5a55-6f1c-4f7e-9c86-0b1a2c3d4e5f",
+    id: "google-sub-104",
+    user_id: SESSION_BODY.user.id,
+    provider: "google",
+    identity_data: { sub: "google-sub-104", email: "person@gmail.com", email_verified: true },
+    ...overrides,
+  });
+
+  it("builds the authorize URL for the PKCE flow, with the redirect and challenge it was given", () => {
+    const { provider, calls } = providerAnswering(() => json(200, {}));
+    const url = new URL(provider.oauthAuthorizeUrl("google", "com.sonny.macagent://auth/callback", "C".repeat(43)));
+
+    expect(`${url.origin}${url.pathname}`).toBe(`${AUTH_URL}/authorize`);
+    expect(url.searchParams.get("provider")).toBe("google");
+    expect(url.searchParams.get("redirect_to")).toBe("com.sonny.macagent://auth/callback");
+    expect(url.searchParams.get("code_challenge")).toBe("C".repeat(43));
+    // S256 and never `plain`: `plain` would put the verifier itself in the URL.
+    expect(url.searchParams.get("code_challenge_method")).toBe("s256");
+    // No key in a URL a browser will show, log and keep in its history.
+    expect(url.searchParams.has("apikey")).toBe(false);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("exchanges through the pkce grant, sending the code and the verifier and nothing else", async () => {
+    const { provider, calls } = providerAnswering(() => json(200, exchangeBody([googleIdentity()])));
+    await provider.exchangeOAuthCode("google", "auth-code-1", "v".repeat(43));
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.method).toBe("POST");
+    expect(calls[0]!.url).toBe(`${AUTH_URL}/token?grant_type=pkce`);
+    expect(calls[0]!.body).toEqual({ auth_code: "auth-code-1", code_verifier: "v".repeat(43) });
+    expect(calls[0]!.headers["apikey"]).toBe(ANON);
+    expect(calls[0]!.headers["authorization"]).toBeUndefined();
+  });
+
+  it("reads the Google identity out of a user Supabase also linked an email identity to", async () => {
+    // **The case the identity pick exists for.** Automatic linking puts the earlier email identity
+    // on the same user, first in the list; reading it would resolve the account by the wrong
+    // `(provider, subject)`.
+    const emailIdentity = {
+      id: SESSION_BODY.user.id,
+      provider: "email",
+      identity_data: { sub: SESSION_BODY.user.id, email: "person@gmail.com", email_verified: true },
+    };
+    const { provider } = providerAnswering(() => json(200, exchangeBody([emailIdentity, googleIdentity()])));
+    const session = await provider.exchangeOAuthCode("google", "auth-code-1", "v".repeat(43));
+
+    expect(session.identity).toEqual({
+      provider: "google",
+      subject: "google-sub-104",
+      email: "person@gmail.com",
+      emailVerified: true,
+    });
+    expect(session.supabaseUserId).toBe(SESSION_BODY.user.id);
+    expect(session.accessToken).toBe(SESSION_BODY.access_token);
+  });
+
+  it("takes the subject from the provider's id, not from GoTrue's identity row id", async () => {
+    const { provider } = providerAnswering(() => json(200, exchangeBody([googleIdentity()])));
+    const session = await provider.exchangeOAuthCode("google", "c", "v".repeat(43));
+    expect(session.identity.subject).toBe("google-sub-104");
+    expect(session.identity.subject).not.toBe("0e9f5a55-6f1c-4f7e-9c86-0b1a2c3d4e5f");
+  });
+
+  it.each([
+    ["missing", {}],
+    ["a string", { email_verified: "true" }],
+    ["false", { email_verified: false }],
+  ])("reads email_verified %s as unverified — only a real true is verified", async (_label, data) => {
+    const identity = googleIdentity({ identity_data: { sub: "google-sub-104", email: "p@x.com", ...data } });
+    const { provider } = providerAnswering(() => json(200, exchangeBody([identity])));
+    const session = await provider.exchangeOAuthCode("google", "c", "v".repeat(43));
+    expect(session.identity.emailVerified).toBe(false);
+  });
+
+  it.each([
+    ["no identities at all", []],
+    ["no Google identity", [{ id: "x", provider: "email", identity_data: {} }]],
+    ["two Google identities", [googleIdentity(), googleIdentity({ id: "google-sub-205", identity_data: { sub: "google-sub-205" } })]],
+    ["a Google identity whose claimed sub disagrees with its id", [googleIdentity({ identity_data: { sub: "someone-else" } })]],
+  ])("refuses as unavailable, never choosing, when the answer carries %s", async (_label, identities) => {
+    const { provider } = providerAnswering(() => json(200, exchangeBody(identities)));
+    const error = await errorFrom(provider.exchangeOAuthCode("google", "c", "v".repeat(43)));
+    expect(error).toBeInstanceOf(ProviderUnavailable);
+    expect(error.message).toContain("no single readable google identity");
+  });
+
+  it.each([
+    ["bad_code_verifier", 400],
+    ["flow_state_not_found", 404],
+    ["flow_state_expired", 400],
+  ])("treats %s (%i) as the caller's failure", async (code, status) => {
+    const { provider } = providerAnswering(() => json(status, { code, message: "m" }));
+    const error = await errorFrom(provider.exchangeOAuthCode("google", "c", "v".repeat(43)));
+    expect(error).toBeInstanceOf(ProviderRejected);
+  });
+
+  it("treats a 5xx on the exchange as unavailable", async () => {
+    const { provider } = providerAnswering(() => json(503, { code: "unexpected_failure", message: "m" }));
+    const error = await errorFrom(provider.exchangeOAuthCode("google", "c", "v".repeat(43)));
+    expect(error).toBeInstanceOf(ProviderUnavailable);
+  });
+});
+
 describe("errorCodeOf", () => {
   it("takes a numeric code as a status rather than as a code", () => {
     expect(errorCodeOf(json(400, { code: 400, msg: "m" }), { code: 400, msg: "m" })).toBeUndefined();
