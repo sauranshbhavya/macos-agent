@@ -1,7 +1,7 @@
 import { screenSummary, stepsSummary, type Coordinator, type CoordinatorCall, type Plan, type Verdict } from "./coordinator.ts";
 import type { Driver } from "./driver/driver.ts";
-import type { WindowRecord, WindowState } from "./driver/types.ts";
-import { frontmost, type Executor, type InstructionOutcome } from "./executor.ts";
+import { DriverRefusal, type WindowRecord, type WindowState } from "./driver/types.ts";
+import { rankWindows, resolveWindow, type Executor, type InstructionOutcome } from "./executor.ts";
 import type { RecentAction } from "./actionModel/jev.ts";
 
 /**
@@ -56,6 +56,13 @@ export interface RunTotals {
 export interface AgentSettings {
   readonly maxCoordinatorTurns: number;
   readonly windowWaitMs: number;
+  /**
+   * Bring the app to the front once, right after launch. cua's Known limits: a SwiftUI window on a
+   * non-current Space returns a stripped tree — Calculator answered "0 AXWindow elements" the moment
+   * it sat on another Space (SONNY-517, 2026-09-17) — and fronting switches to its Space. It also
+   * lets the founder watch. Every action after it still uses background delivery.
+   */
+  readonly frontAtLaunch: boolean;
 }
 
 export interface AgentDeps {
@@ -92,21 +99,28 @@ export async function runTask(task: Task, deps: AgentDeps): Promise<RunReport> {
 
   try {
     const launched = await deps.driver.launchApp(task.app.bundleId, task.app.urls);
-    const window = await waitForWindow(deps.driver, launched.pid, launched.windows, deps.settings.windowWaitMs, sleep);
-    if (window === null) return finish("error", `${task.app.bundleId} launched (pid ${launched.pid}) but showed no window`);
-    log(`launched ${task.app.bundleId} pid ${launched.pid} window ${window.window_id}`);
+    if (deps.settings.frontAtLaunch) {
+      await sleep(750);
+      const fronted = await frontApp(deps.driver, launched.pid, await deps.driver.listWindows(launched.pid), sleep);
+      await sleep(500);
+      log(fronted === null ? `could not bring ${task.app.bundleId} to the front; carrying on` : `brought ${task.app.bundleId} to the front (window ${fronted})`);
+    }
+    const first = await waitForWindow(deps.driver, launched.pid, deps.settings.frontAtLaunch ? [] : launched.windows, deps.settings.windowWaitMs, sleep);
+    if (first === null) return finish("error", `${task.app.bundleId} launched (pid ${launched.pid}) but none of its windows resolved to an accessibility tree`);
+    lastState = first;
+    log(`launched ${task.app.bundleId} pid ${launched.pid} window ${first.window_id} (${first.elements.length} elements)`);
 
-    lastState = await deps.driver.windowState(launched.pid, window.window_id, { screenshot: false });
     plan = await deps.coordinator.plan(task.goal, screenSummary(lastState));
     log(`plan (${plan.call.latencyMs} ms): ${plan.plan.instructions.map((i, n) => `${n + 1}. ${i}`).join(" | ")}`);
 
     const queue = [...plan.plan.instructions];
     const history: RecentAction[] = [];
     let actionsUsed = 0;
-    let windowId = window.window_id;
+    let windowId = first.window_id;
     let instruction = queue.shift();
     if (instruction === undefined) return finish("failed", "the coordinator planned no instructions");
 
+    let blockedInARow = 0;
     for (let turn = 1; turn <= deps.settings.maxCoordinatorTurns; turn += 1) {
       log(`turn ${turn}: ${instruction}`);
       const outcome = await deps.executor.runInstruction({
@@ -140,6 +154,14 @@ export async function runTask(task: Task, deps: AgentDeps): Promise<RunReport> {
         instructions.push({ turn, instruction, outcome, review: null });
         return finish("error", outcome.note);
       }
+      // The coordinator is told to fail after a repeated stall and did not: TextEdit's first live
+      // run spent eleven turns alternating two instructions Jev answered BLOCKED to at once. Three
+      // blocked answers in a row with nothing acted on is the loop's own stop, whatever it says.
+      blockedInARow = outcome.status === "blocked" && outcome.actionsSpent === 0 ? blockedInARow + 1 : 0;
+      if (blockedInARow >= 3) {
+        instructions.push({ turn, instruction, outcome, review: null });
+        return finish("failed", "the action model answered BLOCKED to three instructions in a row without acting");
+      }
 
       const review = await deps.coordinator.review({
         goal: task.goal,
@@ -166,6 +188,37 @@ export async function runTask(task: Task, deps: AgentDeps): Promise<RunReport> {
   }
 }
 
+/**
+ * Best-effort fronting: the driver refuses an app with several windows unless one is named
+ * (`ambiguous_window_target`) and refuses a window it cannot verify
+ * (`bring_to_front_exact_window_unverified` — Safari's launch-time list went stale once it opened
+ * the URL in a new window). Try the best-ranked windows, then the app alone; a refusal everywhere
+ * is logged, not fatal, since the run can still resolve a window that is already on screen.
+ */
+export async function frontApp(
+  driver: Driver,
+  pid: number,
+  windows: readonly WindowRecord[],
+  sleep: (ms: number) => Promise<void> = defaultSleep,
+): Promise<number | "app" | null> {
+  const attempts: Array<number | undefined> = [...rankWindows(windows).slice(0, 3).map((w) => w.window_id), undefined];
+  // A window on another Space is fronted through a Space switch, and the driver's focus check can
+  // run before the animation lands (`bring_to_front_exact_window_unverified` on a call that then
+  // succeeds a second later — SONNY-517 live run). Three rounds, a beat apart.
+  for (let round = 0; round < 3; round += 1) {
+    for (const windowId of attempts) {
+      try {
+        await driver.bringToFront(pid, windowId);
+        return windowId ?? "app";
+      } catch (error) {
+        if (!(error instanceof DriverRefusal)) throw error;
+      }
+    }
+    await sleep(700);
+  }
+  return null;
+}
+
 /** An app launched in the background may take a moment to show a window; poll rather than guess. */
 export async function waitForWindow(
   driver: Driver,
@@ -173,12 +226,12 @@ export async function waitForWindow(
   initial: readonly WindowRecord[],
   timeoutMs: number,
   sleep: (ms: number) => Promise<void>,
-): Promise<WindowRecord | null> {
+): Promise<WindowState | null> {
   const deadline = performance.now() + timeoutMs;
   let windows = initial;
   for (;;) {
-    const front = frontmost(windows);
-    if (front !== null) return front;
+    const resolved = await resolveWindow(driver, pid, windows);
+    if (resolved !== null) return resolved;
     if (performance.now() >= deadline) return null;
     await sleep(250);
     windows = await driver.listWindows(pid);

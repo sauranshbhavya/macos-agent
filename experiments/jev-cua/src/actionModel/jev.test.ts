@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { TypeSafeClient } from "@typesafe-ai/sdk";
 import { buildActionSpace } from "../actionSpace.ts";
 import { element } from "../testSupport/fakes.ts";
-import { buildRequest, JevActionModel, validateChoice } from "./jev.ts";
+import { buildRequest, fitToBudget, JevActionModel, validateChoice } from "./jev.ts";
 
 const good = { type: "choice", choice: "b", confidence: 0.7, probabilities: { a: 0.2, b: 0.7, c: 0.1 } };
 
@@ -100,5 +100,30 @@ describe("JevActionModel.choose", () => {
     const model = new JevActionModel(client({ operation: operation("DONE") }));
     const decision = await model.choose(input);
     expect(decision).toMatchObject({ operation: "DONE", target: null, targetConfidence: null, model: "jev-test" });
+  });
+});
+
+describe("fitToBudget", () => {
+  const big = buildActionSpace(Array.from({ length: 200 }, (_, i) => element({ element_index: i + 1, label: `Link number ${i + 1} with a longer label` })));
+  const input = { instruction: "i", goal: "g", window: { app: null, title: null }, space: big, recentActions: [] };
+
+  it("leaves a request under budget untouched", () => {
+    const { input: fitted } = fitToBudget(input, 1_000_000);
+    expect(Object.keys(fitted.space.targets.CLICK)).toHaveLength(200);
+  });
+
+  it("halves the target cap until the state plus the longest question fits", () => {
+    const { input: fitted, request } = fitToBudget(input, 12_000);
+    const offered = Object.keys(fitted.space.targets.CLICK).length;
+    expect(offered).toBeLessThan(200);
+    expect(offered).toBeGreaterThanOrEqual(16);
+    const longest = Math.max(...Object.values(request.questions).map((q) => JSON.stringify(q).length));
+    expect(JSON.stringify(request.state).length + longest).toBeLessThanOrEqual(12_000);
+    expect((request.state as { elements: unknown[] }).elements).toHaveLength(offered);
+  });
+
+  it("stops at the floor rather than looping when even the floor does not fit", () => {
+    const { input: fitted } = fitToBudget(input, 10);
+    expect(Object.keys(fitted.space.targets.CLICK)).toHaveLength(16);
   });
 });

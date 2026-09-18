@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { DriverRefusal } from "./driver/types.ts";
-import { Executor, frontmost, valueReflects, visibleText, type ExecutorSettings } from "./executor.ts";
+import { Executor, rankWindows, resolveWindow, valueReflects, visibleText, type ExecutorSettings } from "./executor.ts";
 import { actionResult, element, FakeActionModel, FakeDriver, FakeTextHelper, instantSleep, windowRecord, windowState } from "./testSupport/fakes.ts";
 
 const settings: ExecutorSettings = { maxActions: 10, minOperationConfidence: 0.35, waitMs: 0, settleMs: 0 };
@@ -160,8 +160,8 @@ describe("Executor.runInstruction", () => {
     expect(outcome.steps[0]?.outcome).toBe("control");
   });
 
-  it("falls back to the app's frontmost window when the one it was given is gone", async () => {
-    const driver = new FakeDriver([windowState([button], { window_id: 8 })], [windowRecord({ window_id: 8, z_index: 5 }), windowRecord({ window_id: 2, z_index: 1 })]);
+  it("falls back to whichever of the app's windows resolves when the one it was given is gone", async () => {
+    const driver = new FakeDriver([windowState([button], { window_id: 8 })], [windowRecord({ window_id: 8, z_index: 5 }), windowRecord({ window_id: 2, z_index: 1, is_on_screen: false })]);
     driver.windowStateError = new DriverRefusal("get_window_state", { code: "window_id_not_found" });
     const { run } = executor(driver, [{ operation: "DONE" }]);
     const outcome = await run.runInstruction(context);
@@ -169,15 +169,78 @@ describe("Executor.runInstruction", () => {
     expect(driver.calls.filter((c) => c.tool === "get_window_state").map((c) => c.extra["windowId"])).toEqual([7, 8]);
   });
 
-  it("surfaces any other driver refusal as a refused outcome", async () => {
-    const driver = new FakeDriver([windowState([button])]);
-    driver.click = async () => {
-      throw new DriverRefusal("click", { code: "stale_element_token", message: "re-snapshot" });
+  it("treats a refused rung as a failed rung and climbs past it", async () => {
+    const driver = new FakeDriver([windowState([button])], [windowRecord()]);
+    let clicks = 0;
+    driver.click = async (target, delivery) => {
+      clicks += 1;
+      driver.calls.push({ tool: "click", target, delivery, extra: {} });
+      if (target.kind === "pixel") throw new DriverRefusal("click", { code: "px_capture_unavailable" });
+      return clicks === 1 ? actionResult("unverifiable") : actionResult("confirmed");
     };
-    const { run } = executor(driver, [{ operation: "CLICK", targetKey: "3" }]);
+    const { run } = executor(driver, [{ operation: "CLICK", targetKey: "3" }, { operation: "DONE" }]);
+    const outcome = await run.runInstruction(context);
+    expect(outcome.status).toBe("done");
+    expect(outcome.steps[0]?.attempts.map((a) => [a.rung, a.effect, a.verdict])).toEqual([
+      ["ax", "unverifiable", "climb to px: unverifiable with no window change and no recommendation"],
+      ["px", "refused", "refused: px_capture_unavailable"],
+      ["foreground", "confirmed", "settled: confirmed"],
+    ]);
+  });
+
+  it("re-resolves the window when the one it was given comes back degraded", async () => {
+    const degraded = windowState([], { window_id: 7, snapshot_id: null, degraded_reason: "ax_window_unresolved" });
+    const untitled = windowState([button], { window_id: 9, window_title: "Untitled" });
+    const driver = new FakeDriver([untitled], [windowRecord({ window_id: 7, is_on_screen: false }), windowRecord({ window_id: 9, is_on_screen: true })]);
+    driver.windowState = async (_pid, windowId) => {
+      driver.calls.push({ tool: "get_window_state", target: null, delivery: null, extra: { windowId } });
+      return windowId === 9 ? untitled : degraded;
+    };
+    const { run, actionModel } = executor(driver, [{ operation: "DONE" }]);
+    const outcome = await run.runInstruction(context);
+    expect(outcome.state.window_id).toBe(9);
+    expect(actionModel.inputs[0]?.space.candidates).toHaveLength(1);
+    expect(driver.calls.filter((c) => c.tool === "get_window_state").map((c) => c.extra["windowId"])).toEqual([7, 9]);
+  });
+
+  it("retries resolving while every window is momentarily unresolved, then reads the one that comes back", async () => {
+    const degraded = windowState([], { window_id: 7, snapshot_id: null, degraded_reason: "ax_window_unresolved" });
+    const good = windowState([button], { window_id: 7 });
+    const driver = new FakeDriver([good], [windowRecord({ window_id: 7 })]);
+    let reads = 0;
+    driver.windowState = async () => (++reads >= 3 ? good : degraded);
+    const { run } = executor(driver, [{ operation: "DONE" }]);
+    const outcome = await run.runInstruction(context);
+    expect(outcome.state.elements).toHaveLength(1);
+    expect(reads).toBe(3);
+  });
+
+  it("hands every decision snapshot to onObserve in order", async () => {
+    const driver = new FakeDriver([windowState([button])]);
+    const seen: number[] = [];
+    const run = new Executor({ driver, actionModel: new FakeActionModel([{ operation: "CLICK", targetKey: "3" }, { operation: "DONE" }]), textHelper: new FakeTextHelper([]), settings, sleep: instantSleep, onObserve: (_s, n) => seen.push(n) });
+    await run.runInstruction(context);
+    expect(seen).toEqual([1, 2]);
+  });
+
+  it("keeps the degraded state when nothing better resolves, rather than failing the run", async () => {
+    const degraded = windowState([], { window_id: 7, snapshot_id: null, degraded_reason: "ax_window_unresolved" });
+    const driver = new FakeDriver([degraded], [windowRecord({ window_id: 7 })]);
+    const { run } = executor(driver, [{ operation: "BLOCKED" }]);
+    const outcome = await run.runInstruction(context);
+    expect(outcome.status).toBe("blocked");
+    expect(outcome.state.degraded_reason).toBe("ax_window_unresolved");
+  });
+
+  it("surfaces a refusal outside the ladder as a refused outcome", async () => {
+    const driver = new FakeDriver([windowState([button])]);
+    driver.scroll = async () => {
+      throw new DriverRefusal("scroll", { code: "permissions_pending", message: "gate" });
+    };
+    const { run } = executor(driver, [{ operation: "SCROLL_DOWN" }]);
     const outcome = await run.runInstruction(context);
     expect(outcome.status).toBe("refused");
-    expect(outcome.note).toContain("stale_element_token");
+    expect(outcome.note).toContain("permissions_pending");
   });
 
   it("feeds the recent-action history, including effects and screen changes, back to the action model", async () => {
@@ -192,11 +255,32 @@ describe("Executor.runInstruction", () => {
   });
 });
 
-describe("frontmost", () => {
-  it("prefers on-screen windows and the highest z_index, tolerating null z_index", () => {
-    expect(frontmost([windowRecord({ window_id: 1, z_index: null }), windowRecord({ window_id: 2, z_index: 3 }), windowRecord({ window_id: 3, z_index: 9, is_on_screen: false })])?.window_id).toBe(2);
-    expect(frontmost([windowRecord({ window_id: 3, z_index: 9, is_on_screen: false })])?.window_id).toBe(3);
-    expect(frontmost([])).toBeNull();
+describe("rankWindows and resolveWindow", () => {
+  // The shapes list_windows really returned for Calculator (SONNY-517 probe): menu-bar shims first by z-order.
+  const shim = (id: number, z: number) => windowRecord({ window_id: id, z_index: z, is_on_screen: false, bounds: { x: 1920, y: 0, width: 1920, height: 30 } });
+  const real = windowRecord({ window_id: 104578, z_index: 80, is_on_screen: true, bounds: { x: 467, y: 531, width: 230, height: 408 } });
+
+  it("ranks the on-screen window above the taller-than-a-menu-bar ones above the shims, whatever the z-order says", () => {
+    expect(rankWindows([shim(104589, 251), shim(104588, 250), real, shim(104590, 51)]).map((w) => w.window_id)).toEqual([104578, 104589, 104588, 104590]);
+    const offScreenReal = { ...real, is_on_screen: false };
+    expect(rankWindows([shim(1, 251), offScreenReal])[0]?.window_id).toBe(104578);
+    expect(rankWindows([windowRecord({ window_id: 1, z_index: null, bounds: null }), windowRecord({ window_id: 2, z_index: 3, bounds: null })])[0]?.window_id).toBe(2);
+  });
+
+  it("takes the first candidate whose tree resolves and skips degraded ones and refusals", async () => {
+    const degraded = windowState([], { window_id: 104589, snapshot_id: null, degraded_reason: "ax_window_unresolved" });
+    const good = windowState([button], { window_id: 104578 });
+    const driver = new FakeDriver([good], [shim(104589, 251), real]);
+    driver.windowState = async (_pid, windowId) => {
+      if (windowId === 104589) return degraded;
+      if (windowId === 104578) return good;
+      throw new DriverRefusal("get_window_state", { code: "window_id_not_found" });
+    };
+    // Ranking already puts the real window first; force the shim first to prove the degraded skip.
+    const resolved = await resolveWindow(driver, 42, [shim(104589, 251), { ...real, is_on_screen: false, bounds: null }]);
+    expect(resolved?.window_id).toBe(104578);
+    expect(await resolveWindow(driver, 42, [windowRecord({ window_id: 999 })])).toBeNull();
+    expect(await resolveWindow(driver, 42, [])).toBeNull();
   });
 });
 

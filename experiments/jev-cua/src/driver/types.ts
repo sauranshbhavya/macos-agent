@@ -52,13 +52,16 @@ export const elementSchema = z
     enabled: z.boolean().nullish(),
     focused: z.boolean().nullish(),
     selected: z.boolean().nullish(),
+    /** Set by the driver on elements inside a browser's web area. */
+    in_web_content: z.boolean().nullish(),
   })
   .passthrough();
 export type Element = z.infer<typeof elementSchema>;
 
 export const windowStateSchema = z
   .object({
-    snapshot_id: z.string(),
+    /** Absent on a degraded (empty) tree — measured on Calculator's menu-bar shim window (SONNY-517 probe). */
+    snapshot_id: z.string().nullish(),
     pid: z.number().int(),
     window_id: z.number().int(),
     elements: z.array(elementSchema).default([]),
@@ -107,7 +110,8 @@ export const actionResultSchema = z
     effect: effectSchema,
     route: z.string().nullish(),
     delivery: z.object({ mode: z.string().nullish() }).passthrough().nullish(),
-    evidence: z.union([z.string(), z.record(z.unknown())]).nullish(),
+    /** A string, an object, or an array of `{kind}` records (`[{"kind":"value_readback"}]` from type_text, SONNY-517 live run). */
+    evidence: z.unknown().nullish(),
     escalation: escalationSchema.optional().default(null),
   })
   .passthrough();
@@ -117,7 +121,9 @@ export type ActionResult = z.infer<typeof actionResultSchema>;
 export const refusalSchema = z
   .union([
     z.object({ status: z.literal("refused"), refusal: z.object({ code: z.string(), message: z.string().nullish() }) }),
-    z.object({ code: z.string(), message: z.string().nullish(), effect: z.literal("refused").optional() }),
+    // `effect` here is whatever the driver reports alongside the code — "refused", or "partial" on
+    // `type_text_incomplete` with 0 of N characters delivered (SONNY-517 live run).
+    z.object({ code: z.string(), message: z.string().nullish(), effect: z.string().optional() }),
   ])
   .transform((value) => ("refusal" in value ? value.refusal : { code: value.code, message: value.message }));
 export type Refusal = z.infer<typeof refusalSchema>;

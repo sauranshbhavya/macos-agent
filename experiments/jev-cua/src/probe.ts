@@ -30,8 +30,9 @@ try {
   await new Promise((r) => setTimeout(r, 1500));
   const windows = await driver.call("list_windows", { pid, on_screen_only: false });
   dump("list_windows", windows);
-  const list = (windows.payload as { windows?: Array<{ window_id?: number }> } | null)?.windows ?? [];
-  const windowId = list[0]?.window_id;
+  const list = (windows.payload as { windows?: Array<{ window_id?: number; is_on_screen?: boolean }> } | null)?.windows ?? [];
+  // list_windows also returns the per-display menu-bar shims (30px tall, off screen); the real window is on screen.
+  const windowId = (list.find((w) => w.is_on_screen === true) ?? list[0])?.window_id;
   if (typeof windowId !== "number") {
     throw new Error("list_windows returned no window for the app");
   }

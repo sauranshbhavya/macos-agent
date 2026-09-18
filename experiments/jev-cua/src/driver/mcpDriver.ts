@@ -37,6 +37,12 @@ export class McpDriver implements Driver {
     return parseToolPayload("list_windows", result.isError, result.payload, listWindowsSchema).windows;
   }
 
+  async bringToFront(pid: number, windowId?: number): Promise<void> {
+    // Without a window_id the driver refuses an app with several windows (`ambiguous_window_target`).
+    const result = await this.#connection.call("bring_to_front", { pid, ...(windowId === undefined ? {} : { window_id: windowId }) });
+    if (result.isError) parseToolPayload("bring_to_front", true, result.payload, actionResultSchema);
+  }
+
   async windowState(
     pid: number,
     windowId: number,
@@ -48,7 +54,13 @@ export class McpDriver implements Driver {
       include_screenshot: options.screenshot ?? false,
       ...(options.maxElements === undefined ? {} : { max_elements: options.maxElements }),
     });
-    return parseToolPayload("get_window_state", result.isError, result.payload, windowStateSchema);
+    const state = parseToolPayload("get_window_state", result.isError, result.payload, windowStateSchema);
+    // 0.28.2 sends no window_title; the AXWindow element's label is the title (SONNY-517 probe).
+    if (!state.window_title) {
+      const windowElement = state.elements.find((e) => e.role === "AXWindow" && e.label);
+      if (windowElement?.label) return { ...state, window_title: windowElement.label };
+    }
+    return state;
   }
 
   async click(target: ActionTarget, delivery: DeliveryMode): Promise<ActionResult> {

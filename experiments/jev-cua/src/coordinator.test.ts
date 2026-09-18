@@ -31,8 +31,8 @@ describe("stepsSummary", () => {
       actionsSpent: 2,
       state: windowState([]),
       steps: [
-        { step: 1, instruction: "i", operation: "TYPE_TEXT", targetKey: "9", targetLabel: "From", confidence: 0.9, targetConfidence: 0.8, topOperations: [], modelMs: 1, text: { value: "Zurich", latencyMs: 1, model: "m" }, attempts: [{ rung: "ax", effect: "unverifiable", route: null, escalation: null, verdict: "settled: value_matches", driverMs: 1 }], outcome: "settled", windowChanged: true, observeMs: 1, candidates: 2, truncated: 0, note: null },
-        { step: 2, instruction: "i", operation: "CLICK", targetKey: "3", targetLabel: "Search", confidence: 0.9, targetConfidence: 0.8, topOperations: [], modelMs: 1, text: null, attempts: [{ rung: "px", effect: "suspected_noop", route: null, escalation: null, verdict: "exhausted", driverMs: 1 }], outcome: "exhausted", windowChanged: false, observeMs: 1, candidates: 2, truncated: 0, note: null },
+        { step: 1, instruction: "i", operation: "TYPE_TEXT", targetKey: "9", targetLabel: "From", confidence: 0.9, targetConfidence: 0.8, topOperations: [], modelMs: 1, text: { value: "Zurich", latencyMs: 1, model: "m" }, attempts: [{ rung: "ax", effect: "unverifiable", route: null, escalation: null, verdict: "settled: value_matches", driverMs: 1 }], outcome: "settled", windowChanged: true, observeMs: 1, candidates: 2, truncated: 0, offered: { CLICK: 1, TYPE_TEXT: 1 }, note: null },
+        { step: 2, instruction: "i", operation: "CLICK", targetKey: "3", targetLabel: "Search", confidence: 0.9, targetConfidence: 0.8, topOperations: [], modelMs: 1, text: null, attempts: [{ rung: "px", effect: "suspected_noop", route: null, escalation: null, verdict: "exhausted", driverMs: 1 }], outcome: "exhausted", windowChanged: false, observeMs: 1, candidates: 2, truncated: 0, offered: { CLICK: 1, TYPE_TEXT: 1 }, note: null },
       ],
     };
     expect(stepsSummary(outcome)).toBe(

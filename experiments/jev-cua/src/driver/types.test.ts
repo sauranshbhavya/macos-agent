@@ -9,13 +9,18 @@ describe("parseToolPayload", () => {
       .toThrow(expect.objectContaining({ code: "window_target_not_found" }));
   });
 
+  it("reads a coded refusal whatever effect the driver reports beside it", () => {
+    expect(() => parseToolPayload("type_text", true, { code: "type_text_incomplete", delivered_chars: 0, effect: "partial", requested_chars: 7, retryable: true }, actionResultSchema))
+      .toThrow(expect.objectContaining({ code: "type_text_incomplete" }));
+  });
+
   it("recognises a refusal even when the transport did not flag it as an error", () => {
     expect(() => parseToolPayload("click", false, { status: "refused", refusal: { code: "permissions_pending" } }, actionResultSchema))
       .toThrow(DriverRefusal);
   });
 
   it("names the tool and the first mismatched field when the shape is not one it reads", () => {
-    expect(() => parseToolPayload("get_window_state", false, { pid: 1 }, windowStateSchema)).toThrow(/get_window_state answered a shape .*snapshot_id/);
+    expect(() => parseToolPayload("get_window_state", false, { pid: 1 }, windowStateSchema)).toThrow(/get_window_state answered a shape .*window_id/);
   });
 
   it("wraps an unreadable error payload rather than losing it", () => {
@@ -31,6 +36,12 @@ describe("actionResultSchema", () => {
     expect(actionResultSchema.parse({ effect: "confirmed" }).escalation).toEqual({ recommended: null, reason: null });
     expect(actionResultSchema.parse({ effect: "confirmed", escalation: null }).escalation).toEqual({ recommended: null, reason: null });
     expect(actionResultSchema.parse({ effect: "unverifiable", escalation: { recommended: "unknown_rung" } }).escalation.recommended).toBeNull();
+  });
+
+  it("accepts evidence in every shape the driver has sent: string, object, array of records", () => {
+    expect(actionResultSchema.safeParse({ effect: "confirmed", evidence: "AXValue read-back" }).success).toBe(true);
+    expect(actionResultSchema.safeParse({ effect: "confirmed", evidence: { readback: true } }).success).toBe(true);
+    expect(actionResultSchema.safeParse({ effect: "confirmed", evidence: [{ kind: "value_readback" }], delivery: { delivered_count: 44, mode: "background" } }).success).toBe(true);
   });
 
   it("keeps fields it does not know about", () => {

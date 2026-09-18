@@ -87,6 +87,14 @@ describe("fingerprint", () => {
     expect(fingerprint(base)).not.toBe(fingerprint(windowState([element({ element_index: 1, value: "a" }), element({ element_index: 2 })])));
   });
 
+  it("reads the markdown tree too, since static text is only there, ignoring index tags", () => {
+    const a = windowState([element({ element_index: 1 })], { tree_markdown: '- [0] AXWindow\n    - AXStaticText = "4"\n    - [1] AXButton (8)' });
+    const b = windowState([element({ element_index: 1 })], { tree_markdown: '- [0] AXWindow\n    - AXStaticText = "48"\n    - [1] AXButton (8)' });
+    const c = windowState([element({ element_index: 1 })], { tree_markdown: '- [7] AXWindow\n    - AXStaticText = "4"\n    - [9] AXButton (8)' });
+    expect(fingerprint(a)).not.toBe(fingerprint(b));
+    expect(fingerprint(a)).toBe(fingerprint(c));
+  });
+
   it("ignores frames, so a window that merely moved does not read as changed", () => {
     const a = windowState([element({ element_index: 1, frame: { x: 0, y: 0, w: 10, h: 10 } })]);
     const b = windowState([element({ element_index: 1, frame: { x: 50, y: 50, w: 10, h: 10 } })]);

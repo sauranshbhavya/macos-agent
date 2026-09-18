@@ -88,6 +88,9 @@ export function targetFor(
     const point = pixelTarget(element, state, window);
     return point === null ? null : { kind: "pixel", ...base, ...point };
   }
+  // A degraded tree carries no snapshot_id and offers no elements, so this branch is unreachable
+  // from it; the guard keeps an element action from ever being sent without the snapshot it came from.
+  if (!state.snapshot_id) return null;
   return {
     kind: "element",
     ...base,
@@ -97,12 +100,20 @@ export function targetFor(
   };
 }
 
-/** What "the window changed" compares: title plus every element's index, role, label and value. */
+/**
+ * What "the window changed" compares: the title, every element's index, role, label and value, and
+ * the markdown tree's text. The markdown is not redundant: the driver's `elements` array holds only
+ * actionable rows, so Calculator's display — an AXStaticText — is nowhere in it, and without the
+ * markdown a click that turned "4" into "48" read as no change and climbed the ladder for nothing
+ * (SONNY-517, first live run). Element-index tags are stripped so a re-indexed but identical tree
+ * still reads as unchanged.
+ */
 export function fingerprint(state: WindowState): string {
   const hash = createHash("sha1");
   hash.update(state.window_title ?? "");
   for (const e of state.elements) {
     hash.update(`\n${e.element_index}|${e.role}|${e.label ?? ""}|${e.value ?? ""}|${e.selected ?? ""}|${e.focused ?? ""}`);
   }
+  if (state.tree_markdown) hash.update(`\n${state.tree_markdown.replace(/\[element_index \d+\]|\[\d+\] /g, "")}`);
   return hash.digest("hex");
 }

@@ -70,6 +70,10 @@ export class FakeDriver implements Driver {
     return { pid: 42, bundle_id: bundleId, windows: this.windows };
   }
 
+  async bringToFront(pid: number, windowId?: number): Promise<void> {
+    this.calls.push({ tool: "bring_to_front", target: null, delivery: null, extra: { pid, windowId } });
+  }
+
   async listWindows(): Promise<WindowRecord[]> {
     this.calls.push({ tool: "list_windows", target: null, delivery: null, extra: {} });
     return this.windows;
@@ -121,6 +125,7 @@ export function decision(operation: Operation, target: Candidate | null = null, 
   return {
     operation,
     target,
+    offered: { CLICK: 0, TYPE_TEXT: 0 },
     confidence,
     operationProbabilities: { [operation]: confidence, BLOCKED: 1 - confidence },
     targetConfidence: target ? 0.8 : null,

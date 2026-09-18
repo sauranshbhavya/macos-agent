@@ -38,6 +38,8 @@ export interface StepRecord {
   readonly observeMs: number;
   readonly candidates: number;
   readonly truncated: number;
+  /** Targets per head after the request was fitted to Jev's budget. */
+  readonly offered: Readonly<Record<"CLICK" | "TYPE_TEXT", number>>;
   readonly note: string | null;
 }
 
@@ -66,6 +68,8 @@ export interface ExecutorDeps {
   readonly textHelper: TextHelper;
   readonly settings: ExecutorSettings;
   readonly sleep?: (ms: number) => Promise<void>;
+  /** Called with every snapshot the loop bases a decision on — the CLI writes them beside the report. */
+  readonly onObserve?: (state: WindowState, step: number) => void;
 }
 
 export interface InstructionContext {
@@ -86,6 +90,8 @@ export class Executor {
   #textHelper: TextHelper;
   #settings: ExecutorSettings;
   #sleep: (ms: number) => Promise<void>;
+  #onObserve: (state: WindowState, step: number) => void;
+  #observed = 0;
 
   constructor(deps: ExecutorDeps) {
     this.#driver = deps.driver;
@@ -93,6 +99,7 @@ export class Executor {
     this.#textHelper = deps.textHelper;
     this.#settings = deps.settings;
     this.#sleep = deps.sleep ?? defaultSleep;
+    this.#onObserve = deps.onObserve ?? (() => undefined);
   }
 
   async runInstruction(context: InstructionContext): Promise<InstructionOutcome> {
@@ -104,6 +111,8 @@ export class Executor {
 
     for (;;) {
       windowId = state.window_id;
+      this.#observed += 1;
+      this.#onObserve(state, this.#observed);
       const space = buildActionSpace(state.elements);
       const window = { app: state.app_name ?? null, title: state.window_title ?? null };
       const modelStarted = performance.now();
@@ -239,7 +248,20 @@ export class Executor {
         continue;
       }
       const started = performance.now();
-      const result = await act(target, deliveryFor(rung));
+      let result: ActionResult;
+      try {
+        result = await act(target, deliveryFor(rung));
+      } catch (error) {
+        // A rung the driver refuses is a rung that failed, not a run that failed: the px rung is
+        // refused with px_capture_unavailable whenever screen capture is not consented, and the
+        // ladder still has foreground above it (SONNY-517, first live run).
+        if (!(error instanceof DriverRefusal)) throw error;
+        attempts.push({ rung, effect: "refused", route: null, escalation: null, verdict: `refused: ${error.message.replace(/^\w+ refused: /, "")}`.slice(0, 200), driverMs: Math.round(performance.now() - started) });
+        const next: Rung | undefined = RUNGS[RUNGS.indexOf(rung) + 1];
+        if (next === undefined) return { attempts, outcome: "exhausted" };
+        rung = next;
+        continue;
+      }
       const fresh = await this.#observe(state.pid, state.window_id);
       const verdict = nextRung(rung, result, {
         windowChanged: fingerprint(fresh) !== before,
@@ -264,24 +286,60 @@ export class Executor {
     return this.#driver.typeText(target, value, delivery);
   }
 
-  /** Observe the window; if it is gone, fall back to the app's frontmost window rather than failing the run. */
+  /**
+   * Observe the window; if it is gone or its tree no longer resolves, fall back to whichever of the
+   * app's windows does. A window a button closed can outlive its close as a hidden, degraded window
+   * — TextEdit's Open panel did, after "New Document", while the new Untitled document sat on
+   * screen unobserved for eleven turns (SONNY-517, first live run).
+   */
   async #observe(pid: number, windowId: number): Promise<WindowState> {
+    let degraded: WindowState | null = null;
     try {
-      return await this.#driver.windowState(pid, windowId, { screenshot: false });
+      const state = await this.#driver.windowState(pid, windowId, { screenshot: false });
+      if (state.snapshot_id && !state.degraded_reason) return state;
+      degraded = state;
     } catch (error) {
       if (!(error instanceof DriverRefusal) || error.code !== "window_id_not_found") throw error;
-      const windows = await this.#driver.listWindows(pid);
-      const front = frontmost(windows);
-      if (front === null) throw error;
-      return this.#driver.windowState(pid, front.window_id, { screenshot: false });
     }
+    // An open menu or a page mid-navigation can leave every window unresolved for a moment; a
+    // closed window stays that way. Three tries a half-second apart tell the two apart.
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const resolved = await resolveWindow(this.#driver, pid, await this.#driver.listWindows(pid));
+      if (resolved !== null) return resolved;
+      await this.#sleep(500);
+    }
+    if (degraded !== null) return degraded;
+    throw new DriverRefusal("get_window_state", { code: "window_id_not_found", message: `no window of pid ${pid} resolves` });
   }
 }
 
-export function frontmost(windows: readonly WindowRecord[]): WindowRecord | null {
-  const onScreen = windows.filter((w) => w.is_on_screen !== false);
-  const pool = onScreen.length > 0 ? onScreen : windows;
-  return pool.reduce<WindowRecord | null>((best, w) => (best === null || (w.z_index ?? -1) > (best.z_index ?? -1) ? w : best), null);
+/**
+ * Which of an app's windows to drive. `list_windows` returns the per-display menu-bar shims
+ * (1920x30, off screen, high z_index) beside the real window, and a shim's tree comes back empty
+ * with `degraded_reason: ax_window_unresolved` — measured on Calculator (SONNY-517 probe at
+ * 41a1529d). So candidates are tried in preference order and the first whose tree resolves wins;
+ * a z_index alone would have picked a shim every time.
+ */
+export async function resolveWindow(driver: Driver, pid: number, windows: readonly WindowRecord[]): Promise<WindowState | null> {
+  for (const window of rankWindows(windows).slice(0, 6)) {
+    try {
+      const state = await driver.windowState(pid, window.window_id, { screenshot: false });
+      if (!state.degraded_reason && state.snapshot_id) return state;
+    } catch (error) {
+      if (!(error instanceof DriverRefusal)) throw error;
+    }
+  }
+  return null;
+}
+
+/** On-screen first, then anything taller than a menu bar, then the larger window, then z-order. */
+export function rankWindows(windows: readonly WindowRecord[]): WindowRecord[] {
+  const score = (w: WindowRecord): number => {
+    const b = w.bounds;
+    const area = b ? b.width * b.height : 0;
+    return (w.is_on_screen === true ? 1e12 : 0) + (b && b.height > 40 ? 1e9 : 0) + area + (w.z_index ?? 0) / 1e3;
+  };
+  return [...windows].sort((a, b) => score(b) - score(a));
 }
 
 function attempt(rung: Rung, result: ActionResult, verdict: string, started: number): AttemptRecord {
@@ -330,6 +388,7 @@ function stepBase(step: number, instruction: string, decision: Decision, modelMs
     observeMs: 0,
     candidates,
     truncated,
+    offered: decision.offered,
   };
 }
 

@@ -19,6 +19,8 @@ export type ScrollDirection = "up" | "down" | "left" | "right";
 export interface Driver {
   launchApp(bundleId: string, urls?: readonly string[]): Promise<LaunchResult>;
   listWindows(pid: number): Promise<WindowRecord[]>;
+  /** Activate the app and leave it in front — the one deliberate focus change, taken once at launch. */
+  bringToFront(pid: number, windowId?: number): Promise<void>;
   windowState(pid: number, windowId: number, options?: { screenshot?: boolean; maxElements?: number }): Promise<WindowState>;
   click(target: ActionTarget, delivery: DeliveryMode): Promise<ActionResult>;
   typeText(target: ActionTarget, text: string, delivery: DeliveryMode): Promise<ActionResult>;

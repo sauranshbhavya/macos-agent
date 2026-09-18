@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { runTask, totals, waitForWindow, type Task } from "./agent.ts";
 import type { Coordinator, CoordinatorCall, Plan, ReviewInput, Verdict } from "./coordinator.ts";
 import type { Executor, InstructionContext, InstructionOutcome } from "./executor.ts";
+import { DriverRefusal } from "./driver/types.ts";
 import { element, FakeDriver, instantSleep, windowRecord, windowState } from "./testSupport/fakes.ts";
 
 const task: Task = { id: "t", goal: "do the thing", app: { bundleId: "com.example.app" }, humanCheck: "it is done" };
@@ -32,7 +33,7 @@ function outcome(status: InstructionOutcome["status"], actionsSpent = 1): Instru
     note: status,
     actionsSpent,
     state: windowState([element({ element_index: 1 })]),
-    steps: [{ step: 1, instruction: "i", operation: "CLICK", targetKey: "1", targetLabel: "Element 1", confidence: 0.9, targetConfidence: 0.8, topOperations: [], modelMs: 20, text: null, attempts: [{ rung: "ax", effect: "confirmed", route: null, escalation: null, verdict: "settled: confirmed", driverMs: 30, }], outcome: "settled", windowChanged: true, observeMs: 40, candidates: 1, truncated: 0, note: null }],
+    steps: [{ step: 1, instruction: "i", operation: "CLICK", targetKey: "1", targetLabel: "Element 1", confidence: 0.9, targetConfidence: 0.8, topOperations: [], modelMs: 20, text: null, attempts: [{ rung: "ax", effect: "confirmed", route: null, escalation: null, verdict: "settled: confirmed", driverMs: 30, }], outcome: "settled", windowChanged: true, observeMs: 40, candidates: 1, truncated: 0, offered: { CLICK: 1, TYPE_TEXT: 0 }, note: null }],
   };
 }
 
@@ -51,7 +52,7 @@ class FakeExecutor {
 }
 
 const plan: Plan = { understanding: "u", instructions: ["open it", "press it"], success_criteria: "pressed" };
-const settings = { maxCoordinatorTurns: 5, windowWaitMs: 100 };
+const settings = { maxCoordinatorTurns: 5, windowWaitMs: 100, frontAtLaunch: false };
 
 describe("runTask", () => {
   it("launches, plans, runs instructions in order and stops when the coordinator says done", async () => {
@@ -70,6 +71,43 @@ describe("runTask", () => {
     expect(coordinator.reviews[1]?.remainingInstructions).toEqual([]);
     expect(report.totals).toMatchObject({ actions: 3, coordinatorCalls: 3, coordinatorMs: 30, jevCalls: 2, jevMs: 40, driverMs: 60, observeMs: 80, rungs: { ax: 2, px: 0, foreground: 0 } });
     expect(report.finalScreen).toContain("[1] button: Element 1");
+  });
+
+  it("fronts the app once at launch when asked, naming its best-ranked window", async () => {
+    const driver = new FakeDriver([windowState([element({ element_index: 1 })])]);
+    const coordinator = new FakeCoordinator(plan, [{ assessment: "ok", verdict: "done", next_instruction: null }]);
+    await runTask(task, { driver, coordinator, executor: new FakeExecutor([outcome("done")]) as unknown as Executor, settings: { ...settings, frontAtLaunch: true }, sleep: instantSleep });
+    const tools = driver.calls.map((c) => c.tool);
+    expect(tools.indexOf("bring_to_front")).toBeGreaterThan(tools.indexOf("launch_app"));
+    expect(driver.calls.filter((c) => c.tool === "bring_to_front")).toEqual([expect.objectContaining({ extra: { pid: 42, windowId: 7 } })]);
+  });
+
+  it("falls back through the ranked windows and then the app alone when fronting is refused, and carries on", async () => {
+    const driver = new FakeDriver([windowState([element({ element_index: 1 })])], [windowRecord({ window_id: 7 }), windowRecord({ window_id: 8, z_index: 0 })]);
+    const refused: Array<number | undefined> = [];
+    driver.bringToFront = async (_pid, windowId) => {
+      refused.push(windowId);
+      if (windowId !== undefined) throw new DriverRefusal("bring_to_front", { code: "bring_to_front_exact_window_unverified" });
+    };
+    const lines: string[] = [];
+    const report = await runTask(task, { driver, coordinator: new FakeCoordinator(plan, [{ assessment: "ok", verdict: "done", next_instruction: null }]), executor: new FakeExecutor([outcome("done")]) as unknown as Executor, settings: { ...settings, frontAtLaunch: true }, sleep: instantSleep, log: (l) => lines.push(l) });
+    expect(refused).toEqual([7, 8, undefined]);
+    refused.length = 0;
+    let calls = 0;
+    driver.bringToFront = async () => {
+      calls += 1;
+      if (calls < 5) throw new DriverRefusal("bring_to_front", { code: "bring_to_front_exact_window_unverified" });
+    };
+    const late = await runTask(task, { driver, coordinator: new FakeCoordinator(plan, [{ assessment: "ok", verdict: "done", next_instruction: null }]), executor: new FakeExecutor([outcome("done")]) as unknown as Executor, settings: { ...settings, frontAtLaunch: true }, sleep: instantSleep, log: (l) => lines.push(l) });
+    expect(late.status).toBe("done");
+    expect(calls).toBe(5);
+    expect(report.status).toBe("done");
+    driver.bringToFront = async () => {
+      throw new DriverRefusal("bring_to_front", { code: "ambiguous_window_target" });
+    };
+    const still = await runTask(task, { driver, coordinator: new FakeCoordinator(plan, [{ assessment: "ok", verdict: "done", next_instruction: null }]), executor: new FakeExecutor([outcome("done")]) as unknown as Executor, settings: { ...settings, frontAtLaunch: true }, sleep: instantSleep, log: (l) => lines.push(l) });
+    expect(still.status).toBe("done");
+    expect(lines.some((l) => l.includes("could not bring"))).toBe(true);
   });
 
   it("lets the coordinator replace the planned instruction with a better one", async () => {
@@ -108,11 +146,30 @@ describe("runTask", () => {
     expect(budget.instructions[0]?.review).toBeNull();
   });
 
+  it("fails after three BLOCKED answers in a row with nothing acted on, whatever the coordinator says", async () => {
+    const driver = new FakeDriver([windowState([])]);
+    const keepGoing = Array.from({ length: 5 }, (): Verdict => ({ assessment: "try again", verdict: "continue", next_instruction: "again" }));
+    const executor = new FakeExecutor(Array.from({ length: 5 }, () => outcome("blocked", 0)));
+    const report = await runTask(task, { driver, coordinator: new FakeCoordinator(plan, keepGoing), executor: executor as unknown as Executor, settings, sleep: instantSleep });
+    expect(report.status).toBe("failed");
+    expect(report.reason).toContain("three instructions in a row");
+    expect(report.instructions).toHaveLength(3);
+    expect(report.instructions[2]?.review).toBeNull();
+  });
+
+  it("resets the blocked count when an instruction acts", async () => {
+    const driver = new FakeDriver([windowState([])]);
+    const verdicts = Array.from({ length: 5 }, (): Verdict => ({ assessment: "on", verdict: "continue", next_instruction: "again" }));
+    const executor = new FakeExecutor([outcome("blocked", 0), outcome("blocked", 0), outcome("done", 1), outcome("blocked", 0), outcome("blocked", 0)]);
+    const report = await runTask(task, { driver, coordinator: new FakeCoordinator(plan, verdicts), executor: executor as unknown as Executor, settings, sleep: instantSleep });
+    expect(report.status).toBe("turn_budget");
+  });
+
   it("reports an error rather than throwing when the app shows no window or a call fails", async () => {
     const driver = new FakeDriver([windowState([])], []);
     const report = await runTask(task, { driver, coordinator: new FakeCoordinator(plan, []), executor: new FakeExecutor([]) as unknown as Executor, settings: { ...settings, windowWaitMs: 0 }, sleep: instantSleep });
     expect(report.status).toBe("error");
-    expect(report.reason).toContain("showed no window");
+    expect(report.reason).toContain("none of its windows resolved");
 
     const throwing = new FakeDriver([windowState([])]);
     throwing.launchApp = async () => {
@@ -124,7 +181,7 @@ describe("runTask", () => {
 });
 
 describe("waitForWindow", () => {
-  it("polls list_windows until a window appears and gives up at the deadline", async () => {
+  it("polls list_windows until a window resolves and gives up at the deadline", async () => {
     const driver = new FakeDriver([windowState([])], []);
     let polls = 0;
     driver.listWindows = async () => {

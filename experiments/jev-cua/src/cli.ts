@@ -58,6 +58,9 @@ const driver = await McpDriver.open();
 
 try {
   for (const task of tasks) {
+    const startedAt = new Date().toISOString().replace(/[:.]/g, "-");
+    const snapshotDir = resolve(runsDir, `${task.id}-${startedAt}-snapshots`);
+    mkdirSync(snapshotDir, { recursive: true });
     const executor = new Executor({
       driver,
       actionModel: new JevActionModel(typesafe),
@@ -68,15 +71,17 @@ try {
         waitMs: 500,
         settleMs: 150,
       },
+      // Every snapshot a decision was made on, so a wrong pick can be read against what was offered.
+      onObserve: (state, n) => writeFileSync(resolve(snapshotDir, `${String(n).padStart(3, "0")}.json`), JSON.stringify(state, null, 1)),
     });
     const report = await runTask(task, {
       driver,
       coordinator: new OpenAICoordinator(openai, config.COORDINATOR_MODEL),
       executor,
-      settings: { maxCoordinatorTurns: config.MAX_COORDINATOR_TURNS, windowWaitMs: 10_000 },
+      settings: { maxCoordinatorTurns: config.MAX_COORDINATOR_TURNS, windowWaitMs: 10_000, frontAtLaunch: true },
       log: (line) => console.log(line),
     });
-    const file = resolve(runsDir, `${task.id}-${report.startedAt.replace(/[:.]/g, "-")}.json`);
+    const file = resolve(runsDir, `${task.id}-${startedAt}.json`);
     writeFileSync(file, JSON.stringify({ tree: stamp, models: { coordinator: config.COORDINATOR_MODEL, text: config.TEXT_MODEL, jev: config.TYPESAFE_MODEL }, ...report }, null, 2));
     console.log(`\n${summarise(report)}\n  report: ${file}\n`);
   }

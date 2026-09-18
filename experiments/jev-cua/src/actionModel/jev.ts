@@ -2,6 +2,8 @@ import { choice, type ChoiceQuestion, type EntryType, type TypeSafeClient } from
 import { z } from "zod";
 import {
   CONTROL_OPERATIONS,
+  limitTargets,
+  offeredCandidates,
   TARGETED_OPERATIONS,
   type ActionSpace,
   type Candidate,
@@ -35,6 +37,8 @@ export interface ActionModelInput {
 export interface Decision {
   readonly operation: Operation;
   readonly target: Candidate | null;
+  /** How many targets each head offered after fitting the request to Jev's budget. */
+  readonly offered: Readonly<Record<TargetedOperation, number>>;
   /** The operation head's confidence — what the executor thresholds. */
   readonly confidence: number;
   readonly operationProbabilities: Readonly<Record<string, number>>;
@@ -51,7 +55,7 @@ export interface ActionModel {
 
 const OPERATION_LABELS: Record<Operation, string> = {
   CLICK: "Click an offered element: a button, link, menu item, checkbox, tab, row, suggestion or calendar day.",
-  TYPE_TEXT: "Enter or replace text in an offered editable field. A helper model supplies the value from the goal.",
+  TYPE_TEXT: "Enter or replace text in an offered editable field on the page or window, not the browser toolbar. A helper model supplies the value from the goal. A combo box that refused typing is a dropdown: CLICK it instead.",
   PRESS_RETURN: "Press Return to submit or confirm the focused field, search or dialog.",
   PRESS_ESCAPE: "Press Escape to close an open menu, sheet, popover or dialog.",
   SCROLL_DOWN: "Scroll the window down because the needed control is plausibly below the visible area.",
@@ -133,7 +137,9 @@ export function buildRequest(input: ActionModelInput): {
     instruction: input.instruction,
     goal: input.goal,
     window: { app: input.window.app, title: input.window.title },
-    elements: space.candidates.map((c) => ({
+    // Only what Jev can pick: a candidate past every cap cannot be chosen, so listing it is tokens
+    // for nothing — 1,122 of them on Wikipedia's main page blew the request past Jev's budget.
+    elements: offeredCandidates(space).map((c) => ({
       index: c.key,
       role: c.role,
       label: c.label,
@@ -151,6 +157,27 @@ export function buildRequest(input: ActionModelInput): {
   return { state, questions, operations };
 }
 
+/**
+ * Jev 1.13 takes 64k tokens per request and 32k for the state plus its longest question
+ * (docs.typesafe.ai/models). Characters over four is a coarse token estimate, so the budget sits
+ * well under the limit; a request over it halves the per-operation target cap until it fits.
+ */
+export const REQUEST_BUDGET_CHARS = 90_000;
+const MIN_TARGETS = 16;
+
+export function fitToBudget(input: ActionModelInput, budgetChars: number = REQUEST_BUDGET_CHARS): { input: ActionModelInput; request: ReturnType<typeof buildRequest> } {
+  let space = input.space;
+  let maxTargets = Math.max(...TARGETED_OPERATIONS.map((op) => Object.keys(space.targets[op]).length), MIN_TARGETS);
+  for (;;) {
+    const request = buildRequest({ ...input, space });
+    const stateChars = JSON.stringify(request.state).length;
+    const longestQuestion = Math.max(...Object.values(request.questions).map((q) => JSON.stringify(q).length));
+    if (stateChars + longestQuestion <= budgetChars || maxTargets <= MIN_TARGETS) return { input: { ...input, space }, request };
+    maxTargets = Math.max(MIN_TARGETS, Math.floor(maxTargets / 2));
+    space = limitTargets(space, maxTargets);
+  }
+}
+
 export class JevActionModel implements ActionModel {
   #client: TypeSafeClient;
   #model: string | undefined;
@@ -160,8 +187,9 @@ export class JevActionModel implements ActionModel {
     this.#model = model;
   }
 
-  async choose(input: ActionModelInput): Promise<Decision> {
-    const { state, questions, operations } = buildRequest(input);
+  async choose(original: ActionModelInput): Promise<Decision> {
+    const { input, request } = fitToBudget(original);
+    const { state, questions, operations } = request;
     const started = performance.now();
     const result = await this.#client.systemOne({
       state,
@@ -185,6 +213,7 @@ export class JevActionModel implements ActionModel {
     return {
       operation,
       target,
+      offered: { CLICK: Object.keys(input.space.targets.CLICK).length, TYPE_TEXT: Object.keys(input.space.targets.TYPE_TEXT).length },
       confidence: operationAnswer.confidence,
       operationProbabilities: operationAnswer.probabilities,
       targetConfidence: targetAnswer?.confidence ?? null,
