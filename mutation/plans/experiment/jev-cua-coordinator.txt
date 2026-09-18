@@ -1,0 +1,129 @@
+# SONNY-517 — the Jev + cua experiment under experiments/jev-cua. Property: the action model can
+# only ever pick an offered key whose distribution is well-formed; a password field is never a
+# typing target; the target head is capped at the Choice limit and the cap is counted; the ladder
+# settles on evidence and climbs only upward, mapping a page recommendation to foreground; the
+# executor stalls after three unmoving actions, lets DONE through at any confidence, selects
+# existing text before replacing it, and refuses the text helper's malformed output; the run loop
+# consumes a planned instruction only when the coordinator chose it; a refusal is a refusal even
+# when the transport did not flag it; and pixel aim applies the screenshot scale.
+#
+# This is a server-style battery: run it with
+#   MUTATE_TEST_CMD='cd experiments/jev-cua && npx vitest run' scripts/mutate mutation/plans/experiment/jev-cua-coordinator.txt
+# Founder-triggered, never run on the branch (decided 2026-09-10). Killers expected, hand-traced
+# at 8dfca9cf plus the text-helper test file added after it:
+#   J1 jev.test "a choice that is not the argmax"        J2 jev.test "a distribution that does not sum to one"
+#   A1 actionSpace.test "never offers a password field"   A2 actionSpace.test "caps each operation at the Choice limit"
+#   L1 ladder.test "follows the driver's recommendation"  L2 ladder.test "settles on evidence from the fresh snapshot"
+#   L3 ladder.test "maps a screen-absolute frame centre"  L4 ladder.test "has no px rung for it" and executor.test "skips the px rung for a key"
+#   E1 executor.test "calls a stall after three actions"  E2 executor.test "accepts DONE at any confidence"
+#   E3 executor.test "does not select-all into an empty field"   T1 textHelper.test "refuses a value over 2000 characters"
+#   G1 agent.test "launches, plans, runs instructions in order"  D1 types.test "recognises a refusal even when the transport did not flag it"
+
+>>> mutant J1 the argmax check dropped from validateChoice
+>>> file experiments/jev-cua/src/actionModel/jev.ts
+>>> from
+  if (!offered.has(picked) || !covers || !finite || Math.abs(sum - 1) >= 0.02 || chosen === undefined || chosen < max - 1e-6) {
+>>> to
+  if (!offered.has(picked) || !covers || !finite || Math.abs(sum - 1) >= 0.02 || chosen === undefined) {
+>>> end
+
+>>> mutant J2 the sum-to-one tolerance widened to accept anything
+>>> file experiments/jev-cua/src/actionModel/jev.ts
+>>> from
+  if (!offered.has(picked) || !covers || !finite || Math.abs(sum - 1) >= 0.02 || chosen === undefined || chosen < max - 1e-6) {
+>>> to
+  if (!offered.has(picked) || !covers || !finite || Math.abs(sum - 1) >= 2 || chosen === undefined || chosen < max - 1e-6) {
+>>> end
+
+>>> mutant A1 a password field offered as a typing target
+>>> file experiments/jev-cua/src/actionSpace.ts
+>>> from
+  if (TEXT_ROLES.has(role) && !NEVER_TYPE_ROLES.has(role)) operations.push("TYPE_TEXT");
+>>> to
+  if (TEXT_ROLES.has(role) || NEVER_TYPE_ROLES.has(role)) operations.push("TYPE_TEXT");
+>>> end
+
+>>> mutant A2 the target cap off by one
+>>> file experiments/jev-cua/src/actionSpace.ts
+>>> from
+      if (Object.keys(group).length >= MAX_TARGETS_PER_OPERATION) {
+>>> to
+      if (Object.keys(group).length > MAX_TARGETS_PER_OPERATION) {
+>>> end
+
+>>> mutant L1 a page recommendation climbs to px instead of foreground
+>>> file experiments/jev-cua/src/ladder.ts
+>>> from
+    return climbTo("foreground", `driver recommended page (not built); climbing to foreground: ${result.escalation.reason ?? ""}`);
+>>> to
+    return climbTo("px", `driver recommended page (not built); climbing to foreground: ${result.escalation.reason ?? ""}`);
+>>> end
+
+>>> mutant L2 a changed window no longer settles the ladder
+>>> file experiments/jev-cua/src/ladder.ts
+>>> from
+  if (evidence.windowChanged) return { kind: "settled", reason: "window_changed" };
+>>> to
+>>> end
+
+>>> mutant L3 the screenshot scale not applied to the pixel x
+>>> file experiments/jev-cua/src/ladder.ts
+>>> from
+    x: Math.round((frame.x + frame.w / 2 - bounds.x) * scale),
+>>> to
+    x: Math.round(frame.x + frame.w / 2 - bounds.x),
+>>> end
+
+>>> mutant L4 a key press given a px rung that repeats the ax call
+>>> file experiments/jev-cua/src/ladder.ts
+>>> from
+  if (element === null) return rung === "px" ? null : { kind: "focused", ...base };
+>>> to
+  if (element === null) return { kind: "focused", ...base };
+>>> end
+
+>>> mutant E1 the stall threshold raised to four
+>>> file experiments/jev-cua/src/executor.ts
+>>> from
+      if (recent.length === 3 && recent.every((h) => h.windowChanged === false && h.operation !== "WAIT")) {
+>>> to
+      if (recent.length === 4 && recent.every((h) => h.windowChanged === false && h.operation !== "WAIT")) {
+>>> end
+
+>>> mutant E2 the confidence floor applied to DONE as well
+>>> file experiments/jev-cua/src/executor.ts
+>>> from
+      if (decision.confidence < this.#settings.minOperationConfidence && decision.operation !== "DONE") {
+>>> to
+      if (decision.confidence < this.#settings.minOperationConfidence) {
+>>> end
+
+>>> mutant E3 select-all sent to every field, empty ones included
+>>> file experiments/jev-cua/src/executor.ts
+>>> from
+    if (field.value && target.kind === "element") {
+>>> to
+    if (target.kind === "element") {
+>>> end
+
+>>> mutant T1 the text helper's length cap removed
+>>> file experiments/jev-cua/src/actionModel/textHelper.ts
+>>> from
+  if (text.trim().length === 0 || text.length > 2000) {
+>>> to
+  if (text.trim().length === 0) {
+>>> end
+
+>>> mutant G1 a planned instruction never consumed when the coordinator picks it
+>>> file experiments/jev-cua/src/agent.ts
+>>> from
+      if (queue[0] === next) queue.shift();
+>>> to
+>>> end
+
+>>> mutant D1 a refusal the transport did not flag read as a shape mismatch
+>>> file experiments/jev-cua/src/driver/types.ts
+>>> from
+    if (refusal.success) throw new DriverRefusal(tool, refusal.data);
+>>> to
+>>> end
