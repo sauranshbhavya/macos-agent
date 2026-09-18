@@ -14,6 +14,9 @@
 # three checks that round added. Round 3 (the founders' decision C) replaced the pack's own signInURL with
 # a fixed list of identity hosts, re-anchored M2, M3, M13, K3 and K5 on it, and added I1 to I3 for the
 # list itself: a host that forgets which sites it signs in for, a host nobody read, a host dropped.
+# Round 4 (the full review) added I4, its own widening mutant, which the first version of the list's
+# population test let through because that test read its expected answer out of the list, and I5, which
+# narrows the sign-in-only check back to off-site landings.
 #
 # **What a plan of this shape cannot do**, as the review put it: every mutant here deletes or narrows a
 # guard that exists, so none can find a guard that was never written.
@@ -129,9 +132,9 @@
 >>> mutant M13 an identity host admits any word again: a Google product's landing on accounts.google.com loads as product (review-272's F3)
 >>> file Sources/MacAgentCore/SkillPackStartPages.swift
 >>> from
-                guard page.offers == .signIn else {
-                    throw SkillPackLoadError.identityHostLandingIsNotSignIn(url: url, host: landedHost)
-                }
+            if identityHosts[landedHost] != nil, page.offers != .signIn {
+                throw SkillPackLoadError.identityHostLandingIsNotSignIn(url: url, host: landedHost)
+            }
 >>> to
 >>> end
 
@@ -207,4 +210,20 @@
 >>> from
         "app.frontapp.com": ["front.com"],
 >>> to
+>>> end
+
+>>> mutant I4 the full review's widening mutant: Google's sign-in host paired with every .com site, so a Figma pack landing there loads
+>>> file Sources/MacAgentCore/SkillPackStartPages.swift
+>>> from
+        "accounts.google.com": ["google.com", "youtube.com"],
+>>> to
+        "accounts.google.com": ["google.com", "youtube.com", "com"],
+>>> end
+
+>>> mutant I5 the sign-in-only check narrowed back to off-site landings: the Google pack, on google.com, may land on accounts.google.com as product (the full review's F4)
+>>> file Sources/MacAgentCore/SkillPackStartPages.swift
+>>> from
+            if identityHosts[landedHost] != nil, page.offers != .signIn {
+>>> to
+            if !SkillPackDecoder.isOnSite(host: landedHost, domain: domain), identityHosts[landedHost] != nil, page.offers != .signIn {
 >>> end

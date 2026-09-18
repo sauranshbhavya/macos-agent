@@ -1104,28 +1104,53 @@ struct SkillPackTests {
         ) == .identityHostLandingIsNotSignIn(url: "https://meet.google.com/landing", host: "accounts.google.com"))
         // On the pack's own site `product` is still a word a landing may say.
         #expect(Self.landing(start: "https://www.notion.so/", landed: "https://app.notion.so/", offers: "product") == nil)
+        // A site Google's sign-in host does not sign in for is refused there, naming that site (the
+        // full review's widening mutant loaded exactly this).
+        #expect(Self.landing(
+            start: "https://www.figma.com/", landed: "https://accounts.google.com/v3/signin/identifier",
+            domain: "figma.com", signIn: nil
+        ) == .landedOnUnpairedHost(url: "https://www.figma.com/", host: "accounts.google.com", site: "figma.com"))
+        // A listed identity host admits a sign-in page only even on the pack's own site: the Google
+        // pack's domain is google.com, so accounts.google.com is its own site (the full review's F4).
+        #expect(Self.landing(
+            start: "https://myaccount.google.com/", landed: "https://accounts.google.com/v3/signin/identifier", offers: "product",
+            domain: "google.com", signIn: nil
+        ) == .identityHostLandingIsNotSignIn(url: "https://myaccount.google.com/", host: "accounts.google.com"))
+        #expect(Self.landing(
+            start: "https://myaccount.google.com/", landed: "https://accounts.google.com/v3/signin/identifier",
+            domain: "google.com", signIn: nil
+        ) == nil)
     }
 
-    /// **The identity-host list is the population the sweep found, and no more.** Every listed host is
-    /// one a shipped start page lands on, and every site listed for it has a shipped pack landing there,
-    /// so an entry cannot outlive the packs it was read from, and an entry nobody read cannot be added.
-    /// The walk must reach something, or an empty population would pass as a clean one.
+    /// **The identity-host list is exactly the landings the shipped packs make, and its expected answer
+    /// never comes from the list.** For every shipped pack file, read as raw JSON rather than through
+    /// the loader (which consults the list), every start page that lands off its pack's own site
+    /// contributes its landed host, paired with the pack's registrable site: the last two labels of its
+    /// domain, `mail.google.com` → `google.com`. That map, built without reading
+    /// `SkillPackStartPageRule.identityHosts`, must equal the list. So a site added to a host nobody
+    /// lands from fails here, a host added that no pack lands on fails here, and a pairing a pack needs
+    /// fails `everyShippedPackLoads…` instead. The first version of this test read each host's sites
+    /// out of the list inside its own loop and compared the list with itself, and the full review's
+    /// mutant pairing Google's sign-in host with every `.com` site passed it (SONNY-388's trap).
     @Test
-    func everyIdentityHostIsOneAShippedStartPageLandsOn() throws {
-        let catalogue = SkillPackCatalog.load(fileURLs: SkillPackCatalog.packFileURLs(in: Self.shippedPacksDirectory))
-        var used: [String: Set<String>] = [:]
-        for pack in catalogue.packs {
-            for page in pack.startPages {
-                let host = (page.landedURL.host ?? "").lowercased()
-                guard !SkillPackDecoder.isOnSite(host: host, domain: pack.domain) else { continue }
-                let sites = SkillPackStartPageRule.identityHosts[host] ?? []
-                used[host, default: []].formUnion(sites.filter { SkillPackDecoder.isOnSite(host: pack.domain.lowercased(), domain: $0) })
+    func theIdentityHostListIsExactlyTheLandingsTheShippedPacksMake() throws {
+        let files = SkillPackCatalog.packFileURLs(in: Self.shippedPacksDirectory)
+        var landings: [String: Set<String>] = [:]
+        for file in files {
+            let parsed = try JSONSerialization.jsonObject(with: Data(contentsOf: file))
+            let object = try #require(parsed as? [String: Any])
+            let domain = try #require(object["domain"] as? String).lowercased()
+            for page in object["startPages"] as? [[String: Any]] ?? [] {
+                let landedText = try #require(page["landedURL"] as? String)
+                let landed = try #require(URL(string: landedText))
+                let host = (landed.host ?? "").lowercased()
+                guard host != domain, !host.hasSuffix("." + domain) else { continue }
+                landings[host, default: []].insert(domain.split(separator: ".").suffix(2).joined(separator: "."))
             }
         }
-        #expect(!used.isEmpty, "no shipped start page lands off its own site")
-        for (host, sites) in SkillPackStartPageRule.identityHosts {
-            #expect(used[host] == sites, "\(host) lists \(sites.sorted()), and shipped packs land there from \((used[host] ?? []).sorted())")
-        }
+        #expect(files.count > 100, "the walk found \(files.count) pack files")
+        #expect(!landings.isEmpty, "no shipped start page lands off its own site")
+        #expect(SkillPackStartPageRule.identityHosts == landings)
     }
 
     /// Every spelling of account creation `accountCreationParts` folds together, in the landed path, in
@@ -1239,6 +1264,11 @@ struct SkillPackTests {
             #expect(withField("read", read) == .wrongType("startPages[0].read"), "\(read)")
         }
         #expect(withField("signedIn", true) == .unknownField("startPages[0].signedIn"))
+        // A racing page records its other titles; the field is optional, and never empty when present.
+        #expect(withField("otherTitles", ["Otter Voice Meeting Notes - Otter.ai"]) == nil)
+        #expect(withField("otherTitles", "Otter Voice Meeting Notes - Otter.ai") == .wrongType("startPages[0].otherTitles"))
+        #expect(withField("otherTitles", [String]()) == .missingField("startPages[0].otherTitles"))
+        #expect(withField("otherTitles", ["  "]) == .missingField("startPages[0].otherTitles"))
 
         var notAList = SkillPackFixtures.object()
         notAList["startPages"] = SkillPackFixtures.startPage()

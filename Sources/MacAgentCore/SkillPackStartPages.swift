@@ -19,17 +19,20 @@ import Foundation
 /// state and return values, and a record is read by whoever opens the pack next. `title` is that
 /// page's document title once it has settled, read after arriving through `url` the way the flow
 /// arrives and not by opening `landedURL` fresh, because a redirect can race the title's update
-/// (Otter's and DeepL's each show a second title for a moment). `heading` is the text of the first
-/// `h1` or `h2`, in document order, that a visitor can see: one with rendered area, not
-/// `display: none`, not `visibility: hidden`, not clipped to nothing the way a screen-reader-only
-/// heading is, and carrying text. So a hidden cookie dialog's heading is not the page's (Cloudinary's
-/// "Privacy Preference Center"), and a visible promotion's is (Klaviyo's). Opacity is deliberately not
-/// read: a card that fades in sits at opacity 0 in a window that is not on screen, and a reading taken
-/// there would call Clerk's and Discord's headings hidden (founders' definition, 2026-09-18, on
-/// SONNY-510). Each is `""` when the page has none (X's log-in page has no title), and the two are what a
-/// later reader re-opens the page and compares against: a single-page app keeps one title across its
-/// routes, so the title alone can agree with a page that is not the one it names. `offers` is what the
-/// page offered that visitor, in one of two words, and `read` is the date of the reading.
+/// (Otter's and DeepL's each show a second title for a moment). A page that races records every other
+/// title it was read reporting in `otherTitles`, because one reading of a race is a sample and not a
+/// fact; the field is absent for a page that does not race, and no refusal reads either title.
+/// `heading` is the text of the first `h1` or `h2`, in document order, that a visitor can see: one with
+/// rendered area, not `display: none`, not `visibility: hidden`, not clipped to nothing the way a
+/// screen-reader-only heading is, and carrying text. So a hidden cookie dialog's heading is not the
+/// page's (Cloudinary's "Privacy Preference Center"), and a visible promotion's is (Klaviyo's). Opacity
+/// is deliberately not read: a card that fades in sits at opacity 0 in a window that is not on screen,
+/// and a reading taken there would call Clerk's and Discord's headings hidden (founders' definition,
+/// 2026-09-18, on SONNY-510). Each is `""` when the page has none (X's log-in page has no title), and
+/// the two are what a later reader re-opens the page and compares against: a single-page app keeps one
+/// title across its routes, so the title alone can agree with a page that is not the one it names.
+/// `offers` is what the page offered that visitor, in one of two words, and `read` is the date of the
+/// reading.
 ///
 /// **Every reading is signed out, and how a page must be read is `CLAUDE.md`'s**, in its Claims and
 /// evidence section, which is not restated here: a browser, a profile with no sign-ins, the landed page
@@ -78,9 +81,10 @@ import Foundation
 ///
 /// **What the loader checks, and what it cannot** (`SkillPackStartPageRule`). It checks that the record
 /// exists for every start URL and for nothing else; that a landing carries no query, in the URL or in its
-/// fragment; that the landed host is the pack's own site or, for a record that says `sign-in`, a listed
-/// identity host that signs in for the pack's site (`SkillPackStartPageRule.identityHosts`) — which is
-/// what catches `ads.google.com/` landing on `business.google.com`, whatever the pack's `signInURL` says;
+/// fragment; that the landed host is the pack's own site or a listed identity host that signs in for the
+/// pack's site (`SkillPackStartPageRule.identityHosts`) — which is what catches `ads.google.com/` landing
+/// on `business.google.com`, whatever the pack's `signInURL` says — and that any landing on a listed
+/// identity host, on the pack's own site or off it, says `sign-in`;
 /// that neither URL names account creation in its path, fragment or (for the declared one) query, which
 /// is what catches Ghost's `/signup` even when a reader has written `sign-in` beside it; and which word
 /// `offers` is. It cannot check that `offers` is true of the page —
@@ -90,15 +94,26 @@ public struct SkillPackStartPage: Equatable, Sendable {
     public let url: URL
     public let landedURL: URL
     public let title: String
+    /// The other titles a page reported on its way to `title`, when it races; empty otherwise.
+    public let otherTitles: [String]
     public let heading: String
     public let offers: SkillPackStartPageOffer
     /// `YYYY-MM-DD`.
     public let read: String
 
-    public init(url: URL, landedURL: URL, title: String, heading: String, offers: SkillPackStartPageOffer, read: String) {
+    public init(
+        url: URL,
+        landedURL: URL,
+        title: String,
+        otherTitles: [String] = [],
+        heading: String,
+        offers: SkillPackStartPageOffer,
+        read: String
+    ) {
         self.url = url
         self.landedURL = landedURL
         self.title = title
+        self.otherTitles = otherTitles
         self.heading = heading
         self.offers = offers
         self.read = read
@@ -131,7 +146,7 @@ enum SkillPackStartPageRule {
     /// admitted only for a record that says `sign-in`, and only when the pack's `domain` is on one of
     /// those sites, so Google's sign-in host admits a Google pack and not Notion's. The list is the whole
     /// population the second round's sweep found, nine hosts for nineteen landings, and
-    /// `everyIdentityHostIsOneAShippedStartPageLandsOn` holds that it stays exactly that.
+    /// `theIdentityHostListIsExactlyTheLandingsTheShippedPacksMake` holds that it stays exactly that.
     ///
     /// **The refusal is the point.** A pack whose start page lands on a host not listed here does not
     /// load, so somebody sees it. The allowance this replaced read the pack's own `signInURL`, which the
@@ -191,11 +206,13 @@ enum SkillPackStartPageRule {
                 guard signsIn(on: landedHost, forPackOn: domain) else {
                     throw SkillPackLoadError.landedOnUnpairedHost(url: url, host: landedHost, site: domain.lowercased())
                 }
-                // An identity host admits a sign-in page and nothing else (review-272's F3): a `product`
-                // record there is a reader's mistake, not a page Sonny can start a task on.
-                guard page.offers == .signIn else {
-                    throw SkillPackLoadError.identityHostLandingIsNotSignIn(url: url, host: landedHost)
-                }
+            }
+            // An identity host admits a sign-in page and nothing else (review-272's F3): a `product`
+            // record there is a reader's mistake, not a page Sonny can start a task on. It is asked of
+            // every landing on a listed host, on the pack's own site too, because the Google pack's
+            // domain is `google.com` and `accounts.google.com` is its own site.
+            if identityHosts[landedHost] != nil, page.offers != .signIn {
+                throw SkillPackLoadError.identityHostLandingIsNotSignIn(url: url, host: landedHost)
             }
             for named in [page.url, page.landedURL] where namesAccountCreation(named) {
                 throw SkillPackLoadError.startPageCreatesAnAccount(url: named.absoluteString)

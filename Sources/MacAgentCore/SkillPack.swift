@@ -207,8 +207,8 @@ public enum SkillPackLoadError: Error, Equatable, Sendable {
     /// a time: the fix is either the record (the page landed somewhere a flow may not start) or, when
     /// `host` really is where `site` signs in, the pairing `host` → `site` added after reading the page.
     case landedOnUnpairedHost(url: String, host: String, site: String)
-    /// `host` is paired with the pack's site, and the record landing there says `product`: an identity
-    /// host admits a sign-in page and nothing else.
+    /// `host` is a listed identity host, on or off the pack's own site, and the record landing there
+    /// says `product`: an identity host admits a sign-in page and nothing else.
     case identityHostLandingIsNotSignIn(url: String, host: String)
     case startPageCreatesAnAccount(url: String)
     /// `field` is `summary`, `sections[n]` or `flows[n]`; `words` is what moved money — a money verb,
@@ -320,7 +320,7 @@ public enum SkillPackDecoder {
         "triggers", "sections", "depth", "flows", "startPages"
     ]
     static let flowFields: Set<String> = ["title", "startURL", "steps", "source"]
-    static let startPageFields: Set<String> = ["url", "landedURL", "title", "heading", "offers", "read"]
+    static let startPageFields: Set<String> = ["url", "landedURL", "title", "otherTitles", "heading", "offers", "read"]
 
     public static func decode(_ data: Data) throws -> SkillPack {
         guard let object = try? JSONSerialization.jsonObject(with: data),
@@ -465,6 +465,10 @@ public enum SkillPackDecoder {
             // Both present, and both allowed to be empty: a page with no title or no heading is
             // recorded as having none rather than being given one (X's log-in page has no title).
             let title: String = try required(object, "title", prefix: prefix)
+            // Optional, and never empty when present: only a page whose title races has other titles.
+            let otherTitles = object["otherTitles"] == nil
+                ? []
+                : try requiredTextList(object, "otherTitles", prefix: prefix, allowEmpty: false)
             let heading: String = try required(object, "heading", prefix: prefix)
             let offersText = try requiredText(object, "offers", prefix: prefix)
             guard let offers = SkillPackStartPageOffer(rawValue: offersText) else {
@@ -478,6 +482,7 @@ public enum SkillPackDecoder {
                 url: url,
                 landedURL: landedURL,
                 title: title.trimmingCharacters(in: .whitespacesAndNewlines),
+                otherTitles: otherTitles,
                 heading: heading.trimmingCharacters(in: .whitespacesAndNewlines),
                 offers: offers,
                 read: read
