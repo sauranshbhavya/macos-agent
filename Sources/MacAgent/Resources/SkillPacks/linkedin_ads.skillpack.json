@@ -32,7 +32,8 @@
         "Click Content & Assets on the left menu, then click Lead generation forms.",
         "Select the checkbox next to one or more Lead Gen Forms.",
         "Click the time range dropdown arrow in the right corner and choose a Start date and End date, or a pre-populated range from the left of the pop-up window.",
-        "Click the Download leads button, then click Download in the pop-up window. The leads download as a CSV file, one per form."
+        "Click the Download leads button, then click Download in the pop-up window. The leads download as a CSV file, one per form.",
+        "Collected member profile data can only be stored for one year, under LinkedIn's member privacy policy; analytics and performance metrics stay in Campaign Manager beyond that."
       ],
       "source": "https://www.linkedin.com/help/lms/answer/a425750"
     }
