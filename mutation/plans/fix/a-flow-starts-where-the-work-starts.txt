@@ -32,18 +32,17 @@
 >>> mutant M2 a recorded landing on another host loads: ads.google.com landing on business.google.com is accepted
 >>> file Sources/MacAgentCore/SkillPackStartPages.swift
 >>> from
-            guard SkillPackDecoder.isOnSite(host: landedHost, domain: domain) || onIdentityHost else {
-                throw SkillPackLoadError.landedOffSite(url: url, host: landedHost)
-            }
+            if !SkillPackDecoder.isOnSite(host: landedHost, domain: domain) {
 >>> to
+            if false {
 >>> end
 
 >>> mutant M3 the identity hosts stop counting: a Google product landing on accounts.google.com is refused
 >>> file Sources/MacAgentCore/SkillPackStartPages.swift
 >>> from
-            guard SkillPackDecoder.isOnSite(host: landedHost, domain: domain) || onIdentityHost else {
+                guard signsIn(on: landedHost, forPackOn: domain) else {
 >>> to
-            guard SkillPackDecoder.isOnSite(host: landedHost, domain: domain) else {
+                guard false else {
 >>> end
 
 >>> mutant M4 any word loads as what a page offered: a record saying sign-up or marketing is accepted
@@ -130,9 +129,10 @@
 >>> mutant M13 an identity host admits any word again: a Google product's landing on accounts.google.com loads as product (review-272's F3)
 >>> file Sources/MacAgentCore/SkillPackStartPages.swift
 >>> from
-            let onIdentityHost = page.offers == .signIn && signsIn(on: landedHost, forPackOn: domain)
+                guard page.offers == .signIn else {
+                    throw SkillPackLoadError.identityHostLandingIsNotSignIn(url: url, host: landedHost)
+                }
 >>> to
-            let onIdentityHost = signsIn(on: landedHost, forPackOn: domain)
 >>> end
 
 >>> mutant M14 the declared URL's query is not read: a start URL of /login?mode=signup loads (review-272's F4)
@@ -170,9 +170,9 @@
 >>> mutant K5 a reader's sign-in word admits any host (review-272's K5)
 >>> file Sources/MacAgentCore/SkillPackStartPages.swift
 >>> from
-            let onIdentityHost = page.offers == .signIn && signsIn(on: landedHost, forPackOn: domain)
+                guard signsIn(on: landedHost, forPackOn: domain) else {
 >>> to
-            let onIdentityHost = page.offers == .signIn
+                guard signsIn(on: landedHost, forPackOn: domain) || page.offers == .signIn else {
 >>> end
 
 >>> mutant D1 a data mutant: the shipped google_ads record lands on business.google.com, which everyShippedPackLoads must refuse (review-272's D1)

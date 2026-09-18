@@ -1012,7 +1012,7 @@ struct SkillPackTests {
         #expect(Self.landing(
             start: "https://ads.google.com/", landed: "https://business.google.com/us/google-ads/",
             domain: "ads.google.com", signIn: "https://ads.google.com/nav/login"
-        ) == .landedOffSite(url: "https://ads.google.com/", host: "business.google.com"))
+        ) == .landedOnUnpairedHost(url: "https://ads.google.com/", host: "business.google.com", site: "ads.google.com"))
         // 3. StreamYard: nothing moved, and the page is itself the sign-up.
         #expect(Self.landing(
             start: "https://streamyard.com/", landed: "https://streamyard.com/", offers: "sign-up", domain: "streamyard.com"
@@ -1068,35 +1068,40 @@ struct SkillPackTests {
     /// file as the record, so while the rule read it, naming `business.google.com` as the sign-in page let
     /// Google Ads' own shape back in: review-272's probe, which loaded. Now that pack is refused whatever
     /// word its record says, and an identity host admits a sign-in page only (review-272's F3).
+    ///
+    /// **Every refusal names the pairing that is missing** — the landed host and the pack's own site —
+    /// because the list is kept one pairing at a time: Notion's landing on `accounts.google.com` is
+    /// refused with `site: "notion.so"` although that host is listed, and the fix a reader looks for is
+    /// that pairing, not the host.
     @Test
     func aLandingOnAnotherSiteIsRefusedWhateverTheRecordSays() throws {
         #expect(Self.landing(start: "https://www.notion.so/", landed: "https://notnotion.so/login")
-            == .landedOffSite(url: "https://www.notion.so/", host: "notnotion.so"))
+            == .landedOnUnpairedHost(url: "https://www.notion.so/", host: "notnotion.so", site: "notion.so"))
         #expect(Self.landing(
             start: "https://meet.google.com/landing", landed: "https://evil.accounts.google.com/signin",
             domain: "meet.google.com", signIn: "https://accounts.google.com/ServiceLogin"
-        ) == .landedOffSite(url: "https://meet.google.com/landing", host: "evil.accounts.google.com"))
+        ) == .landedOnUnpairedHost(url: "https://meet.google.com/landing", host: "evil.accounts.google.com", site: "meet.google.com"))
         // Google's sign-in host signs in for Google's sites, not Notion's, however the pack names it.
         for signIn in [nil, "https://accounts.google.com/ServiceLogin"] {
             #expect(Self.landing(
                 start: "https://www.notion.so/", landed: "https://accounts.google.com/signin", signIn: signIn
-            ) == .landedOffSite(url: "https://www.notion.so/", host: "accounts.google.com"), "\(signIn ?? "no signInURL")")
+            ) == .landedOnUnpairedHost(url: "https://www.notion.so/", host: "accounts.google.com", site: "notion.so"), "\(signIn ?? "no signInURL")")
         }
         // `offers: product` buys nothing here: the host rule reads the URL, not the reader's word.
         #expect(Self.landing(start: "https://ads.google.com/", landed: "https://business.google.com/", offers: "product", domain: "ads.google.com")
-            == .landedOffSite(url: "https://ads.google.com/", host: "business.google.com"))
+            == .landedOnUnpairedHost(url: "https://ads.google.com/", host: "business.google.com", site: "ads.google.com"))
         // Review-272's probe: the sign-in page edited to be the marketing host. Refused as either word.
         for offers in ["product", "sign-in"] {
             #expect(Self.landing(
                 start: "https://ads.google.com/", landed: "https://business.google.com/us/google-ads/", offers: offers,
                 domain: "ads.google.com", signIn: "https://business.google.com/"
-            ) == .landedOffSite(url: "https://ads.google.com/", host: "business.google.com"), "\(offers)")
+            ) == .landedOnUnpairedHost(url: "https://ads.google.com/", host: "business.google.com", site: "ads.google.com"), "\(offers)")
         }
         // A listed identity host that does sign in for the pack's site admits a sign-in page only.
         #expect(Self.landing(
             start: "https://meet.google.com/landing", landed: "https://accounts.google.com/v3/signin/identifier", offers: "product",
             domain: "meet.google.com", signIn: "https://accounts.google.com/ServiceLogin"
-        ) == .landedOffSite(url: "https://meet.google.com/landing", host: "accounts.google.com"))
+        ) == .identityHostLandingIsNotSignIn(url: "https://meet.google.com/landing", host: "accounts.google.com"))
         // On the pack's own site `product` is still a word a landing may say.
         #expect(Self.landing(start: "https://www.notion.so/", landed: "https://app.notion.so/", offers: "product") == nil)
     }

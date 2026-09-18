@@ -142,7 +142,10 @@ enum SkillPackStartPageRule {
     /// **To add a host**, read the start page signed out, confirm it lands on a sign-in page on that
     /// host, and add the host with the site it signs in for in the same change as the pack, citing the
     /// reading. A new product on a listed site needs no edit: a calendar pack on `calendar.google.com`
-    /// already signs in through `accounts.google.com`.
+    /// already signs in through `accounts.google.com`. The refusal says which pairing is missing,
+    /// `landedOnUnpairedHost(url:host:site:)`, because the list is kept one pairing at a time: a host
+    /// already listed for another site is still refused for this one, and the fix is that pairing, not
+    /// the host.
     static let identityHosts: [String: Set<String>] = [
         "accounts.google.com": ["google.com", "youtube.com"],
         "login.microsoftonline.com": ["office.com", "microsoft.com"],
@@ -184,11 +187,15 @@ enum SkillPackStartPageRule {
                 throw SkillPackLoadError.landedURLCarriesQuery(url: url)
             }
             let landedHost = (page.landedURL.host ?? "").lowercased()
-            // An identity host admits a sign-in page and nothing else (review-272's F3): a `product`
-            // record there is a reader's mistake, not a page Sonny can start a task on.
-            let onIdentityHost = page.offers == .signIn && signsIn(on: landedHost, forPackOn: domain)
-            guard SkillPackDecoder.isOnSite(host: landedHost, domain: domain) || onIdentityHost else {
-                throw SkillPackLoadError.landedOffSite(url: url, host: landedHost)
+            if !SkillPackDecoder.isOnSite(host: landedHost, domain: domain) {
+                guard signsIn(on: landedHost, forPackOn: domain) else {
+                    throw SkillPackLoadError.landedOnUnpairedHost(url: url, host: landedHost, site: domain.lowercased())
+                }
+                // An identity host admits a sign-in page and nothing else (review-272's F3): a `product`
+                // record there is a reader's mistake, not a page Sonny can start a task on.
+                guard page.offers == .signIn else {
+                    throw SkillPackLoadError.identityHostLandingIsNotSignIn(url: url, host: landedHost)
+                }
             }
             for named in [page.url, page.landedURL] where namesAccountCreation(named) {
                 throw SkillPackLoadError.startPageCreatesAnAccount(url: named.absoluteString)

@@ -202,7 +202,14 @@ public enum SkillPackLoadError: Error, Equatable, Sendable {
     case startPageUnused(url: String)
     case startPageNotAStartPage(url: String, offers: String)
     case landedURLCarriesQuery(url: String)
-    case landedOffSite(url: String, host: String)
+    /// The landing is on `host`, off the pack's own site `site`, and `SkillPackStartPageRule.identityHosts`
+    /// has no pairing of `host` with `site`. It names the pairing because the list is kept one pairing at
+    /// a time: the fix is either the record (the page landed somewhere a flow may not start) or, when
+    /// `host` really is where `site` signs in, the pairing `host` → `site` added after reading the page.
+    case landedOnUnpairedHost(url: String, host: String, site: String)
+    /// `host` is paired with the pack's site, and the record landing there says `product`: an identity
+    /// host admits a sign-in page and nothing else.
+    case identityHostLandingIsNotSignIn(url: String, host: String)
     case startPageCreatesAnAccount(url: String)
     /// `field` is `summary`, `sections[n]` or `flows[n]`; `words` is what moved money — a money verb,
     /// or an action verb and its money object ("create + payout").
