@@ -5,7 +5,7 @@ Sonny goes when a command names one of these packs:
 - 38 start pages moved to the site's sign-in page.
 - 15 packs name a different sign-in page.
 - 29 packs have no task steps any more.
-- Perplexity lost two flows.
+- Perplexity lost two flows, and eBay one.
 - OneDrive starts at its own sign-in page.
 - The 25 packs other wave-12 lanes made deep now carry the record, and all 25 keep their task steps.
 
@@ -44,7 +44,8 @@ Run each row with the packaged app, with the named skill added on the Skills pag
   TikTok Ads.
 - [ ] **SONNY-510 — a marketplace starts on the product itself.** Ask Sonny to save an eBay search, for
   example "save an eBay search for vintage cameras". It opens `www.ebay.com/` and searches there,
-  signed out, rather than going to a sign-in page first.
+  signed out, rather than going to a sign-in page first. Asking Sonny to tidy your eBay Watchlist
+  gets no numbered steps, because signed out that flow's first step, My eBay, led to a bot check.
 - [ ] **SONNY-510 — a product page whose first step needs an account has no task steps.** Ask Sonny
   for a ChatGPT task, for example "set my ChatGPT custom instructions". It does not open `chatgpt.com`
   and follow numbered steps from there: signed out, ChatGPT's Settings has no Personalization, and its
