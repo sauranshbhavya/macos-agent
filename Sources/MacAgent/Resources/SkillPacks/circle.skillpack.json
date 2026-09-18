@@ -24,5 +24,15 @@
       ],
       "source": "https://help.circle.so/p/posts/post-spaces/create-a-post"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://login.circle.so/sign_in",
+      "landedURL": "https://login.circle.so/sign_in",
+      "title": "Circle",
+      "heading": "Sign in to your Circle account",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
   ]
 }

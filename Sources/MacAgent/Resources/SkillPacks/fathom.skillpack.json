@@ -33,5 +33,15 @@
       ],
       "source": "https://help.fathom.video/en/articles/296000"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://fathom.video/home",
+      "landedURL": "https://fathom.video/users/sign_in",
+      "title": "Fathom",
+      "heading": "Sign in to Fathom",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
   ]
 }

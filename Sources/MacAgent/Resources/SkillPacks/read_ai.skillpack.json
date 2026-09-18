@@ -35,5 +35,15 @@
       ],
       "source": "https://support.read.ai/hc/en-us/articles/23833171061139-How-do-I-download-meeting-reports-transcripts-and-more"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://app.read.ai/",
+      "landedURL": "https://app.read.ai/analytics/signin",
+      "title": "Read - Sign in",
+      "heading": "Meetings + Ask Read",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
   ]
 }

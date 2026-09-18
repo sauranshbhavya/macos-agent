@@ -38,5 +38,15 @@
       ],
       "source": "https://help.kajabi.com/articles/contacts/manage-your-contacts/tags-overview"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://id.kajabi.com/u/login",
+      "landedURL": "https://id.kajabi.com/u/login",
+      "title": "Kajabi",
+      "heading": "Sign in to your account",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
   ]
 }

@@ -37,5 +37,15 @@
       ],
       "source": "https://support.callrail.com/hc/en-us/articles/5711901362317-Changing-a-number-s-name"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://app.callrail.com/",
+      "landedURL": "https://app.callrail.com/authenticate/",
+      "title": "Login",
+      "heading": "",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
   ]
 }

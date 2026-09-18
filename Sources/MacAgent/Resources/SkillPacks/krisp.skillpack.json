@@ -37,5 +37,15 @@
       ],
       "source": "https://help.krisp.ai/hc/en-us/articles/29185808893340-Meeting-folders"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://app.krisp.ai/login",
+      "landedURL": "https://app.krisp.ai/login",
+      "title": "Login",
+      "heading": "",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
   ]
 }

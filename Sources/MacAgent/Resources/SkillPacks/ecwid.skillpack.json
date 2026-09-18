@@ -35,5 +35,15 @@
       ],
       "source": "https://support.ecwid.com/hc/en-us/articles/115003429065-Managing-customers"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://my.ecwid.com/",
+      "landedURL": "https://my.ecwid.com/cp/",
+      "title": "Login | Ecwid Ecommerce",
+      "heading": "",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
   ]
 }

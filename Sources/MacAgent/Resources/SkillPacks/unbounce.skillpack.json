@@ -40,5 +40,15 @@
       ],
       "source": "https://documentation.unbounce.com/hc/en-us/articles/214545243-Creating-a-Popup-in-Unbounce"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://app.unbounce.com/users/sign_in",
+      "landedURL": "https://app.unbounce.com/users/sign_in",
+      "title": "Unbounce: The Landing Page and Conversion Platform",
+      "heading": "Sign into your Unbounce account",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
   ]
 }

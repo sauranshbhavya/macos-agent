@@ -37,5 +37,15 @@
       ],
       "source": "https://support.quo.com/core-concepts/calling/making-calls"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://my.quo.com/",
+      "landedURL": "https://my.quo.com/login",
+      "title": "Log in | Quo",
+      "heading": "",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
   ]
 }

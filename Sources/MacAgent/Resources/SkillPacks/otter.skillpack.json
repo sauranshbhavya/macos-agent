@@ -35,5 +35,15 @@
       ],
       "source": "https://help.otter.ai/hc/en-us/articles/13675989227543-Manage-your-Otter-Notetaker-settings"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://otter.ai/home",
+      "landedURL": "https://otter.ai/signin",
+      "title": "Otter.ai - Access real-time and shareable meeting notes",
+      "heading": "Sign in",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
   ]
 }

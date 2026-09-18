@@ -36,5 +36,15 @@
       ],
       "source": "https://support.plaud.ai/hc/en-us/articles/51023259082393-Export-recordings-transcripts-and-summaries"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://web.plaud.ai/",
+      "landedURL": "https://web.plaud.ai/login",
+      "title": "Plaud Web",
+      "heading": "",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
   ]
 }

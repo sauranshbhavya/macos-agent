@@ -25,5 +25,15 @@
       ],
       "source": "https://help.samcart.com/support/solutions/articles/60000506436-using-webhooks-on-samcart"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://app.samcart.com/auth/login",
+      "landedURL": "https://app.samcart.com/auth/login",
+      "title": "Login | SamCart",
+      "heading": "Welcome Back!",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
   ]
 }

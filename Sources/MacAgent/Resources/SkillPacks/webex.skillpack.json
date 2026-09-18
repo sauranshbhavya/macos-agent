@@ -34,5 +34,15 @@
       ],
       "source": "https://help.webex.com/en-us/article/n35gqwcb/Webex-App-%7C-Add-people-to-a-space"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://web.webex.com/",
+      "landedURL": "https://web.webex.com/sign-in",
+      "title": "Webex",
+      "heading": "",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
   ]
 }

@@ -37,5 +37,15 @@
       ],
       "source": "https://www.linkedin.com/help/lms/answer/a425750"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://www.linkedin.com/login",
+      "landedURL": "https://www.linkedin.com/login/",
+      "title": "LinkedIn Login, Sign in | LinkedIn",
+      "heading": "Sign in",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
   ]
 }
