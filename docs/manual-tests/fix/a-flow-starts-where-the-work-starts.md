@@ -6,6 +6,7 @@ Sonny goes when a command names one of these packs:
 - 15 packs name a different sign-in page.
 - 25 packs have no task steps any more.
 - Luma and Perplexity each lost one flow.
+- The 25 packs other wave-12 lanes made deep now carry the record, and all 25 keep their task steps.
 
 Run each row with the packaged app, with the named skill added on the Skills page, in a browser
 **signed out** of the site in question.
@@ -36,6 +37,13 @@ Run each row with the packaged app, with the named skill added on the Skills pag
   because an employer creates its accounts. The same is true of Affinity, Ashby, Birdeye and Pylon.
   BambooHR is the opposite case and has no task steps: its sign-in page shows no sign-up either, but
   `bamboohr.com/signup/` offers a self-serve free trial.
+- [ ] **SONNY-510 — a pack another lane made deep opens its recorded start page.** Ask Sonny for a
+  Kajabi task. It opens `id.kajabi.com/u/login` ("Sign in to your account"), where "Sign up here" is a
+  separate link. The same goes for the other 24 packs wave 12 added, among them Circle, Skool, Otter and
+  TikTok Ads.
+- [ ] **SONNY-510 — a marketplace starts on the product itself.** Ask Sonny to save an eBay search, for
+  example "save an eBay search for vintage cameras". It opens `www.ebay.com/` and searches there,
+  signed out, rather than going to a sign-in page first.
 - [ ] **SONNY-510 — a pack that lost one flow keeps its others.** Ask Sonny to create a Luma event.
   It still starts at `luma.com/create`. No Luma task starts at `luma.com/signin`, whose form is
   "Please sign in or sign up below".
