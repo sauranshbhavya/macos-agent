@@ -496,12 +496,21 @@ def _missing_record(cwd: str, directory: str, branch: str, merge: Merge) -> str:
     something on this checkout removed it since; if not, the branch merged without it. Both are real
     faults, and each sentence names the command that shows the reader it is true.
 
-    The command names the branch head rather than the merge commit, and that is legibility, not
-    correctness: the head is the fact this finding rests on — what the checkout is known to contain,
-    in both shapes — so the sentence and its command name the same commit. `<merge>..HEAD` would
-    find the same deleting commit, because the path filter keeps either range to the commits that
-    touched the file; a mutant swapping one for the other survives the selftest for exactly that
-    reason, and it is an equivalent mutant rather than a gap (PR #269's fix round).
+    The command starts from the branch head rather than the merge commit, for legibility: the head
+    is the fact this finding rests on — what the checkout is known to contain, in both shapes — so
+    the sentence and its command name the same commit. **Both ranges always list the deleting
+    commit, which is all the finding promises. They are not otherwise identical.** They differ by
+    the commits the merge reaches and the head does not, the mainline side of the merge before it,
+    and a path-filtered log lists one of those only when this record's own path already existed on
+    the mainline before the branch merged. Review-269 built that history (another branch writes
+    this branch's record path and merges first, and this branch merges with the add/add conflict
+    resolved toward `main`'s copy): the head form then lists that other branch's unrelated commit
+    beside the deletion, and the merge form lists the deletion alone. So a mutant swapping one for
+    the other survives the selftest, and **no case should be written to kill it**: the only history
+    that separates them makes the mutant's form the more precise one, so such a case would pass the
+    mutant and fail the shipped code. That history is also one this tool already objects to: on the
+    other branch, before it merges, arm 2 reports two entries naming branches that have not merged
+    (review-269's delta pass on PR #269, which measured all of this).
     """
     rel = "%s/%s.md" % (directory, branch)
     if _merge_tree_has(cwd, merge.sha, rel):
@@ -1285,7 +1294,9 @@ def selftest() -> int:
         _git(records, "checkout", "-q", "--", two)
 
         # On the mainline, and on a stack's upper branch cut from wave/two's head — the shape F1
-        # found silent. The command must work in both, which is why it names the branch head.
+        # found silent. The command the finding names must list the deleting commit in both, and
+        # these two cases hold that. They do not hold why it starts from the branch head rather
+        # than the merge commit: both would pass here, and `_missing_record`'s docstring says why.
         records_tip = _git(records, "rev-parse", "main")
         for name, place in (("  ...and so does one a commit removed, and the command it names "
                              "finds that commit", lambda: None),
