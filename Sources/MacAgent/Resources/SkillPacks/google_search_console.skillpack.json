@@ -41,9 +41,9 @@
   "startPages": [
     {
       "url": "https://search.google.com/search-console/welcome",
-      "landedURL": "https://accounts.google.com/v3/signin/accountchooser",
+      "landedURL": "https://accounts.google.com/v3/signin/identifier",
       "title": "Google Search Console",
-      "heading": "Choose an account",
+      "heading": "Sign in",
       "offers": "sign-in",
       "read": "2026-09-18"
     }

@@ -45,11 +45,11 @@
   "startPages": [
     {
       "url": "https://mail.google.com/",
-      "landedURL": "https://accounts.google.com/v3/signin/accountchooser",
+      "landedURL": "https://accounts.google.com/v3/signin/identifier",
       "title": "Gmail",
-      "heading": "Choose an account",
+      "heading": "Sign in",
       "offers": "sign-in",
-      "read": "2026-09-17"
+      "read": "2026-09-18"
     }
   ]
 }

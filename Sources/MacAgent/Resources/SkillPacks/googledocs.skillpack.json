@@ -46,11 +46,11 @@
   "startPages": [
     {
       "url": "https://docs.google.com/document/",
-      "landedURL": "https://accounts.google.com/v3/signin/accountchooser",
+      "landedURL": "https://accounts.google.com/v3/signin/identifier",
       "title": "Google Docs: Sign-in",
-      "heading": "Choose an account",
+      "heading": "Sign in",
       "offers": "sign-in",
-      "read": "2026-09-17"
+      "read": "2026-09-18"
     }
   ]
 }

@@ -9,6 +9,12 @@
 #
 # The samples that kill these are JSON decoded through SkillPackDecoder.decode, never values built
 # downstream of it (SONNY-388), so each mutant is on the path of the tests that hold it.
+#
+# Round 2 (review-272) added K3, K4, K5 and D1, which are the review's own probes, and M13 to M15 for the
+# three checks that round added. **What a plan of this shape cannot do**, as the review put it: every
+# mutant here deletes or narrows a guard that exists, so none can find a guard that was never written.
+# Review-272's F3 (the sign-in host admitted any word) and F4 (the declared URL's query was never read)
+# were absent code, and only probing the rule from outside found them.
 
 >>> mutant M1 the start-page record is read and ignored: the own-domain test on the declared URL is the only check left
 >>> file Sources/MacAgentCore/SkillPack.swift
@@ -22,7 +28,7 @@
 >>> mutant M2 a recorded landing on another host loads: ads.google.com landing on business.google.com is accepted
 >>> file Sources/MacAgentCore/SkillPackStartPages.swift
 >>> from
-            guard SkillPackDecoder.isOnSite(host: landedHost, domain: domain) || landedHost == signInHost else {
+            guard SkillPackDecoder.isOnSite(host: landedHost, domain: domain) || admittedAsSignIn else {
                 throw SkillPackLoadError.landedOffSite(url: url, host: landedHost)
             }
 >>> to
@@ -31,7 +37,7 @@
 >>> mutant M3 the pack's own sign-in host stops counting: a Google product landing on accounts.google.com is refused
 >>> file Sources/MacAgentCore/SkillPackStartPages.swift
 >>> from
-            guard SkillPackDecoder.isOnSite(host: landedHost, domain: domain) || landedHost == signInHost else {
+            guard SkillPackDecoder.isOnSite(host: landedHost, domain: domain) || admittedAsSignIn else {
 >>> to
             guard SkillPackDecoder.isOnSite(host: landedHost, domain: domain) else {
 >>> end
@@ -57,9 +63,9 @@
 >>> mutant M6 the fragment is not read: a single-page app's #/signup route loads
 >>> file Sources/MacAgentCore/SkillPackStartPages.swift
 >>> from
-        let text = (components?.path ?? "") + "/" + (components?.fragment ?? "")
+        let text = [components?.path, components?.fragment, components?.query]
 >>> to
-        let text = components?.path ?? ""
+        let text = [components?.path, components?.query]
 >>> end
 
 >>> mutant M7 the declared URL is not read for account creation, only the landing: a start URL of /signup loads
@@ -91,7 +97,7 @@
 >>> mutant M10 a landed URL carrying a query loads: a sign-in redirect's session state reaches the tree
 >>> file Sources/MacAgentCore/SkillPackStartPages.swift
 >>> from
-            guard page.landedURL.query == nil else {
+            guard page.landedURL.query == nil, !(page.landedURL.fragment ?? "").contains("?") else {
                 throw SkillPackLoadError.landedURLCarriesQuery(url: url)
             }
 >>> to
@@ -115,4 +121,60 @@
             return []
 >>> to
             return []
+>>> end
+
+>>> mutant M13 the sign-in host admits any word again: a pack naming business.google.com as its sign-in page lands Google Ads there as product (review-272's F3)
+>>> file Sources/MacAgentCore/SkillPackStartPages.swift
+>>> from
+            let admittedAsSignIn = landedHost == signInHost && page.offers == .signIn
+>>> to
+            let admittedAsSignIn = landedHost == signInHost
+>>> end
+
+>>> mutant M14 the declared URL's query is not read: a start URL of /login?mode=signup loads (review-272's F4)
+>>> file Sources/MacAgentCore/SkillPackStartPages.swift
+>>> from
+        let text = [components?.path, components?.fragment, components?.query]
+>>> to
+        let text = [components?.path, components?.fragment]
+>>> end
+
+>>> mutant M15 a query inside a landing's fragment loads: #/login?redirect=/ is recorded as a page (review-272's item 9)
+>>> file Sources/MacAgentCore/SkillPackStartPages.swift
+>>> from
+            guard page.landedURL.query == nil, !(page.landedURL.fragment ?? "").contains("?") else {
+>>> to
+            guard page.landedURL.query == nil else {
+>>> end
+
+>>> mutant K3 the sign-in allowance widened to that host's subdomains: evil.accounts.google.com is admitted (review-272's K3)
+>>> file Sources/MacAgentCore/SkillPackStartPages.swift
+>>> from
+            let admittedAsSignIn = landedHost == signInHost && page.offers == .signIn
+>>> to
+            let admittedAsSignIn = signInHost.map { landedHost == $0 || landedHost.hasSuffix("." + $0) } == true && page.offers == .signIn
+>>> end
+
+>>> mutant K4 the parser reads the declared URL as the landing — the ticket's whole thesis undone (review-272's K4)
+>>> file Sources/MacAgentCore/SkillPack.swift
+>>> from
+            let landedURL = try requiredHTTPSURL(object, "landedURL", prefix: prefix)
+>>> to
+            let landedURL = try requiredHTTPSURL(object, "url", prefix: prefix)
+>>> end
+
+>>> mutant K5 a reader's sign-in word admits any host (review-272's K5)
+>>> file Sources/MacAgentCore/SkillPackStartPages.swift
+>>> from
+            let admittedAsSignIn = landedHost == signInHost && page.offers == .signIn
+>>> to
+            let admittedAsSignIn = page.offers == .signIn
+>>> end
+
+>>> mutant D1 a data mutant: the shipped google_ads record lands on business.google.com, which everyShippedPackLoads must refuse (review-272's D1)
+>>> file Sources/MacAgent/Resources/SkillPacks/google_ads.skillpack.json
+>>> from
+      "landedURL": "https://accounts.google.com/v3/signin/identifier",
+>>> to
+      "landedURL": "https://business.google.com/us/google-ads/",
 >>> end

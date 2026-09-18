@@ -1057,6 +1057,10 @@ struct SkillPackTests {
     /// sign-in host and nothing else: not a look-alike ending in the domain's letters, not a subdomain of
     /// the sign-in host (the allowance is that host, exactly), and — for a pack with no sign-in page — not
     /// any other host at all.
+    ///
+    /// **And the sign-in host admits a sign-in page only** (review-272's F3). `signInURL` is written in
+    /// the same file as the record, so the allowance alone let Google Ads' own shape back in: name
+    /// `business.google.com` as the sign-in page and its marketing landing loads as `product`.
     @Test
     func aLandingOnAnotherSiteIsRefusedWhateverTheRecordSays() throws {
         #expect(Self.landing(start: "https://www.notion.so/", landed: "https://notnotion.so/login")
@@ -1071,6 +1075,18 @@ struct SkillPackTests {
         // `offers: product` buys nothing here: the host rule reads the URL, not the reader's word.
         #expect(Self.landing(start: "https://ads.google.com/", landed: "https://business.google.com/", offers: "product", domain: "ads.google.com")
             == .landedOffSite(url: "https://ads.google.com/", host: "business.google.com"))
+        // The sign-in host edited to be the marketing host: a `product` landing there is refused, and only
+        // a record saying `sign-in` is admitted — the one left to the reader's judgement.
+        #expect(Self.landing(
+            start: "https://ads.google.com/", landed: "https://business.google.com/us/google-ads/", offers: "product",
+            domain: "ads.google.com", signIn: "https://business.google.com/"
+        ) == .landedOffSite(url: "https://ads.google.com/", host: "business.google.com"))
+        #expect(Self.landing(
+            start: "https://ads.google.com/", landed: "https://business.google.com/us/google-ads/", offers: "sign-in",
+            domain: "ads.google.com", signIn: "https://business.google.com/"
+        ) == nil)
+        // On the pack's own site `product` is still a word a landing may say.
+        #expect(Self.landing(start: "https://www.notion.so/", landed: "https://app.notion.so/", offers: "product") == nil)
     }
 
     /// Every spelling of account creation `accountCreationParts` folds together, in the landed path, in
@@ -1087,6 +1103,14 @@ struct SkillPackTests {
         }
         #expect(Self.landing(start: "https://www.notion.so/signup", landed: "https://www.notion.so/login")
             == .startPageCreatesAnAccount(url: "https://www.notion.so/signup"))
+        // The declared URL's query is read too, since a sign-up intent is often carried there and a
+        // landing is recorded without one (review-272's F4).
+        for start in ["https://www.notion.so/login?mode=signup", "https://www.notion.so/authorize?screen_hint=signup"] {
+            #expect(Self.landing(start: start, landed: "https://www.notion.so/login") == .startPageCreatesAnAccount(url: start), "\(start)")
+        }
+        for start in ["https://www.notion.so/login?mode=login", "https://www.notion.so/api/auth/login?next=%2F"] {
+            #expect(Self.landing(start: start, landed: "https://www.notion.so/login") == nil, "\(start) was refused")
+        }
         for landed in [
             "https://www.notion.so/signin", "https://www.notion.so/sign-in", "https://www.notion.so/users/sign_in",
             "https://www.notion.so/login", "https://www.notion.so/join", "https://www.notion.so/registered-users"
@@ -1154,6 +1178,11 @@ struct SkillPackTests {
     func aStartPageRecordHoldsItsShape() throws {
         #expect(Self.landing(start: "https://www.notion.so/", landed: "https://www.notion.so/login?next=%2Fhome")
             == .landedURLCarriesQuery(url: "https://www.notion.so/"))
+        // A query inside a single-page app's fragment is refused the same way (review-272's item 9); the
+        // route alone loads.
+        #expect(Self.landing(start: "https://app.notion.so/", landed: "https://app.notion.so/#/login?redirect=/")
+            == .landedURLCarriesQuery(url: "https://app.notion.so/"))
+        #expect(Self.landing(start: "https://app.notion.so/", landed: "https://app.notion.so/#/login") == nil)
         #expect(Self.landing(start: "https://www.notion.so/", landed: "http://www.notion.so/login")
             == .notHTTPS(field: "startPages[0].landedURL"))
 

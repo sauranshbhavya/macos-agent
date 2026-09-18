@@ -44,11 +44,11 @@
   "startPages": [
     {
       "url": "https://sheets.google.com/",
-      "landedURL": "https://accounts.google.com/v3/signin/accountchooser",
+      "landedURL": "https://accounts.google.com/v3/signin/identifier",
       "title": "Google Sheets: Sign-in",
-      "heading": "Choose an account",
+      "heading": "Sign in",
       "offers": "sign-in",
-      "read": "2026-09-17"
+      "read": "2026-09-18"
     }
   ]
 }

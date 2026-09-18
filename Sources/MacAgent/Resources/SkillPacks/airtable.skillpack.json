@@ -6,51 +6,11 @@
   "category": "data_databases",
   "summary": "Spreadsheet-database hybrid for building apps.",
   "signInURL": "https://airtable.com/login",
-  "triggers": ["airtable", "airtable.com"],
-  "sections": [],
-  "depth": "deep",
-  "flows": [
-    {
-      "title": "Create a base",
-      "startURL": "https://airtable.com/login",
-      "steps": [
-        "Open your Airtable homepage.",
-        "Click + Create.",
-        "Select the workspace for the base.",
-        "Select one of the options offered, such as Build an app on your own, or Build an app with Omni."
-      ],
-      "source": "https://support.airtable.com/articles/7403739720-creating-and-managing-airtable-bases"
-    },
-    {
-      "title": "Duplicate a base",
-      "startURL": "https://airtable.com/login",
-      "steps": [
-        "On your Airtable home screen, search for and open the base.",
-        "Click the ˅ icon next to the base's name.",
-        "Select the ... icon, then click Duplicate base.",
-        "In the window that opens, choose the record and comment settings, then click Duplicate base."
-      ],
-      "source": "https://support.airtable.com/articles/7403739720-creating-and-managing-airtable-bases"
-    },
-    {
-      "title": "Download a table as a CSV",
-      "startURL": "https://airtable.com/login",
-      "steps": [
-        "On your Airtable home screen, open the base with the table.",
-        "Click the ˅ icon next to the view's name. The download is per view, and the view's filters can leave records out of the file.",
-        "Click Download CSV. The file is saved to the computer; look in the Downloads or Recents folder."
-      ],
-      "source": "https://support.airtable.com/articles/7403739720-creating-and-managing-airtable-bases"
-    }
+  "triggers": [
+    "airtable",
+    "airtable.com"
   ],
-  "startPages": [
-    {
-      "url": "https://airtable.com/login",
-      "landedURL": "https://airtable.com/login",
-      "title": "Sign in - Airtable",
-      "heading": "Welcome to Airtable",
-      "offers": "sign-in",
-      "read": "2026-09-18"
-    }
-  ]
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
 }

@@ -34,12 +34,15 @@ import Foundation
 /// out (SONNY-510's comments).
 ///
 /// **The two words that load** (`SkillPackStartPageOffer`):
-/// - `sign-in`: the page's form signs an existing account in. Creating an account may be a link beside
-///   it, or the branch an email-first form takes for an address it does not know; it may not be the
-///   form itself (StreamYard's home, Bubble's log-in path, LinkedIn's and X's signed-out homes, whose
-///   primary control creates an account with the terms bound to it). A "by continuing you agree" line
-///   under a sign-in form does not make it account creation — the sweep met it on ordinary sign-in
-///   pages across the population — and what decides is which account the form's control reaches.
+/// - `sign-in`: the form on the page signs in an account that already exists, **and** the site has a
+///   separate route for creating one. It is not a start page when that same form is also how an account
+///   gets created, whatever words sit beside it — a form headed "Log in or sign up", an email-first form
+///   that opens account creation for an address it does not know, or single sign-on with no other way
+///   in, whose first press creates the account (Fireflies, tl;dv). A terms line is evidence, not the
+///   test: the same "by continuing you agree" sits under LinkedIn's, X's, Cloudflare's and Notion's real
+///   sign-in forms, each of which has a sign-up route of its own. A cookie notice is never relevant. What
+///   decides is whether pressing the button does something irreversible (founders, 2026-09-18, replacing
+///   both this file's first wording and the terms ruling on SONNY-503 and SONNY-504).
 /// - `product`: the product itself, usable without signing in, with the flow's first step on it.
 ///
 /// Anything else is a page a flow may not start on, and there is no third word to write it in: a
@@ -47,16 +50,16 @@ import Foundation
 /// self-hosted product's vendor site — or one that could not be read.
 ///
 /// **What the loader checks, and what it cannot** (`SkillPackStartPageRule`). It checks that the record
-/// exists for every start URL and for nothing else; that the landed host is the pack's own site or the
-/// host of the pack's own sign-in page, which is what catches `ads.google.com/` landing on
-/// `business.google.com` — and which is why a pack whose start page lands on an identity host names
-/// that host in its `signInURL` (`accounts.google.com`, `login.microsoftonline.com`), the landing being
-/// the evidence for where it signs in; that neither URL's path names account creation, which is what
-/// catches Ghost's `/signup` even when a reader has written `sign-in` beside it; and which word `offers`
-/// is. It cannot
-/// check that `offers` is true of the page — that is the reader's judgement, and the loader holds only
-/// the words it may be written in — and it cannot see a site change after the reading. `read` is what
-/// says how old a record is.
+/// exists for every start URL and for nothing else; that a landing carries no query, in the URL or in its
+/// fragment; that the landed host is the pack's own site, or the host of the pack's own sign-in page for
+/// a record that says `sign-in` — which is what catches `ads.google.com/` landing on `business.google.com`
+/// however `signInURL` is edited, and why a pack whose start page lands on an identity host names that
+/// host in its `signInURL` (`accounts.google.com`, `login.microsoftonline.com`), the landing being the
+/// evidence for where it signs in; that neither URL names account creation in its path, fragment or (for
+/// the declared one) query, which is what catches Ghost's `/signup` even when a reader has written
+/// `sign-in` beside it; and which word `offers` is. It cannot check that `offers` is true of the page —
+/// that is the reader's judgement, and the loader holds only the words it may be written in — and it
+/// cannot see a site change after the reading. `read` is what says how old a record is.
 public struct SkillPackStartPage: Equatable, Sendable {
     public let url: URL
     public let landedURL: URL
@@ -86,8 +89,8 @@ public enum SkillPackStartPageOffer: String, Sendable, Equatable {
 /// The loader's reading of a pack's start-page records against its flows. `SkillPackStartPage` has the
 /// rule and why it exists.
 enum SkillPackStartPageRule {
-    /// Path and fragment parts that name account creation, compared after lowercasing and dropping `-`
-    /// and `_`, so `sign-up`, `sign_up` and `SignUp` are one word. Ghost's `/signup` and PartnerStack's
+    /// Path, fragment and query parts that name account creation, compared after lowercasing and dropping
+    /// `-` and `_`, so `sign-up`, `sign_up` and `SignUp` are one word. Ghost's `/signup` and PartnerStack's
     /// `/handshake/signup` are the measured cases (SONNY-510's comments).
     ///
     /// **Deliberately short.** `join` is not here because Zoom's `join.zoom.us` and `/join` are joining a
@@ -115,12 +118,18 @@ enum SkillPackStartPageRule {
             guard started.contains(url) else {
                 throw SkillPackLoadError.startPageUnused(url: url)
             }
-            guard page.landedURL.query == nil else {
+            // A query inside a single-page app's fragment is as much a session as one in the URL's own
+            // query (review-272's item 9).
+            guard page.landedURL.query == nil, !(page.landedURL.fragment ?? "").contains("?") else {
                 throw SkillPackLoadError.landedURLCarriesQuery(url: url)
             }
             let landedHost = (page.landedURL.host ?? "").lowercased()
             let signInHost = signInURL?.host?.lowercased()
-            guard SkillPackDecoder.isOnSite(host: landedHost, domain: domain) || landedHost == signInHost else {
+            // The sign-in host admits a sign-in page and nothing else. `signInURL` is written in the same
+            // file as the record, so without this a pack could name `business.google.com` as its sign-in
+            // page and land Google Ads' start page there as `product` (review-272's F3).
+            let admittedAsSignIn = landedHost == signInHost && page.offers == .signIn
+            guard SkillPackDecoder.isOnSite(host: landedHost, domain: domain) || admittedAsSignIn else {
                 throw SkillPackLoadError.landedOffSite(url: url, host: landedHost)
             }
             for named in [page.url, page.landedURL] where namesAccountCreation(named) {
@@ -129,11 +138,15 @@ enum SkillPackStartPageRule {
         }
     }
 
-    /// Whether any part of `url`'s path or fragment is one of `accountCreationParts`. The fragment is
-    /// read because a single-page app routes there (`#/signup`).
+    /// Whether any part of `url`'s path, fragment or query is one of `accountCreationParts`. The fragment
+    /// is read because a single-page app routes there (`#/signup`), and the query because a sign-up
+    /// intent is often carried there (`?mode=signup`, Auth0's `?screen_hint=signup`) — which only a
+    /// declared start URL can have, since a landing is recorded without one (review-272's F4).
     static func namesAccountCreation(_ url: URL) -> Bool {
         let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
-        let text = (components?.path ?? "") + "/" + (components?.fragment ?? "")
+        let text = [components?.path, components?.fragment, components?.query]
+            .map { $0 ?? "" }
+            .joined(separator: "/")
         return text.lowercased()
             .split(whereSeparator: { "/#?&=.".contains($0) })
             .map { $0.replacingOccurrences(of: "-", with: "").replacingOccurrences(of: "_", with: "") }

@@ -29,9 +29,9 @@
   "startPages": [
     {
       "url": "https://business.google.com/locations",
-      "landedURL": "https://accounts.google.com/v3/signin/accountchooser",
+      "landedURL": "https://accounts.google.com/v3/signin/identifier",
       "title": "Google Business Profile",
-      "heading": "Choose an account",
+      "heading": "Sign in",
       "offers": "sign-in",
       "read": "2026-09-18"
     }

@@ -47,7 +47,7 @@
   "startPages": [
     {
       "url": "https://zoom.us/signin",
-      "landedURL": "https://zoom.us/signin",
+      "landedURL": "https://zoom.us/signin#/login",
       "title": "Sign In | Zoom",
       "heading": "Sign in",
       "offers": "sign-in",

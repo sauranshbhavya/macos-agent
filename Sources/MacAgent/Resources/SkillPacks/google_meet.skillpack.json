@@ -42,11 +42,11 @@
   "startPages": [
     {
       "url": "https://meet.google.com/landing",
-      "landedURL": "https://accounts.google.com/v3/signin/accountchooser",
+      "landedURL": "https://accounts.google.com/v3/signin/identifier",
       "title": "Sign in - Google Accounts",
-      "heading": "Choose an account",
+      "heading": "Sign in",
       "offers": "sign-in",
-      "read": "2026-09-17"
+      "read": "2026-09-18"
     }
   ]
 }

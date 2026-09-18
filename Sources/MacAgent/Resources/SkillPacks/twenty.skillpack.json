@@ -6,42 +6,10 @@
   "category": "sales_crm",
   "summary": "Open-source CRM.",
   "signInURL": "https://app.twenty.com",
-  "triggers": ["twenty.com"],
-  "sections": [],
-  "depth": "deep",
-  "flows": [
-    {
-      "title": "Import contacts via CSV",
-      "startURL": "https://app.twenty.com",
-      "steps": [
-        "Open the Command Menu with Cmd+K (Mac) or Ctrl+K (Windows), type \"import\", select Import records, then choose People.",
-        "Click Select file and choose your CSV, XLSX, or XLS file, then wait for Twenty to analyze it.",
-        "Review the automatic column mappings, fix any that are wrong by picking the right field from the dropdown, and choose \"Do not map\" for columns you don't want to import.",
-        "Click Next Steps; rows with errors are highlighted in yellow, so fix a value by clicking the cell, or click the X to skip a problem row.",
-        "Review the import summary and click Confirm to import."
-      ],
-      "source": "https://docs.twenty.com/user-guide/data-migration/how-tos/import-contacts-via-csv"
-    },
-    {
-      "title": "Set up a sales pipeline",
-      "startURL": "https://app.twenty.com",
-      "steps": [
-        "Go to Settings → Data Model, select Opportunities, click the Stage field, and add, remove, or rename stages to match your process.",
-        "Go to Opportunities, click the view dropdown, choose + Add view, name it, click Create, then open Options and select Kanban as the layout.",
-        "Open Options → Fields and click the eye icon next to a hidden field, such as Company, Close Date, or Owner, to show it on the cards.",
-        "Create an opportunity by clicking + New in the Opportunities view (or the + in a stage column), then drag and drop cards between columns to move them through stages."
-      ],
-      "source": "https://docs.twenty.com/user-guide/views-pipelines/how-tos/set-up-a-sales-pipeline"
-    }
+  "triggers": [
+    "twenty.com"
   ],
-  "startPages": [
-    {
-      "url": "https://app.twenty.com",
-      "landedURL": "https://app.twenty.com/welcome",
-      "title": "Sign in or Create an account",
-      "heading": "",
-      "offers": "sign-in",
-      "read": "2026-09-18"
-    }
-  ]
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
 }

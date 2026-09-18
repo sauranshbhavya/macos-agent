@@ -28,21 +28,6 @@
         "Click Create Event. Your event is created instantly and you are taken to the event management page."
       ],
       "source": "https://help.luma.com/p/creating-an-event"
-    },
-    {
-      "title": "Add a host or manager to an event",
-      "startURL": "https://luma.com/signin?next=%2Fhome",
-      "steps": [
-        "From your Luma home page, open the event you want and go to its manage page.",
-        "Click on the Add Host button.",
-        "If the person you are adding isn't yet on Luma, you can set an avatar and name for them so that they don't need to do so themselves.",
-        "Choose whether the person should be shown on the event page, have access to the manage event page, or both.",
-        "Under Access Control, Manager gives the host full access to the event, while Non-Manager shows the host on the event page with no access to the event backend.",
-        "When you are done, click on Invite Host to add them to your event. They'll receive an email with a calendar invite that will automatically add the event to their calendar.",
-        "Hosts with the Manager role can add, remove and manage other hosts, but the Creator of the event cannot be removed and the Creator always gets the Manager role.",
-        "You can add up to 5 hosts to any event on Luma. To add more, the calendar managing the event needs to be verified; once verified, you can add up to 70 hosts per event."
-      ],
-      "source": "https://help.luma.com/p/adding-hosts-and-managers-to-your-event"
     }
   ],
   "startPages": [
@@ -53,14 +38,6 @@
       "heading": "",
       "offers": "product",
       "read": "2026-09-17"
-    },
-    {
-      "url": "https://luma.com/signin?next=%2Fhome",
-      "landedURL": "https://luma.com/signin",
-      "title": "Sign In · Luma",
-      "heading": "",
-      "offers": "sign-in",
-      "read": "2026-09-18"
     }
   ]
 }

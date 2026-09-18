@@ -49,19 +49,19 @@
   "startPages": [
     {
       "url": "https://accounts.google.com/ServiceLogin?continue=https%3A%2F%2Fmyaccount.google.com%2F",
-      "landedURL": "https://accounts.google.com/v3/signin/accountchooser",
+      "landedURL": "https://accounts.google.com/v3/signin/identifier",
       "title": "Sign in - Google Accounts",
-      "heading": "Choose an account",
+      "heading": "Sign in",
       "offers": "sign-in",
       "read": "2026-09-18"
     },
     {
       "url": "https://takeout.google.com/",
-      "landedURL": "https://accounts.google.com/v3/signin/accountchooser",
+      "landedURL": "https://accounts.google.com/v3/signin/identifier",
       "title": "Sign in - Google Accounts",
-      "heading": "Choose an account",
+      "heading": "Sign in",
       "offers": "sign-in",
-      "read": "2026-09-17"
+      "read": "2026-09-18"
     }
   ]
 }

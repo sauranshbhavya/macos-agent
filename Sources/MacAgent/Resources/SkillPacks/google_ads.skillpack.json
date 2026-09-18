@@ -42,9 +42,9 @@
   "startPages": [
     {
       "url": "https://ads.google.com/nav/login",
-      "landedURL": "https://accounts.google.com/v3/signin/accountchooser",
+      "landedURL": "https://accounts.google.com/v3/signin/identifier",
       "title": "Google Ads - Sign in",
-      "heading": "Choose an account",
+      "heading": "Sign in",
       "offers": "sign-in",
       "read": "2026-09-18"
     }
