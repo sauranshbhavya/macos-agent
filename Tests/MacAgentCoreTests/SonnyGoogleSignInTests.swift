@@ -237,6 +237,34 @@ struct SonnyGoogleSignInTests {
         #expect(try harness.tokenStore.loadTokens() == nil)
     }
 
+    /// **The exchange spends a single-use code, so it is never sent twice** (§9.3), even when what
+    /// came back is a code the client would retry anywhere else — the mirror of
+    /// `SonnyAccountServiceTests.verifyingIsNeverRetriedEvenOnARetryableFailure`.
+    @Test
+    func theExchangeIsNeverRetriedEvenOnARetryableFailure() async throws {
+        let harness = try Harness()
+        let seen = RecordedRequests()
+        harness.serve { request in
+            seen.record(request)
+            if request.url?.path == "/v1/auth/oauth/google/start" {
+                return .reply(statusCode: 200, headers: [:], body: Data(
+                    #"{"authorize_url":"https://project-ref.supabase.co/auth/v1/authorize"}"#.utf8
+                ))
+            }
+            return .reply(
+                statusCode: 502,
+                headers: [:],
+                body: SonnyBackendFixtures.errorEnvelopeJSON(code: "provider.unavailable", retryable: true)
+            )
+        }
+        let browser = FakeBrowser(returning: "com.sonny.macagent://auth/callback?code=x")
+
+        await #expect(throws: SonnyBackendError.self) {
+            _ = try await harness.service.signInWithGoogle(using: browser, pkce: try SonnyPKCE.generate())
+        }
+        #expect(seen.recorded.filter { $0.url?.path == "/v1/auth/oauth/google" }.count == 1)
+    }
+
     // MARK: - Harness
 
     struct FakeBrowser: WebAuthenticating {

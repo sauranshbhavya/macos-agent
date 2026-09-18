@@ -62,6 +62,8 @@ class GoogleAndEmailProvider implements AuthProvider {
   exchange: "ok" | "rejected" | "unavailable" = "ok";
   /** Mint the access token under a key the gateway does not accept. */
   unverifiableToken = false;
+  /** Mint the access token for a different user than the session reports — a provider answer that disagrees with itself. */
+  tokenForUser: string | undefined;
   readonly exchanges: { authCode: string; codeVerifier: string }[] = [];
   readonly signedOut: string[] = [];
   readonly sessionsMinted: string[] = [];
@@ -69,9 +71,10 @@ class GoogleAndEmailProvider implements AuthProvider {
   private minted(): VerifiedSession {
     const sessionId = randomUUID();
     this.sessionsMinted.push(sessionId);
+    const tokenUser = this.tokenForUser ?? this.supabaseUserId;
     const accessToken = this.unverifiableToken
-      ? accessTokenFor(this.supabaseUserId, { sessionId }).replace(/\.[^.]*$/, ".not-the-signature")
-      : accessTokenFor(this.supabaseUserId, { sessionId });
+      ? accessTokenFor(tokenUser, { sessionId }).replace(/\.[^.]*$/, ".not-the-signature")
+      : accessTokenFor(tokenUser, { sessionId });
     return {
       supabaseUserId: this.supabaseUserId,
       email: this.google.email,
@@ -254,6 +257,19 @@ describeDb("Sign in with Google, one provider-side user per account, and session
       expect(await accountCount()).toBe(0);
       expect((await client.query("SELECT 1 FROM sonny.gateway_session")).rows).toHaveLength(0);
       expect(provider.signedOut).toHaveLength(1);
+      await app.close();
+    });
+
+    itUnderHangBackstop("refuses a session whose token names a different user than the provider said it signed in", async () => {
+      // A provider answer that disagrees with itself. Recording either id would be recording a guess,
+      // and handing the token out would give the caller a session for a user nobody resolved.
+      const app = build();
+      provider.tokenForUser = USER_B;
+      const response = await googleSignIn(app);
+      expect(response.statusCode).toBe(500);
+      expect(response.json().error.code).toBe("server.error");
+      expect(await accountCount()).toBe(0);
+      expect((await client.query("SELECT 1 FROM sonny.gateway_session")).rows).toHaveLength(0);
       await app.close();
     });
 
