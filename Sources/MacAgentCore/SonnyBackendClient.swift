@@ -1296,6 +1296,10 @@ private struct WireErrorEnvelope: Decodable {
 struct SonnyTokenResponse: Decodable {
     struct User: Decodable {
         let id: String
+        /// The address the provider asserted, on `POST /v1/auth/oauth/google` alone (SONNY-129, §3.6).
+        /// **For display and nothing else**: it is what the Account row shows for a Google sign-in, where
+        /// no address was typed. Absent on the email route, whose address the user typed.
+        let email: String?
     }
 
     let access_token: String

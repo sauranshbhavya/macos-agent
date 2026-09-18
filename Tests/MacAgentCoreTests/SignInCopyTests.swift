@@ -50,6 +50,12 @@ struct SignInCopyTests {
         // waiting, which is the whole reason it stopped falling through to `.unexpected`.
         #expect(!SignInCopy.message(for: .updateRequired).contains("Try again"))
         #expect(SignInCopy.message(for: .unexpected) == "Sonny couldn't finish signing you in. Try again.")
+        // SONNY-129's two. The first is the one line the founders scoped for the refusal; it says what
+        // to do and nothing about why. The second exists so a refused Google code does not read as a
+        // code the user mistyped.
+        #expect(SignInCopy.message(for: .accountExists) == "This address already has a Sonny account. Sign in the way you did before.")
+        #expect(SignInCopy.message(for: .googleNotCompleted) == "Sonny couldn't finish signing you in with Google. Try again.")
+        #expect(!SignInCopy.message(for: .accountExists).contains("Try again"))
         #expect(SignInCopy.signedOutLocallyOnly == "Signed out on this Mac. Sonny couldn't finish signing you out everywhere.")
     }
 
@@ -141,6 +147,7 @@ struct SignInCopyTests {
         // permanent. Its words are `ClientVersionCopy`'s, because the same build meets the same wall
         // in the widget and in Command Center.
         ("version.unsupported", SignInFailure.updateRequired),
+        ("auth.account_exists", SignInFailure.accountExists),
         ("something.new_in_a_later_version", SignInFailure.unexpected)
     ])
     func everyBackendCodeMapsToOneNamedFailure(code: String, expected: SignInFailure) {
@@ -153,6 +160,30 @@ struct SignInCopyTests {
             envelopeSaysRetryable: false
         ))
         #expect(SignInFailure(error) == expected)
+    }
+
+    /// **A Google sign-in reads a refused code as the flow not finishing, never as a mistyped code**
+    /// (SONNY-129). Everything else maps exactly as the email flow's does, which is the control.
+    @Test(arguments: [
+        ("auth.code_invalid", SignInFailure.googleNotCompleted),
+        ("auth.code_expired", SignInFailure.googleNotCompleted),
+        ("auth.code_used", SignInFailure.googleNotCompleted),
+        ("request.invalid", SignInFailure.googleNotCompleted),
+        ("auth.account_exists", SignInFailure.accountExists),
+        ("limit.rate", SignInFailure.tooManyAttempts),
+        ("provider.unavailable", SignInFailure.backendUnreachable),
+        ("version.unsupported", SignInFailure.updateRequired)
+    ])
+    func aGoogleSignInsFailureMapsWithoutBlamingTheUsersTyping(code: String, expected: SignInFailure) {
+        let error = SonnyBackendError.api(SonnyBackendAPIError(
+            code: SonnyBackendErrorCode(wire: code),
+            statusCode: 400,
+            message: "irrelevant",
+            requestID: nil,
+            retryAfter: nil,
+            envelopeSaysRetryable: false
+        ))
+        #expect(SignInFailure(googleSignIn: error) == expected)
     }
 
     /// §7.2 case 7's distinction, from the client's side: "you are offline" and "Sonny is up and
@@ -253,6 +284,7 @@ struct SignInCopyTests {
         "auth.code_expired", "auth.code_used", "entitlement.required", "entitlement.expired",
         "limit.rate", "limit.spend", "request.invalid", "request.timeout", "request.too_large",
         "provider.unavailable", "provider.timeout", "provider.rejected", "server.error",
-        "server.unavailable", "resource.not_found", "idempotency.conflict", "version.unsupported"
+        "server.unavailable", "resource.not_found", "idempotency.conflict", "version.unsupported",
+        "auth.account_exists"
     ]
 }

@@ -452,6 +452,108 @@ struct SignInSurfaceTests {
         #expect(refusedAnnouncements == 0, "a refused code announced a session that was never created")
     }
 
+    // MARK: - Sign in with Google (SONNY-129)
+
+    /// A Google sign-in reaches the same signed-in state an email one does, shows the address Google
+    /// asserted, and announces itself exactly once.
+    @Test
+    func signingInWithGoogleLandsSignedInAndAnnouncesItOnce() async throws {
+        let harness = Harness()
+        harness.serveGoogle(exchange: .reply(statusCode: 200, headers: [:], body: Harness.googleTokenResponse))
+        let model = harness.makeModel()
+        model.webAuthenticator = AnsweringWebAuthenticator(outcome: .success("com.sonny.macagent://auth/callback?code=c"))
+        var announcements = 0
+        model.sessionDidChange = { announcements += 1 }
+
+        await model.signInWithGoogle()
+
+        #expect(model.step == .signedIn)
+        #expect(model.signedInAddress == "person@gmail.com")
+        #expect(model.failure == nil)
+        #expect(model.isBusy == false)
+        #expect(announcements == 1)
+    }
+
+    /// Closing the browser is a choice, not a failure: nothing is shown and nothing is announced.
+    @Test
+    func closingTheBrowserShowsNothingAndStaysOnTheAddressStep() async throws {
+        let harness = Harness()
+        harness.serveGoogle(exchange: .reply(statusCode: 500, headers: [:], body: Data()))
+        let model = harness.makeModel()
+        model.webAuthenticator = AnsweringWebAuthenticator(outcome: .failure(.cancelled))
+        var announcements = 0
+        model.sessionDidChange = { announcements += 1 }
+
+        await model.signInWithGoogle()
+
+        #expect(model.step == .address)
+        #expect(model.failure == nil)
+        #expect(model.isSignedIn == false)
+        #expect(announcements == 0)
+    }
+
+    /// The founders' option A, as the user meets it: one sentence saying to sign in the way they did
+    /// before, and no session.
+    @Test
+    func aSignInRefusedAsAnExistingAccountSaysToSignInTheWayTheyDidBefore() async throws {
+        let harness = Harness()
+        harness.serveGoogle(exchange: .reply(
+            statusCode: 409,
+            headers: ["Content-Type": "application/json"],
+            body: Data(#"{"error":{"code":"auth.account_exists","message":"no","retryable":false,"request_id":"r"}}"#.utf8)
+        ))
+        let model = harness.makeModel()
+        model.webAuthenticator = AnsweringWebAuthenticator(outcome: .success("com.sonny.macagent://auth/callback?code=c"))
+
+        await model.signInWithGoogle()
+
+        #expect(model.failure == .accountExists)
+        #expect(model.isSignedIn == false)
+        #expect(SignInCopy.message(for: try #require(model.failure)) == "This address already has a Sonny account. Sign in the way you did before.")
+    }
+
+    /// A refused Google code is not the user's typing, so it does not borrow the email flow's words.
+    @Test
+    func aRefusedGoogleCodeDoesNotBlameTheUsersTyping() async throws {
+        let harness = Harness()
+        harness.serveGoogle(exchange: .reply(
+            statusCode: 400,
+            headers: ["Content-Type": "application/json"],
+            body: Data(#"{"error":{"code":"auth.code_invalid","message":"no","retryable":false,"request_id":"r"}}"#.utf8)
+        ))
+        let model = harness.makeModel()
+        model.webAuthenticator = AnsweringWebAuthenticator(outcome: .success("com.sonny.macagent://auth/callback?code=c"))
+
+        await model.signInWithGoogle()
+
+        #expect(model.failure == .googleNotCompleted)
+        #expect(model.failure != .codeIncorrect)
+    }
+
+    /// The fixture's browser opens nothing — the property that keeps every other test in this target
+    /// from opening a real window on the machine running it.
+    @Test
+    func theFixturesBrowserOpensNothing() async throws {
+        let harness = Harness()
+        harness.serveGoogle(exchange: .reply(statusCode: 200, headers: [:], body: Harness.googleTokenResponse))
+        let model = harness.makeModel()
+
+        await model.signInWithGoogle()
+
+        #expect(model.failure == .googleNotCompleted)
+        #expect(model.isSignedIn == false)
+    }
+
+    /// The button is on the address step, carries its functional label, and there is no Apple button.
+    @Test
+    func theAddressStepCarriesTheGoogleButtonAndNoAppleOne() throws {
+        let source = try MacAgentSource.read("SignInView.swift")
+        #expect(MacAgentSource.count(of: "SignInCopy.signInWithGoogleLabel", inText: source) == 2)
+        #expect(MacAgentSource.count(of: "model.signInWithGoogle()", inText: source) == 1)
+        #expect(!source.contains("Sign in with Apple\""))
+        #expect(!source.lowercased().contains("wkwebview"))
+    }
+
     /// Signing out announces itself too, **including when the server never confirmed the revoke** —
     /// `SonnyAccountService.signOut` clears this Mac either way, so the session is gone locally
     /// whatever happened upstream, and that is precisely the case where a row still reading "Signed
@@ -592,6 +694,29 @@ struct SignInSurfaceTests {
                     "user": ["id": "acct_7f3c"]
                 ])
                 return .reply(statusCode: 200, headers: [:], body: body)
+            }
+        }
+
+        static let googleTokenResponse = try! JSONSerialization.data(withJSONObject: [
+            "access_token": "google-access",
+            "token_type": "Bearer",
+            "expires_in": 3600,
+            "expires_at": "2026-09-18T12:00:00Z",
+            "refresh_token": "google-refresh",
+            "user": ["id": "acct_7f3c", "email": "person@gmail.com"]
+        ])
+
+        /// `oauth/google/start` answers an authorize URL; `oauth/google` answers `exchange`.
+        func serveGoogle(exchange: BackendStubURLProtocol.Outcome) {
+            serve { request in
+                if request.url?.path == "/v1/auth/oauth/google/start" {
+                    return .reply(
+                        statusCode: 200,
+                        headers: [:],
+                        body: Data(#"{"authorize_url":"https://project-ref.supabase.co/auth/v1/authorize?provider=google"}"#.utf8)
+                    )
+                }
+                return exchange
             }
         }
 

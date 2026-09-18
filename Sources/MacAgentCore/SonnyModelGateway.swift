@@ -291,15 +291,15 @@ public enum SonnyBackendCopy {
         case .offline:
             return "You're offline. Everything Sonny does on this Mac still works."
         case .backendUnreachable, .unexpected, .emailInvalid, .codeIncorrect, .codeExpired,
-             .codeAlreadyUsed:
+             .codeAlreadyUsed, .accountExists, .googleNotCompleted:
             // **What is left in this arm really is unreachable-or-unknown, and the previous version
             // of this comment was wrong about which** (PR #139, F7). It said the four code cases
             // "cannot arise on these routes" and named `.emailInvalid` among them — but
             // `SignInFailure` maps `request.invalid` to `.emailInvalid`, and `request.invalid` is
             // exactly what this server answers a missing `retention` with, so it arose constantly.
             // It is unreachable *now*, because the interception above takes `request.invalid` first;
-            // the three `authCode*` cases are unreachable because these routes never return those
-            // codes. What remains is a backend that could not be reached and a code this build does
+            // the three `authCode*` cases, and SONNY-129's `accountExists` and `googleNotCompleted`,
+            // are unreachable because these routes never return those codes. What remains is a backend that could not be reached and a code this build does
             // not recognise, and "try again" is honest for both.
             //
             // **`request.timeout` is reached here too, deliberately, and it is not unknown**

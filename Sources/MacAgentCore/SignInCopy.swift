@@ -44,8 +44,31 @@ public enum SignInFailure: Equatable, Sendable, CaseIterable {
     /// permanent, and the exact non-answer §8.3 exists to replace with "a definite, actionable
     /// state".
     case updateRequired
+    /// The sign-in belongs to an account reached another way — §7.2's `auth.account_exists`
+    /// (SONNY-129). Someone who signed up with an email code and then chose Google on the same
+    /// address, or the reverse: the gateway refuses rather than give them a second account.
+    case accountExists
+    /// A Google sign-in that came back without a session: the provider declined, the browser returned
+    /// something this flow did not ask for, or the gateway refused the code (SONNY-129).
+    ///
+    /// **Its own case rather than `.codeIncorrect`**, which is what `auth.code_invalid` maps to on the
+    /// email route: "That code isn't right. Check it and try again." is a sentence about a code the
+    /// user typed, and on the Google route there is nothing typed to check. Reached only through
+    /// `SignInFailure(googleSignIn:)`.
+    case googleNotCompleted
     /// Anything this build does not recognise, including a `code` added after it shipped.
     case unexpected
+
+    /// A Google sign-in's failure, which differs from the email flow's in exactly one place: a refused
+    /// code is not the user's typing (SONNY-129).
+    public init(googleSignIn error: SonnyBackendError) {
+        if case .api(let api) = error,
+           [.authCodeInvalid, .authCodeExpired, .authCodeUsed, .requestInvalid].contains(api.code) {
+            self = .googleNotCompleted
+        } else {
+            self.init(error)
+        }
+    }
 
     public init(_ error: SonnyBackendError) {
         switch error {
@@ -89,6 +112,8 @@ public enum SignInFailure: Equatable, Sendable, CaseIterable {
             self = .backendUnreachable
         case .versionUnsupported:
             self = .updateRequired
+        case .authAccountExists:
+            self = .accountExists
         case .entitlementRequired, .entitlementExpired, .entitlementNoSubscription,
              .requestTooLarge, .resourceNotFound, .idempotencyConflict,
              .unknown:
@@ -129,6 +154,10 @@ public enum SignInCopy {
             return "Sign-in isn't available in this build."
         case .signedOut:
             return "You're signed out. Sign in again."
+        case .accountExists:
+            return "This address already has a Sonny account. Sign in the way you did before."
+        case .googleNotCompleted:
+            return "Sonny couldn't finish signing you in with Google. Try again."
         case .updateRequired:
             // One owner for the wall's sentence. The same condition reaches the sign-in sheet, the
             // widget and Command Center, and two literals would be two sentences about one state.
@@ -153,6 +182,9 @@ public enum SignInCopy {
     public static let useAnotherAddressLabel = "Use another address"
     public static let signOutLabel = "Sign out"
     public static let signInLabel = "Sign in"
+    /// SONNY-129. Functional, per the founder's rule for this surface; Google's own button artwork is
+    /// SONNY-109's design question.
+    public static let signInWithGoogleLabel = "Sign in with Google"
     public static let codeSentConfirmation = "Code sent."
 
     /// Sign-out cleared this Mac but the server did not confirm the session ended.

@@ -430,6 +430,45 @@ final class SonnyAccountModel: ObservableObject {
     /// the machine running the suite. `main.swift` leaves it at the default.
     var openPortalURL: @MainActor (URL) -> Void = { NSWorkspace.shared.open($0) }
 
+    /// Opens the user's browser for Sign in with Google (SONNY-129). **Replaceable for tests only**,
+    /// for `openPortalURL`'s reason: the real one opens a browser on the machine running the suite.
+    /// `main.swift` leaves it at the default.
+    var webAuthenticator: any WebAuthenticating = SystemWebAuthenticator()
+
+    /// Sign in with Google (SONNY-129, contract §3.6).
+    ///
+    /// **Three outcomes the user can tell apart.** A session arrives and the surface moves to signed in,
+    /// exactly as an email sign-in does. The user closes the browser, and nothing is shown — closing it
+    /// is a choice, not a failure. Anything else is a failure with its own words:
+    /// `SignInFailure(googleSignIn:)` keeps a refused code from reading as a code the user mistyped,
+    /// and `auth.account_exists` says to sign in the way they did before.
+    func signInWithGoogle() async {
+        guard !isBusy, isConfigured else { return }
+        isBusy = true
+        failure = nil
+        notice = nil
+        defer { isBusy = false }
+        do {
+            let pkce = try SonnyPKCE.generate()
+            identity = try await service.signInWithGoogle(using: webAuthenticator, pkce: pkce)
+            code = ""
+            step = .signedIn
+        } catch SonnyGoogleSignInError.cancelled {
+            // The user closed the browser. Nothing to report.
+        } catch is SonnyGoogleSignInError {
+            failure = .googleNotCompleted
+        } catch let error as SonnyBackendError {
+            failure = SignInFailure(googleSignIn: error)
+        } catch {
+            // A Keychain write that failed, which `run` below treats the same way and for the same
+            // reason: telling a user they are signed in when no disk agrees is the worst answer.
+            failure = .unexpected
+        }
+        // Outside the `do`, for the reason `verify()` gives: the guard is what keeps a refusal from
+        // announcing a session that never arrived.
+        if identity != nil, step == .signedIn { sessionDidChange?() }
+    }
+
     func useAnotherAddress() {
         step = .address
         code = ""
@@ -498,11 +537,11 @@ final class SonnyAccountModel: ObservableObject {
 /// how this looks; this ticket owns that it works. System A throughout (Inter, flat opaque fills,
 /// zero shadows, accent #5C84FE), on the same close-X chrome as `SettingsDialogView`.
 ///
-/// **Google and Apple buttons are next branch's and this must not have to be rebuilt for them**
-/// (founder, 2026-08-17 — Google lands early, Apple near launch, so the requirement has to hold
-/// twice, months apart). They slot in above `emailForm` inside `addressStep`: the step is already
-/// a vertical stack of independent blocks, and neither the model's state machine nor the code step
-/// changes, because both providers return the same §3.2 token response this already adopts.
+/// **The Google button sits above the email form inside `addressStep`** (SONNY-129), which is where
+/// this comment said the provider buttons would go, and it arrived without rebuilding anything: the
+/// step is a vertical stack of independent blocks, and neither the model's state machine nor the code
+/// step changed, because Google returns the same §3.2 token response this already adopts. **Apple's
+/// button never came**: Sign in with Apple was dropped from v1 on 2026-09-18 (SONNY-521).
 /// The write half of the auto-top-up control (SONNY-215).
 ///
 /// **Three fields and not four: there is no `isOn` here.** Whether the setting is on is a property of
@@ -618,6 +657,19 @@ struct SignInDialogView: View {
 
     private var addressStep: some View {
         VStack(alignment: .leading, spacing: SonnySpacing.sm) {
+            // SONNY-129. Above the email form, where this view's own comment said the provider buttons
+            // would slot in, so neither the model's steps nor the code step change. Sign in with
+            // Apple is not beside it: it was dropped from v1 (SONNY-521).
+            Button {
+                Task { await model.signInWithGoogle() }
+            } label: {
+                Text(SignInCopy.signInWithGoogleLabel)
+            }
+            .buttonStyle(SonnyButtonStyle(tone: .secondary))
+            .disabled(model.isBusy || !model.isConfigured)
+            .accessibilityLabel(SignInCopy.signInWithGoogleLabel)
+            .padding(.bottom, SonnySpacing.sm)
+
             Text(SignInCopy.emailFieldLabel)
                 .font(SonnyType.caption)
                 .foregroundStyle(SonnyTheme.muted)

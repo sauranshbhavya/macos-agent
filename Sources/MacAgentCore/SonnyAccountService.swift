@@ -18,7 +18,7 @@ public enum SignOutOutcome: Equatable, Sendable {
     case clearedLocallyOnly(SignInFailure)
 }
 
-/// The three auth calls the Mac app makes, on top of the one shared client.
+/// The auth calls the Mac app makes, on top of the one shared client.
 ///
 /// Refresh is deliberately not here: it belongs to `SonnyBackendClient`, which is the only thing
 /// that sees a 401 and the only thing that can hold the single-flight guard across every concurrent
@@ -83,6 +83,70 @@ public struct SonnyAccountService: Sendable {
         ))
         let decoded = try SonnyTokenResponse.decode(response.data)
         let tokens = decoded.tokens(emailAddress: email, receivedAt: await client.serverNow())
+        try await client.adopt(tokens)
+        return tokens.identity
+    }
+
+    /// Sign in with Google, and **write the session to the Keychain before returning** — the same
+    /// ordering `verifyEmailCode` holds, for the same reason (SONNY-129, contract §3.6).
+    ///
+    /// Three steps, and only the last one spends anything. `start` sends the PKCE challenge and gets
+    /// back the address to open; `authenticator` opens it in the user's browser and returns where the
+    /// browser came back to; the exchange sends the code with the verifier. **The verifier is sent
+    /// once, there**, and nowhere else.
+    ///
+    /// **`start` is retry-safe and the exchange is not** (§9.3): the first stores and calls nothing,
+    /// and the second spends a code that is single-use at the provider. A closed browser throws
+    /// `SonnyGoogleSignInError.cancelled` before the exchange is sent, so nothing is spent and nothing
+    /// is written.
+    public func signInWithGoogle(
+        using authenticator: any WebAuthenticating,
+        pkce: SonnyPKCE
+    ) async throws -> SonnyAccountIdentity {
+        let startBody = try JSONSerialization.data(withJSONObject: ["code_challenge": pkce.challenge])
+        let started = try await client.send(SonnyBackendRequest(
+            method: "POST",
+            path: "/v1/auth/oauth/google/start",
+            body: startBody,
+            authentication: .none,
+            idempotencyKey: UUID(),
+            timeout: SonnyBackendTimeouts.auth,
+            isRetrySafe: true
+        ))
+        guard
+            let decoded = try? JSONDecoder().decode(WireAuthorizeURL.self, from: started.data),
+            let authorizeURL = URL(string: decoded.authorize_url)
+        else {
+            throw SonnyBackendError.undecodableResponse("oauth/google/start response")
+        }
+        guard SonnyGoogleSignIn.isOpenable(authorizeURL) else {
+            throw SonnyGoogleSignInError.unopenableAuthorizeURL
+        }
+
+        let callback = try await authenticator.authenticate(
+            url: authorizeURL,
+            callbackScheme: SonnyGoogleSignIn.callbackScheme
+        )
+        let code = try SonnyGoogleSignIn.authorizationCode(from: callback)
+
+        let exchangeBody = try JSONSerialization.data(withJSONObject: [
+            "auth_code": code,
+            "code_verifier": pkce.verifier
+        ])
+        let response = try await client.send(SonnyBackendRequest(
+            method: "POST",
+            path: "/v1/auth/oauth/google",
+            body: exchangeBody,
+            authentication: .none,
+            idempotencyKey: UUID(),
+            timeout: SonnyBackendTimeouts.auth,
+            isRetrySafe: false
+        ))
+        let tokenResponse = try SonnyTokenResponse.decode(response.data)
+        let tokens = tokenResponse.tokens(
+            emailAddress: tokenResponse.user.email,
+            receivedAt: await client.serverNow()
+        )
         try await client.adopt(tokens)
         return tokens.identity
     }
@@ -202,6 +266,11 @@ public struct SonnyAccountService: Sendable {
         try await client.discardSessionLocally()
         return outcome
     }
+}
+
+/// §3.6's `POST /v1/auth/oauth/google/start` response (SONNY-129).
+private struct WireAuthorizeURL: Decodable {
+    let authorize_url: String
 }
 
 private struct WireCodeRequest: Decodable {
