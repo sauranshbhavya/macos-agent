@@ -8,6 +8,33 @@
   "signInURL": "https://app.plaud.ai/login",
   "triggers": ["plaud.ai"],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Create, rename or delete a folder in Plaud Web",
+      "startURL": "https://web.plaud.ai/",
+      "steps": [
+        "Plaud Web's file library is behind sign-in: signed out, web.plaud.ai opens its sign-in page instead, and every step below is on the library it shows once you are signed in.",
+        "To create a folder, click the + icon to the right of your folders list.",
+        "Enter a name for the new folder, then click Save to confirm.",
+        "To rename or delete a folder, find it, click the ... icon to the right of its name, and select Edit or Delete from the menu that appears.",
+        "A deleted folder cannot be restored. The files inside it move to Trash, where they can be restored later."
+      ],
+      "source": "https://support.plaud.ai/hc/en-us/articles/51073116390425-Create-rename-and-delete-folders"
+    },
+    {
+      "title": "Export a recording, transcript, summary or mind map from Plaud Web",
+      "startURL": "https://web.plaud.ai/",
+      "steps": [
+        "These steps are on Plaud Web once you are signed in; signed out, web.plaud.ai opens its sign-in page instead.",
+        "Open the file you want to export.",
+        "Click the Share icon in the top-right corner.",
+        "Choose the content you want to export: the audio, the transcript, the summary or the mind map.",
+        "Select the file format. Audio exports as MP3; a transcript as TXT, SRT, DOCX or PDF; a summary as TXT, Markdown, DOCX or PDF; a mind map as PNG or Markdown.",
+        "For a transcript, choose whether to include timestamps and speaker labels.",
+        "Click Export."
+      ],
+      "source": "https://support.plaud.ai/hc/en-us/articles/51023259082393-Export-recordings-transcripts-and-summaries"
+    }
+  ]
 }

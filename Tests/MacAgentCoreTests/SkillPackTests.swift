@@ -84,7 +84,7 @@ struct SkillPackTests {
             #expect(ids.contains(added), "\(added) was added by founder decision")
         }
         // Two of the column's three values are in use: the flows rest on re-openable documentation on
-        // 421 rows and on the running product on the other 52, and no row says `shallow` any more
+        // 423 rows and on the running product on the other 50, and no row says `shallow` any more
         // (`awk -F'\t' 'NR > 1 {c[$8]++} END {for (k in c) print k, c[k]}' docs/sonny-skill-sites.tsv`).
         // No SHA beside those numbers deliberately: this assertion re-counts them on every run, so
         // unlike a stamped figure they cannot describe a tree that has since moved. It is also the
@@ -92,7 +92,7 @@ struct SkillPackTests {
         // make this dictionary equal, so a separate set-membership assertion added only a message
         // (review-260's F3).
         let evidence = rows.map { $0["task_flow_docs"]! }
-        #expect(Dictionary(evidence.map { ($0, 1) }, uniquingKeysWith: +) == ["deep": 421, "site": 52])
+        #expect(Dictionary(evidence.map { ($0, 1) }, uniquingKeysWith: +) == ["deep": 423, "site": 50])
         #expect(rows.filter { $0["why_in_list"]!.hasPrefix("founder-named") }.count == 100)
         for row in rows {
             #expect(!row["domain"]!.isEmpty, "\(row["id"]!) has no domain")
