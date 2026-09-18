@@ -22,7 +22,7 @@ Same packaged app. Sign in to eBay yourself first.
 - [ ] Ask Sonny to save an eBay search for something you look for often. It searches, then selects Save this search at the top of the results — it does not open a listing or offer to bid or buy.
 - [ ] Ask it to tidy your eBay Watchlist. It goes to My eBay → Watching, and offers Sort, the Status dropdown, and tick-and-Delete.
 
-### The ten new packs' start pages are sign-in pages or a shop front, not sign-up pages (new 2026-09-18, SONNY-503, SONNY-504)
+### The twelve new packs' start pages sign in an existing account, with account creation a separate route (new 2026-09-18, SONNY-503, SONNY-504)
 
 No app needed — a browser signed out of everything, which is what Sonny meets on a fresh Mac. Each was measured once on this branch; if a page has moved, note what it now shows.
 
@@ -32,11 +32,13 @@ No app needed — a browser signed out of everything, which is what Sonny meets 
 - [ ] `https://id.kajabi.com/u/login` — "Sign in to your account", Sign up here a link.
 - [ ] `https://app.samcart.com/auth/login` — "Login | SamCart", Sign Up a link to the pricing page.
 - [ ] `https://www.ebay.com/` — the homepage: a search box, Sign in and register as links, a My eBay menu.
-- [ ] `https://www.etsy.com/` — the shop homepage with its search box and Sign in. A cookie notice may show at the bottom right; leave it alone. By the founders' rule of 2026-09-18, a cookie or consent notice never disqualifies a start page.
+- [ ] `https://www.etsy.com/` — the shop homepage with its search box and Sign in. A cookie notice may show at the bottom right; leave it alone. A cookie notice is never relevant to a start page (founders, 2026-09-18). Signed out, this page shows only "Sign in", with no Shop Manager and no Your account. That is expected: both flows begin in the signed-in product.
 - [ ] `https://app.clickfunnels.com/users/sign_in` — "ClickFunnels - Login", Sign Up a link, no agreement text.
 - [ ] `https://thrivecart.com/signin/` — email, password and Sign In, no sign-up form.
 - [ ] `https://ads.tiktok.com/i18n/login` — "TikTok Ads: Log In", "Log in to your TikTok for Business account", Sign up now a link, no agreement text.
-- [ ] For contrast, the held ones should still show what held them: `https://www.appsheet.com/Template/Apps` ("By signing in, you agree…" under its provider buttons), `https://my.ecwid.com/` ("By continuing, you agree…"), `https://www.linkedin.com/login` (the same, under Continue with Google), `https://app.bubble.io/login` (a sign-up form), and `https://creator.zoho.com/` (a www.zoho.com sign-up form).
+- [ ] `https://my.ecwid.com/` — goes to `/cp/`, "Sign in to your Ecwid account": email, password and Sign In. "Create new Ecwid account" switches to a different form ending "Next: Set up your Store". The "By continuing, you agree…" line is there and does not decide it.
+- [ ] `https://www.linkedin.com/login` — "Sign in": email or phone, password and Sign in, with Join now a link to a separate sign-up page. The "By continuing, you agree…" line is there and does not decide it.
+- [ ] For contrast, the held ones should still show what held them: `https://www.appsheet.com/Template/Apps` (seven single-sign-on provider buttons and no sign-up route at all, so the one set of buttons both signs in and would create an account), `https://app.bubble.io/login` (the visible form is "Sign up and start building"), and `https://creator.zoho.com/` (a www.zoho.com sign-up form).
 
 ### Sonny reads TikTok Ads results without touching an ad (new 2026-09-18, SONNY-503)
 
@@ -45,6 +47,13 @@ Same packaged app. Sign in to TikTok Ads Manager yourself first.
 - [ ] Ask Sonny how your TikTok ads did this week. It goes to the Campaigns page, the Campaign / Ad group / Ad tabs and the column metrics, or to the Dashboard summary with its Calendar filter.
 - [ ] Nothing it proposes creates, edits, turns on or pays for an ad.
 
+### Sonny reads LinkedIn Ads lead results without touching an ad (new 2026-09-18, SONNY-503)
+
+Same packaged app. Sign in to LinkedIn yourself first, with access to a Campaign Manager ad account.
+
+- [ ] Ask Sonny to download the leads from one of your LinkedIn Lead Gen Forms. It goes to Campaign Manager → Content & Assets → Lead generation forms, ticks the form, sets the time range, then Download leads → Download.
+- [ ] Nothing it proposes creates, edits, turns on or pays for an ad.
+
 ### This group's remaining sites still carrying facts alone is not a finding (new 2026-09-18, SONNY-503, SONNY-504)
 
-- [ ] appsheet, ecwid, bubble, glide, zoho_creator, linkedin_ads and metricool are still shallow packs after this branch — each named on SONNY-503 or SONNY-504 with the start-page reason. Skip them when checking deep flows.
+- [ ] appsheet, bubble, glide, zoho_creator and metricool are still shallow packs after this branch — each named on SONNY-503 or SONNY-504 with the start-page reason. Skip them when checking deep flows.
