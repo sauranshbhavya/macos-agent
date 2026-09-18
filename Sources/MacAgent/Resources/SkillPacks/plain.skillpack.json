@@ -49,5 +49,15 @@
       ],
       "source": "https://www.plain.com/docs/product/platform/keyboard-shortcuts"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://app.plain.com/",
+      "landedURL": "https://signin.auth.plain.com/",
+      "title": "Sign in",
+      "heading": "Welcome back to Plain",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
   ]
 }

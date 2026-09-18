@@ -41,5 +41,15 @@
       ],
       "source": "https://help.typeform.com/hc/en-us/articles/360029253732-Working-with-your-responses"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://admin.typeform.com/",
+      "landedURL": "https://admin.typeform.com/login",
+      "title": "Typeform",
+      "heading": "",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
   ]
 }

@@ -27,5 +27,15 @@
       ],
       "source": "https://docs.partnerstack.com/docs/universal-importer"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://dash.partnerstack.com/login",
+      "landedURL": "https://dash.partnerstack.com/handshake/login",
+      "title": "PartnerStack",
+      "heading": "Sign in to PartnerStack",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
   ]
 }

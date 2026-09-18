@@ -24,18 +24,16 @@
         "To delete a saved search, select the blue heart on it."
       ],
       "source": "https://www.ebay.com/help/buying/search-tips/saved-searches?id=4051"
-    },
+    }
+  ],
+  "startPages": [
     {
-      "title": "View and tidy your Watchlist",
-      "startURL": "https://www.ebay.com/",
-      "steps": [
-        "Go to My eBay and select Watching.",
-        "Use the Sort dropdown to sort the listings by most relevant, time left, price, seller ID or date added.",
-        "Active and ended listings show together by default. Use the dropdown beside Status to see them separately.",
-        "To remove items, tick the box beside each one and select Delete. Several can be removed at once.",
-        "To add an item from a listing, select Add to Watchlist on the listing, or the heart symbol under an item on a search results page."
-      ],
-      "source": "https://www.ebay.com/help/buying/search-tips/watchlist?id=4046"
+      "url": "https://www.ebay.com/",
+      "landedURL": "https://www.ebay.com/",
+      "title": "Electronics, Cars, Fashion, Collectibles & More | eBay",
+      "heading": "Peace of mind for your next pair",
+      "offers": "product",
+      "read": "2026-09-18"
     }
   ]
 }

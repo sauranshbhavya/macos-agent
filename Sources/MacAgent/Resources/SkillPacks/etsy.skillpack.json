@@ -37,5 +37,15 @@
       ],
       "source": "https://help.etsy.com/hc/en-us/articles/360044099373-How-to-Turn-Off-Your-Etsy-Ads-Campaign"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://www.etsy.com/",
+      "landedURL": "https://www.etsy.com/",
+      "title": "Etsy - Shop for handmade, vintage, custom, and unique gifts for everyone",
+      "heading": "Jump into featured interests",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
   ]
 }

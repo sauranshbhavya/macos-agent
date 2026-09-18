@@ -23,30 +23,16 @@
         "Ask follow-ups in the same session; it keeps the context, so earlier background does not have to be repeated."
       ],
       "source": "https://www.perplexity.ai/help-center/en/articles/10354769-what-is-a-thread"
-    },
+    }
+  ],
+  "startPages": [
     {
-      "title": "Find, tidy or share an earlier session",
-      "startURL": "https://www.perplexity.ai/library",
-      "steps": [
-        "Go to your History at perplexity.ai/library, which only you can see.",
-        "Use the search bar to find a session, Type to sort by Search Mode, and Sorting to go newest-to-oldest or the other way; sessions from the Comet browser can be hidden or shown.",
-        "Click Select to pick several sessions at once for deletion, or the three dots on one session to delete it or add it to a project. The dots menu on the right of the screen removes every session in one go.",
-        "To share a session, open it and click Share at the top right, then choose Private, Anyone with the link, or — for Enterprise Pro — anyone in your organization with the link.",
-        "Export saves the answer as PDF, Markdown or DOCX; Rewrite answers again with a different model."
-      ],
-      "source": "https://www.perplexity.ai/help-center/en/articles/10354769-what-is-a-thread"
-    },
-    {
-      "title": "Make a skill for Perplexity Computer",
-      "startURL": "https://www.perplexity.ai/",
-      "steps": [
-        "In Computer, go to the Skills page. Its two tabs are My Skills, which holds what you made or uploaded, and Perplexity Skills, the built-in library.",
-        "Click Create skill.",
-        "Select Create with Perplexity, then describe the task the skill should handle — Perplexity builds it with you through a conversation, and no technical knowledge is needed.",
-        "To bring in a skill you already have, select Upload a skill instead and drag in a .zip with a SKILL.md at the root, or a .md file, up to 10 MB. The file needs YAML frontmatter with a name and a description, and the name is lowercase with hyphens.",
-        "Write the description carefully: Perplexity reads it to decide when the skill applies, so it should carry the words somebody would use when they want it."
-      ],
-      "source": "https://www.perplexity.ai/help-center/en/articles/13914413-how-to-use-computer-skills"
+      "url": "https://www.perplexity.ai/",
+      "landedURL": "https://www.perplexity.ai/",
+      "title": "Perplexity",
+      "heading": "",
+      "offers": "product",
+      "read": "2026-09-18"
     }
   ]
 }

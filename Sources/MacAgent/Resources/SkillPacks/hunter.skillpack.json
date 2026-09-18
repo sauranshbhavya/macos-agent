@@ -12,7 +12,7 @@
   "flows": [
     {
       "title": "Find a person's email with Email Finder",
-      "startURL": "https://hunter.io/",
+      "startURL": "https://hunter.io/users/sign_in",
       "steps": [
         "Go to the Email Finder.",
         "Enter the first and last name of the person you are looking to find the email address for.",
@@ -23,7 +23,7 @@
     },
     {
       "title": "Verify an email address",
-      "startURL": "https://hunter.io/",
+      "startURL": "https://hunter.io/users/sign_in",
       "steps": [
         "Select the \"Verifier\" tool in the left-side navigation panel.",
         "Enter the email address you'd like to verify.",
@@ -34,13 +34,23 @@
     },
     {
       "title": "Find companies with Discover",
-      "startURL": "https://hunter.io/",
+      "startURL": "https://hunter.io/users/sign_in",
       "steps": [
         "Access Discover from the main menu in your Hunter dashboard, or go directly to hunter.io/discover.",
         "Use the AI Assistant by typing a plain-language description of your target audience (for example, \"SaaS companies with 50-200 employees in Europe\") and clicking the orange button, or apply filters manually from the sidebar instead.",
         "Click any company in your results to expand its profile, showing its description, industry and size, headquarters location, and detected technologies."
       ],
       "source": "https://help.hunter.io/en/articles/9123069-find-companies-using-hunter-discover"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://hunter.io/users/sign_in",
+      "landedURL": "https://hunter.io/users/sign_in",
+      "title": "Sign in • Hunter",
+      "heading": "Welcome back",
+      "offers": "sign-in",
+      "read": "2026-09-18"
     }
   ]
 }

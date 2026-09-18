@@ -35,5 +35,23 @@
       ],
       "source": "https://grok.com/imagine"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://grok.com/",
+      "landedURL": "https://grok.com/",
+      "title": "Grok",
+      "heading": "What should we explore?",
+      "offers": "product",
+      "read": "2026-09-18"
+    },
+    {
+      "url": "https://grok.com/imagine",
+      "landedURL": "https://grok.com/imagine",
+      "title": "Grok Imagine",
+      "heading": "What should we imagine?",
+      "offers": "product",
+      "read": "2026-09-18"
+    }
   ]
 }

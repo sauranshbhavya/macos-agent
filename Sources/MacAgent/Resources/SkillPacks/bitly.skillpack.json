@@ -42,5 +42,15 @@
       ],
       "source": "https://support.bitly.com/hc/en-us/articles/11513559140109-How-do-I-create-a-Bitly-Page"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://app.bitly.com/",
+      "landedURL": "https://bitly.com/a/sign_in",
+      "title": "Log in to the Bitly Connections Platform",
+      "heading": "Log in and start sharing",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
   ]
 }

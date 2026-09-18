@@ -40,5 +40,15 @@
       ],
       "source": "https://learn.hex.tech/docs/collaborate/sharing-and-permissions/project-sharing"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://app.hex.tech/",
+      "landedURL": "https://app.hex.tech/login",
+      "title": "Hex",
+      "heading": "Log in",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
   ]
 }

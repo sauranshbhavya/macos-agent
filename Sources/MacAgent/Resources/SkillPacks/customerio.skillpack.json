@@ -45,5 +45,15 @@
       ],
       "source": "https://docs.customer.io/messaging/segmentation/manual-segments/"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://fly.customer.io/",
+      "landedURL": "https://fly.customer.io/login",
+      "title": "Customer.io",
+      "heading": "Welcome back! Log in to Customer.io",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
   ]
 }

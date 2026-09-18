@@ -5,7 +5,7 @@
   "domain": "ads.google.com",
   "category": "marketing_growth",
   "summary": "Google's advertising platform.",
-  "signInURL": "https://ads.google.com/nav/login",
+  "signInURL": "https://accounts.google.com/ServiceLogin?continue=https%3A%2F%2Fads.google.com%2Fnav%2Flogin",
   "triggers": [
     "google ads",
     "ads.google.com"
@@ -15,7 +15,7 @@
   "flows": [
     {
       "title": "View campaign performance",
-      "startURL": "https://ads.google.com/",
+      "startURL": "https://ads.google.com/nav/login",
       "steps": [
         "Click the Campaigns icon.",
         "Click the Campaigns drop down in the section menu.",
@@ -27,7 +27,7 @@
     },
     {
       "title": "Download a performance report",
-      "startURL": "https://ads.google.com/",
+      "startURL": "https://ads.google.com/nav/login",
       "steps": [
         "Click the Campaigns icon.",
         "Click the Campaigns drop down in the section menu, then click Ad groups if you want ad group data.",
@@ -37,6 +37,16 @@
         "When the report is finished, you will receive a Downloading report notification."
       ],
       "source": "https://support.google.com/google-ads/answer/2404036?hl=en"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://ads.google.com/nav/login",
+      "landedURL": "https://accounts.google.com/v3/signin/identifier",
+      "title": "Google Ads - Sign in",
+      "heading": "Sign in",
+      "offers": "sign-in",
+      "read": "2026-09-18"
     }
   ]
 }

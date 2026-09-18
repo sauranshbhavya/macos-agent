@@ -44,5 +44,15 @@
       ],
       "source": "https://launchdarkly.com/docs/home/flags/toggle"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://app.launchdarkly.com/",
+      "landedURL": "https://app.launchdarkly.com/login",
+      "title": "Sign in",
+      "heading": "Sign in to LaunchDarkly",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
   ]
 }

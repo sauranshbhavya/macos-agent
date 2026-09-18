@@ -41,5 +41,15 @@
       ],
       "source": "https://help.warmupinbox.com/en/articles/15478604-how-does-email-warmup-work-and-what-to-expect-after-you-connect-your-first-inbox"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://app.warmupinbox.com/",
+      "landedURL": "https://app.warmupinbox.com/login",
+      "title": "Log In | Warmup Inbox",
+      "heading": "Log in to Your Account",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
   ]
 }

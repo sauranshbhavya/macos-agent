@@ -5,7 +5,7 @@
   "domain": "carrd.co",
   "category": "websites_apps_commerce",
   "summary": "Simple one-page website builder.",
-  "signInURL": "https://carrd.co/login",
+  "signInURL": "https://carrd.com/login",
   "triggers": [
     "carrd",
     "carrd.co"
@@ -39,6 +39,16 @@
         "Back at Carrd, click Publish Changes."
       ],
       "source": "https://carrd.com/docs/sites/using-a-custom-domain"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://carrd.co/dashboard",
+      "landedURL": "https://carrd.com/login",
+      "title": "Log In - Carrd",
+      "heading": "Log In",
+      "offers": "sign-in",
+      "read": "2026-09-18"
     }
   ]
 }

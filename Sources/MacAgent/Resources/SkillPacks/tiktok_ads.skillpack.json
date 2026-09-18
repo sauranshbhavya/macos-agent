@@ -37,5 +37,15 @@
       ],
       "source": "https://ads.tiktok.com/resources/help/article/view-data"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://ads.tiktok.com/i18n/login",
+      "landedURL": "https://ads.tiktok.com/i18n/login",
+      "title": "TikTok Ads: Log In",
+      "heading": "Log in to your TikTok for Business account",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
   ]
 }

@@ -41,5 +41,15 @@
       ],
       "source": "https://docs.lusha.com/user-guide/managing-and-exporting-data/exporting-from-a-workspace-table"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://dashboard.lusha.com/",
+      "landedURL": "https://auth.lusha.com/login",
+      "title": "Lusha | Sign in",
+      "heading": "",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
   ]
 }

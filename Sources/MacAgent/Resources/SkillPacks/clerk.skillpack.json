@@ -40,5 +40,15 @@
       ],
       "source": "https://clerk.com/docs/guides/organizations/create-and-manage"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://dashboard.clerk.com/",
+      "landedURL": "https://dashboard.clerk.com/sign-in",
+      "title": "Sign in | Clerk.com",
+      "heading": "Sign in to Clerk",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
   ]
 }

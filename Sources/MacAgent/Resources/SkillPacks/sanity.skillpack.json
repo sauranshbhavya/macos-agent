@@ -42,5 +42,15 @@
       ],
       "source": "https://www.sanity.io/docs/user-guides/content-operations-cheatsheet"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://www.sanity.io/manage",
+      "landedURL": "https://www.sanity.io/login",
+      "title": "Log in to Sanity",
+      "heading": "Build content-powered applications in minutes",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
   ]
 }

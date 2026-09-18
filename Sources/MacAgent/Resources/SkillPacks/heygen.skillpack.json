@@ -11,42 +11,6 @@
     "heygen.com"
   ],
   "sections": [],
-  "depth": "deep",
-  "flows": [
-    {
-      "title": "Make a photo avatar",
-      "startURL": "https://app.heygen.com/",
-      "steps": [
-        "Go to the Avatars tab and choose New Avatar, then Upload Photo — or Design with AI to generate one instead.",
-        "Upload the photo, give the avatar a name, and submit it for creation.",
-        "Wait for the avatar look to be validated. Once that finishes it can be used across the platform.",
-        "A photo works best when the face is close to human proportions, with eyes, mouth and lips clearly visible and the character large in the frame."
-      ],
-      "source": "https://help.heygen.com/en/articles/10034438-how-to-get-started-with-photo-avatars"
-    },
-    {
-      "title": "Put a photo avatar into a video",
-      "startURL": "https://app.heygen.com/",
-      "steps": [
-        "Go to the Avatars tab and select your avatar.",
-        "Click the arrow icon on the avatar to take it straight into Studio. The heart button marks it a favourite so it appears first wherever an avatar is chosen.",
-        "In Studio, choose a Voice for the avatar.",
-        "Still in Studio, open the Avatar tab and click the small arrow under Motion Engine to pick from the engines available to you.",
-        "Advanced Settings adds a custom motion prompt when a scene needs particular gestures or body language."
-      ],
-      "source": "https://help.heygen.com/en/articles/10034438-how-to-get-started-with-photo-avatars"
-    },
-    {
-      "title": "Work through an explainer video",
-      "startURL": "https://app.heygen.com/",
-      "steps": [
-        "Decide what the video is for, then draft a short script — the guide suggests 60 to 90 seconds, opening with a hook, then the problem, the solution, how it works, the benefits and a closing call to action.",
-        "Choose a public avatar from the library, or make a custom one, and match it with a voice.",
-        "Design the scenes: browse HeyGen's templates or build your own, and upload assets such as product images, videos, animations, music or screen recordings.",
-        "Refine it in HeyGen's text-based editor, which keeps scenes, text and transitions lined up with the script.",
-        "Click Generate, then download or share the finished video. Captions help on platforms that autoplay silently."
-      ],
-      "source": "https://help.heygen.com/en/articles/7842596-how-to-create-explainer-videos-on-heygen"
-    }
-  ]
+  "depth": "shallow",
+  "flows": []
 }

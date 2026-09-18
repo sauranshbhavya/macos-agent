@@ -33,5 +33,15 @@
       ],
       "source": "https://support.textmagic.com/article/make-and-receive-voice-calls-online/"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://app.textmagic.com/",
+      "landedURL": "https://app.textmagic.com/login",
+      "title": "Log in to continue - Textmagic",
+      "heading": "",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
   ]
 }

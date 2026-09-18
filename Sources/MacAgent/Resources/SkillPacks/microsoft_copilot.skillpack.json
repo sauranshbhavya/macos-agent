@@ -11,28 +11,6 @@
     "copilot.microsoft.com"
   ],
   "sections": [],
-  "depth": "deep",
-  "flows": [
-    {
-      "title": "Find an agent and put it to work",
-      "startURL": "https://copilot.microsoft.com/",
-      "steps": [
-        "Start in the Microsoft Copilot app. Agents are available in both the Web and Work tabs.",
-        "In the navigation panel, find Agents and expand the chevron for the pre-installed ones, or select All agents to see everything in the Agent Store.",
-        "Select an agent. From the Agent Store, choose Add or Open.",
-        "Select one of its prompts, or type your question into the Message Copilot box."
-      ],
-      "source": "https://support.microsoft.com/en-us/microsoft-365-copilot/get-started-with-agents-in-the-microsoft-365-copilot-app"
-    },
-    {
-      "title": "Share a link to an agent",
-      "startURL": "https://copilot.microsoft.com/",
-      "steps": [
-        "Start in the Microsoft Copilot app and look for the agent you want to share.",
-        "If it is listed under Agents in the left pane, hover over it and select More (…), then Share. The link is copied for you.",
-        "If it is not listed, select All Agents in the left pane, find the agent, hover over it, select More (…), then Share."
-      ],
-      "source": "https://support.microsoft.com/en-us/microsoft-365-copilot/get-started-with-agents-in-the-microsoft-365-copilot-app"
-    }
-  ]
+  "depth": "shallow",
+  "flows": []
 }

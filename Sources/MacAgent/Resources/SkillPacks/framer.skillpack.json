@@ -10,28 +10,6 @@
     "framer.com"
   ],
   "sections": [],
-  "depth": "deep",
-  "flows": [
-    {
-      "title": "Publish your website",
-      "startURL": "https://www.framer.com/projects/",
-      "steps": [
-        "Click the Publish button in the top right corner of the Framer editor.",
-        "Your site will automatically generate a framer.app domain.",
-        "For a site on a PRO plan or higher with staging enabled, go to the Staging tab in the editor to publish your changes to a staging environment.",
-        "Once it is ready to go live, switch to the Production tab and press Deploy Latest to publish directly without opening Settings."
-      ],
-      "source": "https://www.framer.com/help/articles/publishing-your-framer-website/"
-    },
-    {
-      "title": "Review what changed before publishing",
-      "startURL": "https://www.framer.com/projects/",
-      "steps": [
-        "Open the project you are about to publish.",
-        "Click View Changes to see a list of edits and the profile image of the user who made each one.",
-        "Read the list so you are aware of every change before the site goes live."
-      ],
-      "source": "https://www.framer.com/help/articles/publishing-your-framer-website/"
-    }
-  ]
+  "depth": "shallow",
+  "flows": []
 }

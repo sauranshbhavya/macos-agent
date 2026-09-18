@@ -14,7 +14,7 @@ public enum SkillPackFixtures {
         category: String = "knowledge_bases",
         depth: String = "deep"
     ) -> [String: Any] {
-        [
+        var object: [String: Any] = [
             "format": 1,
             "id": id,
             "name": name,
@@ -26,6 +26,30 @@ public enum SkillPackFixtures {
             "sections": [],
             "depth": depth,
             "flows": depth == "deep" ? [flow(on: domain)] : []
+        ]
+        // A shallow pack has no flows and so carries no start-page record, the way the shipped ones do.
+        if depth == "deep" {
+            object["startPages"] = [startPage(on: domain)]
+        }
+        return object
+    }
+
+    /// The record of where `flow(on:)`'s start page landed: an ordinary sign-in page on the pack's own
+    /// site (SONNY-510). A test that moves a flow's start URL replaces this with `startPage(url:…)`, or
+    /// the pack does not load for want of a record — which is the rule, not the fixture being fussy.
+    public static func startPage(
+        on domain: String = "notion.so",
+        url: String? = nil,
+        landedURL: String? = nil,
+        offers: String = "sign-in"
+    ) -> [String: Any] {
+        [
+            "url": url ?? "https://www.\(domain)/",
+            "landedURL": landedURL ?? "https://www.\(domain)/login",
+            "title": "Log in",
+            "heading": "Log in to your account",
+            "offers": offers,
+            "read": "2026-09-18"
         ]
     }
 

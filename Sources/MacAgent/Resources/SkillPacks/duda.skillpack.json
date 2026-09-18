@@ -34,5 +34,15 @@
       ],
       "source": "https://support.duda.co/hc/en-us/articles/26519239837975-Export-Site-List-to-CSV"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://www.duda.co/login",
+      "landedURL": "https://www.duda.co/login",
+      "title": "Log In to Duda Platform ┃ Sign In to the Duda Website Builder",
+      "heading": "Log in",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
   ]
 }

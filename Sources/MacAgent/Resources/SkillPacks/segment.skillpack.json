@@ -43,5 +43,15 @@
       ],
       "source": "https://www.twilio.com/docs/segment/getting-started/implementation-guide"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://app.segment.com/",
+      "landedURL": "https://app.segment.com/login",
+      "title": "Segment",
+      "heading": "Sign In to Segment",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
   ]
 }

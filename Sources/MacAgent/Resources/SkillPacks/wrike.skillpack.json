@@ -42,5 +42,15 @@
       ],
       "source": "https://help.wrike.com/hc/en-us/articles/209603849-Sharing-Tasks"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://www.wrike.com/workspace.htm",
+      "landedURL": "https://login.wrike.com/login/",
+      "title": "Sign in to your Wrike account",
+      "heading": "",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
   ]
 }

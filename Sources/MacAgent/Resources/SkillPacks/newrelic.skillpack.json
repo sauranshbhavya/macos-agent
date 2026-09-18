@@ -44,5 +44,15 @@
       ],
       "source": "https://docs.newrelic.com/docs/synthetics/synthetic-monitoring/getting-started/get-started-synthetic-monitoring/"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://one.newrelic.com/",
+      "landedURL": "https://login.newrelic.com/",
+      "title": "Log in to New Relic",
+      "heading": "Log in to see your data",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
   ]
 }

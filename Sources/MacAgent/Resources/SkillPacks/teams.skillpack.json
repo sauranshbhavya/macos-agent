@@ -5,7 +5,7 @@
   "domain": "teams.microsoft.com",
   "category": "communication",
   "summary": "Microsoft's chat, meetings and calling for work.",
-  "signInURL": "https://teams.microsoft.com",
+  "signInURL": "https://login.microsoftonline.com/",
   "triggers": ["microsoft teams", "teams.microsoft.com"],
   "sections": [],
   "depth": "deep",
@@ -40,6 +40,16 @@
         "Choose Pin for everyone. The message appears at the top of the chat."
       ],
       "source": "https://support.microsoft.com/en-us/teams/chat/pin-a-chat-message-to-the-top-of-a-chat-in-microsoft-teams"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://teams.microsoft.com/",
+      "landedURL": "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
+      "title": "Sign in to your account",
+      "heading": "",
+      "offers": "sign-in",
+      "read": "2026-09-18"
     }
   ]
 }

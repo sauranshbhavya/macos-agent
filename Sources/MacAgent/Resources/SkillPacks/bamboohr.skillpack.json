@@ -6,43 +6,11 @@
   "category": "recruiting_hr",
   "summary": "HR software for small and medium businesses.",
   "signInURL": "https://app.bamboohr.com/login",
-  "triggers": ["bamboohr", "bamboohr.com"],
+  "triggers": [
+    "bamboohr",
+    "bamboohr.com"
+  ],
   "sections": [],
-  "depth": "deep",
-  "flows": [
-    {
-      "title": "Request time off",
-      "startURL": "https://app.bamboohr.com/login",
-      "steps": [
-        "Sign in. A company's BambooHR opens on its own subdomain of bamboohr.com.",
-        "Go Home and click Request Time Off in the Time Off widget. If it is not there, the HR team has to grant that access.",
-        "Enter the date or dates, select a time off category, and enter how much time off. It defaults to one day's hours, or one day, and to zero on a company holiday.",
-        "Enter a note about the request. The future balance list shows each category's balance on the request's first day.",
-        "Send the request for approval."
-      ],
-      "source": "https://help.bamboohr.com/s/article/640810"
-    },
-    {
-      "title": "Change or cancel a time off request",
-      "startURL": "https://app.bamboohr.com/login",
-      "steps": [
-        "Go to the Time Off tab, hover over a future request in the Upcoming Time Off section, and click the edit button that appears.",
-        "Or, in the time off history table, select the category, click Requests, and click the status link beside the request.",
-        "Change the date, category, amount or note and click Save, or click Cancel Request if the time off is no longer needed.",
-        "An employee can edit a request only while it is in the future. A request in the present or past is updated by an administrator."
-      ],
-      "source": "https://help.bamboohr.com/s/article/532543"
-    },
-    {
-      "title": "View time off history",
-      "startURL": "https://app.bamboohr.com/login",
-      "steps": [
-        "Go to the Time Off tab.",
-        "Select the time off category to show in the History table.",
-        "Pick a year from the year drop-down, or All for every year.",
-        "Choose the subtable for balance history or for requests. The Upcoming Time Off table lists upcoming requests, approved and denied, and company holidays in the next 60 days."
-      ],
-      "source": "https://help.bamboohr.com/s/article/530269"
-    }
-  ]
+  "depth": "shallow",
+  "flows": []
 }

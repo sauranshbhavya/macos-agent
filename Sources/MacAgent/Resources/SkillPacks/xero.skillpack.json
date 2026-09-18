@@ -42,5 +42,15 @@
       ],
       "source": "https://central.xero.com/0/article/Export-contacts-out-of-Xero"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://login.xero.com/identity/user/login",
+      "landedURL": "https://login.xero.com/identity/user/login",
+      "title": "Login | Xero Accounting Software",
+      "heading": "Log in to Xero",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
   ]
 }

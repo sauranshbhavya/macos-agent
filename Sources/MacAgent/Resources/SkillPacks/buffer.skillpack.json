@@ -28,5 +28,15 @@
       ],
       "source": "https://support.buffer.com/en-us/articles/adding-mentions-tags-in-posts-ulm0tGb2Ej"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://login.buffer.com/login",
+      "landedURL": "https://auth.buffer.com/login",
+      "title": "Buffer - Log In",
+      "heading": "Log in to Buffer",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
   ]
 }

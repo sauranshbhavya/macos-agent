@@ -42,5 +42,15 @@
       ],
       "source": "https://plausible.io/docs/google-analytics-import"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://plausible.io/sites",
+      "landedURL": "https://plausible.io/login",
+      "title": "Plausible · Simple, privacy-friendly alternative to Google Analytics",
+      "heading": "Sign in to your account",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
   ]
 }

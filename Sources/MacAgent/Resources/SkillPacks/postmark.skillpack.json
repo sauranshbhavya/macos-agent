@@ -42,5 +42,23 @@
       ],
       "source": "https://postmarkapp.com/support/article/how-do-i-verify-a-domain"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://account.postmarkapp.com/servers",
+      "landedURL": "https://account.postmarkapp.com/login",
+      "title": "Log In to Postmark",
+      "heading": "Log In",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    },
+    {
+      "url": "https://account.postmarkapp.com/signature_domains",
+      "landedURL": "https://account.postmarkapp.com/login",
+      "title": "Log In to Postmark",
+      "heading": "Log In",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
   ]
 }

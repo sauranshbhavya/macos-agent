@@ -26,5 +26,15 @@
       ],
       "source": "https://help.manychat.com/hc/en-us/articles/14281085179164-How-to-clone-a-Manychat-account"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://app.manychat.com/",
+      "landedURL": "https://app.manychat.com/signin",
+      "title": "Sign In",
+      "heading": "",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
   ]
 }

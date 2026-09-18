@@ -43,5 +43,15 @@
       ],
       "source": "https://support.productboard.com/hc/en-us/articles/4417696648339-Share-your-roadmaps-with-external-stakeholders-and-customers"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://app.productboard.com/",
+      "landedURL": "https://app.productboard.com/",
+      "title": "Productboard – Welcome",
+      "heading": "An agent that knows your product,customers & business from day one",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
   ]
 }

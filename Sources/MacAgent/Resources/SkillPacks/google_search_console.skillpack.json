@@ -15,7 +15,7 @@
   "flows": [
     {
       "title": "Check whether a page is indexed",
-      "startURL": "https://search.google.com/search-console",
+      "startURL": "https://search.google.com/search-console/welcome",
       "steps": [
         "Open the URL Inspection tool, either by typing the fully-qualified URL into the inspection search bar at the top of any Search Console screen, or by clicking an Inspect link next to a page URL in most reports.",
         "Enter the complete URL to inspect. The URL must be in the currently opened property.",
@@ -27,7 +27,7 @@
     },
     {
       "title": "Test a live URL and request indexing",
-      "startURL": "https://search.google.com/search-console",
+      "startURL": "https://search.google.com/search-console/welcome",
       "steps": [
         "Inspect the URL. The page must be accessible from the internet without any login requirements.",
         "Click Test live URL.",
@@ -36,6 +36,16 @@
         "To have the page crawled, click Request indexing on the inspection result page. You cannot request indexing if the page is considered non-indexable in the live test."
       ],
       "source": "https://support.google.com/webmasters/answer/9012289?hl=en"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://search.google.com/search-console/welcome",
+      "landedURL": "https://accounts.google.com/v3/signin/identifier",
+      "title": "Google Search Console",
+      "heading": "Sign in",
+      "offers": "sign-in",
+      "read": "2026-09-18"
     }
   ]
 }

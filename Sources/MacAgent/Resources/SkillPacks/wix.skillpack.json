@@ -50,5 +50,15 @@
       ],
       "source": "https://support.wix.com/en/article/connecting-a-domain-to-the-wix-name-servers"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://manage.wix.com/",
+      "landedURL": "https://users.wix.com/signin",
+      "title": "Log In to Your Wix Account - Wix.com",
+      "heading": "Log in",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
   ]
 }

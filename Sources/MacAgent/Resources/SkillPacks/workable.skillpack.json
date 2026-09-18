@@ -12,7 +12,7 @@
   "flows": [
     {
       "title": "Create and publish a job",
-      "startURL": "https://www.workable.com/",
+      "startURL": "https://www.workable.com/signin",
       "steps": [
         "The steps below are in Workable, which a signed-in person reaches at https://www.workable.com/signin.",
         "Create the job manually in the job editor.",
@@ -25,7 +25,7 @@
     },
     {
       "title": "Add a candidate to a job by hand",
-      "startURL": "https://www.workable.com/",
+      "startURL": "https://www.workable.com/signin",
       "steps": [
         "The steps below are in Workable, which a signed-in person reaches at https://www.workable.com/signin.",
         "Open one of the job's stages, for example Sourced. The candidate is added to the stage being viewed.",
@@ -36,7 +36,7 @@
     },
     {
       "title": "Edit a requisition",
-      "startURL": "https://www.workable.com/",
+      "startURL": "https://www.workable.com/signin",
       "steps": [
         "The steps below are in Workable, which a signed-in person reaches at https://www.workable.com/signin.",
         "Navigate to the Hiring Plan dashboard and click the three dots to select Edit requisition.",
@@ -45,6 +45,16 @@
         "Navigate to your Hiring Plan settings, through the three dots menu, to check which fields require re-approval. Editing one of those sends the requisition through the approval workflow again before the change is finalized; on a filled requisition it never triggers re-approval."
       ],
       "source": "https://help.workable.com/hc/en-us/articles/360034516774-How-do-I-edit-a-requisition"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://www.workable.com/signin",
+      "landedURL": "https://id.workable.com/oidc/i",
+      "title": "Workable Recruitment Software - Sign in",
+      "heading": "Sign in to Workable",
+      "offers": "sign-in",
+      "read": "2026-09-18"
     }
   ]
 }

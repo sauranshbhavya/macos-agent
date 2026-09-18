@@ -6,42 +6,11 @@
   "category": "documents_storage",
   "summary": "Cloud file storage and sharing.",
   "signInURL": "https://www.dropbox.com/login",
-  "triggers": ["dropbox", "dropbox.com"],
+  "triggers": [
+    "dropbox",
+    "dropbox.com"
+  ],
   "sections": [],
-  "depth": "deep",
-  "flows": [
-    {
-      "title": "Share a file or folder with people",
-      "startURL": "https://www.dropbox.com/",
-      "steps": [
-        "On dropbox.com, hover over the file or folder and click Share.",
-        "Click Add people.",
-        "Type the email, name or group of each person, then select them from the results.",
-        "Select can edit or can view, and add a message if you like.",
-        "Click Share."
-      ],
-      "source": "https://help.dropbox.com/share/create-and-share-link"
-    },
-    {
-      "title": "Create a folder",
-      "startURL": "https://www.dropbox.com/",
-      "steps": [
-        "On dropbox.com, click New folder under the search bar at the top.",
-        "Under Name, enter a name for the folder.",
-        "Select who has access: Only you or Only specific people.",
-        "Click Create or Share."
-      ],
-      "source": "https://help.dropbox.com/create-upload/creating-using-folders-on-dropbox"
-    },
-    {
-      "title": "Upload files or a folder",
-      "startURL": "https://www.dropbox.com/",
-      "steps": [
-        "On dropbox.com, click Upload under the search bar at the top.",
-        "For files, select as many as you like, then click Open.",
-        "For a folder, select it, then click Upload."
-      ],
-      "source": "https://help.dropbox.com/create-upload/add-files"
-    }
-  ]
+  "depth": "shallow",
+  "flows": []
 }

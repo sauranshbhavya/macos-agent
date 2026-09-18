@@ -36,5 +36,15 @@
       ],
       "source": "https://support.aircall.io/en-gb/articles/21534383832733"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://workspace.aircall.io/",
+      "landedURL": "https://workspace.aircall.io/login",
+      "title": "Aircall Workspace",
+      "heading": "",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
   ]
 }

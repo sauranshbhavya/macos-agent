@@ -41,5 +41,15 @@
       ],
       "source": "https://help.zapier.com/hc/en-us/articles/8496257774221-Set-up-your-Zap-action"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://zapier.com/app/home",
+      "landedURL": "https://zapier.com/app/login",
+      "title": "Login | Zapier",
+      "heading": "Automate across your teams",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
   ]
 }

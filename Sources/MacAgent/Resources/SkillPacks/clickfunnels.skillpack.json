@@ -39,5 +39,15 @@
       ],
       "source": "https://support.clickfunnels.com/en/articles/12734348-restoring-a-page-version"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://app.clickfunnels.com/users/sign_in",
+      "landedURL": "https://app.clickfunnels.com/users/sign_in",
+      "title": "ClickFunnels - Login",
+      "heading": "",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
   ]
 }

@@ -44,5 +44,15 @@
       ],
       "source": "https://help.webflow.com/hc/en-us/articles/33961360067987-Pages-panel-overview"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://webflow.com/dashboard",
+      "landedURL": "https://webflow.com/login",
+      "title": "Login - Webflow",
+      "heading": "",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
   ]
 }

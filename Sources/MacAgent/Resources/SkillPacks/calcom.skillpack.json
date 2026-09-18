@@ -40,5 +40,15 @@
       ],
       "source": "https://cal.com/help/event-types/private-links"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://app.cal.com/",
+      "landedURL": "https://app.cal.com/auth/login",
+      "title": "Login | Cal.com",
+      "heading": "Cal.com",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
   ]
 }

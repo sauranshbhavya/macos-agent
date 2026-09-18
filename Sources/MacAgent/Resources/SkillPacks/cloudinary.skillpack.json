@@ -12,7 +12,7 @@
   "flows": [
     {
       "title": "Upload files to the Media Library",
-      "startURL": "https://console.cloudinary.com/",
+      "startURL": "https://cloudinary.com/users/login",
       "steps": [
         "In the Media Library, select the Folders page and navigate to the folder to upload to. Uploading from the Assets page puts files in the root folder.",
         "Drag and drop the files or folders into the Media Library. Or click the drop-down button next to the main Upload button, keep the My Files tab selected, and click Browse to pick the files.",
@@ -22,7 +22,7 @@
     },
     {
       "title": "Create a folder and move assets into it",
-      "startURL": "https://console.cloudinary.com/",
+      "startURL": "https://cloudinary.com/users/login",
       "steps": [
         "In the Media Library, select the Folders page and go to where the new folder belongs.",
         "Click the Add Folder button near the folder path breadcrumbs.",
@@ -32,13 +32,23 @@
     },
     {
       "title": "Share a folder with users",
-      "startURL": "https://console.cloudinary.com/",
+      "startURL": "https://cloudinary.com/users/login",
       "steps": [
         "Select Share from the options drop-down next to the current folder path at the top of the Media Library, or from the kebab menu in the Folders grid.",
         "Select the users or user groups to share the folder with, and the permission level for each.",
         "They get an email notification. To adjust or remove someone's access later, click Access Details in the Share dialog box."
       ],
       "source": "https://cloudinary.com/documentation/dam_folders_collections_sharing"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://cloudinary.com/users/login",
+      "landedURL": "https://cloudinary.com/users/login",
+      "title": "Cloudinary - Management Console Login",
+      "heading": "",
+      "offers": "sign-in",
+      "read": "2026-09-18"
     }
   ]
 }

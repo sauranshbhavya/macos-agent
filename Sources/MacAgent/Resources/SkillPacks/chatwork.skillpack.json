@@ -22,5 +22,15 @@
       ],
       "source": "https://support-en.chatwork.com/hc/en-us/articles/47532574546201-Type-edit-delete-messages"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://www.chatwork.com/",
+      "landedURL": "https://auth.chatwork.com/u/login/identifier",
+      "title": "Chatwork",
+      "heading": "Login",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
   ]
 }

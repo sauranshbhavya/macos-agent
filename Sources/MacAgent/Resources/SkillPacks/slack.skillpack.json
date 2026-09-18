@@ -12,7 +12,7 @@
   "flows": [
     {
       "title": "Send a message",
-      "startURL": "https://app.slack.com/",
+      "startURL": "https://slack.com/mweb-signin-start?dest=signin",
       "steps": [
         "Open the channel, DM or thread to send the message to.",
         "From the Messages tab, click the message field.",
@@ -23,7 +23,7 @@
     },
     {
       "title": "Create a channel",
-      "startURL": "https://app.slack.com/",
+      "startURL": "https://slack.com/mweb-signin-start?dest=signin",
       "steps": [
         "Click the plus sign in the sidebar.",
         "Select Channel. On a paid plan, select Blank channel for a regular channel, or choose a template.",
@@ -33,13 +33,23 @@
     },
     {
       "title": "Search messages",
-      "startURL": "https://app.slack.com/",
+      "startURL": "https://slack.com/mweb-signin-start?dest=signin",
       "steps": [
         "Click the search field at the top of Slack.",
         "Type what to look for, or select a recent search. Add modifiers to narrow the results.",
         "Select an option from the list, or press Enter to view all results. Click Filters to refine them."
       ],
       "source": "https://slack.com/help/articles/202528808-Search-in-Slack"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://slack.com/mweb-signin-start?dest=signin",
+      "landedURL": "https://slack.com/signin#/signin",
+      "title": "Log in | Slack",
+      "heading": "Enter your email address to sign in",
+      "offers": "sign-in",
+      "read": "2026-09-18"
     }
   ]
 }

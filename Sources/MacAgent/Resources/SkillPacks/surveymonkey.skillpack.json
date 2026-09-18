@@ -12,7 +12,7 @@
   "flows": [
     {
       "title": "Create a survey from scratch",
-      "startURL": "https://www.surveymonkey.com/",
+      "startURL": "https://www.surveymonkey.com/login/",
       "steps": [
         "Select Create survey from the SurveyMonkey header, on any screen.",
         "Choose Start from scratch to get a blank survey page.",
@@ -23,7 +23,7 @@
     },
     {
       "title": "Share a survey by web link",
-      "startURL": "https://www.surveymonkey.com/",
+      "startURL": "https://www.surveymonkey.com/login/",
       "steps": [
         "Go to the Publish survey section of the survey.",
         "Select Add new collector +, then Share a link.",
@@ -33,13 +33,23 @@
     },
     {
       "title": "View individual responses",
-      "startURL": "https://www.surveymonkey.com/",
+      "startURL": "https://www.surveymonkey.com/login/",
       "steps": [
         "Go to the Analyze Results section of the survey.",
         "Click the Individual Responses tab toward the top of the page.",
         "Switch between the Table and Single response views in the top right corner."
       ],
       "source": "https://help.surveymonkey.com/en/surveymonkey/analyze/individual-responses/"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://www.surveymonkey.com/login/",
+      "landedURL": "https://auth-us.surveymonkey.com/login#/login",
+      "title": "SurveyMonkey Login",
+      "heading": "Log in",
+      "offers": "sign-in",
+      "read": "2026-09-18"
     }
   ]
 }

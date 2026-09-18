@@ -34,5 +34,15 @@
       ],
       "source": "https://help.justcall.io/en/articles/2707274-wrap-up-time"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://justcall.io/login/",
+      "landedURL": "https://justcall.io/apex/login",
+      "title": "JustCall",
+      "heading": "",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
   ]
 }

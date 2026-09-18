@@ -5,7 +5,7 @@
   "domain": "lists.live.com",
   "category": "project_tracking",
   "summary": "Microsoft's app for tracking information in lists.",
-  "signInURL": "https://www.microsoft365.com/",
+  "signInURL": "https://login.live.com/",
   "triggers": ["microsoft lists", "lists.live.com"],
   "sections": [],
   "depth": "deep",
@@ -43,6 +43,16 @@
         "Include a message if you want, then select Send."
       ],
       "source": "https://support.microsoft.com/en-us/sharepoint/lists/sharepoint-sharing-and-permissions/share-a-list-or-list-item"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://lists.live.com/",
+      "landedURL": "https://login.live.com/login.srf",
+      "title": "Sign in",
+      "heading": "Sign in",
+      "offers": "sign-in",
+      "read": "2026-09-18"
     }
   ]
 }

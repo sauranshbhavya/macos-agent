@@ -39,5 +39,15 @@
       ],
       "source": "https://help.clickup.com/hc/en-us/articles/6329600534935-Move-tasks-between-Lists"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://app.clickup.com/",
+      "landedURL": "https://app.clickup.com/login",
+      "title": "Login",
+      "heading": "",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
   ]
 }

@@ -41,5 +41,15 @@
       ],
       "source": "https://support.teachable.com/en/articles/11682453-sections-and-lessons"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://sso.teachable.com/secure/teachable_accounts/sign_in",
+      "landedURL": "https://sso.teachable.com/secure/teachable_accounts/sign_in",
+      "title": "Teachable Accounts",
+      "heading": "Log in to Teachable",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
   ]
 }

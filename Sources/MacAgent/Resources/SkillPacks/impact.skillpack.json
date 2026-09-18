@@ -25,5 +25,15 @@
       ],
       "source": "https://help.impact.com/brand/what-would-you-like-to-learn-about/creator-program/recruit-creators/invite-creators-to-your-campaign"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://app.impact.com/",
+      "landedURL": "https://app.impact.com/login.user",
+      "title": "Login",
+      "heading": "Welcome Back!",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
   ]
 }

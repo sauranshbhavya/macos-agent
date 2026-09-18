@@ -41,5 +41,15 @@
       ],
       "source": "https://help.asana.com/s/article/create-tasks-in-asana"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://app.asana.com/",
+      "landedURL": "https://app.asana.com/-/login",
+      "title": "Log in - Asana",
+      "heading": "Welcome to Asana",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
   ]
 }

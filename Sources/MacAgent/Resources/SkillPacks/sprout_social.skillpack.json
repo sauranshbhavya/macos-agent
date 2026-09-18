@@ -27,5 +27,15 @@
       ],
       "source": "https://support.sproutsocial.com/hc/en-us/articles/115005864203-How-do-I-use-bulk-scheduling"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://app.sproutsocial.com/",
+      "landedURL": "https://app.sproutsocial.com/login",
+      "title": "Log In | Sprout Social",
+      "heading": "Break free from data digging",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
   ]
 }

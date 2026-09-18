@@ -11,21 +11,6 @@
     "shipstation.com"
   ],
   "sections": [],
-  "depth": "deep",
-  "flows": [
-    {
-      "title": "Connect a store or marketplace",
-      "startURL": "https://ship.shipstation.com/",
-      "steps": [
-        "Go to Account Settings.",
-        "Select Selling Channels from the sidebar, then choose Store Setup.",
-        "Click Connect a Store or Marketplace.",
-        "Select the selling channel you wish to add. Use the search bar to filter the selling channel list if you do not see your store platform.",
-        "Follow the on-screen instructions to add your store.",
-        "You are then taken to the Store Settings section of the Store Setup page, where you can edit the store's display name, enable or disable the auto-update feature, set your marketplace and customer notifications, and customize the store's branding.",
-        "Click Save Changes if you altered anything."
-      ],
-      "source": "https://help.shipstation.com/hc/en-us/articles/360026156871-Connect-a-Store"
-    }
-  ]
+  "depth": "shallow",
+  "flows": []
 }

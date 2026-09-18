@@ -24,5 +24,15 @@
       ],
       "source": "https://help.socialpilot.co/article/639-how-to-enable-instagram-direct-messages-dm-story-mentions-from-the-settings"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://app.socialpilot.co/",
+      "landedURL": "https://auth.socialpilot.co/login",
+      "title": "app",
+      "heading": "Sign in to SocialPilot",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
   ]
 }

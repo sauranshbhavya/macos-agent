@@ -12,7 +12,7 @@
   "flows": [
     {
       "title": "Change the name on a Google Account",
-      "startURL": "https://myaccount.google.com/",
+      "startURL": "https://accounts.google.com/ServiceLogin?continue=https%3A%2F%2Fmyaccount.google.com%2F",
       "steps": [
         "Go to your Google Account and, at the top left, click Personal info.",
         "Click Name.",
@@ -23,7 +23,7 @@
     },
     {
       "title": "Change the profile picture",
-      "startURL": "https://myaccount.google.com/",
+      "startURL": "https://accounts.google.com/ServiceLogin?continue=https%3A%2F%2Fmyaccount.google.com%2F",
       "steps": [
         "Go to your Google Account and click Personal info.",
         "Under Basic info, click Profile picture.",
@@ -44,6 +44,24 @@
         "In the email that arrives, select Download archive. Downloading the data does not delete it from Google."
       ],
       "source": "https://support.google.com/accounts/answer/3024190?hl=en"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://accounts.google.com/ServiceLogin?continue=https%3A%2F%2Fmyaccount.google.com%2F",
+      "landedURL": "https://accounts.google.com/v3/signin/identifier",
+      "title": "Sign in - Google Accounts",
+      "heading": "Sign in",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    },
+    {
+      "url": "https://takeout.google.com/",
+      "landedURL": "https://accounts.google.com/v3/signin/identifier",
+      "title": "Sign in - Google Accounts",
+      "heading": "Sign in",
+      "offers": "sign-in",
+      "read": "2026-09-18"
     }
   ]
 }

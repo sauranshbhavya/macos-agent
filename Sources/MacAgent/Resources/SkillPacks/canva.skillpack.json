@@ -6,33 +6,22 @@
   "category": "design",
   "summary": "Online graphic design tool.",
   "signInURL": "https://www.canva.com/login/",
-  "triggers": ["canva", "canva.com"],
-  "sections": ["Sheets", "Docs", "Whiteboards", "Presentations", "Social", "Photo Editor", "Videos", "Print", "Websites", "PDF editor"],
-  "depth": "deep",
-  "flows": [
-    {
-      "title": "Create a design from a template",
-      "startURL": "https://www.canva.com/",
-      "steps": [
-        "Signed in, canva.com opens your Canva homepage and every step below is on it. Signed out the same address shows the marketing page instead, whose top row reads Design, Product, Plans, Business, Education, Help, Sign up and Log in, and which carries none of these controls.",
-        "On the homepage search bar, type your keywords and press Enter. Selecting Templates above the search bar leaves only templates in the results.",
-        "You can also select Templates in the side navigation, then browse the categories or use the search bar there to find one.",
-        "Select a template to preview it, then select Customize this template to open it in the editor.",
-        "Inside the editor, select Templates in the side panel to browse the templates available from there."
-      ],
-      "source": "https://www.canva.com/help/use-templates/"
-    },
-    {
-      "title": "Start a design from scratch at a custom size",
-      "startURL": "https://www.canva.com/",
-      "steps": [
-        "These steps are on the Canva homepage, which canva.com opens once you are signed in — not on the signed-out marketing page at the same address.",
-        "On the homepage banner, click Custom size.",
-        "Under Units, click the dropdown menu and select the unit you want — for example px, in, mm or cm.",
-        "Enter the Width and Height for the design. They should be at least 40px and not more than 8000px.",
-        "Select Create new design to open the editor at that size."
-      ],
-      "source": "https://www.canva.com/help/design-from-scratch/"
-    }
-  ]
+  "triggers": [
+    "canva",
+    "canva.com"
+  ],
+  "sections": [
+    "Sheets",
+    "Docs",
+    "Whiteboards",
+    "Presentations",
+    "Social",
+    "Photo Editor",
+    "Videos",
+    "Print",
+    "Websites",
+    "PDF editor"
+  ],
+  "depth": "shallow",
+  "flows": []
 }

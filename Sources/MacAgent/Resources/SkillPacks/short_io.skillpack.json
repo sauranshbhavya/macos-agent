@@ -24,5 +24,15 @@
       ],
       "source": "https://docs.short.io/articles/managing-links/how-to-customize-a-url-slug"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://app.short.io/",
+      "landedURL": "https://app.short.io/public/login",
+      "title": "Login | Short.io",
+      "heading": "",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
   ]
 }

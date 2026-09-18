@@ -44,5 +44,15 @@
       ],
       "source": "https://help.shopify.com/en/manual/customers/manage-customers"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://admin.shopify.com/",
+      "landedURL": "https://accounts.shopify.com/lookup",
+      "title": "Log in — Shopify",
+      "heading": "Log in",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
   ]
 }

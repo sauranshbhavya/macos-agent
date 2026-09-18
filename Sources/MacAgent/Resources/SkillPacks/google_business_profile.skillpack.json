@@ -15,7 +15,7 @@
   "flows": [
     {
       "title": "Add your business",
-      "startURL": "https://business.google.com/",
+      "startURL": "https://business.google.com/locations",
       "steps": [
         "Go to business.google.com/add.",
         "Click Add your business to Google.",
@@ -24,6 +24,16 @@
         "Make sure your business address is correct and meets Google's address guidelines."
       ],
       "source": "https://support.google.com/business/answer/2911778?hl=en"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://business.google.com/locations",
+      "landedURL": "https://accounts.google.com/v3/signin/identifier",
+      "title": "Google Business Profile",
+      "heading": "Sign in",
+      "offers": "sign-in",
+      "read": "2026-09-18"
     }
   ]
 }

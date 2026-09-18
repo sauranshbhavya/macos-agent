@@ -14,7 +14,7 @@
   "flows": [
     {
       "title": "Create a LinkedIn Page",
-      "startURL": "https://www.linkedin.com/",
+      "startURL": "https://www.linkedin.com/login",
       "steps": [
         "Click the For Business icon in the upper-right corner of your LinkedIn homepage.",
         "Scroll down and click Create a Company Page.",
@@ -28,7 +28,7 @@
     },
     {
       "title": "Add an admin to your Page",
-      "startURL": "https://www.linkedin.com/",
+      "startURL": "https://www.linkedin.com/login",
       "steps": [
         "Go to your Page super admin view.",
         "Click Settings in the left menu and select Manage admins.",
@@ -40,6 +40,16 @@
         "Click Save."
       ],
       "source": "https://www.linkedin.com/help/linkedin/answer/a569144"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://www.linkedin.com/login",
+      "landedURL": "https://www.linkedin.com/login/",
+      "title": "LinkedIn Login, Sign in | LinkedIn",
+      "heading": "Sign in",
+      "offers": "sign-in",
+      "read": "2026-09-18"
     }
   ]
 }

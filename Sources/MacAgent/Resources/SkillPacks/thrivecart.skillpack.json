@@ -25,5 +25,15 @@
       ],
       "source": "https://support.thrivecart.com/help/resend-a-receipt/"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://thrivecart.com/signin/",
+      "landedURL": "https://thrivecart.com/signin/",
+      "title": "ThriveCart",
+      "heading": "Revenue Infrastructure for Modern Creators",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
   ]
 }

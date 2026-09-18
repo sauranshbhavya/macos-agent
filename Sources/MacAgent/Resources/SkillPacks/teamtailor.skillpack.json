@@ -43,5 +43,15 @@
       ],
       "source": "https://support.teamtailor.com/en/articles/118465-add-comments-on-your-candidates"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://app.teamtailor.com/",
+      "landedURL": "https://app.teamtailor.com/login",
+      "title": "Teamtailor",
+      "heading": "Sign in",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
   ]
 }

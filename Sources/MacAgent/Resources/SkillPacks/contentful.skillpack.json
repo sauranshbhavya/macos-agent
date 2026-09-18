@@ -48,5 +48,15 @@
       ],
       "source": "https://www.contentful.com/help/scheduled-publishing/schedule-an-entry/"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://be.contentful.com/login/",
+      "landedURL": "https://be.contentful.com/login/",
+      "title": "Log In - Contentful",
+      "heading": "Welcome back",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
   ]
 }

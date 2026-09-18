@@ -43,5 +43,15 @@
       ],
       "source": "https://support.apple.com/guide/icloud/share-a-calendar-mm6b1a9479/icloud"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://www.icloud.com/calendar/",
+      "landedURL": "https://www.icloud.com/calendar/",
+      "title": "Calendar - Apple iCloud",
+      "heading": "iCloud Calendar",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
   ]
 }

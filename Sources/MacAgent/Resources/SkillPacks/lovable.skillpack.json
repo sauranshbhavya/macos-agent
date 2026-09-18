@@ -14,7 +14,7 @@
   "flows": [
     {
       "title": "Invite someone to a project",
-      "startURL": "https://lovable.dev/",
+      "startURL": "https://lovable.dev/login",
       "steps": [
         "Open the project and click Share in the top bar.",
         "Enter one or more email addresses, or workspace groups on Business and Enterprise plans, in the Add people field.",
@@ -25,7 +25,7 @@
     },
     {
       "title": "Make a preview link for a reviewer",
-      "startURL": "https://lovable.dev/",
+      "startURL": "https://lovable.dev/login",
       "steps": [
         "Open the project, click Share, and select Share preview.",
         "Click Create new preview link.",
@@ -37,7 +37,7 @@
     },
     {
       "title": "Switch or create the branch Lovable syncs",
-      "startURL": "https://lovable.dev/",
+      "startURL": "https://lovable.dev/login",
       "steps": [
         "Open Project settings, then Git, then GitHub.",
         "Click the branch picker and search or select the branch you want. Clicking it switches Lovable to editing and syncing that branch.",
@@ -46,6 +46,16 @@
         "Lovable edits and syncs one branch at a time, and neither switching nor creating works while it is editing the project."
       ],
       "source": "https://docs.lovable.dev/integrations/github"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://lovable.dev/login",
+      "landedURL": "https://lovable.dev/login",
+      "title": "Login",
+      "heading": "Log in",
+      "offers": "sign-in",
+      "read": "2026-09-18"
     }
   ]
 }

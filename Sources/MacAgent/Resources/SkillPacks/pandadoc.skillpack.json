@@ -41,5 +41,15 @@
       ],
       "source": "https://support.pandadoc.com/en/articles/9714819-review-audit-trail-for-sent-documents"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://app.pandadoc.com/",
+      "landedURL": "https://app.pandadoc.com/login/",
+      "title": "PandaDoc - fast and easy way to send and sign documents online.",
+      "heading": "Log in to PandaDoc",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
   ]
 }

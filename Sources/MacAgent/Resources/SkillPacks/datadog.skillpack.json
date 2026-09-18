@@ -42,5 +42,15 @@
       ],
       "source": "https://docs.datadoghq.com/logs/explorer/search/"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://app.datadoghq.com/",
+      "landedURL": "https://app.datadoghq.com/account/login",
+      "title": "Datadog: Log In",
+      "heading": "Log in to Datadog",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
   ]
 }

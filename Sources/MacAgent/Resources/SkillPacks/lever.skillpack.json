@@ -43,5 +43,15 @@
       ],
       "source": "https://help.lever.co/s/article/Submitting-referrals"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://hire.lever.co/",
+      "landedURL": "https://hire.lever.co/auth/login",
+      "title": "Lever Hire",
+      "heading": "Sign in to Lever",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
   ]
 }

@@ -36,5 +36,15 @@
       ],
       "source": "https://elevenlabs.io/docs/eleven-creative/voices/voice-library"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://elevenlabs.io/app/speech-synthesis",
+      "landedURL": "https://elevenlabs.io/app/sign-in",
+      "title": "Sign In | ElevenLabs",
+      "heading": "Welcome back",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
   ]
 }

@@ -35,5 +35,15 @@
       ],
       "source": "https://ghost.org/help/site-setup/"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://account.ghost.org/signin/",
+      "landedURL": "https://account.ghost.org/signin",
+      "title": "Ghost: Sign in",
+      "heading": "",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
   ]
 }

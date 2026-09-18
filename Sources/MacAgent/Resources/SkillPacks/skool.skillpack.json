@@ -36,5 +36,15 @@
       ],
       "source": "https://help.skool.com/article/143-how-to-publish-a-course"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://www.skool.com/login",
+      "landedURL": "https://www.skool.com/login",
+      "title": "Skool: Log in",
+      "heading": "",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
   ]
 }

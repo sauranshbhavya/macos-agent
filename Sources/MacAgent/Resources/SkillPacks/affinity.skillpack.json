@@ -42,5 +42,15 @@
       ],
       "source": "https://support.affinity.co/s/article/How-to-log-interactions-into-Affinity"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://app.affinity.co/",
+      "landedURL": "https://login.affinity.co/auth/oauth2/authorize",
+      "title": "Sign In | Affinity",
+      "heading": "Sign In",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
   ]
 }

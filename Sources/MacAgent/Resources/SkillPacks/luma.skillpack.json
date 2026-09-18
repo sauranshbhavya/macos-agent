@@ -10,39 +10,6 @@
     "luma.com"
   ],
   "sections": [],
-  "depth": "deep",
-  "flows": [
-    {
-      "title": "Create an event",
-      "startURL": "https://luma.com/create",
-      "steps": [
-        "Go to luma.com/create, or click Create Event from your home page.",
-        "Enter a clear, descriptive title for your event. This will be the main headline that guests see when browsing events.",
-        "Select the date and time for your event and choose the appropriate timezone. For multi-day events, set both start and end dates.",
-        "Choose the type of event you're hosting: In-Person for a physical gathering at a specific location, Online for a virtual event, or Hybrid for both.",
-        "For an In-Person event, enter the venue name or address, which will appear on a map on your event page. For an Online event, add your meeting link, and Luma will create unique join links for each guest to track attendance.",
-        "Write a description covering what the event is about, who should attend, and what guests can expect.",
-        "Choose a cover image from Luma's curated gallery or upload your own, and pick one of the themes from categories like Minimal, Confetti, Emoji, Pattern and Seasonal.",
-        "Every event belongs to a calendar. Use your personal calendar, which is the default, select an existing team calendar you manage, or create a new calendar.",
-        "Choose who can see and register: Public events are shown on your calendar and can be indexed by search engines, Private events are unlisted so only people with the link can register, and Member-Only events are shown to active members of your calendar membership.",
-        "Click Create Event. Your event is created instantly and you are taken to the event management page."
-      ],
-      "source": "https://help.luma.com/p/creating-an-event"
-    },
-    {
-      "title": "Add a host or manager to an event",
-      "startURL": "https://luma.com/",
-      "steps": [
-        "From your Luma home page, open the event you want and go to its manage page.",
-        "Click on the Add Host button.",
-        "If the person you are adding isn't yet on Luma, you can set an avatar and name for them so that they don't need to do so themselves.",
-        "Choose whether the person should be shown on the event page, have access to the manage event page, or both.",
-        "Under Access Control, Manager gives the host full access to the event, while Non-Manager shows the host on the event page with no access to the event backend.",
-        "When you are done, click on Invite Host to add them to your event. They'll receive an email with a calendar invite that will automatically add the event to their calendar.",
-        "Hosts with the Manager role can add, remove and manage other hosts, but the Creator of the event cannot be removed and the Creator always gets the Manager role.",
-        "You can add up to 5 hosts to any event on Luma. To add more, the calendar managing the event needs to be verified; once verified, you can add up to 70 hosts per event."
-      ],
-      "source": "https://help.luma.com/p/adding-hosts-and-managers-to-your-event"
-    }
-  ]
+  "depth": "shallow",
+  "flows": []
 }

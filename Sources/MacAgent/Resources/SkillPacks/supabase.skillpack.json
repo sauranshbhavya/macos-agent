@@ -40,5 +40,15 @@
       ],
       "source": "https://supabase.com/docs/guides/platform/access-control"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://supabase.com/dashboard",
+      "landedURL": "https://supabase.com/dashboard/sign-in",
+      "title": "Supabase",
+      "heading": "Welcome back",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
   ]
 }

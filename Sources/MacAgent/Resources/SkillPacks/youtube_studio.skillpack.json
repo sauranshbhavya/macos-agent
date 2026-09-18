@@ -5,7 +5,7 @@
   "domain": "studio.youtube.com",
   "category": "marketing_growth",
   "summary": "YouTube's dashboard for creators.",
-  "signInURL": "https://studio.youtube.com/",
+  "signInURL": "https://accounts.google.com/ServiceLogin?continue=https%3A%2F%2Fstudio.youtube.com%2F",
   "triggers": [
     "youtube studio",
     "studio.youtube.com"
@@ -35,6 +35,16 @@
         "Click SAVE."
       ],
       "source": "https://support.google.com/youtube/answer/9527654?hl=en"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://studio.youtube.com/",
+      "landedURL": "https://accounts.google.com/v3/signin/identifier",
+      "title": "YouTube",
+      "heading": "Sign in",
+      "offers": "sign-in",
+      "read": "2026-09-18"
     }
   ]
 }

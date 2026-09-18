@@ -41,5 +41,15 @@
       ],
       "source": "https://help.close.com/feature-guide/calling"
     }
+  ],
+  "startPages": [
+    {
+      "url": "https://app.close.com/",
+      "landedURL": "https://app.close.com/login/",
+      "title": "Log In | Close CRM",
+      "heading": "Your CRM can finally do the work.",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
   ]
 }
