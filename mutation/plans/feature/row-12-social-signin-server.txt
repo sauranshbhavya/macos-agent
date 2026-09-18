@@ -34,8 +34,8 @@
 #   G15 supabase-provider.test "reads the Google identity out of a user Supabase also linked an email
 #       identity to"
 #   G16 supabase-provider.test "reads email_verified a string as unverified"
-#   G17 oauth.db "migration 0023's guard: refuses to apply while any Supabase user backs two live
-#       accounts"
+#   G17 migration-shared-supabase-user-guard.db "refuses to apply while any Supabase user backs two
+#       live accounts, and applies once it does not"
 
 >>> mutant G1 the guard always proceeds: a second account is filed under a Supabase user that already has one — the lockout
 >>> file server/src/auth/signin-guard.ts

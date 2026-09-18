@@ -277,7 +277,8 @@ it re-proved the lock and never reached the state it was aimed at.
 - the gate refuses a token the project signed for a real account's user whose session this gateway
   never started — the recycled-mailbox route around the rules — on a protected route and on refresh
 - migration 0023 refuses to apply over a Supabase user backing two live accounts, and applies once none
-  does
+  does (`server/test/migration-shared-supabase-user-guard.db.test.ts`, a file of its own because only a
+  suite about migrations may drive the runner)
 
 **Why every one of these is a database test.** They are asserted against a real Postgres,
 because what is being claimed lives in a partial unique index, a trigger and a transaction rather than

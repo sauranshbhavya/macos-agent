@@ -12,7 +12,6 @@ import {
 } from "../src/auth/provider.js";
 import { OAUTH_EXCHANGE_PER_SOURCE } from "../src/auth/ratelimit.js";
 import type { Config } from "../src/config.js";
-import { down, up } from "../src/db/migrate.js";
 import { testConfig } from "./support/config.js";
 import { rebuildSchema } from "./support/schema.js";
 import { accessTokenFor } from "./support/tokens.js";
@@ -489,32 +488,4 @@ describeDb("Sign in with Google, one provider-side user per account, and session
     });
   });
 
-  describe("migration 0023's guard", () => {
-    itUnderHangBackstop("refuses to apply while any Supabase user backs two live accounts, and applies once it does not", async () => {
-      // Rolled back to 0022, the broken state seeded — the only way to reach it now — and forward again.
-      expect(await down(client)).toBe("0023_the_gate_honours_only_sessions_the_gateway_started");
-      try {
-        const one = await resolve(client, {
-          provider: "email", subject: "one@example.com", email: "one@example.com", emailVerified: true, supabaseUserId: USER_A,
-        });
-        await resolve(client, {
-          provider: "email", subject: "two@example.com", email: "two@example.com", emailVerified: true, supabaseUserId: USER_A,
-        });
-        await expect(up(client)).rejects.toThrow(/backs two live accounts/);
-        // Nothing half-applied: the table is still absent.
-        const table = await client.query("SELECT to_regclass('sonny.gateway_session') AS t");
-        expect(table.rows[0].t).toBeNull();
-
-        // Resolve the state — close one of the two accounts — and the same migration applies.
-        await client.query("UPDATE sonny.account SET deleted_at = now() WHERE id = $1", [one.accountId]);
-        expect(await up(client)).toEqual(["0023_the_gate_honours_only_sessions_the_gateway_started"]);
-      } finally {
-        // Whatever happened above, leave the schema at its head for the tests after this one.
-        await client.query("TRUNCATE sonny.identity, sonny.account CASCADE");
-        if ((await client.query("SELECT to_regclass('sonny.gateway_session') AS t")).rows[0].t === null) {
-          await up(client);
-        }
-      }
-    });
-  });
 });

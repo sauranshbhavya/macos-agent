@@ -138,6 +138,11 @@ const MAY_REACH_THE_MIGRATION_RUNNER = new Set([
   // holds. Its pure sibling, `migration-lock-profile.test.ts`, tests the parser alone and imports
   // nothing from the runner, so it has no entry here.
   "migration-lock-profile.db.test.ts",
+  // SONNY-129's, by the same criterion and split out for the same reason SONNY-365's was. Migration
+  // 0023 refuses to apply while any Supabase user backs two live accounts, and that state is reachable
+  // only with 0023 rolled back — no route can create it any more — so the test has to call `down()`
+  // and `up()`. The rest of what SONNY-129 pins lives in `oauth.db.test.ts`, which is not on this list.
+  "migration-shared-supabase-user-guard.db.test.ts",
 ]);
 
 describe("the shared schema rebuild", () => {
