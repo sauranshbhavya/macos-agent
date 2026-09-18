@@ -16,14 +16,20 @@ import Foundation
 /// signed in, written as a page and not as the session that reached it: no query, no query inside a
 /// single-page app's fragment (`#/login`, not `#/login?redirect=/`), and no path segment the site mints
 /// per visit (`auth.buffer.com/login`, not `auth.buffer.com/login/8pSZ…`) — a sign-in redirect carries
-/// state and return values, and a record is read by whoever opens the pack next. `title` and
-/// `heading` are that page's document title and the text of its first `h1` or `h2` in document order,
-/// each `""` when the page has none (X's log-in page has no title), which is what a later reader
-/// re-opens it and compares against: a single-page app keeps one title across its routes, so the
-/// title alone can agree with a page that is not the one it names. The heading is recorded as read,
-/// even when it is a cookie banner's or a promotion's — a reading is evidence, not a caption.
-/// `offers` is what the page offered that visitor, in one of two words, and `read` is the date of the
-/// reading.
+/// state and return values, and a record is read by whoever opens the pack next. `title` is that
+/// page's document title once it has settled, read after arriving through `url` the way the flow
+/// arrives and not by opening `landedURL` fresh, because a redirect can race the title's update
+/// (Otter's and DeepL's each show a second title for a moment). `heading` is the text of the first
+/// `h1` or `h2`, in document order, that a visitor can see: one with rendered area, not
+/// `display: none`, not `visibility: hidden`, not clipped to nothing the way a screen-reader-only
+/// heading is, and carrying text. So a hidden cookie dialog's heading is not the page's (Cloudinary's
+/// "Privacy Preference Center"), and a visible promotion's is (Klaviyo's). Opacity is deliberately not
+/// read: a card that fades in sits at opacity 0 in a window that is not on screen, and a reading taken
+/// there would call Clerk's and Discord's headings hidden (founders' definition, 2026-09-18, on
+/// SONNY-510). Each is `""` when the page has none (X's log-in page has no title), and the two are what a
+/// later reader re-opens the page and compares against: a single-page app keeps one title across its
+/// routes, so the title alone can agree with a page that is not the one it names. `offers` is what the
+/// page offered that visitor, in one of two words, and `read` is the date of the reading.
 ///
 /// **Every reading is signed out, and how a page must be read is `CLAUDE.md`'s**, in its Claims and
 /// evidence section, which is not restated here: a browser, a profile with no sign-ins, the landed page
@@ -42,7 +48,11 @@ import Foundation
 ///   test: the same "by continuing you agree" sits under LinkedIn's, X's, Cloudflare's and Notion's real
 ///   sign-in forms, each of which has a sign-up route of its own. A cookie notice is never relevant. What
 ///   decides is whether pressing the button does something irreversible (founders, 2026-09-18, replacing
-///   both this file's first wording and the terms ruling on SONNY-503 and SONNY-504).
+///   both this file's first wording and the terms ruling on SONNY-503 and SONNY-504). The separate route
+///   is read at the page — a visible registration control, a tab, a button or a link to a page of its
+///   own — and a page that shows none is held, whoever creates its accounts (Lever's and Ashby's are an
+///   employer's), because what a form does with an address nobody may type into it cannot be seen from
+///   outside.
 /// - `product`: the product itself, usable without signing in, with the flow's first step on it.
 ///
 /// Anything else is a page a flow may not start on, and there is no third word to write it in: a

@@ -45,7 +45,7 @@
   "startPages": [
     {
       "url": "https://www.surveymonkey.com/login/",
-      "landedURL": "https://auth-us.surveymonkey.com/login",
+      "landedURL": "https://auth-us.surveymonkey.com/login#/login",
       "title": "SurveyMonkey Login",
       "heading": "Log in",
       "offers": "sign-in",
