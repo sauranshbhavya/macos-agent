@@ -6,8 +6,36 @@
   "category": "communication",
   "summary": "AI noise cancellation and meeting notes.",
   "signInURL": "https://app.krisp.ai/login",
-  "triggers": ["krisp", "krisp.ai"],
+  "triggers": [
+    "krisp",
+    "krisp.ai"
+  ],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Upload a file to transcribe",
+      "startURL": "https://app.krisp.ai/login",
+      "steps": [
+        "Upload and transcribe is for users on Krisp's Core and Advanced plans, and takes one audio or video file at a time.",
+        "Go to the Meetings page of your Krisp account.",
+        "Click the New button in the top-right corner and select Upload file.",
+        "Select the transcription language from the dropdown. English is the default, and 15 other languages are available.",
+        "Drag and drop the audio or video file into the upload box, or select it from your device. Once it is uploaded it is transcribed, and the transcript is there to review and summarise."
+      ],
+      "source": "https://help.krisp.ai/hc/en-us/articles/16411029727260-Upload-and-transcribe-audio-video-files-with-Krisp"
+    },
+    {
+      "title": "Create a meeting folder",
+      "startURL": "https://app.krisp.ai/login",
+      "steps": [
+        "Click the New Folder button, or hover over the Private or Teamspace section header and click +.",
+        "Enter a folder name or select one of the predefined names. Optionally add a description, and pick an emoji or an icon; an icon can take one of 8 standard colours.",
+        "The window shows which space the folder goes in: select Private or Teamspace to change it. Everyone on your team can view Teamspace folders.",
+        "Click Create.",
+        "To fill it, open the folder, click Add meeting, select the meetings — search, filter and sort work as on the Meetings page — and confirm. Only your own meetings can be added."
+      ],
+      "source": "https://help.krisp.ai/hc/en-us/articles/29185808893340-Meeting-folders"
+    }
+  ]
 }

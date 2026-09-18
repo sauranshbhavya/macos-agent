@@ -6,8 +6,36 @@
   "category": "communication",
   "summary": "Business phone system.",
   "signInURL": "https://my.quo.com/login",
-  "triggers": ["openphone", "quo.com"],
+  "triggers": [
+    "openphone",
+    "quo.com"
+  ],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Make a call",
+      "startURL": "https://my.quo.com/",
+      "steps": [
+        "Stop and ask before dialling a number outside the US or Canada. Calls there need international calling turned on and are paid for from credit on the account, so this flow never places one without the user saying so, whether or not the account already has credit.",
+        "If you have more than one Quo number, first select the one to call from in the Inboxes section of the left sidebar. That number is what the person you call sees on caller ID.",
+        "Press Ctrl+C on a Mac, or Alt+C on Windows, or click the dialer icon at the top of the page.",
+        "In the pop-up, type a phone number, search for a contact by name, or pick one of your recent conversations. Or open any conversation and click the phone icon at the top to call that contact.",
+        "During the call, click the settings gear to switch microphone or speaker without dropping the call."
+      ],
+      "source": "https://support.quo.com/core-concepts/calling/making-calls"
+    },
+    {
+      "title": "Set up hold music for a phone number",
+      "startURL": "https://my.quo.com/",
+      "steps": [
+        "Go to Phone numbers and select a number. Hold music is set up in the web or desktop app only, and then applies on every device.",
+        "Scroll to Hold music.",
+        "Choose a track from Quo's library — Upbeat is the default, Mellow is another — or upload a custom audio file.",
+        "Click Play to preview it.",
+        "Select its radio button to make it live. It goes live immediately, and an uploaded track plays only once its radio button is selected."
+      ],
+      "source": "https://support.quo.com/core-concepts/calling/making-calls"
+    }
+  ]
 }
