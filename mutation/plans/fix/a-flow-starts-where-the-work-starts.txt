@@ -11,8 +11,12 @@
 # downstream of it (SONNY-388), so each mutant is on the path of the tests that hold it.
 #
 # Round 2 (review-272) added K3, K4, K5 and D1, which are the review's own probes, and M13 to M15 for the
-# three checks that round added. **What a plan of this shape cannot do**, as the review put it: every
-# mutant here deletes or narrows a guard that exists, so none can find a guard that was never written.
+# three checks that round added. Round 3 (the founders' decision C) replaced the pack's own signInURL with
+# a fixed list of identity hosts, re-anchored M2, M3, M13, K3 and K5 on it, and added I1 to I3 for the
+# list itself: a host that forgets which sites it signs in for, a host nobody read, a host dropped.
+#
+# **What a plan of this shape cannot do**, as the review put it: every mutant here deletes or narrows a
+# guard that exists, so none can find a guard that was never written.
 # Review-272's F3 (the sign-in host admitted any word) and F4 (the declared URL's query was never read)
 # were absent code, and only probing the rule from outside found them.
 
@@ -20,7 +24,7 @@
 >>> file Sources/MacAgentCore/SkillPack.swift
 >>> from
         let startPages = try decodeStartPages(root["startPages"], hasFlows: !flows.isEmpty)
-        try SkillPackStartPageRule.check(flows: flows, startPages: startPages, domain: domain, signInURL: signInURL)
+        try SkillPackStartPageRule.check(flows: flows, startPages: startPages, domain: domain)
 >>> to
         let startPages: [SkillPackStartPage] = []
 >>> end
@@ -28,16 +32,16 @@
 >>> mutant M2 a recorded landing on another host loads: ads.google.com landing on business.google.com is accepted
 >>> file Sources/MacAgentCore/SkillPackStartPages.swift
 >>> from
-            guard SkillPackDecoder.isOnSite(host: landedHost, domain: domain) || admittedAsSignIn else {
+            guard SkillPackDecoder.isOnSite(host: landedHost, domain: domain) || onIdentityHost else {
                 throw SkillPackLoadError.landedOffSite(url: url, host: landedHost)
             }
 >>> to
 >>> end
 
->>> mutant M3 the pack's own sign-in host stops counting: a Google product landing on accounts.google.com is refused
+>>> mutant M3 the identity hosts stop counting: a Google product landing on accounts.google.com is refused
 >>> file Sources/MacAgentCore/SkillPackStartPages.swift
 >>> from
-            guard SkillPackDecoder.isOnSite(host: landedHost, domain: domain) || admittedAsSignIn else {
+            guard SkillPackDecoder.isOnSite(host: landedHost, domain: domain) || onIdentityHost else {
 >>> to
             guard SkillPackDecoder.isOnSite(host: landedHost, domain: domain) else {
 >>> end
@@ -123,12 +127,12 @@
             return []
 >>> end
 
->>> mutant M13 the sign-in host admits any word again: a pack naming business.google.com as its sign-in page lands Google Ads there as product (review-272's F3)
+>>> mutant M13 an identity host admits any word again: a Google product's landing on accounts.google.com loads as product (review-272's F3)
 >>> file Sources/MacAgentCore/SkillPackStartPages.swift
 >>> from
-            let admittedAsSignIn = landedHost == signInHost && page.offers == .signIn
+            let onIdentityHost = page.offers == .signIn && signsIn(on: landedHost, forPackOn: domain)
 >>> to
-            let admittedAsSignIn = landedHost == signInHost
+            let onIdentityHost = signsIn(on: landedHost, forPackOn: domain)
 >>> end
 
 >>> mutant M14 the declared URL's query is not read: a start URL of /login?mode=signup loads (review-272's F4)
@@ -147,12 +151,12 @@
             guard page.landedURL.query == nil else {
 >>> end
 
->>> mutant K3 the sign-in allowance widened to that host's subdomains: evil.accounts.google.com is admitted (review-272's K3)
+>>> mutant K3 the identity-host allowance widened to each host's subdomains: evil.accounts.google.com is admitted (review-272's K3)
 >>> file Sources/MacAgentCore/SkillPackStartPages.swift
 >>> from
-            let admittedAsSignIn = landedHost == signInHost && page.offers == .signIn
+        identityHosts[host]?.contains { SkillPackDecoder.isOnSite(host: domain.lowercased(), domain: $0) } ?? false
 >>> to
-            let admittedAsSignIn = signInHost.map { landedHost == $0 || landedHost.hasSuffix("." + $0) } == true && page.offers == .signIn
+        identityHosts.first { host == $0.key || host.hasSuffix("." + $0.key) }?.value.contains { SkillPackDecoder.isOnSite(host: domain.lowercased(), domain: $0) } ?? false
 >>> end
 
 >>> mutant K4 the parser reads the declared URL as the landing — the ticket's whole thesis undone (review-272's K4)
@@ -166,9 +170,9 @@
 >>> mutant K5 a reader's sign-in word admits any host (review-272's K5)
 >>> file Sources/MacAgentCore/SkillPackStartPages.swift
 >>> from
-            let admittedAsSignIn = landedHost == signInHost && page.offers == .signIn
+            let onIdentityHost = page.offers == .signIn && signsIn(on: landedHost, forPackOn: domain)
 >>> to
-            let admittedAsSignIn = page.offers == .signIn
+            let onIdentityHost = page.offers == .signIn
 >>> end
 
 >>> mutant D1 a data mutant: the shipped google_ads record lands on business.google.com, which everyShippedPackLoads must refuse (review-272's D1)
@@ -177,4 +181,30 @@
       "landedURL": "https://accounts.google.com/v3/signin/identifier",
 >>> to
       "landedURL": "https://business.google.com/us/google-ads/",
+>>> end
+
+>>> mutant I1 the identity-host list forgets which sites a host signs in for: Notion's start page landing on accounts.google.com loads (founders' decision C)
+>>> file Sources/MacAgentCore/SkillPackStartPages.swift
+>>> from
+        identityHosts[host]?.contains { SkillPackDecoder.isOnSite(host: domain.lowercased(), domain: $0) } ?? false
+>>> to
+        identityHosts[host] != nil
+>>> end
+
+>>> mutant I2 a host nobody read is added to the list: review-272's business.google.com probe loads again
+>>> file Sources/MacAgentCore/SkillPackStartPages.swift
+>>> from
+        "carrd.com": ["carrd.co"]
+    ]
+>>> to
+        "carrd.com": ["carrd.co"],
+        "business.google.com": ["google.com"]
+    ]
+>>> end
+
+>>> mutant I3 a host the sweep found is dropped from the list: Front's start page, landing on app.frontapp.com, is refused
+>>> file Sources/MacAgentCore/SkillPackStartPages.swift
+>>> from
+        "app.frontapp.com": ["front.com"],
+>>> to
 >>> end

@@ -1029,16 +1029,22 @@ struct SkillPackTests {
 
     /// The controls for the test above, through the same decoder: what an ordinary start page's record
     /// looks like loads, including the two cases the host rule exists to allow — a landing on a subdomain
-    /// of the site, and one on the pack's own sign-in host when that host is another domain, which is how
-    /// a Google product lands on `accounts.google.com`. Without the second, every Google pack in the tree
-    /// would be refused for landing exactly where its own `signInURL` says it signs in.
+    /// of the site, and one on a listed identity host that signs in for the pack's site, which is how a
+    /// Google product lands on `accounts.google.com`. The second loads with no `signInURL` at all, and
+    /// with one naming another host, because the rule does not read it.
     @Test
     func anOrdinaryStartPageRecordLoads() throws {
         #expect(Self.landing(start: "https://www.notion.so/", landed: "https://www.notion.so/login") == nil)
         #expect(Self.landing(start: "https://notion.so/", landed: "https://app.notion.so/sign-in") == nil)
+        for signIn in [nil, "https://meet.google.com/", "https://accounts.google.com/ServiceLogin"] {
+            #expect(Self.landing(
+                start: "https://meet.google.com/landing", landed: "https://accounts.google.com/v3/signin/identifier",
+                domain: "meet.google.com", signIn: signIn
+            ) == nil, "\(signIn ?? "no signInURL")")
+        }
         #expect(Self.landing(
-            start: "https://meet.google.com/landing", landed: "https://accounts.google.com/v3/signin/identifier",
-            domain: "meet.google.com", signIn: "https://accounts.google.com/ServiceLogin"
+            start: "https://teams.microsoft.com/", landed: "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
+            domain: "teams.microsoft.com", signIn: nil
         ) == nil)
         #expect(Self.landing(start: "https://www.notion.so/", landed: "https://www.notion.so/", offers: "product") == nil)
         // A single-page app's route lives in the fragment, and a fragment is recorded as it is.
@@ -1053,14 +1059,15 @@ struct SkillPackTests {
         #expect(Self.error(untitled) == nil)
     }
 
-    /// **The landed host, held on both sides of its line.** It is the pack's own site or the pack's own
-    /// sign-in host and nothing else: not a look-alike ending in the domain's letters, not a subdomain of
-    /// the sign-in host (the allowance is that host, exactly), and — for a pack with no sign-in page — not
-    /// any other host at all.
+    /// **The landed host, held on both sides of its line.** It is the pack's own site, or a listed
+    /// identity host that signs in for that site, and nothing else: not a look-alike ending in the
+    /// domain's letters, not a subdomain of a listed host (the allowance is that host, exactly), and not a
+    /// listed host that signs in for some other site.
     ///
-    /// **And the sign-in host admits a sign-in page only** (review-272's F3). `signInURL` is written in
-    /// the same file as the record, so the allowance alone let Google Ads' own shape back in: name
-    /// `business.google.com` as the sign-in page and its marketing landing loads as `product`.
+    /// **And `signInURL` buys nothing** (founders' decision C of 2026-09-18). It is written in the same
+    /// file as the record, so while the rule read it, naming `business.google.com` as the sign-in page let
+    /// Google Ads' own shape back in: review-272's probe, which loaded. Now that pack is refused whatever
+    /// word its record says, and an identity host admits a sign-in page only (review-272's F3).
     @Test
     func aLandingOnAnotherSiteIsRefusedWhateverTheRecordSays() throws {
         #expect(Self.landing(start: "https://www.notion.so/", landed: "https://notnotion.so/login")
@@ -1069,24 +1076,51 @@ struct SkillPackTests {
             start: "https://meet.google.com/landing", landed: "https://evil.accounts.google.com/signin",
             domain: "meet.google.com", signIn: "https://accounts.google.com/ServiceLogin"
         ) == .landedOffSite(url: "https://meet.google.com/landing", host: "evil.accounts.google.com"))
-        #expect(Self.landing(
-            start: "https://www.notion.so/", landed: "https://accounts.google.com/signin", signIn: nil
-        ) == .landedOffSite(url: "https://www.notion.so/", host: "accounts.google.com"))
+        // Google's sign-in host signs in for Google's sites, not Notion's, however the pack names it.
+        for signIn in [nil, "https://accounts.google.com/ServiceLogin"] {
+            #expect(Self.landing(
+                start: "https://www.notion.so/", landed: "https://accounts.google.com/signin", signIn: signIn
+            ) == .landedOffSite(url: "https://www.notion.so/", host: "accounts.google.com"), "\(signIn ?? "no signInURL")")
+        }
         // `offers: product` buys nothing here: the host rule reads the URL, not the reader's word.
         #expect(Self.landing(start: "https://ads.google.com/", landed: "https://business.google.com/", offers: "product", domain: "ads.google.com")
             == .landedOffSite(url: "https://ads.google.com/", host: "business.google.com"))
-        // The sign-in host edited to be the marketing host: a `product` landing there is refused, and only
-        // a record saying `sign-in` is admitted — the one left to the reader's judgement.
+        // Review-272's probe: the sign-in page edited to be the marketing host. Refused as either word.
+        for offers in ["product", "sign-in"] {
+            #expect(Self.landing(
+                start: "https://ads.google.com/", landed: "https://business.google.com/us/google-ads/", offers: offers,
+                domain: "ads.google.com", signIn: "https://business.google.com/"
+            ) == .landedOffSite(url: "https://ads.google.com/", host: "business.google.com"), "\(offers)")
+        }
+        // A listed identity host that does sign in for the pack's site admits a sign-in page only.
         #expect(Self.landing(
-            start: "https://ads.google.com/", landed: "https://business.google.com/us/google-ads/", offers: "product",
-            domain: "ads.google.com", signIn: "https://business.google.com/"
-        ) == .landedOffSite(url: "https://ads.google.com/", host: "business.google.com"))
-        #expect(Self.landing(
-            start: "https://ads.google.com/", landed: "https://business.google.com/us/google-ads/", offers: "sign-in",
-            domain: "ads.google.com", signIn: "https://business.google.com/"
-        ) == nil)
+            start: "https://meet.google.com/landing", landed: "https://accounts.google.com/v3/signin/identifier", offers: "product",
+            domain: "meet.google.com", signIn: "https://accounts.google.com/ServiceLogin"
+        ) == .landedOffSite(url: "https://meet.google.com/landing", host: "accounts.google.com"))
         // On the pack's own site `product` is still a word a landing may say.
         #expect(Self.landing(start: "https://www.notion.so/", landed: "https://app.notion.so/", offers: "product") == nil)
+    }
+
+    /// **The identity-host list is the population the sweep found, and no more.** Every listed host is
+    /// one a shipped start page lands on, and every site listed for it has a shipped pack landing there,
+    /// so an entry cannot outlive the packs it was read from, and an entry nobody read cannot be added.
+    /// The walk must reach something, or an empty population would pass as a clean one.
+    @Test
+    func everyIdentityHostIsOneAShippedStartPageLandsOn() throws {
+        let catalogue = SkillPackCatalog.load(fileURLs: SkillPackCatalog.packFileURLs(in: Self.shippedPacksDirectory))
+        var used: [String: Set<String>] = [:]
+        for pack in catalogue.packs {
+            for page in pack.startPages {
+                let host = (page.landedURL.host ?? "").lowercased()
+                guard !SkillPackDecoder.isOnSite(host: host, domain: pack.domain) else { continue }
+                let sites = SkillPackStartPageRule.identityHosts[host] ?? []
+                used[host, default: []].formUnion(sites.filter { SkillPackDecoder.isOnSite(host: pack.domain.lowercased(), domain: $0) })
+            }
+        }
+        #expect(!used.isEmpty, "no shipped start page lands off its own site")
+        for (host, sites) in SkillPackStartPageRule.identityHosts {
+            #expect(used[host] == sites, "\(host) lists \(sites.sorted()), and shipped packs land there from \((used[host] ?? []).sorted())")
+        }
     }
 
     /// Every spelling of account creation `accountCreationParts` folds together, in the landed path, in

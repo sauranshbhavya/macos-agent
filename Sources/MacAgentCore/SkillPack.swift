@@ -364,7 +364,7 @@ public enum SkillPackDecoder {
         }
 
         let startPages = try decodeStartPages(root["startPages"], hasFlows: !flows.isEmpty)
-        try SkillPackStartPageRule.check(flows: flows, startPages: startPages, domain: domain, signInURL: signInURL)
+        try SkillPackStartPageRule.check(flows: flows, startPages: startPages, domain: domain)
 
         // The money rule reads everything that reaches the planner as description of the site: each
         // flow as one unit (its money act is often split between title and steps), the summary, and

@@ -49,10 +49,27 @@ import Foundation
 ///   sign-in forms, each of which has a sign-up route of its own. A cookie notice is never relevant. What
 ///   decides is whether pressing the button does something irreversible (founders, 2026-09-18, replacing
 ///   both this file's first wording and the terms ruling on SONNY-503 and SONNY-504). The separate route
-///   is read at the page — a visible registration control, a tab, a button or a link to a page of its
-///   own — and a page that shows none is held, whoever creates its accounts (Lever's and Ashby's are an
-///   employer's), because what a form does with an address nobody may type into it cannot be seen from
-///   outside.
+///   is read at the page: a visible registration control, a tab, a button or a link to a page of its
+///   own. A page that shows none is held, because what a form does with an address nobody may type into
+///   it cannot be seen from outside.
+///
+///   **With one exception: a product that offers no self-serve sign-up anywhere passes**, because an
+///   admin or a sales team creates every account (founders, 2026-09-18; Ashby and Lever). The visible
+///   route was only ever a proxy for "this form cannot create an account", and on such a product the
+///   proxy reads backwards. On tl;dv and Fireflies its absence means the provider button is the sign-up.
+///   On Ashby it means no account can be created on that page at all. Same evidence, opposite meaning.
+///   So the exception is a check of the site, not of the sign-in page: if self-serve sign-up exists
+///   anywhere on it (a free plan, a trial, a "Get started" that creates an account) and the sign-in page
+///   merely hides it, that is tl;dv's shape and the page is held. Where each reader looked is recorded on
+///   SONNY-510, site by site.
+///
+///   **And a consent to biometric capture or to recording, bound to the control that signs in, holds the
+///   page whatever its sign-up route** (founders, 2026-09-18; Runway's "we and our vendors may scan faces
+///   or capture voiceprints", Fireflies' consent to recording the visitor's voice). It is a separate
+///   ground because the rule above is about account creation and is blind to it: a faceprint granted by a
+///   press is not terms boilerplate, and closing the account does not undo it. It is narrow on purpose,
+///   biometric and recording consent only and never consent in general, or it would swallow the terms
+///   line above.
 /// - `product`: the product itself, usable without signing in, with the flow's first step on it.
 ///
 /// Anything else is a page a flow may not start on, and there is no third word to write it in: a
@@ -61,13 +78,12 @@ import Foundation
 ///
 /// **What the loader checks, and what it cannot** (`SkillPackStartPageRule`). It checks that the record
 /// exists for every start URL and for nothing else; that a landing carries no query, in the URL or in its
-/// fragment; that the landed host is the pack's own site, or the host of the pack's own sign-in page for
-/// a record that says `sign-in` — which is what catches `ads.google.com/` landing on `business.google.com`
-/// however `signInURL` is edited, and why a pack whose start page lands on an identity host names that
-/// host in its `signInURL` (`accounts.google.com`, `login.microsoftonline.com`), the landing being the
-/// evidence for where it signs in; that neither URL names account creation in its path, fragment or (for
-/// the declared one) query, which is what catches Ghost's `/signup` even when a reader has written
-/// `sign-in` beside it; and which word `offers` is. It cannot check that `offers` is true of the page —
+/// fragment; that the landed host is the pack's own site or, for a record that says `sign-in`, a listed
+/// identity host that signs in for the pack's site (`SkillPackStartPageRule.identityHosts`) — which is
+/// what catches `ads.google.com/` landing on `business.google.com`, whatever the pack's `signInURL` says;
+/// that neither URL names account creation in its path, fragment or (for the declared one) query, which
+/// is what catches Ghost's `/signup` even when a reader has written `sign-in` beside it; and which word
+/// `offers` is. It cannot check that `offers` is true of the page —
 /// that is the reader's judgement, and the loader holds only the words it may be written in — and it
 /// cannot see a site change after the reading. `read` is what says how old a record is.
 public struct SkillPackStartPage: Equatable, Sendable {
@@ -109,11 +125,45 @@ enum SkillPackStartPageRule {
     /// account creation under an ordinary path is refused (StreamYard's home has no path at all).
     static let accountCreationParts: Set<String> = ["signup", "register", "registration", "createaccount"]
 
+    /// **Where a start page may land off its own pack's site: this list, and nowhere else** (the
+    /// founders' decision of 2026-09-18 on SONNY-524). Each key is a host a shipped start page was read
+    /// landing on, signed out, and its value is the sites whose packs it signs in for. A landing there is
+    /// admitted only for a record that says `sign-in`, and only when the pack's `domain` is on one of
+    /// those sites, so Google's sign-in host admits a Google pack and not Notion's. The list is the whole
+    /// population the second round's sweep found, nine hosts for nineteen landings, and
+    /// `everyIdentityHostIsOneAShippedStartPageLandsOn` holds that it stays exactly that.
+    ///
+    /// **The refusal is the point.** A pack whose start page lands on a host not listed here does not
+    /// load, so somebody sees it. The allowance this replaced read the pack's own `signInURL`, which the
+    /// same author writes in the same file, so a wrong value admitted a bad landing silently: review-272
+    /// loaded a Google Ads pack that named `business.google.com` as its sign-in page, through the real
+    /// decoder. `signInURL` is not read by this rule at all now.
+    ///
+    /// **To add a host**, read the start page signed out, confirm it lands on a sign-in page on that
+    /// host, and add the host with the site it signs in for in the same change as the pack, citing the
+    /// reading. A new product on a listed site needs no edit: a calendar pack on `calendar.google.com`
+    /// already signs in through `accounts.google.com`.
+    static let identityHosts: [String: Set<String>] = [
+        "accounts.google.com": ["google.com", "youtube.com"],
+        "login.microsoftonline.com": ["office.com", "microsoft.com"],
+        "login.live.com": ["live.com"],
+        "id.atlassian.com": ["trello.com"],
+        "app.frontapp.com": ["front.com"],
+        "app.notion.com": ["notion.so"],
+        "authenticator.cursor.sh": ["cursor.com"],
+        "identity.getpostman.com": ["postman.com"],
+        "carrd.com": ["carrd.co"]
+    ]
+
+    /// Whether `host` is a listed identity host that signs in for a pack on `domain`.
+    static func signsIn(on host: String, forPackOn domain: String) -> Bool {
+        identityHosts[host]?.contains { SkillPackDecoder.isOnSite(host: domain.lowercased(), domain: $0) } ?? false
+    }
+
     static func check(
         flows: [SkillPackFlow],
         startPages: [SkillPackStartPage],
-        domain: String,
-        signInURL: URL?
+        domain: String
     ) throws {
         let recorded = Dictionary(grouping: startPages, by: \.url.absoluteString)
         for page in startPages where recorded[page.url.absoluteString, default: []].count > 1 {
@@ -134,12 +184,10 @@ enum SkillPackStartPageRule {
                 throw SkillPackLoadError.landedURLCarriesQuery(url: url)
             }
             let landedHost = (page.landedURL.host ?? "").lowercased()
-            let signInHost = signInURL?.host?.lowercased()
-            // The sign-in host admits a sign-in page and nothing else. `signInURL` is written in the same
-            // file as the record, so without this a pack could name `business.google.com` as its sign-in
-            // page and land Google Ads' start page there as `product` (review-272's F3).
-            let admittedAsSignIn = landedHost == signInHost && page.offers == .signIn
-            guard SkillPackDecoder.isOnSite(host: landedHost, domain: domain) || admittedAsSignIn else {
+            // An identity host admits a sign-in page and nothing else (review-272's F3): a `product`
+            // record there is a reader's mistake, not a page Sonny can start a task on.
+            let onIdentityHost = page.offers == .signIn && signsIn(on: landedHost, forPackOn: domain)
+            guard SkillPackDecoder.isOnSite(host: landedHost, domain: domain) || onIdentityHost else {
                 throw SkillPackLoadError.landedOffSite(url: url, host: landedHost)
             }
             for named in [page.url, page.landedURL] where namesAccountCreation(named) {
