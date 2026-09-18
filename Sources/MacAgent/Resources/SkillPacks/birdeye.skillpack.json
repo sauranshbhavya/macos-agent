@@ -11,6 +11,32 @@
     "birdeye.com"
   ],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Reply to a review on an integrated source",
+      "startURL": "https://app.birdeye.com/",
+      "steps": [
+        "Click on the 'Reviews' tab.",
+        "Click on 'All' and it will display the received reviews.",
+        "Click on 'Haven't replied', which will show the only reviews that you haven't replied to.",
+        "If your Google and Facebook accounts are integrated with your Birdeye account, click on the 'Reply' tab.",
+        "Select a 'Template', and the template content will auto-populate in the response box.",
+        "You can also edit the template content to customize it, or you can continue to respond using the auto-populated template content.",
+        "Click on the 'Post reply' button on the bottom right.",
+        "There are multiple templates available by default within the dashboard. Additional response templates will appear in the drop-down once you add new templates under the 'Settings' tab."
+      ],
+      "source": "https://support.birdeye.com/en/articles/12653001-how-do-i-respond-to-reviews-from-my-birdeye-account"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://app.birdeye.com/",
+      "landedURL": "https://app.birdeye.com/sign-in/",
+      "title": "Business Reputation Management |",
+      "heading": "AI Coworkers forMulti-location Brands",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
+  ]
 }
