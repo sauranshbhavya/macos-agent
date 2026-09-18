@@ -4,7 +4,7 @@ The Skills page shows no depth, flows or start pages, so nothing on it changes. 
 Sonny goes when a command names one of these packs:
 - 38 start pages moved to the site's sign-in page.
 - 15 packs name a different sign-in page.
-- 29 packs have no task steps any more.
+- 25 packs have no task steps any more.
 - Luma and Perplexity each lost one flow.
 
 Run each row with the packaged app, with the named skill added on the Skills page, in a browser
@@ -28,13 +28,17 @@ Run each row with the packaged app, with the named skill added on the Skills pag
   for a Canva task, for example "make a Canva poster". It does not open Canva's "Log in or sign up in
   seconds" page and follow numbered steps from there. The same is true of Airtable, Amplitude, Attio,
   Dropbox, Fireflies, Framer, HeyGen, Manus, Microsoft Copilot, Synthesia, Twenty and v0.
-- [ ] **SONNY-510 — a start page with no visible sign-up route has no task steps.** Ask Sonny for a
-  Lever task. It does not open Lever's "Sign in to Lever" page and follow numbered steps from there,
-  because that page shows no way to create an account. The same is true of Affinity, Ashby, Birdeye,
-  Pylon and BambooHR.
+- [ ] **SONNY-510 — a start page that asks to scan faces has no task steps.** Ask Sonny for a Runway
+  task. It does not open Runway's log-in page, whose Continue and Log in agree that faces may be
+  scanned and voiceprints captured, and follow numbered steps from there.
+- [ ] **SONNY-510 — a product nobody signs themselves up for keeps its task steps.** Ask Sonny for a
+  Lever task. It opens Lever's "Sign in to Lever" page. Lever offers no self-serve sign-up anywhere,
+  because an employer creates its accounts. The same is true of Affinity, Ashby, Birdeye and Pylon.
+  BambooHR is the opposite case and has no task steps: its sign-in page shows no sign-up either, but
+  `bamboohr.com/signup/` offers a self-serve free trial.
 - [ ] **SONNY-510 — a pack that lost one flow keeps its others.** Ask Sonny to create a Luma event.
-  It still starts at `luma.com/create`. No Luma task starts at `luma.com/signin`,
-  whose form is "Please sign in or sign up below".
+  It still starts at `luma.com/create`. No Luma task starts at `luma.com/signin`, whose form is
+  "Please sign in or sign up below".
 - [ ] **SONNY-510 — signed in, a moved start page still reaches the product.** Signed **in** to Miro
   in the browser, ask Sonny for a Miro task. `miro.com/login` should forward a signed-in user into the
   product. This branch read every start page signed out only, so this row is the one reading of the
