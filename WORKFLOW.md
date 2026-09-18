@@ -581,7 +581,15 @@ file, and nothing else. What it checks:
   (step 7's own record of it, below). A branch that owes nothing writes one line saying so; a
   missing file and a deliberate "none" are otherwise the same silence. Only branches merged in
   the one-file-per-branch era are checked — the roughly thirty that merged before it and wrote
-  nothing are the archive's.
+  nothing are the archive's. **And only the merges the checkout contains** (SONNY-516): the merge
+  list is the mainline's and the files are the working tree's, so on a branch whose base predates
+  a merge, that merge's files are rightly absent. Until 2026-09-17 the tool reported each one
+  missing, in words that read as the merged branch having broken this rule, and three sessions
+  took it as fact inside one hour — one of them into a changelog entry that would have merged. The
+  skipped merges are named on every run instead, and a finding that does fire says whether the
+  merge commit itself lacked the file or this checkout removed it. The mirror — a checkout holding
+  pull-request merges the mainline it read lacks, a stale `origin/main` beneath a newer branch —
+  is refused with exit 1 and `git fetch origin` as the remedy, never measured.
 - **An entry's heading and its filename are the same branch**, which is the shape a copied entry
   takes and the one thing nothing else could see.
 - **Exactly one `Status:` line per entry, and one `### Branch:` heading per file.** That arm is

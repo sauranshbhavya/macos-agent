@@ -280,6 +280,59 @@ assert "a fault reachable only through docs/manual-tests is caught" \
 only_one_directory "$repo" "$MANUAL_DIR" "$ENTRY_DIR"
 
 # ---------------------------------------------------------------------------------------------
+# A branch that has not rebased (SONNY-516). The merge list is the mainline's and the files are
+# the tree's, so a branch cut before a later merge rightly lacks that merge's records — and the
+# hook blocked the turn on them, with findings that read as the merged branch having broken the
+# rule. Three sessions took that as fact within an hour. The pair below is one fixture and one
+# difference: where the lane is cut.
+# ---------------------------------------------------------------------------------------------
+
+ERA_BRANCH="chore/an-entry-is-a-file-of-its-own"
+
+# new_era_fixture — `new_fixture`, then the one-file-per-branch era on its mainline: the era's own
+# branch and two after it, each committing both of its records before it merges, the way a real
+# branch does. Leaves `main` checked out; the caller cuts the lane.
+new_era_fixture() {
+  local repo spec pr branch
+  repo="$(new_fixture)"
+  git -C "$repo" checkout -q main
+  for spec in 54:"$ERA_BRANCH" 55:wave/one 56:wave/two; do
+    pr="${spec%%:*}"; branch="${spec#*:}"
+    git -C "$repo" checkout -q -b "$branch"
+    write_entry "$repo" "$ENTRY_DIR" "$branch"
+    write_entry "$repo" "$MANUAL_DIR" "$branch"
+    git -C "$repo" add -A >/dev/null
+    git -C "$repo" commit -q -m "work on $branch"
+    git -C "$repo" checkout -q main
+    git -C "$repo" merge -q --no-ff -m "Merge pull request #$pr from ns/$branch" "$branch"
+  done
+  printf '%s' "$repo"
+}
+
+# The lane is cut at PR #55's merge, so wave/two (PR #56) merged after its base. It writes its own
+# two records and commits them — the state the last turn of a branch is in.
+repo="$(new_era_fixture)"
+git -C "$repo" checkout -q -B docs/fixture-branch main~1
+write_entry "$repo" "$ENTRY_DIR" docs/fixture-branch
+write_entry "$repo" "$MANUAL_DIR" docs/fixture-branch
+git -C "$repo" add -A >/dev/null && git -C "$repo" commit -q -m "entries"
+run_hook "$repo" false
+assert "a lane cut before a later merge, with its own records written, is not blocked" \
+  0 - "missing"
+
+# The control, one difference: the lane is cut at the tip, so it contains wave/two's merge — and
+# it removes wave/two's entry. That is a real fault, and it must still block.
+repo="$(new_era_fixture)"
+git -C "$repo" checkout -q -B docs/fixture-branch main
+write_entry "$repo" "$ENTRY_DIR" docs/fixture-branch
+write_entry "$repo" "$MANUAL_DIR" docs/fixture-branch
+git -C "$repo" rm -q "$ENTRY_DIR/wave/two.md"
+git -C "$repo" add -A >/dev/null && git -C "$repo" commit -q -m "entries"
+run_hook "$repo" false
+assert "  ...and a lane that contains that merge and removed its record is blocked" \
+  2 "docs/changelog/wave/two.md: missing — PR #56 merged 'wave/two' with it" -
+
+# ---------------------------------------------------------------------------------------------
 # The two battery states. Neither is this ticket's work; both are what it had to not break.
 # ---------------------------------------------------------------------------------------------
 repo="$(new_fixture)"

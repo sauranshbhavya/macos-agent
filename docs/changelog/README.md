@@ -54,7 +54,12 @@ swept for it by hand (PR #124).
 
 `scripts/changelog-order` fails a branch that merged in this era and wrote no file. The era
 begins at the merge of the branch named in that script's `DIRECTORY_ERA_BRANCH`; everything
-merged before it is the archive's and is not checked for completeness.
+merged before it is the archive's and is not checked for completeness. **It asks a checkout only
+for the records of merges that checkout contains** (SONNY-516): a branch whose base predates a
+merge cannot hold that merge's files, so it is not asked for them, and every run names the merges
+it did not ask about on its `this checkout contains` line. A finding it does report says which of
+two things happened — the merge commit's own tree lacks the file, so the branch merged without
+it, or holds it, so something on this checkout removed it — and names the command that shows it.
 
 ## The template
 
