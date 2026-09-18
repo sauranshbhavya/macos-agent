@@ -22,7 +22,7 @@ Same packaged app. Sign in to eBay yourself first.
 - [ ] Ask Sonny to save an eBay search for something you look for often. It searches, then selects Save this search at the top of the results — it does not open a listing or offer to bid or buy.
 - [ ] Ask it to tidy your eBay Watchlist. It goes to My eBay → Watching, and offers Sort, the Status dropdown, and tick-and-Delete.
 
-### The nine new packs' start pages are sign-in pages or a shop front, not sign-up pages (new 2026-09-18, SONNY-504)
+### The ten new packs' start pages are sign-in pages or a shop front, not sign-up pages (new 2026-09-18, SONNY-503, SONNY-504)
 
 No app needed — a browser signed out of everything, which is what Sonny meets on a fresh Mac. Each was measured once on this branch; if a page has moved, note what it now shows.
 
@@ -32,11 +32,19 @@ No app needed — a browser signed out of everything, which is what Sonny meets 
 - [ ] `https://id.kajabi.com/u/login` — "Sign in to your account", Sign up here a link.
 - [ ] `https://app.samcart.com/auth/login` — "Login | SamCart", Sign Up a link to the pricing page.
 - [ ] `https://www.ebay.com/` — the homepage: a search box, Sign in and register as links, a My eBay menu.
-- [ ] `https://www.etsy.com/` — the shop homepage with its search box and Sign in. A cookie notice may show at the bottom right; leave it alone. It is the one agreement text on the page, and it was ruled not to be a terms acceptance bound to a flow's control.
+- [ ] `https://www.etsy.com/` — the shop homepage with its search box and Sign in. A cookie notice may show at the bottom right; leave it alone. By the founders' rule of 2026-09-18, a cookie or consent notice never disqualifies a start page.
 - [ ] `https://app.clickfunnels.com/users/sign_in` — "ClickFunnels - Login", Sign Up a link, no agreement text.
 - [ ] `https://thrivecart.com/signin/` — email, password and Sign In, no sign-up form.
+- [ ] `https://ads.tiktok.com/i18n/login` — "TikTok Ads: Log In", "Log in to your TikTok for Business account", Sign up now a link, no agreement text.
 - [ ] For contrast, the held ones should still show what held them: `https://www.appsheet.com/Template/Apps` ("By signing in, you agree…" under its provider buttons), `https://my.ecwid.com/` ("By continuing, you agree…"), `https://www.linkedin.com/login` (the same, under Continue with Google), `https://app.bubble.io/login` (a sign-up form), and `https://creator.zoho.com/` (a www.zoho.com sign-up form).
+
+### Sonny reads TikTok Ads results without touching an ad (new 2026-09-18, SONNY-503)
+
+Same packaged app. Sign in to TikTok Ads Manager yourself first.
+
+- [ ] Ask Sonny how your TikTok ads did this week. It goes to the Campaigns page, the Campaign / Ad group / Ad tabs and the column metrics, or to the Dashboard summary with its Calendar filter.
+- [ ] Nothing it proposes creates, edits, turns on or pays for an ad.
 
 ### This group's remaining sites still carrying facts alone is not a finding (new 2026-09-18, SONNY-503, SONNY-504)
 
-- [ ] appsheet, ecwid, bubble, glide, zoho_creator, linkedin_ads, metricool and tiktok_ads are still shallow packs after this branch — each named on SONNY-503 or SONNY-504 with the start-page or flow reason. Skip them when checking deep flows.
+- [ ] appsheet, ecwid, bubble, glide, zoho_creator, linkedin_ads and metricool are still shallow packs after this branch — each named on SONNY-503 or SONNY-504 with the start-page reason. Skip them when checking deep flows.
