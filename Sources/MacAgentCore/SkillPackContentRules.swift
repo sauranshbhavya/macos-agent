@@ -33,7 +33,7 @@ struct SkillWords {
     /// before this array existed. The shape is not exotic, and the count depends on which
     /// punctuation is called a boundary, so the instrument is named with the number:
     /// `python3 -c "import json,glob,re; steps=[s for f in glob.glob('Sources/MacAgent/Resources/SkillPacks/' + '*.skillpack.json') for fl in json.load(open(f))['flows'] for s in fl['steps']]; print(len(steps), sum(1 for s in steps if re.search(r'[.:;!?]\s+\S', s)), sum(1 for s in steps if re.search(r'[.!?]\s+\S', s)))"`
-    /// → `1767 495 381` at `18f125fe`. The figure reads the shipped pack resources only, and
+    /// → `1799 503 388` at `6aae9a90`. The figure reads the shipped pack resources only, and
     /// `Sources/MacAgent/Resources/SkillPacks` is one tree hash at that commit and at this branch's
     /// head, so it is a reading of both. **It is stamped at a commit on `main` rather than at a
     /// branch head on purpose**: this branch hopped twice while it was open, and each hop orphaned
