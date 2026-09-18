@@ -119,7 +119,7 @@ Two alternatives were on the record and both were rejected:
   costs little here and reuses a shape the system already speaks.
 
 **The principle the decision encodes: keep one person on one account in the ordinary case, and refuse
-to guess in the ambiguous one.** Surfacing the hint is SONNY-128's and SONNY-129's, as it already is
+to guess in the ambiguous one.** Surfacing the hint is SONNY-522's (moved from SONNY-128 and SONNY-129 on 2026-09-18), as it already is
 for relay.
 
 **What this costs, stated rather than glossed.** The genuinely common case — one person, one mailbox,
@@ -159,6 +159,25 @@ cannot represent that case at all, which is why it was rejected rather than defe
 can no longer produce the wrong answer: at worst it creates an extra `auth.users` row that our
 identity table resolves to the right account.
 
+**Corrected 2026-09-18 (SONNY-129): that paragraph was false, in two ways, and both arrive with a second
+sign-in method.** Neither changes the rule; both are guarded beside it.
+
+- **The first bullet above locked people out.** When Supabase joins two methods into *one* `auth.users`
+  row, rule 2's new account is filed under that same Supabase user — and `accountForSupabaseUser`
+  answers `ambiguous` for a user two live accounts name, so the gate and refresh refused every token
+  that person held, on both accounts, with no route able to recover it. Reproduced against a real
+  Postgres in both orders, email then Google and Google then email (`server/test/oauth.db.test.ts`).
+  **The guard:** both sign-in routes refuse a sign-in whose Supabase user already backs a different
+  live account, with `409 auth.account_exists`, before `resolve()` runs (`server/src/auth/signin-guard.ts`,
+  founders' option A). So where the provider joined the two, the second method is refused rather than
+  given an account; where it did not — different Supabase users — rule 2 still flags exactly as §2.1
+  says. Joining on purpose is SONNY-522.
+- **The separation held only for sign-ins that came through this gateway.** Supabase will mint a
+  session for a joined user to anyone who asks it directly, so the new owner of a recycled mailbox could
+  sign in *at Supabase* and present a token for the Google-created user of the previous owner — §2.1's
+  case, reached around every rule here. **The guard:** the gate honours only sessions this gateway's own
+  sign-in routes started (migration 0023, `server/src/auth/gateway-session.ts`).
+
 ---
 
 ## 4. The case this rule deliberately does not solve silently
@@ -175,7 +194,7 @@ by rule 4. What the server must never do is guess: it cannot know that
 guess is the takeover pattern with extra steps.
 
 So the second account is created, flagged, and offered a link. **Surfacing that hint is
-SONNY-128's and SONNY-129's**; this ticket owns the detection, the flag and the field, and pins them
+SONNY-522's** (it was SONNY-128's and SONNY-129's until 2026-09-18); this ticket owns the detection, the flag and the field, and pins them
 with tests.
 
 ---
@@ -243,6 +262,22 @@ pass alternates who starts first by construction and **asserts that both outcome
 because the ad-hoc battery this replaces passed 50/50 against a tree with the defect it was written
 to catch: every path it drove linked *onto* the closing account, which the account lock refuses, so
 it re-proved the lock and never reached the state it was aimed at.
+
+**And the two guards SONNY-129 added beside the rule** (`server/test/oauth.db.test.ts`, 2026-09-18):
+
+- `resolve()` alone, email then Google on one Supabase user, **and the reverse order**, each leave that
+  user naming two live accounts and attribution answering `ambiguous` — the lockout, measured in both
+  directions as the reason the guard exists
+- the routes refuse both orders with `409 auth.account_exists`, create nothing, and leave the first
+  account attributable and its session working
+- a user already in the two-account state is refused `401 auth.token_revoked`, as the gate refuses it
+- a sign-in waits while another holds the per-user lock, so the guard and `resolve()` cannot interleave
+- a verified match under a *different* Supabase user still gets rule 2's flag through Google, and an
+  unverified one gets nothing
+- the gate refuses a token the project signed for a real account's user whose session this gateway
+  never started — the recycled-mailbox route around the rules — on a protected route and on refresh
+- migration 0023 refuses to apply over a Supabase user backing two live accounts, and applies once none
+  does
 
 **Why every one of these is a database test.** They are asserted against a real Postgres,
 because what is being claimed lives in a partial unique index, a trigger and a transaction rather than

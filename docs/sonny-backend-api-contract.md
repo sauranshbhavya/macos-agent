@@ -187,7 +187,7 @@ Everything in section 2 applies to every endpoint unless an endpoint says otherw
 Restating a partial list here is how a client ends up attaching an access token to the calls made
 before it has one. For convenience, the endpoints that carry no `Authorization` header at all are
 `GET /v1/meta`, `GET /v1/health`, `POST /v1/auth/email/start`, `POST /v1/auth/email/verify`,
-`POST /v1/auth/oauth/google`, `POST /v1/auth/oauth/apple` and `POST /v1/auth/refresh` — the last of
+`POST /v1/auth/oauth/google/start`, `POST /v1/auth/oauth/google` and `POST /v1/auth/refresh` — the last of
 these authenticates with the refresh token in its body and deliberately sends no header, so that an
 expired or missing access token can never be the reason a refresh fails.
 
@@ -467,22 +467,74 @@ Two values:
 
 A client that ignores the field is correct and gets two accounts; there is no failure mode in
 ignoring it, only a worse experience. **Surfacing it — the prompt that offers to join the two — is
-SONNY-128's and SONNY-129's**, and neither the field nor the prompt merges anything: rule 4 is the
-only path that joins two existing accounts.
+SONNY-522's** (moved from SONNY-128 and SONNY-129 by founder decision on 2026-09-18, because a join
+decides which account's data survives, which is a data design before it is a screen), and neither the
+field nor the prompt merges anything: rule 4 is the only path that joins two existing accounts.
 
-`POST /v1/auth/oauth/google` and `POST /v1/auth/oauth/apple` — the body is whatever the provider's
-flow yields and is SONNY-129's to fix, once that ticket has established which Sign in with Apple
-mechanism actually works for a Developer-ID-signed, non-App-Store Mac app. Both return the same token
-response of 3.2. **Neither lands on an existing account on the strength of an email address**
-(corrected 2026-08-26, SONNY-288). This sentence said both "land on the same account as an email
-sign-in for the same person", which the `link_hint` table directly above it already contradicted.
-Under the rule SONNY-127 built, and the founder's decision of 2026-08-22 that rule 2 flags rather
-than links, a verified non-relay match creates a **new** account and returns
-`verified_email_matches_existing_account`; a Hide My Email relay matches nothing and returns
-`relay_address_may_belong_to_existing_account`; and rule 4 — a sign-in completed while already
-authenticated on the target account — is the only path that joins two existing accounts
-(`docs/sonny-identity-linking-rule.md` §1 and §4). This contract fixes the paths and the response so
-the sign-in surface does not have to be rebuilt when they arrive.
+**Sign in with Google, settled 2026-09-18 (SONNY-129).** The body shapes this section left open are
+fixed here, and **Sign in with Apple is not in v1**: Apple offers its native sign-in only to App Store
+builds — its capability table marks Sign in with Apple unavailable to an app signed with a Developer ID
+certificate, which is how Sonny ships — and the browser flow that remained needs a client secret Apple
+refuses to issue for more than six months. The founders dropped it on 2026-09-18; SONNY-521 is the
+record and says when it returns. `POST /v1/auth/oauth/apple` is not served and not public.
+
+The flow is Supabase's PKCE flow in the user's browser. The Mac never holds a secret: it makes a
+random verifier, sends only its S256 challenge to start, and spends the verifier once, at the end.
+
+`POST /v1/auth/oauth/google/start` — where to send the browser.
+
+```json
+{ "code_challenge": "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM" }
+```
+```json
+{ "authorize_url": "https://<project>.supabase.co/auth/v1/authorize?provider=google&redirect_to=…&code_challenge=…&code_challenge_method=s256" }
+```
+
+`code_challenge` is `BASE64URL(SHA256(verifier))`, exactly 43 characters; anything else is
+`400 request.invalid`. **The redirect is not a parameter.** It is the gateway's constant,
+`com.sonny.macagent://auth/callback` (`server/src/auth/oauth.ts`), a private scheme the Mac's
+`ASWebAuthenticationSession` waits on, and a caller-supplied `redirect_to` is ignored. The deployment's
+Supabase project must list that exact URL in its redirect allow-list. Nothing is stored and nothing is
+called: the answer is built from the request.
+
+`POST /v1/auth/oauth/google` — the code the browser brought back, and the verifier, for a session.
+
+```json
+{ "auth_code": "…", "code_verifier": "…" }
+```
+
+Returns the token response of 3.2, whose `user` also carries **`email`, the address Google asserted,
+for display only** — the client shows it and decides nothing from it. Refusals: a body that is not a
+code and an RFC 7636 verifier is `400 request.invalid`; a pair the provider refuses — an expired or
+spent flow, a verifier that does not match — is `400 auth.code_invalid`, because the provider does not
+say which; `429 limit.rate` past 30 attempts per source per hour; `502 provider.unavailable` and
+`504 provider.timeout` as for `email/verify`; and `409 auth.account_exists`, below. The account is
+resolved by Google's own `sub`, never by the address (`docs/sonny-identity-linking-rule.md` §1).
+
+**One provider-side user never backs two live accounts, on either sign-in route (founders' option A,
+2026-09-18).** Supabase joins sign-ins with the same verified address into one provider-side user, so
+someone who signed up by email code and later presses Google — or the reverse — comes back as the same
+Supabase user. Rule 2 used to give the second sign-in its own account under that same user, and the
+gate refuses every token for a user two live accounts name, so both accounts were locked with no route
+able to recover them. **Both `email/verify` and `oauth/google` now refuse that sign-in with
+`409 auth.account_exists`**: nothing is created, the session the provider just minted is ended, and the
+existing account is untouched. The client tells the user to sign in the way they did before. It is not
+an account-existence oracle: only a caller who has completed a sign-in for that address — who holds the
+mailbox, or the Google account — can reach it. Rule 2's `verified_email_matches_existing_account` still
+arrives where the provider did **not** join the two (different Supabase users), and a user already in
+the two-account state is refused `401 auth.token_revoked`, as the gate refuses them. Joining the two
+accounts on purpose is SONNY-522.
+
+**Only sessions this gateway started are honoured (SONNY-129).** Each sign-in route verifies the token
+the provider just minted — exactly as 3.1 verifies every later one — records its session against the
+account it resolved to, and refuses to hand out a token it cannot verify (`500 server.error`; the usual
+cause is a project signing with a key the gateway does not hold). Every authenticated route, and
+`POST /v1/auth/refresh`, then refuses with `401 auth.token_revoked` a token whose session has no such
+record for the same provider-side user and account, and a token carrying no session claim at all. The
+reason is the same joining: Supabase will mint a session for a joined user to anyone who asks it
+directly, and a token it signed is not evidence that this gateway's sign-in rules ever ran for it.
+**Every session started before this change signs in once more**; nothing is backfilled, because nothing
+on record says which earlier sessions the gateway started.
 
 `POST /v1/auth/refresh` — `{ "refresh_token": "…" }`, returning the token response of 3.2 with a new
 refresh token. Rotation, overlap and reuse detection are in 3.3.
@@ -498,9 +550,11 @@ The gateway now records the token's session and refuses it on every authenticate
 No shape moved and no code was added; a state that used to be served is now refused. **This route
 itself stays reachable with such a token**, deliberately: the revocation is recorded before the
 provider is called, so a retry of a sign-out that answered `502` or `504` — both retryable under 9.3
-— must not meet the record its own first attempt wrote. **And a token that carries no session claim
-cannot be covered**: the provider omits the claim in some cases, and such a token keeps the window
-above.
+— must not meet the record its own first attempt wrote. **A token that carries no session claim
+could not be covered, and since SONNY-129 it is not honoured at all**: the provider omits the claim in
+some cases, and such a token used to keep the window above. Every authenticated route now refuses it
+with `401 auth.token_revoked`, and no sign-in route hands one out — see "Only sessions this gateway
+started" below.
 
 **A provider that cannot be reached answers `502 provider.unavailable` here, not `204`** (SONNY-311).
 `204` would assert a revocation that did not happen: the family is still live at the provider, so a
@@ -528,8 +582,8 @@ here only so nobody adds a second one.
 | `GET /v1/health` | none | Liveness and build identifier | SONNY-126 |
 | `POST /v1/auth/email/start` | none | Request a sign-in code | SONNY-127 |
 | `POST /v1/auth/email/verify` | none | Exchange a code for tokens | SONNY-127 |
+| `POST /v1/auth/oauth/google/start` | none | Where to send the browser for Sign in with Google | SONNY-129 |
 | `POST /v1/auth/oauth/google` | none | Sign in with Google | SONNY-129 |
-| `POST /v1/auth/oauth/apple` | none | Sign in with Apple | SONNY-129 |
 | `POST /v1/auth/refresh` | refresh token in body | Rotate tokens | SONNY-127 |
 | `POST /v1/auth/signout` | yes | Revoke this session's family | SONNY-127 |
 | `GET /v1/account/entitlements` | yes | Fetch the signed entitlement claim | SONNY-135 |
@@ -1375,7 +1429,8 @@ Also part of the taxonomy:
 | The provider did not complete the charge | 402 | `topup.declined` | `POST /v1/account/credits/top-up` only (SONNY-215). The provider answered and did not charge — a declined card, no payment method on file, or an authentication challenge an off-session charge cannot answer. Its own status because the fix is the user's payment method rather than their settings, and collapsing it into the row above is a distinction a later surface could not recover |
 | The provider's answer could not be read | 502 | `topup.unconfirmed` | `POST /v1/account/credits/top-up` only (SONNY-215). The charge was attempted and its answer could not be read, so **money may have moved and nothing was granted for it**. **Not retryable, which is why it is not `provider.unavailable`**: a client told to retry would buy a second pack to recover from a first one it cannot see. The provider's order id is recorded server-side for an operator to resolve. **A late caller never answers it over a row that says granted** (SONNY-435, PR #236's fresh review): two attempts can finalize one order, and the later one's settle writes nothing when the row is already closed; that caller answers from the row — `200` with the pack when the row says granted, `402 topup.declined` when it says declined — and this code only when the row itself is unconfirmed. **The route can still send it while the row says granted, in two other ways, and both are the honest answer rather than a defect** (PR #236's delta pass: this lead-in read "Never answered over a row that says granted", which those two make false): §12's last row's total bounds the answer and never the work, so an attempt that outruns it is told `topup.unconfirmed` while its own finalize goes on to settle that same row `granted` — the sequence this ticket exists for; and this code is storable and is not in `idempotency/hook.ts`'s `RELEASE_ON_CODES`, so a repeat on the same idempotency key replays the stored answer, by which time the row may say granted. What a client does is the same in all three: do not retry, and let the next read of the position say whether the pack arrived |
 | Client below the minimum supported version | 410 | `version.unsupported` | Section 8.3 |
-| Sign-in code wrong, expired or already used | 400 | `auth.code_invalid`, `auth.code_expired`, `auth.code_used` | Three distinct codes because SONNY-127 and SONNY-128 both need to tell them apart |
+| Sign-in code wrong, expired or already used | 400 | `auth.code_invalid`, `auth.code_expired`, `auth.code_used` | Three distinct codes because SONNY-127 and SONNY-128 both need to tell them apart. On `POST /v1/auth/oauth/google`, `auth.code_invalid` is the one answer for any refused code and verifier (SONNY-129) |
+| The sign-in belongs to an account reached another way | 409 | `auth.account_exists` | `POST /v1/auth/email/verify` and `POST /v1/auth/oauth/google` (SONNY-129). The provider-side user this sign-in came back as already backs a different live account, and a second account under it would lock both. **Not retryable** — the same sign-in is refused identically — and the client tells the user to sign in the way they did before. Reachable only by someone who completed the sign-in, so it answers nothing about an address to anyone else |
 
 Case 7 is the only one with no HTTP status, and that is the point: it is not a response, it is the
 absence of one. The client synthesises it and must be able to tell it apart from a backend that
@@ -1640,7 +1695,8 @@ token is still what keeps that survivable rather than corrupting.
 | `POST /v1/auth/refresh` | yes, with the same key | Rotation plus the overlap window (3.3) means a lost response does not cost the session |
 | `POST /v1/auth/email/start` | yes, with the same key | Without the key, a retry sends a second code and races the first |
 | `POST /v1/auth/email/verify` | **no** | A code is single-use by design (SONNY-127). The idempotency record returns the original *result*, including the original failure; it does not un-consume a code. **Except for the retryable failures 9.2 carves out** — those release the key, so a retry genuinely re-runs against a code that may already be consumed, which is one more reason this row says no |
-| `POST /v1/auth/oauth/google`, `POST /v1/auth/oauth/apple` | **open** | These flows typically carry a single-use provider authorization code, in which case they behave like `email/verify` rather than like `email/start`. SONNY-129 settles it when it settles the body shape (3.6), and records which |
+| `POST /v1/auth/oauth/google/start` | yes | Nothing is stored and nothing is called; the same challenge answers the same URL (SONNY-129) |
+| `POST /v1/auth/oauth/google` | **no** | Like `email/verify`: the authorization code is single-use at the provider, so a genuine second attempt is refused, and the idempotency record returns the original result (SONNY-129, settling the row that read "open") |
 | `POST /v1/auth/signout` | yes | Revoking an already-revoked family succeeds |
 | `DELETE /v1/tasks/{task_id}`, `DELETE /v1/account` | yes | Naturally idempotent; a second delete succeeds with `requests_deleted: 0` |
 | `DELETE /v1/tasks`, `DELETE /v1/tasks/{task_id}/screenshots` | yes | Naturally idempotent for the same reason (SONNY-404). A repeat of the batch answers the same `tasks_not_found` and deletes nothing the first pass took; a repeat of the screenshot clear answers `screenshots_deleted: 0` |
@@ -1654,7 +1710,7 @@ identically.
 - Retryable: `limit.rate` (after `Retry-After`), `provider.unavailable`, `provider.timeout`,
   `request.timeout`, `server.error`, `server.unavailable`, `client.offline`, and
   `auth.token_expired` after exactly one refresh.
-- Not retryable: `request.invalid`, `auth.unauthenticated`, `auth.token_revoked`,
+- Not retryable: `request.invalid`, `auth.unauthenticated`, `auth.token_revoked`, `auth.account_exists`,
   `entitlement.required`, `entitlement.expired`, `limit.spend`, `request.too_large`,
   `provider.rejected`, `resource.not_found`, `idempotency.conflict` on a differing body, and
   `version.unsupported`. Retrying any of these produces the identical failure and burns a round trip.
@@ -2226,7 +2282,7 @@ rows should read the date on each rather than the heading above both.
 | Whether the OAuth sign-in calls are replay-safe (9.3) | SONNY-129, alongside the body shape | **Open.** SONNY-129 is in Backlog |
 | Server language, framework, database, deploy path, migrations, credential rotation | SONNY-126 | **Decided.** SONNY-126 closed 2026-08-21: TypeScript on Node >= 22, Fastify, Zod, Postgres via `pg`, a plain-SQL migration runner that refuses a file carrying no `-- @rollback` half (`ls server/src/db/migrations/*.sql \| wc -l` → 10), a containerized deploy path coupled to no host, and credential rotation as an ordered list so a rotation is three independently valid deploys (`server/README.md`). Two acceptance criteria — health on staging and production, a migration rolled back on staging — were deferred by the founder on 2026-08-21 because no remote environment exists; that is the row above |
 | The per-user spend-cap mechanism, and what happens when two requests from one user race it | SONNY-125 names it, SONNY-135 implements it | **Named, demonstrated and now built** (2026-08-28). SONNY-125 settled the mechanism — reserve-then-settle in one statement, with the race and its residuals worked through against Postgres 17 (`docs/sonny-row-12-host-decision.md` §9, §9.3, §9.5); it is a property of Postgres, not of a host, so it survived the move off Edge Functions intact. SONNY-135 implemented that one rather than a second beside it: `sonny.usage_period` with the conditional `UPDATE`, `sonny.usage_reservation` with an expiry and a sweep whose per-period aggregation is §9.5's first residual closed, and a settle that takes a boolean rather than an amount, which is why §9.5's *second* residual cannot arise while one metered call is one unit. The race is held by a forced interleaving and a fifty-way battery against a real Postgres, with the naive read-then-write committed beside them as a control |
-| The identity-linking rule, and how it survives Hide My Email relay addresses | SONNY-127 | **Decided and built.** The key is `(provider, subject)`, never the email address; the rule is `docs/sonny-identity-linking-rule.md`, pinned by `server/test/linking.db.test.ts`, and the relay case is its §4. Decided 2026-08-21, with rule 2 amended by founder decision on 2026-08-22 to flag rather than link. SONNY-127 closed 2026-08-23. What remains is not the rule but surfacing `link_hint`, which is SONNY-128's and SONNY-129's (3.6) |
+| The identity-linking rule, and how it survives Hide My Email relay addresses | SONNY-127 | **Decided and built.** The key is `(provider, subject)`, never the email address; the rule is `docs/sonny-identity-linking-rule.md`, pinned by `server/test/linking.db.test.ts`, and the relay case is its §4. Decided 2026-08-21, with rule 2 amended by founder decision on 2026-08-22 to flag rather than link. SONNY-127 closed 2026-08-23. What remains is not the rule but surfacing `link_hint`, which is SONNY-522's since 2026-09-18 (3.6). SONNY-129 added the rule's one guard: a sign-in whose Supabase user already backs another live account is refused rather than given a second account (3.6, `409 auth.account_exists`) |
 | Sign-in code lifetime, rate limits, and the refresh overlap window's length | SONNY-127 for the first two; **the platform's** for the third | **Decided, all three.** A code lives 600 s and the four rate limits are set (3.6). The overlap window was never SONNY-127's: under the 2026-08-21 decision to serve auth from Supabase Auth it is the platform's, and it is 10 seconds (3.3, and section 14's 2026-08-21 row). This row still named SONNY-127 for it until 2026-08-26, contradicting 3.3 |
 | Literal user-facing copy for every `code` in section 7 | SONNY-128 (sign-in), SONNY-136 (everything else) | **Open.** SONNY-128 is In Progress; SONNY-136 is in Backlog |
 | The audio duration cap and its refusal | SONNY-130 | **Open.** Backlog |
@@ -2347,3 +2403,4 @@ record rather than a tidy list.
 | 2026-09-05 | **12 gains a request-delivery bound, and 9.2's lease paragraph is corrected — no shape a client sends or receives moved.** Nothing bounded how long a caller could take to deliver a request: the framework disables the option by default and this project had never set it, so a caller that sent headers and then withheld the body held a connection, a request and — on `POST /v1/transcriptions` alone — an idempotency claim, indefinitely, and the sign-in routes make that reachable without an account (SONNY-322). Delivery is now bounded at **120 s**, which is 12's own longest *client* timeout, so nothing a shipping client would still have been waiting for is refused; the bound is on receiving a request and not on running a handler, so no server deadline in 12's table moved and 8.1's rule about deadlines is not engaged. The transcription route's body read gains a 30 s bound of its own, which is what makes 9.2's lease arithmetic true rather than assumed: 30 + 75 = 105 against a 120 s lease, the same fifteen seconds of margin the JSON routes already had. **The correction is to 9.2's closing paragraph**, which read *"a stalled upload is the one shape that can reach this"* — a subtraction claim the gateway's own adjacent comment already contradicted, since the JSON routes' margin is fifteen seconds rather than infinity. Bounding the upload removes the unbounded shape and leaves the bounded ones, and the case the lease exists for — a process killed mid-request, which runs no timer — is untouched. **One new response is observable**: a request cut off for late delivery answers `408` carrying 7.1's envelope with the existing `request.invalid`, which is the rule 7.2 already applies to a 4xx it does not name individually; **no code was added to 7.2** and no existing `code` changed meaning. | SONNY-322 |
 | 2026-09-05 | **7.2 gains `request.timeout` (408, retryable), 9.3 lists it, 12 gains a per-route upload bound, and two client-error statuses are put back.** Corrections to the SONNY-322 row above, from PR #208's review, landing in the same branch before either merged. **F1:** the delivery bound answered `408 request.invalid`, which is the code this contract assigns a *malformed* request — and the Mac decides retryability from the code, so a body that was merely late was told it could not be retried and rendered as a request Sonny could not send. `request.timeout` is a **narrowing of the `request.*` family** under 8.1, and the Mac maps it in the same branch, so no shipped client meets an unknown code. **F2:** that answer was also outside 9.2's release set, so it was stored and replayed for twenty-four hours — a complete, valid retry under the same key got a day-old timeout with no upstream call, which is precisely the "wrong answer to a correct request" 9.2's first decision exists to prevent. It is in the release set now. **F3:** the socket-level handler answered `408` to **every** client error, so a malformed request was told it had been too slow and a header block over the runtime's limit lost its `431` — two existing response classes had silently moved, which the row above did not record. The framework's three-way classification is restored inside 7.1's envelope, and both doors now call one mapping rather than each implementing a rule. **F4, the founders' decision of 2026-09-05:** `POST /v1/transcriptions`' body-read bound rises from 30 s to **90 s**, this section 12's own client timeout for that route, because the first derivation held the gateway's internal idempotency lease fixed and solved for the upload — inverting 12's governing rule on the one route where the upload is the slow part, and refusing a three-minute recording on a weak connection. The lease rose to 180 s to make room, at the same 15-second margin; the accepted cost is that a process killed mid-request holds its key a minute longer. **No request shape, response shape, header or size limit changed**, and no existing `code` changed meaning. | SONNY-322 |
 | 2026-09-06 | **3.6 — a signed-out access token stops verifying, and nothing else in this document moves.** An access token is self-contained and this gateway verifies it locally (3.1), so signing out revoked the *refresh* family and left the presented access token working until its own `exp` plus 3.5's tolerance — an hour and thirty seconds on Supabase's default, and on a shared Mac a working session left behind by someone who pressed Sign out. `POST /v1/auth/signout` now records the token's provider-side session and every authenticated route refuses it with `401 auth.token_revoked`, which 7.2 already assigns that meaning. **No shape changed**: no endpoint, request body, response body, header, error `code`, size limit or timeout in this document moved, no `code` changed meaning, and none was added — 8.2's breaking list is about changing what a code means, and a state that used to be served being refused is the gate keeping 3.3's own promise rather than a new one. **Two exclusions are stated in 3.6 rather than left to be discovered.** The sign-out route stays reachable with a revoked token, because the record is written before the provider call and a 9.3 retry of a `502` must still reach the provider; and a token carrying no session claim cannot be keyed on, so it keeps the old window. | SONNY-237 |
+| 2026-09-18 | **3.6, 4.1, 7.2 and 9.3 — Sign in with Google's shapes, one new code, and the gate honours only sessions it started. Sign in with Apple leaves the contract.** 4.1 gains `POST /v1/auth/oauth/google/start` and loses `POST /v1/auth/oauth/apple`; 3.6 fixes both Google bodies, the fixed redirect and the PKCE flow; 7.2 gains `409 auth.account_exists`, on `email/verify` as well as on Google; 9.3 settles the Google rows that read "open". **Two behaviours change for existing callers, and both are refusals of states that were never safe**: a sign-in whose Supabase user already backs another live account is refused rather than given a second account that locked both, and a token whose session this gateway did not start — including one with no session claim, which SONNY-237's row above left serving — is refused `401 auth.token_revoked`, the meaning 7.2 already gives it. So every session from before this change signs in once more. `user.email` is added to the Google route's token response, additively. No other shape moved. The finding, both founder decisions and the evidence are on SONNY-129; the Apple record is SONNY-521. | SONNY-129 |
