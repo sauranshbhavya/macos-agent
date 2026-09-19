@@ -650,7 +650,9 @@ struct ApprovalNotificationRoundTripTests {
     func theRunAndTheTokenAreReadFromTheirOwnKeys() throws {
         let target = ApprovalTarget(runID: RunID(), token: UUID())
         let written = target.notificationUserInfo
-        #expect(written.count == 2)
+        // `#require`, not `#expect`: the subscripts below would trap on a shorter dictionary and take
+        // the whole test process down with them, which costs every other test its verdict.
+        try #require(written.count == 2)
         let keys = Array(written.keys)
         var swapped: [AnyHashable: Any] = [:]
         swapped[keys[0]] = written[keys[1]]
