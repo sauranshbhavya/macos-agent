@@ -234,9 +234,9 @@ final class FirstRunCoordinator: ObservableObject {
     ///
     /// **Quitting is what does this** (SONNY-448). A SwiftUI sheet dismisses itself for termination
     /// by writing `false` to the binding that presents it, inside `terminate` and before the
-    /// delegate is asked, so the sheet's own binding cannot tell a quit from a decision. It used to
-    /// route here through `skipCurrentStep()`, which was harmless only while AppKit refused to quit
-    /// under a sheet at all; with that fixed (`SheetTerminationRelease`), ⌘Q on the sign-in step
+    /// delegate is asked, so the sheet's own binding cannot tell a quit from a decision. That binding
+    /// used to call `skipCurrentStep()`, which was harmless only while AppKit refused to quit under a
+    /// sheet at all; with that fixed (`SheetTerminationRelease`), ⌘Q on the sign-in step
     /// would have recorded sign-in as declined, and Relaunch Sonny on the screen-access step would
     /// have recorded screen access as declined — so the relaunched app skipped the Accessibility
     /// half that the relaunch exists to come back for.
