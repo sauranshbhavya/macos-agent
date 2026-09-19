@@ -29,6 +29,15 @@ struct ClientVersionClientTests {
     /// it fires first and says which of the two happened.
     private static let secondCallerBudget = SonnyBackendTimeouts.auth / 2
 
+    /// How long ``twoCallersAtOnceMakeOneRequest``'s handler keeps the window open past
+    /// ``secondCallerBudget`` while its canary decides whether a late second caller is stuck or
+    /// starved (SONNY-515).
+    ///
+    /// **Nine tenths of the client's own deadline, for the reason the budget is half of it**: the
+    /// handler has to answer before `SonnyBackendTimeouts.auth` ends the fetch from the client's
+    /// side, or a starved window turns back into a second request nobody can explain.
+    private static let windowCeiling = SonnyBackendTimeouts.auth * 0.9
+
     private func planRequest() -> SonnyBackendRequest {
         SonnyBackendRequest(
             method: "POST",
@@ -158,14 +167,22 @@ struct ClientVersionClientTests {
     /// ``SonnyBackendTimeouts/auth`` — twenty seconds — so the first fetch timed out at twenty, the
     /// flag came down, and the second caller made a second request at fifty-seven. Both of that
     /// version's precondition assertions passed while it happened. **A window a starved actor can
-    /// hold open is not a window**; this one is held by a thread of the stub's own concurrent queue,
-    /// which is the thing `BackendStubURLProtocol` dispatches to precisely so that a handler may
-    /// block.
+    /// hold open is not a window**; this one is held by the handler's own thread, which
+    /// `BackendStubURLProtocol` gives every request precisely so that a handler may block. (Until
+    /// SONNY-515 it was a thread of one shared queue, which was measured waiting seconds for a
+    /// thread under load, and this handler parked one of that queue's threads for as long as it
+    /// waited.)
     ///
-    /// **Bounded rather than eliminated, which is the honest wording.** The handler's wait carries
-    /// ``secondCallerBudget``, and `#expect` reads the outcome of that wait rather than assuming it —
-    /// so a window that did close early says so, in its own words, instead of arriving as a count
-    /// nobody can explain. The first caller's document is asserted for the same reason, and its
+    /// **Bounded rather than eliminated, which is the honest wording — and now judged rather than
+    /// timed** (SONNY-515). The handler waits with `CanaryBackstop.block`, whose deadline is
+    /// ``secondCallerBudget`` and whose witness is a canary down the second caller's kind of path: a
+    /// detached task hopping onto an actor — one of its own rather than this client, so that a
+    /// defect in the client cannot starve the witness that is judging it (PR #277's review, F3). Before SONNY-515 a window that closed early
+    /// recorded a sentence no declaration covered, which a loaded battery counted as a kill. Now it
+    /// says which of two things happened — the client kept answering the canary while the second
+    /// caller never came back, a real failure, or nothing got through, a busy machine — and the
+    /// test ends there either way instead of reading the count below over two calls that never
+    /// overlapped. The first caller's document is asserted for the same reason, and its
     /// message names **every** way `performMetaFetch` ends without one rather than only the way
     /// this test is defending against (PR #205's F2): one `try?` swallows the whole send, so a
     /// reached deadline, an offline transport and a non-2xx envelope are one branch between them,
@@ -173,12 +190,12 @@ struct ClientVersionClientTests {
     /// after a twenty-second timeout that a decoder change had never reached.
     @Test
     @MainActor
-    func twoCallersAtOnceMakeOneRequest() async {
+    func twoCallersAtOnceMakeOneRequest() async throws {
         let fixture = SignedInBackendFixture()
         defer { fixture.unregister() }
         let requests = RecordedRequests()
         let holdsTheFirstRequest = OneShotSwitch()
-        let flight = StubCounter()
+        let window = CanaryBackstop.Handoff()
         let client = fixture.client
         let served = BackendStubURLProtocol.Outcome.reply(
             statusCode: 200,
@@ -190,25 +207,27 @@ struct ClientVersionClientTests {
             guard holdsTheFirstRequest.takeIfArmed() else { return served }
             // Nothing has answered this request, so the client is inside one fetch — and stays
             // inside it until this handler returns. The second caller runs entirely in there.
-            let secondCallerReturned = DispatchSemaphore(value: 0)
+            let secondCaller = StubCounter()
             Task.detached {
                 _ = await client.refreshMetaDocument()
-                secondCallerReturned.signal()
+                secondCaller.increment("returned")
             }
-            if secondCallerReturned.wait(timeout: .now() + Self.secondCallerBudget) == .success {
-                flight.increment("the second caller returned inside the first request's flight")
-            }
+            window.hand(CanaryBackstop.block(
+                deadline: Self.secondCallerBudget,
+                ceiling: Self.windowCeiling,
+                canary: .actorHop
+            ) { secondCaller.count("returned") == 1 })
             return served
         }
 
         let firstDocument = await client.refreshMetaDocument()
 
-        #expect(
-            flight.count("the second caller returned inside the first request's flight") == 1,
-            """
-            the second caller has to have run and returned while the first request was still \
-            unanswered, or the count below is measuring two calls that never overlapped
-            """
+        // The second caller has to have run and returned while the first request was still
+        // unanswered, or the count below is measuring two calls that never overlapped.
+        let heldTheWindow = try #require(window.outcome, "the first request never reached the stub, so nothing held it open")
+        try CanaryBackstop.abandonUnlessHeld(
+            heldTheWindow,
+            waitingFor: "the second caller to return inside the first request's flight"
         )
         #expect(
             firstDocument != nil,

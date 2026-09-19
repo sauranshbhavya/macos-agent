@@ -3018,12 +3018,14 @@ struct MemoryCommandCenterTests {
 
         fixture.viewModel.command = "overwrite the notes"
         fixture.viewModel.start(prebuiltPlan: try fixture.planNeedingApproval())
-        let deadline = Date().addingTimeInterval(30)
-        while !fixture.viewModel.isAwaitingApproval {
-            #expect(Date() < deadline, "the run never reached its approval")
-            guard Date() < deadline else { return }
-            try await Task.sleep(nanoseconds: 5_000_000)
-        }
+        // A backstop that can tell a stuck run from a starved actor, rather than a thirty-second
+        // deadline recording a wording no declaration covers — which a loaded battery read as a kill
+        // (SONNY-515's sweep found this loop).
+        let paused = try await HangBackstop.waitRecordingAStuckWait(
+            for: "the run to reach its approval",
+            stuck: "the run never reached its approval, and the wait looked often enough to rule out a starved actor."
+        ) { fixture.viewModel.isAwaitingApproval }
+        guard paused else { return }
 
         #expect(fixture.viewModel.savedSnippets.isEmpty, "the pause reloaded the Memory rows")
 
@@ -4094,12 +4096,17 @@ private struct MemoryFixture {
         }
     }
 
-    /// 9am on a fixed day in a fixed zone, and the hour after it — the same shape
+    /// 9am on a fixed day in the machine's own zone, and the hour after it — the same shape
     /// `ScheduledRoutineRunTests` uses, so a scheduled run here fires for the same reason it does
     /// there rather than for one this file invented.
+    ///
+    /// **The machine's zone because it is the scheduler's**: `checkScheduledRoutines` hands
+    /// `RoutineScheduler` no calendar, so it reads the machine's. This pinned Eastern until SONNY-418
+    /// and passed because the Mac running it was there — in each of the four other zones the ticket
+    /// measured, the routine was never due and nothing downstream of it ran.
     static let nineAM: Date = {
         var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = TimeZone(identifier: "America/New_York") ?? .gmt
+        calendar.timeZone = .current
         return calendar.date(from: DateComponents(year: 2026, month: 7, day: 15, hour: 9, minute: 0))
             ?? Date(timeIntervalSince1970: 1_700_000_000)
     }()
@@ -4820,7 +4827,7 @@ struct SkillsCommandCenterTests {
 
         loader.release()
         await load.value
-        let stoppedAtItsQuestion = try await Self.waitRecordingAStuckWait(
+        let stoppedAtItsQuestion = try await HangBackstop.waitRecordingAStuckWait(
             for: "the run to stop at its question once the catalogue landed",
             stuck: "the run was still waiting for the Skills catalogue after the load had landed, so the wait does not end when the load lands."
         ) {
@@ -4893,7 +4900,7 @@ struct SkillsCommandCenterTests {
         #expect(Self.loggedTheWait(viewModel), "the run reached its planner without waiting for the catalogue")
 
         viewModel.cancelCurrentRun()
-        let endedWhileHeld = try await Self.waitRecordingAStuckWait(
+        let endedWhileHeld = try await HangBackstop.waitRecordingAStuckWait(
             for: "the stopped run to end while the catalogue is still loading",
             stuck: "a stop pressed while the run waited for the Skills catalogue did not end the run while the load was held, so the wait does not answer a stop."
         ) {
@@ -4962,7 +4969,7 @@ struct SkillsCommandCenterTests {
 
         loader.release()
         await load.value
-        let requested = try await Self.waitRecordingAStuckWait(
+        let requested = try await HangBackstop.waitRecordingAStuckWait(
             for: "the delegated instruction to plan once the catalogue landed",
             stuck: "the delegated instruction was still waiting for the Skills catalogue after the load had landed, so the wait does not end when the load lands."
         ) {
@@ -5026,31 +5033,6 @@ struct SkillsCommandCenterTests {
         #expect(MacAgentSource.count(of: "await Self.waitUntilLandedOrStopped(load)", inText: helper) == 1)
         // Both doors that plan build their runner on the helper.
         #expect(MacAgentSource.count(of: "plannerAfterTheSkillsCatalogue(", inText: source) == 3)
-    }
-
-    /// `HangBackstop.wait`, for a wait whose never ending is the failure a test is written to catch,
-    /// and which therefore has to be able to count as a mutation kill (`CLAUDE.md`'s SONNY-259 rule).
-    ///
-    /// Every wording `HangBackstop` records is declared in `scripts/mutate-untrusted-failures`, so a
-    /// test whose only red is a backstop comes back UNATTRIBUTED. This records `stuck` as a second issue,
-    /// in wording nothing declares, once the wait has looked `HangBackstop.observationFloor` times —
-    /// that type's own line between stuck and starved — and nothing more below it. It returns whether
-    /// the condition held, and a caller that gets `false` stops rather than asserting on a state that
-    /// never arrived.
-    static func waitRecordingAStuckWait(
-        for description: String,
-        stuck: String,
-        sourceLocation: SourceLocation = #_sourceLocation,
-        until condition: @MainActor () -> Bool
-    ) async throws -> Bool {
-        let looks = try await HangBackstop.wait(for: description, sourceLocation: sourceLocation, until: condition)
-        if condition() {
-            return true
-        }
-        if looks >= HangBackstop.observationFloor {
-            Issue.record(Comment(rawValue: "\(stuck) Checked \(looks) times."), sourceLocation: sourceLocation)
-        }
-        return false
     }
 
     static func loggedTheWait(_ viewModel: AgentViewModel) -> Bool {

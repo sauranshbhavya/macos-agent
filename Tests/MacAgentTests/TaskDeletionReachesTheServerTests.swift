@@ -812,6 +812,7 @@ struct EveryDeleteReachesTheServerTests {
         // token expiry, so the client would refresh and the assertion would be reading the wrong
         // request. The direction does not matter to what is being tested: the bound follows the
         // gateway's clock rather than this Mac's, whichever way the two differ.
+        let built = Date()
         let fixture = try TaskDeletionFixture(serverClockAhead: -3600)
         defer { fixture.tearDown() }
         let record = try fixture.writeTaskRecord(id: "task-a")
@@ -821,15 +822,25 @@ struct EveryDeleteReachesTheServerTests {
         fixture.seen.removeAll()
         fixture.viewModel.deleteLocalData()
         await fixture.viewModel.localDataWipeForTests?.value
+        let wipeReturned = Date()
 
         let sent = try fixture.seen.only
         #expect(sent.path == "/v1/account/content")
         let bound = try #require(Self.boundOnTheWire(of: sent))
-        // Nearer the gateway's hour-behind clock than this Mac's — with a second of slack for the
-        // wire format, which carries no fractional seconds and truncates toward the past. On the
-        // Mac's own clock this would be within a second of zero.
-        #expect(bound.timeIntervalSince(Date()) < -3500)
-        #expect(bound.timeIntervalSince(Date()) > -3700)
+        // **Bracketed by instants this test read itself, so no stall anywhere can move it outside**
+        // (SONNY-515). This compared the bound with `Date()` read at the assertion, allowing 100 s of
+        // slack, and two reviews on two branches failed it under load — 134 s stale at a load
+        // average near 110, 112 s at 93 — in a wording no declaration covers, so a battery counted
+        // each as a kill. The arithmetic that makes the bracket exact: the stub's `Date` header is
+        // formatted once, when the fixture is built, so it reads at most an hour behind `built`
+        // and at least an hour and a second behind it (the header carries whole seconds);
+        // `SonnyBackendClient` resets its offset to that header minus its own `now()` on every
+        // response, all on the wall clock; and the wire truncates the bound toward the past by up
+        // to a second more. So the bound is no earlier than `built` less an hour and two seconds,
+        // and no later than an hour before the wipe returned. On this Mac's own clock it would sit
+        // an hour past that upper edge; with the offset applied twice, an hour below the lower.
+        #expect(bound >= built.addingTimeInterval(-3602))
+        #expect(bound <= wipeReturned.addingTimeInterval(-3600))
     }
 
     /// Parses the `before=` the request carried, or `nil` when it carried none.
@@ -1342,24 +1353,32 @@ private struct TaskDeletionFixture {
     /// **The handle first, and the poll only if that was not enough** — which is what keeps the
     /// passing path free of any wall clock at all. In the shipped code the passes chain, so awaiting
     /// the last handle transitively covers every earlier one and the count is already there: the
-    /// loop below never runs a single iteration. It runs only under a mutant that breaks the chain,
-    /// where the last handle covers nothing, and there a timeout is a red on a broken tree rather
-    /// than a flake on a healthy one.
+    /// poll below is satisfied on its first look. It runs longer only under a mutant that breaks the
+    /// chain, where the last handle covers nothing.
+    ///
+    /// **That claim is measured now, not only argued** (SONNY-515). An uncommitted probe counting
+    /// this wait's iterations saw 16 calls and 0 iterations in each of three full flagged-suite runs
+    /// at `8f3d1d02` — the probe alone, then with SONNY-515's stub-thread change, then with all of
+    /// its work in progress — at one-minute load averages reaching 40.40, 54.79 and, with ten
+    /// CPU-bound processes running, 94.72. So on a clean tree
+    /// the handle does all of the waiting. What the poll decides is the verdict on a chain-breaking
+    /// mutant, and a sixty-second deadline recording an undeclared wording used to decide that by the
+    /// clock. It is `HangBackstop`'s now, so a mutant whose passes never finish on a healthy actor is
+    /// a kill and one that only ran out of turns is not.
     ///
     /// **Written this way after the poll-only version failed a loaded full-suite run** and passed in
     /// 0.049 s on its own: a neighbouring test held the main actor for 43 seconds, so a 30-second
     /// deadline for a main-actor hop was reachable without anything being wrong. That is the third
     /// time on this branch a test has depended on the machine being idle, which is why the fix is to
     /// remove the dependency rather than to widen the number.
-    func waitForDeliveryPasses(_ count: Int, timeout: TimeInterval = 60) async throws {
+    func waitForDeliveryPasses(_ count: Int) async throws {
         await viewModel.pendingServerDeletionDeliveryForTests?.value
-        let deadline = Date(timeIntervalSinceNow: timeout)
-        while viewModel.completedServerDeletionPasses < count {
-            if Date() > deadline {
-                Issue.record("only \(viewModel.completedServerDeletionPasses) of \(count) delivery passes finished — treat as genuinely stuck.")
-                return
-            }
-            try await Task.sleep(for: .milliseconds(10))
+        let finished = try await HangBackstop.waitRecordingAStuckWait(
+            for: "\(count) delivery passes to finish",
+            stuck: "fewer than \(count) delivery passes finished, and the wait looked often enough to rule out a starved actor."
+        ) { viewModel.completedServerDeletionPasses >= count }
+        guard finished else {
+            throw HangBackstop.Abandoned(description: HangBackstop.abandonedMessage("\(count) delivery passes to finish"))
         }
     }
 

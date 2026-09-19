@@ -171,14 +171,16 @@ struct SonnyBackendClientTests {
     /// this test raced instead, and a mutant that replaced the generation check with `false`
     /// survived it, because the straggler happened to arrive while the first refresh's task was
     /// still parked on the actor. Here the first request is `await`ed to completion before the
-    /// straggler's reply is released, so the in-flight task is provably gone. The waits poll with a
-    /// backstop and the test asserts the backstop did not fire.
+    /// straggler's reply is released, so the in-flight task is provably gone. The wait for the
+    /// straggler is `CanaryBackstop`'s (SONNY-515), and the held reply is released however the test
+    /// ends.
     @Test
     func aStragglers401RaisedAgainstAnAlreadyRefreshedTokenDoesNotRefreshAgain() async throws {
         let harness = try Harness()
         try await harness.signIn(accessToken: "expired-access", expiresIn: 3600)
         let counts = StubCounter()
         let releaseStraggler = StubSignal()
+        defer { releaseStraggler.signal() }
         let stragglerWasReleased = StubCounter()
 
         harness.serve { request in
@@ -222,8 +224,9 @@ struct SonnyBackendClientTests {
         }()
 
         // The straggler has reached the stub, so it is already holding the pre-refresh token.
-        let stragglerIsHolding = await pollUntil { counts.count("straggler") == 1 }
-        #expect(stragglerIsHolding, "the straggler never reached the stub")
+        try await CanaryBackstop.waitOrAbandon(for: "the straggler to reach the stub") {
+            counts.count("straggler") == 1
+        }
 
         // Awaited to completion: the refresh is finished and its in-flight task is gone.
         _ = try await harness.client.send(harness.bearerRequest())
@@ -780,14 +783,16 @@ struct SonnyBackendClientTests {
     ///
     /// The ordering is enforced rather than raced. The refresh is held at the stub until the test
     /// has seen it arrive, sign-out runs to completion while it is held, and only then is it
-    /// released — so the write it attempts is unambiguously after the clear. Both waits poll or
-    /// carry a backstop, and the test asserts the backstop did not fire.
+    /// released — so the write it attempts is unambiguously after the clear. The wait for the
+    /// refresh is `CanaryBackstop`'s (SONNY-515), the held refresh is released however the test
+    /// ends, and the test asserts the handler was released rather than giving up on its own.
     @Test
     func aRefreshInFlightWhenTheUserSignsOutCannotWriteTheSessionBack() async throws {
         let harness = try Harness()
         try await harness.signIn(accessToken: "expired-access", expiresIn: 3600)
         let counts = StubCounter()
         let releaseRefresh = StubSignal()
+        defer { releaseRefresh.signal() }
         let refreshWasReleased = StubCounter()
 
         harness.serve { request in
@@ -821,8 +826,9 @@ struct SonnyBackendClientTests {
             _ = try await harness.client.send(harness.bearerRequest())
         }
 
-        let refreshIsInFlight = await pollUntil { counts.count("refresh-arrived") == 1 }
-        #expect(refreshIsInFlight, "the refresh never reached the stub")
+        try await CanaryBackstop.waitOrAbandon(for: "the refresh to reach the stub") {
+            counts.count("refresh-arrived") == 1
+        }
 
         // Sign-out runs to completion while the refresh is parked mid-flight.
         let outcome = try await SonnyAccountService(client: harness.client).signOut()
@@ -889,13 +895,18 @@ struct SonnyBackendClientTests {
     /// refusal produces — failing a request that had a perfectly good session behind it.
     ///
     /// Ordered rather than raced: the old refresh is held at the stub for the whole test, and the
-    /// new session's refresh is waited for by polling with a backstop the test asserts did not fire.
+    /// new session's refresh is waited for with `CanaryBackstop` (SONNY-515). **That second wait is
+    /// the property itself rather than a precondition** — under the defect it never ends — so it is
+    /// the one site in this file where a backstop has to be able to count as a kill: when requests
+    /// through the same stub transport keep completing after its deadline and the new session's
+    /// refresh still has not arrived, it records a second issue no declaration matches.
     @Test
     func aRequestOnANewSessionDoesNotWaitOnThePreviousSessionsRefresh() async throws {
         let harness = try Harness()
         try await harness.signIn(accessToken: "session-a", refreshToken: "refresh-a", expiresIn: 3600)
         let counts = StubCounter()
         let releaseFirstRefresh = StubSignal()
+        defer { releaseFirstRefresh.signal() }
 
         harness.serve { request in
             switch request.url?.path {
@@ -936,7 +947,9 @@ struct SonnyBackendClientTests {
         let firstRequest = Task { [harness] in
             _ = try await harness.client.send(harness.bearerRequest())
         }
-        #expect(await pollUntil { counts.count("refresh") == 1 }, "the first refresh never reached the stub")
+        try await CanaryBackstop.waitOrAbandon(for: "the first refresh to reach the stub") {
+            counts.count("refresh") == 1
+        }
 
         // The user signs out and straight back in, while that refresh is still parked.
         try await harness.client.discardSessionLocally()
@@ -954,8 +967,11 @@ struct SonnyBackendClientTests {
         }
 
         // The new session refreshes on its own rather than waiting on the old one, which is still
-        // held. With the stale handle left in place this poll times out instead.
-        #expect(await pollUntil { counts.count("refresh") == 2 }, "the new session waited on the old session's refresh")
+        // held. With the stale handle left in place this wait never ends, and the canary is what
+        // lets it say so as a real failure.
+        try await CanaryBackstop.waitOrAbandon(for: "the new session's own refresh, instead of a wait on the old session's") {
+            counts.count("refresh") == 2
+        }
 
         let status = try await secondRequest.value
         #expect(status == 200)
@@ -1322,21 +1338,6 @@ private struct Harness {
         )
         return data.flatMap { String(data: $0, encoding: .utf8) } ?? ""
     }
-}
-
-/// Poll a condition rather than sleep for a fixed span and hope. Returns whether it ever held, so
-/// a caller asserts the backstop did not fire — a wait that timed out and carried on is how a test
-/// passes by accident.
-private func pollUntil(
-    backstop: TimeInterval = 10,
-    _ condition: @escaping @Sendable () -> Bool
-) async -> Bool {
-    let deadline = Date().addingTimeInterval(backstop)
-    while Date() < deadline {
-        if condition() { return true }
-        try? await Task.sleep(nanoseconds: 1_000_000)
-    }
-    return condition()
 }
 
 final class RecordedStrings: @unchecked Sendable {

@@ -11,22 +11,45 @@ import Foundation
 /// `canInit(with:)` claims only a request whose host is registered — so suites using this run in
 /// parallel with each other and with everything else.
 ///
-/// **`startLoading` dispatches rather than running the handler inline.** URLSession calls it on its
-/// own worker threads, and tests here register handlers that block: on a barrier, so a burst of
-/// requests raises its 401s together, and on a signal, so one request is still in flight while the
-/// test does something else with the client. Blocking URLSession's threads to do that risks
-/// exhausting its pool; a queue of our own cannot.
+/// **`startLoading` runs each request's handler on a thread of its own**, rather than inline or on a
+/// shared queue. URLSession calls it on its own worker threads, and tests here register handlers
+/// that block: on a barrier, so a burst of requests raises its 401s together, and on a signal, so
+/// one request is still in flight while the test does something else with the client. Blocking
+/// URLSession's threads to do that risks exhausting its pool.
+///
+/// **This said "a queue of our own cannot", and a measurement disproved it** (SONNY-515). The
+/// queue was one custom concurrent `DispatchQueue`, and GCD serves those from its constrained worker
+/// pool — shared with every other piece of default-priority dispatch work in the test process, and
+/// capped for the whole process at `sysctl kern.wq_max_constrained_threads`, 64 on the Mac this was
+/// measured on — which grants a thread only when it judges there is room. An uncommitted probe on a
+/// full flagged-suite run at `8f3d1d02`, at a one-minute load average climbing from 12.66 to 40.40,
+/// logged 553 handler starts, of which 72 had waited a second or more for a thread, the longest
+/// 7.352 s — all 72 released within 0.105 s of each other, one grant. The suite's own blocking
+/// handlers were not what held the pool in that run (the longest signal wait was 0.039 s and the
+/// longest barrier wait 0.016 s), so something else in the process was. With a `Thread` per request
+/// the same probe logged 550 starts at a load average reaching 54.79 and 636 with ten CPU-bound
+/// processes running beside it (reaching 94.72), and none waited even a tenth of a second — the
+/// longest 0.018 s and 0.026 s. A thread asks nothing of any pool, so a handler starts when its
+/// request arrives and a blocking one parks only itself. `BackendStubURLProtocolTests` holds it.
+///
+/// **What that did not fix, measured in the same runs**: the process as a whole still stalls under
+/// load. With no handler waiting at all, one run still had five seconds in which no request reached
+/// the stub and three test-side waits made two or three looks in seven. That is why the waits
+/// themselves are `CanaryBackstop`'s rather than a bare clock.
 ///
 /// **That said "two of the tests here" and named a number instead of a method, which is why it is a
 /// method now** (PR #205's F1, SONNY-420). The number was stale before the branch that found it and
 /// staler after — a suite that registers a blocking handler joins this population the day it lands,
 /// and nothing brings the sentence with it. Count them rather than trusting a numeral:
-/// `git grep -n "arriveAndWait()|waitUntilSignalled|secondCallerReturned.wait" <sha> -- Tests`
-/// piped through `grep -v "MacAgentTestSupport/BackendStubURLProtocol.swift"`, with the alternation
-/// written for the engine you use — `git grep -E` for that spelling, backslashed alternation for the
-/// default. **The exclusion stage is not tidiness and its control fires**: this comment names all
-/// three tokens and `waitUntilSignalled` is declared further down this very file, so without it the
-/// answer counts the file that is only describing the population.
+/// `git grep -nE 'arriveAndWait\(\)|waitUntilSignalled\(|CanaryBackstop\.block\(|\.wait\(timeout:' <sha> -- Tests`,
+/// then `grep -vE ':Tests/MacAgentTestSupport/|CanaryBackstopTests.swift'` and a stage dropping
+/// comment lines. **The exclusion stage is not tidiness and its control fires**: the support target
+/// is where the barrier, the signal and the backstop are defined, and `CanaryBackstopTests` calls
+/// `block` on threads of its own with no stub anywhere, so without it the answer counts definitions
+/// and unit tests as handlers. The
+/// alternation was three tokens until SONNY-515, whose sweep found a blocking handler none of them
+/// named — `TaskDeletionReachesTheServerTests`' gate, a raw semaphore wait — and which replaced the
+/// third token's only site with `CanaryBackstop.block`.
 ///
 /// The old sentence also described the wrong pair. `.hang` is not a blocking handler: that handler
 /// returns immediately and it is the `Outcome` that never answers, so the request ends on the
@@ -44,11 +67,6 @@ public final class BackendStubURLProtocol: URLProtocol, @unchecked Sendable {
 
     private static let lock = NSLock()
     nonisolated(unsafe) private static var handlers: [String: Handler] = [:]
-
-    private static let queue = DispatchQueue(
-        label: "sonny.backend-stub",
-        attributes: .concurrent
-    )
 
     public static func register(host: String, handler: @escaping Handler) {
         lock.lock()
@@ -114,7 +132,7 @@ public final class BackendStubURLProtocol: URLProtocol, @unchecked Sendable {
             client?.urlProtocol(self, didFailWithError: URLError(.unsupportedURL))
             return
         }
-        Self.queue.async { [weak self] in
+        let thread = Thread { [weak self] in
             guard let self else { return }
             switch handler(request) {
             case .hang:
@@ -137,6 +155,8 @@ public final class BackendStubURLProtocol: URLProtocol, @unchecked Sendable {
                 self.client?.urlProtocolDidFinishLoading(self)
             }
         }
+        thread.name = "sonny.backend-stub"
+        thread.start()
     }
 
     override public func stopLoading() {}
@@ -202,6 +222,14 @@ public final class StubBarrier: @unchecked Sendable {
 /// `waitUntilSignalled` returns whether the signal actually arrived, so a caller can assert the
 /// backstop did not fire — a wait that timed out and carried on would otherwise let a test pass by
 /// accident, which is the exact failure mode `CLAUDE.md` records for wall-clock tests.
+///
+/// **The backstop is longer than any test-side wait can run, and a test holding one signals it in a
+/// `defer`** (SONNY-515). It was ten seconds, the same as the test-side wait it was raced against, so
+/// a test slowed by load could have its held request release itself early — breaking the very
+/// ordering the hold existed to enforce, and failing in a wording no declaration covers. It now
+/// outlasts `CanaryBackstop.ceiling` twice over, so a handler never gives up before its test has;
+/// and because every test that holds one releases it however it ends, a test that abandons still
+/// frees its handler at once instead of parking a thread for the whole backstop.
 public final class StubSignal: @unchecked Sendable {
     private let semaphore = DispatchSemaphore(value: 0)
     private let lock = NSLock()
@@ -218,7 +246,7 @@ public final class StubSignal: @unchecked Sendable {
     }
 
     @discardableResult
-    public func waitUntilSignalled(backstop: TimeInterval = 10) -> Bool {
+    public func waitUntilSignalled(backstop: TimeInterval = CanaryBackstop.ceiling * 2) -> Bool {
         lock.lock()
         let already = isSignalled
         lock.unlock()

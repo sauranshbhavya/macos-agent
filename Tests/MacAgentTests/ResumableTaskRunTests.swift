@@ -905,8 +905,12 @@ struct ResumableTaskRunTests {
         fixture.viewModel.checkScheduledRoutines(now: ResumableTaskRunTests.tenAM)
         try await fixture.waitForIdle()
 
-        // The routine really ran — otherwise "no record" says nothing about the scheduled path.
-        #expect(fixture.viewModel.scheduledRunNotice?.contains("Morning") == true)
+        // The routine really ran — otherwise "no record" says nothing about the scheduled path. The
+        // notice has to say it *ran*: this read `contains("Morning")` until SONNY-418, and the notice
+        // for an occurrence missed past the catch-up window names the routine too, so on a Mac
+        // outside Eastern — where the fixture's pinned 9am was never due — this passed with nothing
+        // having run at all.
+        #expect(fixture.viewModel.scheduledRunNotice?.contains("ran on schedule") == true)
         #expect(try fixture.resumableTaskStore.loadAll().isEmpty)
 
         // The control.
@@ -1420,9 +1424,12 @@ struct ResumableTaskRunTests {
 
     // MARK: - Fixture
 
+    /// 9am on a fixed day in the machine's own zone — `MemoryCommandCenterTests.nineAM`'s shape, and
+    /// its reason: the scheduler reads the machine's calendar, so a fixture pinned to Eastern agreed
+    /// with it only on a Mac in Eastern (SONNY-418).
     static let nineAM: Date = {
         var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = TimeZone(identifier: "America/New_York") ?? .gmt
+        calendar.timeZone = .current
         return calendar.date(from: DateComponents(year: 2026, month: 7, day: 15, hour: 9, minute: 0))
             ?? Date(timeIntervalSince1970: 1_700_000_000)
     }()
