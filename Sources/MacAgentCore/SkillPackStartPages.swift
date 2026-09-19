@@ -32,7 +32,16 @@ import Foundation
 /// the two are what a later reader re-opens the page and compares against: a single-page app keeps one
 /// title across its routes, so the title alone can agree with a page that is not the one it names.
 /// `offers` is what the page offered that visitor, in one of two words, and `read` is the date of the
-/// reading.
+/// reading: a real calendar date, `YYYY-MM-DD`, and no earlier than `SkillPackStartPageRule.firstReadingDay`,
+/// so a typo such as `2026-13-45` or a placeholder such as `1970-01-01` does not load (SONNY-529).
+///
+/// **The word is judged at each flow's own first step, not at the page's shape** (SONNY-510's round five).
+/// So two pages of one shape can carry different words, and that is the rule working. eBay's homepage and
+/// Etsy's are the same shape — a marketplace with a demoted "Sign in" — and eBay's record says `product`
+/// because its one flow begins in the search box, which works signed out, while Etsy's says `sign-in`
+/// because both of its flows begin in Your account or Shop Manager, which only a signed-in visitor has.
+/// Had eBay's Watchlist flow stayed, its record could not have said `product` for that flow; that is why
+/// the flow was left out rather than the word changed (SONNY-529).
 ///
 /// **Every reading is signed out, and how a page must be read is `CLAUDE.md`'s**, in its Claims and
 /// evidence section, which is not restated here: a browser, a profile with no sign-ins, the landed page
@@ -85,8 +94,8 @@ import Foundation
 /// pack's site (`SkillPackStartPageRule.identityHosts`) — which is what catches `ads.google.com/` landing
 /// on `business.google.com`, whatever the pack's `signInURL` says — and that any landing on a listed
 /// identity host, on the pack's own site or off it, says `sign-in`;
-/// that neither URL names account creation in its path, fragment or (for the declared one) query, which
-/// is what catches Ghost's `/signup` even when a reader has written `sign-in` beside it; and which word
+/// that neither URL names account creation in its path, fragment, host or (for the declared one) query,
+/// which is what catches Ghost's `/signup` even when a reader has written `sign-in` beside it; and which word
 /// `offers` is. It cannot check that `offers` is true of the page —
 /// that is the reader's judgement, and the loader holds only the words it may be written in — and it
 /// cannot see a site change after the reading. `read` is what says how old a record is.
@@ -130,23 +139,76 @@ public enum SkillPackStartPageOffer: String, Sendable, Equatable {
 /// The loader's reading of a pack's start-page records against its flows. `SkillPackStartPage` has the
 /// rule and why it exists.
 enum SkillPackStartPageRule {
-    /// Path, fragment and query parts that name account creation, compared after lowercasing and dropping
-    /// `-` and `_`, so `sign-up`, `sign_up` and `SignUp` are one word. Ghost's `/signup` and PartnerStack's
+    /// The words that name account creation. A URL names it when one of these is a run of the words
+    /// (`accountCreationWords(in:)`) in a part of its path or its fragment's route, in a query value, or
+    /// in a host label left of the last two — so `sign-up`, `sign_up` and `SignUp` are one word, and so are
+    /// `/signup-free`, `/register-now`, `?intent=signup_free` and `signup.<site>` — or when a piece of a
+    /// query key, cut at `/` and `.`, is one of them whole. Ghost's `/signup` and PartnerStack's
     /// `/handshake/signup` are the measured cases (SONNY-510's comments).
     ///
-    /// **Deliberately short.** `join` is not here because Zoom's `join.zoom.us` and `/join` are joining a
-    /// meeting, and `start`, `trial` and `get-started` are not because each is as often a product's own
-    /// page as a sales one. What this list misses is left to `offers`, which is where a page that offers
-    /// account creation under an ordinary path is refused (StreamYard's home has no path at all).
+    /// **Deliberately short, and the list stayed short when the match widened** (SONNY-529). The words are
+    /// the same four; what changed is that a word may now be part of a longer slug or be a host's first
+    /// label, which review-272b found missed. A match on a word's *prefix* was measured and rejected:
+    /// `/registered-users` starts with `register` and is not account creation, and a prefix match refuses
+    /// it. `join` is not here because Zoom's `join.zoom.us` and `/join` are joining a meeting, and `start`,
+    /// `trial` and `get-started` are not because each is as often a product's own page as a sales one.
+    /// What this list misses is left to `offers`, which is where a page that offers account creation under
+    /// an ordinary path is refused (StreamYard's home has no path at all).
+    ///
+    /// **A query key is read in whole pieces, and only its value is read by runs** (founders' ruling on
+    /// PR #282, review-282's F4). The query is where tracking parameters live: Snov's own sign-in address
+    /// carries `signup_source=landing`, which says where a visitor came from and not what the page does, and
+    /// a match on runs inside the key refused it. The query was read at all for values that state an
+    /// intent (`?mode=signup`, Auth0's `?screen_hint=signup`), and those are values.
+    ///
+    /// **But a key can be a path, so it is cut at `/` and `.` before each piece is read whole** (review-282's
+    /// delta pass). An app that routes without URL rewriting puts the page's path in the query as its only
+    /// key — `index.php?/register`, `?/auth/signup` — and a dotted name does the same (`?user.register=1`).
+    /// The first version of this rule read the key as one word, so every one of those, refused on `main`,
+    /// loaded: a widening of the query rule that looked like a narrowing, and no measurement over shipped
+    /// addresses could see it, because no shipped address has that shape. `signup_source` has no `/` or
+    /// `.`, so it is still one piece and still loads.
+    ///
+    /// **Known refusals: pages the wider match refuses although they may not create an account.** None is
+    /// an address a shipped pack carries — the branch's changelog entry has the measurement over every
+    /// address the packs carry — and each fails closed, so a pack that needs one sees the refusal.
+    /// `/event-registration`, `/domain-registration`, `/Register-Domain`, `/account/register-device`,
+    /// `/un-register`, `/de-register`, `/newsletter-signup`, `?next=/register-success`,
+    /// `?utm_campaign=signup-q3` and `?ref=signup_page` are refused for a run naming a word. A site whose
+    /// own name is one of the words, under a suffix of two labels, is refused for being itself:
+    /// `www.register.co.uk` (the host check drops only the last two labels). And Trello's sign-in address
+    /// on `id.atlassian.com` carries `application=trello--direct-signup`, a value, so it would be refused as
+    /// a start page; it cannot be one, because it is off Trello's own site. `SkillPackTests` holds each of
+    /// these, so a later narrowing that frees one is a change somebody has to make on purpose.
     static let accountCreationParts: Set<String> = ["signup", "register", "registration", "createaccount"]
+
+    /// The first day any start page was read under this rule: SONNY-510 was filed on 2026-09-17 and its
+    /// first readings are dated that day (Outlook Calendar's record still is). A record dated earlier
+    /// describes a reading that could not have happened, which is the shape a placeholder takes.
+    static let firstReadingDay = "2026-09-17"
+
+    /// Whether `text` is a real calendar date on or after `firstReadingDay`. Its `YYYY-MM-DD` shape is the
+    /// decoder's to check first, so the comparison with `firstReadingDay` is between two strings of one
+    /// fixed shape, where text order is date order. No upper bound, deliberately: the loader runs on every
+    /// launch, and a Mac whose clock is wrong would refuse every pack read after that clock's today.
+    static func isAReadingDay(_ text: String) -> Bool {
+        let parts = text.split(separator: "-").compactMap { Int($0) }
+        guard parts.count == 3 else { return false }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC") ?? calendar.timeZone
+        let day = DateComponents(calendar: calendar, year: parts[0], month: parts[1], day: parts[2])
+        return day.isValidDate && text >= firstReadingDay
+    }
 
     /// **Where a start page may land off its own pack's site: this list, and nowhere else** (the
     /// founders' decision of 2026-09-18 on SONNY-524). Each key is a host a shipped start page was read
     /// landing on, signed out, and its value is the sites whose packs it signs in for. A landing there is
     /// admitted only for a record that says `sign-in`, and only when the pack's `domain` is on one of
     /// those sites, so Google's sign-in host admits a Google pack and not Notion's. The list is the whole
-    /// population the second round's sweep found, nine hosts for nineteen landings, and
-    /// `theIdentityHostListIsExactlyTheLandingsTheShippedPacksMake` holds that it stays exactly that.
+    /// population of off-site landings the shipped packs make — the second round's sweep found it, and
+    /// SONNY-529 added the two pairings Microsoft 365 and Zoho Desk came back with, each read on
+    /// 2026-09-18 — and `theIdentityHostListIsExactlyTheLandingsTheShippedPacksMake` holds that it stays
+    /// exactly that.
     ///
     /// **The refusal is the point.** A pack whose start page lands on a host not listed here does not
     /// load, so somebody sees it. The allowance this replaced read the pack's own `signInURL`, which the
@@ -158,18 +220,22 @@ enum SkillPackStartPageRule {
     /// host, and add the host with the site it signs in for in the same change as the pack, citing the
     /// reading. A new product on a listed site needs no edit: a calendar pack on `calendar.google.com`
     /// already signs in through `accounts.google.com`. The refusal says which pairing is missing,
-    /// `landedOnUnpairedHost(url:host:site:)`, because the list is kept one pairing at a time: a host
-    /// already listed for another site is still refused for this one, and the fix is that pairing, not
-    /// the host.
+    /// `landingHostNotPairedWithSite(url:host:site:)`, because the list is kept one pairing at a time: a
+    /// host already listed for another site is still refused for this one, and the fix is that pairing,
+    /// not the host. That is why the refusal is not named for an unpaired host: Microsoft 365's landing on
+    /// `login.microsoftonline.com` was refused while that host was listed for Outlook and Teams (SONNY-529).
     static let identityHosts: [String: Set<String>] = [
         "accounts.google.com": ["google.com", "youtube.com"],
-        "login.microsoftonline.com": ["office.com", "microsoft.com"],
+        // microsoft365.com: www.microsoft365.com/login, read signed out 2026-09-18 (SONNY-529).
+        "login.microsoftonline.com": ["office.com", "microsoft.com", "microsoft365.com"],
         "login.live.com": ["live.com"],
         "id.atlassian.com": ["trello.com"],
         "app.frontapp.com": ["front.com"],
         "app.notion.com": ["notion.so"],
         "authenticator.cursor.sh": ["cursor.com"],
         "identity.getpostman.com": ["postman.com"],
+        // desk.zoho.com/agent, read signed out 2026-09-18 (SONNY-529).
+        "accounts.zoho.com": ["zoho.com"],
         "carrd.com": ["carrd.co"]
     ]
 
@@ -204,7 +270,7 @@ enum SkillPackStartPageRule {
             let landedHost = (page.landedURL.host ?? "").lowercased()
             if !SkillPackDecoder.isOnSite(host: landedHost, domain: domain) {
                 guard signsIn(on: landedHost, forPackOn: domain) else {
-                    throw SkillPackLoadError.landedOnUnpairedHost(url: url, host: landedHost, site: domain.lowercased())
+                    throw SkillPackLoadError.landingHostNotPairedWithSite(url: url, host: landedHost, site: domain.lowercased())
                 }
             }
             // An identity host admits a sign-in page and nothing else (review-272's F3): a `product`
@@ -220,18 +286,72 @@ enum SkillPackStartPageRule {
         }
     }
 
-    /// Whether any part of `url`'s path, fragment or query is one of `accountCreationParts`. The fragment
-    /// is read because a single-page app routes there (`#/signup`), and the query because a sign-up
-    /// intent is often carried there (`?mode=signup`, Auth0's `?screen_hint=signup`) — which only a
-    /// declared start URL can have, since a landing is recorded without one (review-272's F4).
+    /// Whether `url` names account creation (`accountCreationParts` has what is read and how). The fragment
+    /// is read because a single-page app routes there (`#/signup`), and a `?` inside it starts a query of
+    /// the route's own, read the way the URL's query is. The query is read because a sign-up intent is
+    /// often carried there (`?mode=signup`, Auth0's `?screen_hint=signup`) — which only a declared start URL
+    /// can have, since a landing is recorded without one (review-272's F4). The host is read because a site
+    /// can put its sign-up on a host of its own (`signup.<site>`, SONNY-529). Its last two labels are left
+    /// out, so a site whose own name is one of the words is not refused for being itself under a suffix of
+    /// one label (`signup.com`); under a suffix of two (`register.co.uk`) its name is the third label from
+    /// the end and is read — a known refusal, since this type does not know which suffixes have two labels.
     static func namesAccountCreation(_ url: URL) -> Bool {
         let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
-        let text = [components?.path, components?.fragment, components?.query]
-            .map { $0 ?? "" }
+        let fragment = components?.fragment ?? ""
+        let route = fragment.prefix { $0 != "?" }
+        let queries = [components?.query ?? "", String(fragment.dropFirst(route.count + 1))]
+        let pairs = queries.flatMap { $0.split(separator: "&").map { $0.split(separator: "=", maxSplits: 1) } }
+        let keys = pairs.compactMap { $0.first.map(String.init) }
+        let values = pairs.compactMap { $0.count > 1 ? String($0[1]) : nil }
+        let parts = ([components?.path ?? "", String(route)] + values)
             .joined(separator: "/")
-        return text.lowercased()
             .split(whereSeparator: { "/#?&=.".contains($0) })
-            .map { $0.replacingOccurrences(of: "-", with: "").replacingOccurrences(of: "_", with: "") }
-            .contains(where: accountCreationParts.contains)
+            .map(String.init)
+        let hostLabels = (components?.host ?? "").split(separator: ".").dropLast(2).map(String.init)
+        return (parts + hostLabels).contains { !accountCreationWords(in: $0).isEmpty }
+            || keys.flatMap { $0.split(whereSeparator: { "/.".contains($0) }) }.contains { accountCreationParts.contains(foldedWhole(String($0))) }
+    }
+
+    /// One piece of a query key as one word: lowercased, with `-` and `_` dropped, so `sign_up` and
+    /// `Sign-Up` are `signup` and `signup_source` is `signupsource`.
+    static func foldedWhole(_ key: String) -> String {
+        key.lowercased().replacingOccurrences(of: "-", with: "").replacingOccurrences(of: "_", with: "")
+    }
+
+    /// The account-creation words a single URL part carries, as runs of its words. A part's words are cut
+    /// at `-`, at `_` and where a lowercase letter meets an uppercase one, then lowercased; every run of
+    /// consecutive words is joined and looked up. So `sign-up-free` carries `signup`, `create_account_now`
+    /// carries `createaccount`, and `SignUpNow` carries `signup`, while `registered-users` carries nothing,
+    /// because `registered` is a word of its own and not a run ending at `register`.
+    static func accountCreationWords(in part: String) -> [String] {
+        var words: [String] = []
+        var word = ""
+        var previous: Character?
+        for character in part {
+            if character == "-" || character == "_" {
+                words.append(word)
+                word = ""
+            } else {
+                if let previous, previous.isLowercase, character.isUppercase {
+                    words.append(word)
+                    word = ""
+                }
+                word.append(character)
+            }
+            previous = character
+        }
+        words.append(word)
+        let folded = words.filter { !$0.isEmpty }.map { $0.lowercased() }
+        var found: [String] = []
+        for start in folded.indices {
+            var run = ""
+            for next in folded[start...] {
+                run += next
+                if accountCreationParts.contains(run) {
+                    found.append(run)
+                }
+            }
+        }
+        return found
     }
 }

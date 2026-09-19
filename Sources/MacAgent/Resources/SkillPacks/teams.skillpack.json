@@ -5,7 +5,7 @@
   "domain": "teams.microsoft.com",
   "category": "communication",
   "summary": "Microsoft's chat, meetings and calling for work.",
-  "signInURL": "https://login.microsoftonline.com/",
+  "signInURL": "https://teams.microsoft.com",
   "triggers": ["microsoft teams", "teams.microsoft.com"],
   "sections": [],
   "depth": "deep",
@@ -47,9 +47,9 @@
       "url": "https://teams.microsoft.com/",
       "landedURL": "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
       "title": "Sign in to your account",
-      "heading": "",
+      "heading": "Sign in",
       "offers": "sign-in",
-      "read": "2026-09-18"
+      "read": "2026-09-19"
     }
   ]
 }
