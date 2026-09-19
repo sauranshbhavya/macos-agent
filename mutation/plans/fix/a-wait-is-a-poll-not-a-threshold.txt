@@ -43,6 +43,18 @@
 #   M9 — stuckOutranksBrokenAndBrokenOutranksStarved, and the two broken-verdict waits, which then run
 #        to their 120 s ceiling and come back starved instead of hanging: the broken verdict removed,
 #        so a canary that keeps getting failures is called a busy machine again (PR #277's F3).
+#   M10 — EveryDeleteReachesTheServerTests.theCutoffIsTheServersClockAndNotThisMacs, on its upper edge:
+#        the wipe's bound read from this Mac's clock instead of the gateway's (PR #277's F2, and its
+#        delta review ran this mutant and saw it killed there).
+#   M11 — the same test, on its lower edge: the fixture's server clock set two hours behind while the
+#        bracket expects one, which is the offset applied twice. M10 and M11 together are what re-prove
+#        the rewritten bracket in every battery rather than only in the review that first ran them.
+#
+# **No mutant here reaches F1's guard, and that is deliberate** (PR #277's F1). The guard in
+# BackendStubURLProtocolTests' eighty-handler test — `guard allStarted else { return }` — only matters
+# after its wait gives up, and a clean tree never gives up there: it takes M5 to keep handlers from
+# starting and, for the starved path the guard exists for, a main actor starved past 180 s as well,
+# which is a machine state and not a code change. Nothing to write, so nothing is written.
 #
 # **Why M7 pins a zone half a day from the machine's, and not America/New_York.** Pinning Eastern is
 # exactly SONNY-418's defect, and on a Mac in Eastern it is invisible by construction: the fixture and
@@ -126,4 +138,22 @@
 >>> from
         if elapsed >= deadline, failed >= canaryFloor { return .broken }
 >>> to
+>>> end
+
+>>> mutant M10 the wipe's bound read from this Mac's clock instead of the gateway's
+>>> file Sources/MacAgentCore/SonnyTaskDeletionService.swift
+>>> from
+    public func instantToBoundAPressAt() async -> Date {
+        await client.serverNow()
+>>> to
+    public func instantToBoundAPressAt() async -> Date {
+        Date()
+>>> end
+
+>>> mutant M11 the cutoff fixture's server clock two hours behind, the offset applied twice
+>>> file Tests/MacAgentTests/TaskDeletionReachesTheServerTests.swift
+>>> from
+        let fixture = try TaskDeletionFixture(serverClockAhead: -3600)
+>>> to
+        let fixture = try TaskDeletionFixture(serverClockAhead: -7200)
 >>> end

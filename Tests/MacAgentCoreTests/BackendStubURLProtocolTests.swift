@@ -31,7 +31,9 @@ struct BackendStubURLProtocolTests {
     /// stuck-or-starved rule.
     ///
     /// **What that witness costs, measured by the same review.** In a full run this test takes about
-    /// a minute (64 to 78 s), and the time is the witness's rather than the handlers': all eighty
+    /// a minute at an ordinary load (64 to 85 s) and nearly three minutes beside ten CPU burners
+    /// (175.0 s at a load average peaking at 113.15), and the time is the witness's rather than the
+    /// handlers': all eighty
     /// started within 0.03 to 13 s of the requests going out, and the wait then got three looks in
     /// 16 to 54 s, because it queues behind every `@MainActor` suite in the process. A late look that
     /// finds the handlers started passes, so a slow main actor lengthens this test but cannot fail it.

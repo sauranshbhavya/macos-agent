@@ -67,18 +67,16 @@ public enum CanaryBackstop {
     /// How many canary trips, each begun after the deadline, make "it stayed false" a statement
     /// about the code.
     ///
-    /// **A hundred, and the margin is measured** (PR #277's review, F4). It was twenty. The review
-    /// raced the canary against a real flow of one and a half round trips, started at the same
-    /// instant — the worst timing, the one a stall ending exactly at the deadline produces — three
-    /// hundred times inside a full run under ten CPU burners at a load average up to 109.81: all
-    /// three hundred held, and the most trips the canary had completed when the flow landed was
-    /// 18, of twenty. A hundred is more than five times that. That was the first canary, which went
-    /// through a `SonnyBackendClient`; this one asks `URLSession` directly, and it is *slower* per
-    /// trip rather than faster, which was checked rather than assumed because a faster canary would
-    /// have eaten into the margin: a hundred trips took 0.060 to 0.143 s against 0.027 to 0.066 s for
-    /// the client's path, five batches each, at a load average between 23.50 and 58.81. So it reaches
-    /// fewer trips in the same window, the safe direction, and the raise costs the stuck path about a
-    /// tenth of a second.
+    /// **A hundred, and the margin is measured** (PR #277's review, F4, and its delta pass). It was
+    /// twenty. The review raced the canary against a real flow of one and a half round trips, started
+    /// at the same instant — the worst timing, the one a stall ending exactly at the deadline
+    /// produces — three hundred times inside a full run under ten CPU burners, twice. With the first
+    /// canary, at a load average up to 109.81, all three hundred held and the most trips completed
+    /// when the flow landed was 18. With this one, at a load average up to 113.15, all three hundred
+    /// held and the most was **30** — which under the old floor of twenty would have been a false
+    /// stuck verdict, a manufactured kill. A hundred leaves 3.3 times that. What the raise costs is
+    /// the stuck path's time, measured by the same review at 36 to 44 ms for a hundred trips at a load
+    /// average of 5 to 9.
     public static let canaryFloor = 100
 
     /// How one canary round trip ended.
@@ -340,7 +338,7 @@ public enum CanaryBackstop {
     /// log that said so would send the reader after load that was never there.
     public static func brokenMessage(_ description: String, failedRoundTrips: Int) -> String {
         """
-        not a busy machine: \(failedRoundTrips) canary requests came back failed after the deadline \
+        not a busy machine: \(failedRoundTrips) canary requests came back as failures once the deadline had passed \
         while this wait, for \(description), never saw it — something answered every time, so the \
         canary's own path is broken; for the canaries CanaryBackstop ships, that path is the test \
         harness and never Sources/.
