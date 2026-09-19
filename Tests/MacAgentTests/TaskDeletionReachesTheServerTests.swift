@@ -1342,24 +1342,32 @@ private struct TaskDeletionFixture {
     /// **The handle first, and the poll only if that was not enough** — which is what keeps the
     /// passing path free of any wall clock at all. In the shipped code the passes chain, so awaiting
     /// the last handle transitively covers every earlier one and the count is already there: the
-    /// loop below never runs a single iteration. It runs only under a mutant that breaks the chain,
-    /// where the last handle covers nothing, and there a timeout is a red on a broken tree rather
-    /// than a flake on a healthy one.
+    /// poll below is satisfied on its first look. It runs longer only under a mutant that breaks the
+    /// chain, where the last handle covers nothing.
+    ///
+    /// **That claim is measured now, not only argued** (SONNY-515). An uncommitted probe counting
+    /// this wait's iterations saw 16 calls and 0 iterations in each of three full flagged-suite runs
+    /// at `8f3d1d02` — the probe alone, then with SONNY-515's stub-thread change, then with all of
+    /// its work in progress — at one-minute load averages reaching 40.40, 54.79 and, with ten
+    /// CPU-bound processes running, 94.72. So on a clean tree
+    /// the handle does all of the waiting. What the poll decides is the verdict on a chain-breaking
+    /// mutant, and a sixty-second deadline recording an undeclared wording used to decide that by the
+    /// clock. It is `HangBackstop`'s now, so a mutant whose passes never finish on a healthy actor is
+    /// a kill and one that only ran out of turns is not.
     ///
     /// **Written this way after the poll-only version failed a loaded full-suite run** and passed in
     /// 0.049 s on its own: a neighbouring test held the main actor for 43 seconds, so a 30-second
     /// deadline for a main-actor hop was reachable without anything being wrong. That is the third
     /// time on this branch a test has depended on the machine being idle, which is why the fix is to
     /// remove the dependency rather than to widen the number.
-    func waitForDeliveryPasses(_ count: Int, timeout: TimeInterval = 60) async throws {
+    func waitForDeliveryPasses(_ count: Int) async throws {
         await viewModel.pendingServerDeletionDeliveryForTests?.value
-        let deadline = Date(timeIntervalSinceNow: timeout)
-        while viewModel.completedServerDeletionPasses < count {
-            if Date() > deadline {
-                Issue.record("only \(viewModel.completedServerDeletionPasses) of \(count) delivery passes finished — treat as genuinely stuck.")
-                return
-            }
-            try await Task.sleep(for: .milliseconds(10))
+        let finished = try await HangBackstop.waitRecordingAStuckWait(
+            for: "\(count) delivery passes to finish",
+            stuck: "fewer than \(count) delivery passes finished, and the wait looked often enough to rule out a starved actor."
+        ) { viewModel.completedServerDeletionPasses >= count }
+        guard finished else {
+            throw HangBackstop.Abandoned(description: HangBackstop.abandonedMessage("\(count) delivery passes to finish"))
         }
     }
 
@@ -1452,6 +1460,7 @@ private final class NetworkState: @unchecked Sendable {
         let next = outcome
         lock.unlock()
         guard let held else { return next }
+
         return held.wait(timeout: .now() + 30) == .success ? next : Self.gateNeverOpened
     }
 

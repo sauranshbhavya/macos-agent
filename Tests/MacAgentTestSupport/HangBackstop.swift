@@ -250,6 +250,37 @@ public enum HangBackstop {
         guard condition() else { throw Abandoned(description: abandonedMessage(description)) }
     }
 
+    /// ``wait(for:...)``, for a wait whose never ending is the failure a test is written to catch,
+    /// and which therefore has to be able to count as a mutation kill (`CLAUDE.md`'s SONNY-259 rule).
+    ///
+    /// Every wording this type records is declared in `scripts/mutate-untrusted-failures`, so a test
+    /// whose only red is a backstop comes back UNATTRIBUTED. This records `stuck` as a second issue,
+    /// in wording nothing declares, once the wait has looked ``observationFloor`` times — this type's
+    /// own line between stuck and starved — and nothing more below it. It returns whether the
+    /// condition held, and a caller that gets `false` stops rather than asserting on a state that
+    /// never arrived.
+    ///
+    /// **It lived on `SkillsCommandCenterTests` until SONNY-515**, which needed it in two more suites —
+    /// `MemoryCommandCenterTests`' wait for a run to reach its approval and
+    /// `TaskDeletionReachesTheServerTests`' wait for delivery passes, both hand-rolled deadline loops
+    /// whose give-up wording no declaration covered.
+    @MainActor
+    public static func waitRecordingAStuckWait(
+        for description: String,
+        stuck: String,
+        sourceLocation: SourceLocation = #_sourceLocation,
+        until condition: @MainActor () -> Bool
+    ) async throws -> Bool {
+        let looks = try await wait(for: description, sourceLocation: sourceLocation, until: condition)
+        if condition() {
+            return true
+        }
+        if looks >= observationFloor {
+            Issue.record(Comment(rawValue: "\(stuck) Checked \(looks) times."), sourceLocation: sourceLocation)
+        }
+        return false
+    }
+
     /// Polls `condition` on the caller's actor until it is true, or until ``verdict(elapsed:observations:deadline:ceiling:observationFloor:)``
     /// says to stop, and records the matching issue when it does.
     ///
