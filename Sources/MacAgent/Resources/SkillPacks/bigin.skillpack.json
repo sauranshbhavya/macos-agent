@@ -5,7 +5,7 @@
   "domain": "bigin.com",
   "category": "sales_crm",
   "summary": "Simple pipeline CRM for small businesses, from Zoho.",
-  "signInURL": "https://bigin.com/login",
+  "signInURL": "https://accounts.zoho.com/signin?servicename=ZohoBigin",
   "triggers": ["bigin", "bigin.com"],
   "sections": [],
   "depth": "shallow",
