@@ -58,15 +58,20 @@ Setup: the same packaged app and folder.
 The second thing this branch changes, and it is on purpose (founder decision 2026-09-19). **Before
 it**, when the push-to-talk shortcut (⌃⌥Space) could not be set up at launch, usually because
 another app already holds it, Sonny posted a **"Task failed"** notification carrying the reason,
-though no task had run. **Now** no notification posts, and the reason is shown in the widget.
-That the reason is shown *only* in the widget is known, and SONNY-535 is where a proper launch-time
-surface is decided; this row checks the new behaviour, not that ticket's.
+though no task had run. **Now** no notification posts; the reason still shows in the widget and in Settings, and the
+menu-bar icon still turns red.
+What is lost is the only signal that arrived unasked; SONNY-535 is where whether a launch-time
+problem should push anything is decided. This row checks the new behaviour, not that ticket's.
 
 Setup: the packaged app. In Settings › Notifications, "Task failed" is on. Give another app ⌃⌥Space
 as its own shortcut — a launcher such as Raycast or Alfred lets you set one — so Sonny cannot take it.
 
-- [ ] Quit Sonny, then launch it from Finder and leave it without opening the widget. **No "Task
-      failed" notification arrives**, then or in the next minute.
-- [ ] Open the widget. It says the shortcut could not be set up.
+- [ ] Quit Sonny, then launch it from Finder and leave it without opening the widget. **First, the
+      menu-bar icon turns to its failure colour** — that is what says the other app really did take
+      ⌃⌥Space; if it does not, the rows below prove nothing, so fix the setup first.
+- [ ] **No "Task failed" notification arrives**, then or in the next minute.
+- [ ] Open the widget. It says the shortcut could not be set up. Settings › Security & Access ›
+      Permission Readiness says "Another app is using ⌃⌥Space." These two and the icon are where
+      the failure still shows; what this branch removed is only the notification.
 - [ ] Take ⌃⌥Space away from the other app and relaunch Sonny. Holding ⌃⌥Space starts a recording
       again.

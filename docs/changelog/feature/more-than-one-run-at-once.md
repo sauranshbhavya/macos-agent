@@ -2,7 +2,7 @@
 Status: complete — the first layer of SONNY-456 only; the ticket stays In Progress, and the feature is its own branch after this merges
 Date: 2026-09-18
 Tickets: **SONNY-456** (more than one task at once: a pill per task, the single-run state made a list). This branch is its foundation and nothing more, **by founder decision on 2026-09-18**: the lane stopped at the ninety-minute mark at a green point, and the founder split the work — this refactor and the bug fix it carries merge on their own, and the feature goes to a fresh lane cut from a `main` that already has the slots. The founders' decisions recorded on the ticket that day also apply to that lane: a cap of three runs at once, a second command starts a second run rather than queueing, screen control stays one session at a time. **SONNY-535** (filed by this branch, 2026-09-19, from its review's F1): a push-to-talk shortcut that fails to register at launch is said only in the widget. **SONNY-533** (filed by the review's coordinator): the "Task failed" banner's Retry has the same defect this branch removes from Allow.
-Reviewed by: **cycle 1 — a fresh session, deep adversarial pass, at `6b8e30f2`, posted in full on PR #279: six findings, five taken in one round and one filed.** The review reproduced the suite (3479 in 252, exit 0, on its second run; its first run was red in two MacAgentCore backend-stub suites this diff does not touch, which passed alone), `scripts/warnings` (0) and every gate. By hand it traced the fix, the token in both directions, and every door that approves, and found the sixth mutant equivalent. **F1**, a second behaviour change the entry did not mention: the founders decided to keep it, and it is recorded below. **F2**, the approval-announcement test ran with one run, so it could not tell "its run" from "the run on screen" (SONNY-388's shape), and the failure channel had no behavioural test at all: both are now held with two runs. **F3**, nothing ran the banner's round trip: it is one tested type now. **F4**, record corrections: made, below. **F5**, the token rule was kept by convention: the types enforce it now. **F6**, the Retry banner: filed as SONNY-533, outside this branch. The review also found that the fix closes three more stale-banner routes than this entry first claimed. They are under *Behavior changed* now.
+Reviewed by: **cycle 1 — a fresh session, deep adversarial pass, at the branch's pre-hop head that its comment on PR #279 names, posted there in full: six findings, five taken in one round and one filed.** The review reproduced the suite (3479 in 252, exit 0, on its second run; its first run was red in two MacAgentCore backend-stub suites this diff does not touch, which passed alone), `scripts/warnings` (0) and every gate. By hand it traced the fix, the token in both directions, and every door that approves, and found the sixth mutant equivalent. **F1**, a second behaviour change the entry did not mention: the founders decided to keep it, and it is recorded below. **F2**, the approval-announcement test ran with one run, so it could not tell "its run" from "the run on screen" (SONNY-388's shape), and the failure channel had no behavioural test at all: both are now held with two runs. **F3**, nothing ran the banner's round trip: it is one tested type now. **F4**, record corrections: made, below. **F5**, the token rule was kept by convention: the types enforce it now. **F6**, the Retry banner: filed as SONNY-533, outside this branch. The review also found that the fix closes three more stale-banner routes than this entry first claimed. They are under *Behavior changed* now. **Cycle 2 — the same reviewer's scoped delta pass on that round, posted on PR #279: nothing blocking.** It confirmed each fix can fail, and it recorded three things, all written into this entry rather than taken as a round. The delegate's hold call is pinned by no test, and `RunSlot.parkedApproval` has no reader, both under *Known limitations*. The launch-time failure is not said "only in the widget", which is corrected under *Behavior changed* and on SONNY-535. **Then one hop onto `main` at `7b89cfd9`**, after #276, #278 and #277 merged. Every figure below was re-measured after it.
 
 Spec sections covered: none in full. The founders' "Multi-agent mode" text, bullet two ("More than one task can run at once. Each running task has its own pill") is what SONNY-456 delivers, and this branch builds only the state underneath it. No second run can exist in the product yet.
 
@@ -16,7 +16,7 @@ Files changed:
   - `RunScope`, a `@TaskLocal` naming the run whose work is executing. Its doc lists the code known to run outside any run.
 - `Sources/MacAgent/AgentViewModel.swift`:
   - `runSlots` (never empty) and `focusedRunID`.
-  - The run's properties become computed properties forwarding to the slot of the run in scope: **45** (`git grep -c 'get { runSlotInScope\.' 943b1f49 -- Sources/MacAgent/AgentViewModel.swift` → 45). Slots are written only through `updateRunSlotInScope`, which is `private`.
+  - The run's properties become computed properties forwarding to the slot of the run in scope: **45** (`git grep -c 'get { runSlotInScope\.' fb5cde29 -- Sources/MacAgent/AgentViewModel.swift` → 45). Slots are written only through `updateRunSlotInScope`, which is `private`.
   - `RunScope` is bound where a run's work begins: `start`, `approvePendingRun` and the scheduled routine.
   - `approvalRequest`'s setter parks through the slot and announces `(ApprovalTarget, request)` on `approvalParked`.
   - Also new: `errorMessageRaised`, `approveParkedRun(_:token:)`, `markOutcomeAsNotified(for:)` and `addRunSlotForTests()`.
@@ -33,22 +33,31 @@ Files changed:
 
 Tests:
 
-Every figure below was measured at `943b1f49`. This entry's own commit adds only the two record files, so `git diff --stat 943b1f49 HEAD -- Sources Tests Package.swift` prints nothing, and each figure is the head's.
+**Every figure here was measured at `fb5cde29`, this branch's head after its one hop onto `main` at `7b89cfd9`, with a clean tree.** This entry's last commit adds only record files, so `git diff --stat fb5cde29 HEAD -- Sources Tests Package.swift` prints nothing, and each figure is the head's.
 
-The flagged command from `CLAUDE.md` was redirected to a file with `echo "SWIFT_TEST_EXIT=$?"` on the next line. **Three full runs at this one head, all recorded:**
+**The hop.** `git rebase --onto 7b89cfd9 8f3d1d02 feature/more-than-one-run-at-once` replayed this branch's nine commits with no conflict.
+- Its range is `git diff --name-only 8f3d1d02 origin/main` → **42** files, from #276, #278 and #277. That is 18 under `Sources/MacAgent` (fourteen of them skill packs), 14 under `Tests/` (three in `Tests/MacAgentTestSupport`, `HangBackstop.swift` among them), plus records.
+- Two of those files bear on this branch. **`AppDelegate.swift`**, which #276 edits in a region apart from this branch's. **`HangBackstop.swift`**, whose `waitOrAbandon` this branch's tests call; it only gained a function (`waitRecordingAStuckWait`).
+- None of `main`'s added lines in the range names anything this branch removed or reshaped. `git diff 8f3d1d02 origin/main -- Sources Tests`, reduced to its `+` lines, was searched with `grep -cE` for the pattern `\$(isRunning|approvalRequest|errorMessage)\b|postPermissionNotification|onAllow|markOutcomeAsNotified|approvalParked|errorMessageRaised|updateRunSlotInScope|runSlots|focusedRunID|RunScope|approvalToken` → **0**. That zero is controlled three ways:
+  - the same pipeline over this branch's own `git diff 7b89cfd9 fb5cde29` → 133;
+  - `\b` works in that `grep`: it matches `$isRunning,` and not `$isRunningX`;
+  - the removed publishers are found in this branch's removed lines → 6.
+- Nothing carried across the hop. Every figure below, and every mutant, was measured again.
 
-| Run | Result | Start condition and load |
-|---|---|---|
-| 1 | red: 3482 in 253, **44 issues** (52 with the 8 known), exit 1, 136.073 s | started with no other Swift process running, at load `38.97`, from other work on the machine. All **25** failing tests are in MacAgentCore's `SonnyBackendClientTests`, mostly `.timedOut(after: 20.0)`: the review's first run met the same. This diff touches nothing under `Sources/MacAgentCore` or `Tests/MacAgentCoreTests` (`git diff --stat 8f3d1d02 HEAD --` on both → nothing), and that suite alone → **37 in 1, exit 0, 0.472 s** |
-| 2 | green: 3482 in 253, 8 known issues, exit 0, 139.812 s | **did not meet the start condition.** A 25-minute wait for no Swift process gave up and started it beside another lane's **15**. Load `32.95` → `27.82`. Kept as a record, not as the figure |
-| 3 | **green: 3482 tests in 253 suites passed after 179.416 seconds with 8 known issues, exit 0** | started with **no** other Swift process running (`ps -axww -o command \| grep -cE '(^\| )/[^ ]*(swift-frontend\|swift-driver\|swiftpm-testing-helper\|xctest)'` → 0, its control `launchd` → 1). Load `34.14` at the start and `69.21` at the end, a figure that includes this run's own work. **This is the figure** |
+**The flagged suite.** The command from `CLAUDE.md`, redirected to a file with `echo "SWIFT_TEST_EXIT=$?"` on the next line → **3506 tests in 256 suites passed after 99.737 seconds with 16 known issues, exit 0.**
+- It started with no other Swift process running. `ps -axww -o command | grep -cE '(^| )/[^ ]*(swift-frontend|swift-driver|swiftpm-testing-helper|xctest)'` → 0, and its control `launchd` → 1.
+- Load was `8.41` at the start and `7.04` at the end.
+- **The known issues went from 8 to 16 across the hop, and none of the new ones is this branch's.** The extra eight are all in `CanaryBackstopTests.swift`, a file #277 added (3 + 2 + 3 known-issue lines across three of its tests), and the other eight are the same tests that recorded them before the hop.
+- Every one of this branch's seven new or rewritten tests is named `passed` in the log, so none was skipped.
 
-Every one of the seven new or rewritten tests is named `passed` in run 3's log, so none was skipped.
+**Warnings: 0.** `scripts/warnings` exits 0, and its header reads `measured at : fb5cde29 (clean)` and `compiled : every file`. It too started with no other Swift process running, at load `7.04` rising to `15.20`.
 
-**Warnings: 0** (`scripts/warnings`, exit 0). Its header reads `measured at : 943b1f49 plus 2 uncommitted file(s)` (the two records, which no build reads) and `compiled : every file`. It was started with no other Swift process running, at load `23.14` rising to `24.88`.
-
-The refactor alone measured **3475 in 251**, exit 0, at `18780e34`, and the first layer with its tests **3479 in 252**, exit 0, at `7cc9d989`. Those are records of those trees, not of this one. `server/` is untouched, so none of its commands is owed.
-Mutation plan: `mutation/plans/feature/more-than-one-run-at-once.txt` (founder-triggered, not run on this branch). **Ten** mutants. Each was applied by hand at `943b1f49`, built, and killed by the tests named here, then put back from `HEAD`:
+**Before the hop, kept as history and not as figures.** Every commit those runs measured was replaced by the rebase, so no SHA is cited for them.
+- The refactor alone measured 3475 in 251, exit 0, and with its first tests 3479 in 252, exit 0.
+- At round one's head, three full runs were recorded. One was red: all 25 failing tests were in MacAgentCore's `SonnyBackendClientTests`, timed out at load ~39, and that suite alone passed, 37 in 1. One was green but started beside another lane's Swift processes, so it does not count. One was green with the start condition met: 3482 in 253, exit 0.
+- `scripts/warnings` was 0 each time it ran.
+- `server/` is untouched, so none of its commands is owed.
+Mutation plan: `mutation/plans/feature/more-than-one-run-at-once.txt` (founder-triggered, not run on this branch). **Ten** mutants. Each was applied by hand at `fb5cde29`, after the hop, built, and killed by the tests named here, then put back from `HEAD`. The hop moved R3's target file and a helper every killer calls, so none of the round-one proofs was carried:
 
 | Mutant | What it breaks | Killed by |
 |---|---|---|
@@ -63,7 +72,7 @@ Mutation plan: `mutation/plans/feature/more-than-one-run-at-once.txt` (founder-t
 | R9 | the notification's hold lands on the run on screen | the same |
 | R10 | the decoder reads the token from the run's key | four tests, both round-trip suites among them |
 
-`scripts/mutate mutation/plans/feature/more-than-one-run-at-once.txt --check` → exit 0, ten mutants, each `1 match`, at `943b1f49`. **Three more are owed by the next layer and are not in the plan.** They are listed under *Architectural decisions* below.
+`scripts/mutate mutation/plans/feature/more-than-one-run-at-once.txt --check` → ten mutants, each `1 match`, at `fb5cde29`. **Three more are owed by the next layer and are not in the plan.** They are listed under *Architectural decisions* below.
 
 Behavior changed:
 - **A notification's Allow answers only the question it was posted for (the fix).** Before this branch the banner's Allow called `viewModel.start()`, and `start()` acts on whatever is in front of it when the banner is pressed. So a banner pressed after its own question had gone did one of four wrong things, depending on what was there:
@@ -74,9 +83,9 @@ Behavior changed:
 
   Now the notification carries its run and a token minted for that one asking of that one question. Its Allow answers that question or does nothing, and "does nothing" leaves only a log line. The last three routes were found by PR #279's review. They close because a refused banner no longer reaches `start()` at all, and a notification from a previous launch names a run that no longer exists.
 - **An error already set when Sonny launches no longer posts a "Task failed" notification (on purpose, founder decision 2026-09-19).** The old failure channel was `viewModel.$errorMessage`, and `@Published` sends its current value to every new subscriber. So an error set before `AppDelegate` subscribed was replayed into the notification. The new channel, `errorMessageRaised`, sends only errors that happen after it is subscribed.
-  - **The known instance is the push-to-talk shortcut failing to register at launch.** `markVoiceHotKeyUnavailable` runs at `AppDelegate.swift:176`, before `observeNotificationTriggers()` at `:198`, both at `943b1f49`. The old build turned that into a "Task failed" banner whenever the user was not working in Sonny, though no task had failed. This build does not. The widget still shows the reason, because the error is persistent.
+  - **The known instance is the push-to-talk shortcut failing to register at launch.** `markVoiceHotKeyUnavailable` runs at `AppDelegate.swift:187`, before `observeNotificationTriggers()` at `:209`. Both lines come from `git grep -nE 'markVoiceHotKeyUnavailable|observeNotificationTriggers\(\)$' fb5cde29 -- Sources/MacAgent/AppDelegate.swift`. The same command answered `176` and `198` before the hop, because #276's edit to that file moved them: a line number a command answered is a reading at a commit. The old build turned that into a "Task failed" banner whenever the user was not working in Sonny, though no task had failed. This build does not. **The failure is still visible in three places.** The widget shows the reason, because the error is persistent. Settings › Security & Access › Permission Readiness reads "Another app is using ⌃⌥Space." (`PermissionReadinessService.swift:190`). And the menu-bar icon turns to its failure colour.
   - **The founders chose not to restore the replay.** It would re-ship a banner whose title is wrong. The right shape is a launch-time surface that says what actually happened, and SONNY-535 carries it.
-  - SONNY-535 exists because the message is now said *only* in the widget, which someone who has not opened the widget never sees. That may not be fine, and the ticket says so. A manual row checks the new behaviour.
+  - **What is lost is the only *pushed* signal**: nothing now arrives unasked. What is left is text the user has to go and look for, plus a red icon with no words. SONNY-535 carries that narrower question: should a problem Sonny finds at launch push anything, and in what words? This entry and that ticket first said the reason was shown "only in the widget". PR #279's delta review found the other two surfaces, and a correcting comment on SONNY-535 records it. A manual row checks the new behaviour.
 
 Behavior preserved (required, no blanket claims):
 - **Every run is still the one run.** Nothing in `Sources/` creates a second slot: `addRunSlotForTests()` is called only from `Tests/`, and `focusedRunID` is written only in `init`. So the run in scope is always the only slot, and every forwarded property reads and writes exactly what its stored predecessor did. The evidence is the full suite passing with no test's expected behaviour edited. The only existing tests this branch touches are three source scans, each updated to name what moved: the wipe classifier's population, the count of routes into `start(` (seven to six, the notification's Allow leaving), and the notification-gate scan's two channel names.
@@ -162,7 +171,11 @@ Known limitations / deferred scope:
 - **SONNY-533**, the Retry banner re-running whatever was last submitted rather than the task it was about. It is live on `main` today, and it starts work rather than merely failing to answer.
 - **SONNY-535**, a launch-time error surface.
 
-**Recorded rather than fixed:** `addRunSlotForTests()` ships in the release binary with no production caller. When a stale banner's Allow is refused, the only trace is a log line, which fits the no-explanatory-copy rule.
+**Recorded rather than fixed, for the next layer to settle** (PR #279's delta review):
+- **The delegate's hold call is pinned by no test.** `AppDelegate`'s failure sink calls `viewModel.markOutcomeAsNotified(for: runID)`. Changing it to `viewModel.markOutcomeAsNotified()` passes the suite: the test calls the view model's method directly, and no scan reads the delegate's line. While one run exists, the change makes no difference. The layer that adds runs should pin it, the way R3 pins Allow's line.
+- **`RunSlot.parkedApproval` has no reader.** `git grep -nE 'parkedApproval' fb5cde29 -- Sources Tests` → the declaration alone, at `RunSlot.swift:161`. The next layer either uses it or removes it.
+
+`addRunSlotForTests()` ships in the release binary with no production caller. When a stale banner's Allow is refused, the only trace is a log line, which fits the no-explanatory-copy rule.
 
 Open questions (required, write "none" if true): none.
 
