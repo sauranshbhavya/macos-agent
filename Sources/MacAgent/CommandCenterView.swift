@@ -208,10 +208,10 @@ struct CommandCenterView: View {
         // `presentedStep != nil` keeps one sheet up and swaps its content.
         //
         // **Setting it false is not a decision, and records none** (SONNY-448). This said it meant
-        // "skip this step", as Escape or a drag. Escape reaches the hosted dialog's close control
-        // first, a macOS sheet has no drag, and what does write `false` here is quitting: SwiftUI
-        // takes every sheet down that way inside `terminate`. `withdrawUnanswered()` says why a skip
-        // recorded there was wrong.
+        // "skip this step", as Escape or a drag. A macOS sheet has no drag; Escape is answered inside
+        // the sheet now (`FirstRunSequenceView`'s `onExitCommand`, and the close control's
+        // `.cancelAction`); and what writes `false` here is quitting — SwiftUI takes every sheet down
+        // that way inside `terminate`. `withdrawUnanswered()` says why a skip recorded there was wrong.
         .sheet(isPresented: Binding(
             get: { firstRunCoordinator.presentedStep != nil },
             set: { isPresented in

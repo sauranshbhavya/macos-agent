@@ -5,7 +5,8 @@
 # termination silently, before the delegate is asked, while such a window is up. The fix clears the
 # flag on every window when any sheet begins (SheetTerminationRelease), installed at launch; and,
 # because SwiftUI takes a sheet down for termination by writing false to its binding, the first-run
-# sheet's binding now records nothing (FirstRunCoordinator.withdrawUnanswered) instead of a skip.
+# sheet's binding now records nothing (FirstRunCoordinator.withdrawUnanswered) instead of a skip, and
+# Escape declines through the sequence's own onExitCommand rather than through that binding.
 #
 # SWIFT HALF. Every path below is under Sources/.
 #
@@ -33,6 +34,10 @@
 #        relaunch that starts the new copy and never ends this one.
 #   Q10 — FirstRunSequenceTests.quittingWithAStepOnScreenRecordsNothingAndTheNextLaunchLandsOnIt: a
 #        quit that ends first run for good.
+#   Q11 — FirstRunSequenceTests.commandCenterPresentsTheSequenceAndBothDecliningControlsReachTheSameCall:
+#        Escape no longer declines. With a field focused the sheet answers it by writing false to its
+#        binding, which now records nothing, so the sheet goes away until the next launch (measured
+#        in the probe; no test can deliver a key to a live sheet, so this one is held by the scan).
 
 >>> mutant Q1 the hold left on: every sheet refuses termination again
 >>> file Sources/MacAgent/SheetTerminationRelease.swift
@@ -126,4 +131,11 @@
         presentedStep = nil
         store.markFinished()
     }
+>>> end
+
+>>> mutant Q11 Escape left to the sheet, so it stops declining the step
+>>> file Sources/MacAgent/FirstRunSequence.swift
+>>> from
+        .onExitCommand { coordinator.skipCurrentStep() }
+>>> to
 >>> end

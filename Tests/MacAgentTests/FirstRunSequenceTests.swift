@@ -587,7 +587,7 @@ struct FirstRunSequenceTests {
         // And the sheet's own dismissal records nothing (SONNY-448). This asserted the opposite —
         // that it declined the step, as Escape or a drag — and what writes `false` here is quitting:
         // SwiftUI takes the sheet down that way inside `terminate`, so a skip wired here turns ⌘Q
-        // into "sign in later". Escape declines through the close control below instead.
+        // into "sign in later". Escape declines inside the sheet instead, held below.
         #expect(MacAgentSource.count(of: "firstRunCoordinator.withdrawUnanswered()", inText: presentation) == 1)
         #expect(MacAgentSource.count(of: "skipCurrentStep()", inText: presentation) == 0)
         // And that binding is the one caller in the target, so nothing a user presses can reach the
@@ -608,11 +608,18 @@ struct FirstRunSequenceTests {
             openedBy: "private var stepContent: some View {"
         )
         #expect(MacAgentSource.count(of: "isPresented: skipBinding", inText: stepContent) == 2)
-        // Two routes into that call in this file and no third: the binding both dialogs are handed,
-        // and the deferral button. (This comment said *three* beside the correct `== 2` — the count
-        // was right and the sentence beside it was not, which is the shape a reader trusts and a
-        // compiler cannot see. PR #159's cycle-2 review.)
-        #expect(MacAgentSource.count(of: "coordinator.skipCurrentStep()", inText: sequence) == 2)
+        // Escape declines through the sequence's own handler (SONNY-448). With a field focused the
+        // sheet would otherwise answer it by writing `false` to the binding above — the write a quit
+        // makes, which records nothing — so without this line Escape stops declining and the sheet
+        // simply goes away until the next launch.
+        let body = try MacAgentSource.braceBlock(of: sequence, openedBy: "var body: some View {")
+        #expect(MacAgentSource.count(of: ".onExitCommand { coordinator.skipCurrentStep() }", inText: body) == 1)
+        // Three routes into that call in this file and no fourth: the binding both dialogs are
+        // handed, the deferral button, and Escape. (This said *two* before SONNY-448 added Escape's;
+        // before that it once said *three* beside a correct `== 2` — the count was right and the
+        // sentence beside it was not, which is the shape a reader trusts and a compiler cannot see.
+        // PR #159's cycle-2 review.)
+        #expect(MacAgentSource.count(of: "coordinator.skipCurrentStep()", inText: sequence) == 3)
     }
 
     /// **Both dialogs have exactly two doors each: the manual one, and the sequence.** An exact map

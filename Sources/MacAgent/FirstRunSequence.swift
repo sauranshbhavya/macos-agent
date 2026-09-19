@@ -241,11 +241,11 @@ final class FirstRunCoordinator: ObservableObject {
     /// have recorded screen access as declined — so the relaunched app skipped the Accessibility
     /// half that the relaunch exists to come back for.
     ///
-    /// **Declining is the dialogs' own close control and the deferral bar, and neither passes
-    /// here.** Escape reaches the close control, whose `.keyboardShortcut(.cancelAction)` answers it
-    /// before the sheet does. Nothing is persisted and the published step is cleared, so the
-    /// binding's getter agrees with the sheet SwiftUI has already taken down rather than asking for
-    /// it back.
+    /// **Declining never passes here.** It is the dialogs' own close control, the deferral bar, and
+    /// Escape — which `FirstRunSequenceView` answers itself with `onExitCommand`, because left to
+    /// the sheet, Escape with a field focused is exactly this binding written `false`, the same
+    /// write a quit makes. Nothing is persisted and the published step is cleared, so the binding's
+    /// getter agrees with the sheet SwiftUI has already taken down rather than asking for it back.
     func withdrawUnanswered() {
         presentedStep = nil
     }
@@ -327,6 +327,13 @@ struct FirstRunSequenceView: View {
             }
         }
         .background(SonnyTheme.ink)
+        // **Escape declines the step on screen, and says so here rather than through the sheet**
+        // (SONNY-448). Without this, Escape with a field focused — the sign-in step's own state — is
+        // answered by the sheet itself, which writes `false` to the binding presenting it: the one
+        // write a quit also makes, and which therefore records nothing. With the window itself first
+        // responder instead, Escape reaches the close control's `.cancelAction` and declines through
+        // `skipBinding`; this covers the other case, so both reach the same call.
+        .onExitCommand { coordinator.skipCurrentStep() }
         // Live state moved: a session was verified, or a grant landed. The sequence advances off the
         // same values it was begun with rather than off anything it recorded about the user's
         // progress, which is what makes the post-relaunch launch and this one take the same path.
