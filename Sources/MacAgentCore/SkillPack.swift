@@ -497,6 +497,10 @@ public enum SkillPackDecoder {
             guard read.range(of: "^[0-9]{4}-[0-9]{2}-[0-9]{2}$", options: .regularExpression) != nil else {
                 throw SkillPackLoadError.wrongType(prefix + "read")
             }
+            // The shape alone let `2026-13-45` load (SONNY-529): a typo nobody re-reads.
+            guard SkillPackStartPageRule.isAReadingDay(read) else {
+                throw SkillPackLoadError.wrongType(prefix + "read")
+            }
             return SkillPackStartPage(
                 url: url,
                 landedURL: landedURL,
