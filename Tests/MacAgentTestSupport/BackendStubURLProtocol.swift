@@ -42,9 +42,11 @@ import Foundation
 /// staler after — a suite that registers a blocking handler joins this population the day it lands,
 /// and nothing brings the sentence with it. Count them rather than trusting a numeral:
 /// `git grep -nE 'arriveAndWait\(\)|waitUntilSignalled\(|CanaryBackstop\.block\(|\.wait\(timeout:' <sha> -- Tests`,
-/// then `grep -v '^Tests/MacAgentTestSupport/'` and a stage dropping comment lines. **The exclusion
-/// stage is not tidiness and its control fires**: the support target is where the barrier, the
-/// signal and the backstop are defined, so without it the answer counts the definitions. The
+/// then `grep -vE ':Tests/MacAgentTestSupport/|CanaryBackstopTests.swift'` and a stage dropping
+/// comment lines. **The exclusion stage is not tidiness and its control fires**: the support target
+/// is where the barrier, the signal and the backstop are defined, and `CanaryBackstopTests` calls
+/// `block` on threads of its own with no stub anywhere, so without it the answer counts definitions
+/// and unit tests as handlers. The
 /// alternation was three tokens until SONNY-515, whose sweep found a blocking handler none of them
 /// named — `TaskDeletionReachesTheServerTests`' gate, a raw semaphore wait — and which replaced the
 /// third token's only site with `CanaryBackstop.block`.
