@@ -67,9 +67,35 @@ private enum SonnyNotificationCategory {
 private enum SonnyNotificationUserInfo {
     static let taskID = "SONNY_TASK_ID"
     /// The run an approval notification was posted for, and the token that approval was parked
-    /// with (SONNY-456). The banner's Allow answers that approval and nothing else.
+    /// with (SONNY-456). Written and read only by `ApprovalTarget`'s two members below.
     static let runID = "SONNY_RUN_ID"
     static let approvalToken = "SONNY_APPROVAL_TOKEN"
+}
+
+/// How an "Approval needed" notification carries the approval it was posted for, and how its Allow
+/// reads it back (SONNY-456). Both directions live here, side by side, so a test can hold the round
+/// trip: the service cannot be built in a test process, and a mismatch between the two halves turns
+/// every banner's Allow into a silent refusal with nothing else in the suite noticing.
+extension ApprovalTarget {
+    /// The notification's `userInfo`. The run is written from its UUID, not from `RunID.description`,
+    /// which exists for logs and is free to change.
+    var notificationUserInfo: [String: String] {
+        [
+            SonnyNotificationUserInfo.runID: runID.value.uuidString,
+            SonnyNotificationUserInfo.approvalToken: token.uuidString
+        ]
+    }
+
+    /// Reads a notification's `userInfo` back, or fails when either half is missing or is not a
+    /// UUID — which approves nothing, since the Allow then has no approval to name.
+    init?(notificationUserInfo userInfo: [AnyHashable: Any]) {
+        guard let run = (userInfo[SonnyNotificationUserInfo.runID] as? String).flatMap(UUID.init(uuidString:)),
+              let token = (userInfo[SonnyNotificationUserInfo.approvalToken] as? String).flatMap(UUID.init(uuidString:))
+        else {
+            return nil
+        }
+        self.init(runID: RunID(run), token: token)
+    }
 }
 
 private enum SonnyNotificationAction {
@@ -87,9 +113,9 @@ private enum SonnyNotificationAction {
 @MainActor
 final class SonnyNotificationService: NSObject, UNUserNotificationCenterDelegate {
     private let center: UNUserNotificationCenter
-    /// The banner's Allow, handed the run and the approval token the notification was posted with
-    /// (SONNY-456), or `nil` for either when the notification carried none — which approves nothing.
-    private let onAllow: (RunID?, UUID?) -> Void
+    /// The banner's Allow, handed the approval the notification was posted for (SONNY-456), or
+    /// `nil` when it carried none that reads — which approves nothing.
+    private let onAllow: (ApprovalTarget?) -> Void
     private let onRetry: () -> Void
     private let onOpen: () -> Void
     /// The default action for a finished-run notification, which opens that task rather than the
@@ -125,7 +151,7 @@ final class SonnyNotificationService: NSObject, UNUserNotificationCenterDelegate
     /// (`bundleProxyForCurrentProcess is nil`, an uncaught Objective-C exception, not a throwing
     /// Swift error) — this has to be checked *before* ever touching the class, not caught after.
     init?(
-        onAllow: @escaping (RunID?, UUID?) -> Void,
+        onAllow: @escaping (ApprovalTarget?) -> Void,
         onRetry: @escaping () -> Void,
         onOpen: @escaping () -> Void,
         onOpenTask: @escaping (String?) -> Void = { _ in },
@@ -226,7 +252,7 @@ final class SonnyNotificationService: NSObject, UNUserNotificationCenterDelegate
         ])
     }
 
-    func postPermissionNotification(resource: String, runID: String, approvalToken: String) {
+    func postPermissionNotification(resource: String, target: ApprovalTarget) {
         guard isEnabled(.approvalNeeded) else { return }
         let content = UNMutableNotificationContent()
         content.title = "Approval needed"
@@ -234,8 +260,9 @@ final class SonnyNotificationService: NSObject, UNUserNotificationCenterDelegate
         content.categoryIdentifier = SonnyNotificationCategory.permission
         // Carried rather than looked up when the click arrives, for the reason the outcome
         // notification carries its task: by then a different question may be the one parked.
-        content.userInfo[SonnyNotificationUserInfo.runID] = runID
-        content.userInfo[SonnyNotificationUserInfo.approvalToken] = approvalToken
+        for (key, value) in target.notificationUserInfo {
+            content.userInfo[key] = value
+        }
         deliver(content)
     }
 
@@ -336,15 +363,11 @@ final class SonnyNotificationService: NSObject, UNUserNotificationCenterDelegate
         let actionIdentifier = response.actionIdentifier
         let category = response.notification.request.content.categoryIdentifier
         let taskID = response.notification.request.content.userInfo[SonnyNotificationUserInfo.taskID] as? String
-        let runID = (response.notification.request.content.userInfo[SonnyNotificationUserInfo.runID] as? String)
-            .flatMap(UUID.init(uuidString:))
-            .map(RunID.init)
-        let approvalToken = (response.notification.request.content.userInfo[SonnyNotificationUserInfo.approvalToken] as? String)
-            .flatMap(UUID.init(uuidString:))
+        let approvalTarget = ApprovalTarget(notificationUserInfo: response.notification.request.content.userInfo)
         Task { @MainActor [weak self] in
             switch actionIdentifier {
             case SonnyNotificationAction.allow:
-                self?.onAllow(runID, approvalToken)
+                self?.onAllow(approvalTarget)
             case SonnyNotificationAction.retry:
                 self?.onRetry()
             case UNNotificationDefaultActionIdentifier:

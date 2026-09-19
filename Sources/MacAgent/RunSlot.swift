@@ -23,6 +23,13 @@ struct RunID: Hashable, Sendable, CustomStringConvertible {
     }
 }
 
+/// One parked approval's address: the run it is parked on and the token it was parked with
+/// (SONNY-456). An answer that carries this reaches that question and no other.
+struct ApprovalTarget: Hashable, Sendable {
+    let runID: RunID
+    let token: UUID
+}
+
 /// Which run the code executing right now belongs to (SONNY-456).
 ///
 /// **Bound at the one place each run's work begins, and inherited by everything under it.** Every
@@ -44,18 +51,39 @@ struct RunID: Hashable, Sendable, CustomStringConvertible {
 /// `DispatchQueue` hop), and `AgentViewModel` answers that with the focused run too; so both designs
 /// share that one failure, and the scope removes every other.
 ///
-/// **Known to run outside any run, and right only while focus cannot move under them:** the voice
-/// recording and transcription `Task`s (`startVoiceRecording`, `stopVoiceRecordingAndTranscribe`), which
-/// write `clarificationQuestion`, `currentTaskID` and `preserveUsageForNextStart` on the focused
-/// run. While only one run can exist that is the run they mean. A full sweep of the pipeline for
-/// hops of this kind is owed before a second run can exist (SONNY-456's handback comment).
+/// **Known to run outside any run, and right only while focus cannot move under them** — each one is
+/// owed a binding, or a proof it cannot outlive a focus change, before a second run can exist
+/// (SONNY-456's comments list them in order):
+/// - **The four screen-control cancellation hops** in `AgentViewModel+VisionSession.swift`. Each is a
+///   `Task` started inside `withTaskCancellationHandler`'s `onCancel`, which runs in the context of
+///   whoever cancelled, so it reads the continuation of the run *that* context names. Once focus can
+///   move, stopping one run while the widget shows another reads the wrong run's continuation: the
+///   stopped run is never resumed, never finishes, and holds its slot for good.
+/// - **Voice** (`startVoiceRecording`, `stopVoiceRecordingAndTranscribe`, and the `Task`s they
+///   start). They write `errorMessage` and `errorIsPersistent` through `setError`, clear
+///   `errorMessage` and `finalSummary`, write `currentTaskID` and `taskUsageSummary` (and reset the
+///   one shared `taskUsageRecorder`), set `preserveUsageForNextStart`, write `clarificationAnswer`
+///   after reading `clarificationQuestion`, and hand a transcript to `dispatch`, so the run it
+///   starts begins in whichever slot is focused when the transcript lands.
+/// - Timers and observers: the routine timer and the wake observer start a scheduled run in the
+///   focused slot, and the whole wipe clears the focused slot only.
 enum RunScope {
     @TaskLocal static var current: RunID?
 }
 
-/// Everything one run holds (SONNY-456). Each property is the one `AgentViewModel` used to declare
-/// for its single run, with the same name, type and default; `AgentViewModel` forwards its old
-/// property to the slot of the run in scope, so nothing that read or wrote the old property changed.
+/// The state of one run that moved out of `AgentViewModel` (SONNY-456). Each property here is the one
+/// `AgentViewModel` used to declare for its single run, with the same name, type and default, plus
+/// `approvalToken`; `AgentViewModel` forwards its old property to the slot of the run in scope, so
+/// nothing that read or wrote the old property changed.
+///
+/// **Not everything that describes a run moved, and the difference matters to the next layer.**
+/// These are still one per view model: `taskUsageRecorder` — while `currentTaskID` and
+/// `taskUsageSummary` moved, so `beginNewTaskIdentity()` now resets one shared recorder beside two
+/// per-run values that were written as one lifetime; `widgetWasExpandedForThisRun`, which any run
+/// starting resets for all of them; `completedRunNotice`, which the next finished run overwrites;
+/// `taskRecordingPolicy`; and the screen-control session's `visionSessionEnvironment`,
+/// `visionUserPauseMonitor` and `visionEmergencyStopHotKey`. With one run each is exactly what it
+/// was. With two, each is a decision still to make.
 struct RunSlot {
     let id: RunID
 
@@ -69,14 +97,24 @@ struct RunSlot {
     var suggestions: [RunSuggestion] = []
     var stepStatuses: [String: AgentStepStatus] = [:]
 
-    var approvalRequest: RiskApprovalRequest?
+    /// Written only through `setApprovalRequest(_:)`, together with `approvalToken`.
+    private(set) var approvalRequest: RiskApprovalRequest?
     /// Minted afresh every time an approval parks on this run, and `nil` while none is parked.
     ///
     /// An approval is answered by naming the run *and* this token, so an answer given to one
     /// question can never approve a different one: not another run's (two runs can park requests
     /// that compare equal, since `RiskApprovalRequest` is a value), and not a later question on this
     /// same run (a notification's Allow pressed after the question it was posted for has gone).
-    var approvalToken: UUID?
+    private(set) var approvalToken: UUID?
+
+    /// The one way to park or clear an approval: both halves in one write, a fresh token for every
+    /// park and none for a clear, so no code can put a new question under an old question's token.
+    /// Returns the token minted, or `nil` for a clear.
+    mutating func setApprovalRequest(_ request: RiskApprovalRequest?) -> UUID? {
+        approvalRequest = request
+        approvalToken = request == nil ? nil : UUID()
+        return approvalToken
+    }
 
     var visionCapturePreview: VisionCapturePreview?
     var visionSessionProgress: VisionSessionProgress?
@@ -117,6 +155,11 @@ struct RunSlot {
 
     init(id: RunID = RunID()) {
         self.id = id
+    }
+
+    /// The address of the approval parked on this run now, or `nil` when none is.
+    var parkedApproval: ApprovalTarget? {
+        approvalToken.map { ApprovalTarget(runID: id, token: $0) }
     }
 
     /// Running, or parked on a question only the user can answer — the three terms

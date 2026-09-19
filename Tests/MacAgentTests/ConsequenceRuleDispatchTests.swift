@@ -436,6 +436,13 @@ struct RunAttributedApprovalTests {
         try "existing alpha".write(to: alpha, atomically: true, encoding: .utf8)
         try "existing beta".write(to: beta, atomically: true, encoding: .utf8)
 
+        // Every announcement the notification would be posted from, in order (F2 of PR #279's
+        // review): with two runs and the widget on the first, "announced with its run" and
+        // "announced with the run on screen" finally give different answers.
+        var announced: [ApprovalTarget] = []
+        let subscription = viewModel.approvalParked.sink { target, _ in announced.append(target) }
+        defer { subscription.cancel() }
+
         let first = viewModel.focusedRunID
         viewModel.command = "Draft alpha"
         viewModel.start()
@@ -465,6 +472,13 @@ struct RunAttributedApprovalTests {
         let secondToken = try #require(secondSlot.approvalToken, "the second run parked no approval of its own")
         #expect(firstToken != secondToken)
         #expect(viewModel.focusedRunID == first, "precondition: the widget is on the first run")
+        #expect(
+            announced == [
+                ApprovalTarget(runID: first, token: firstToken),
+                ApprovalTarget(runID: second, token: secondToken)
+            ],
+            "each park must be announced with its own run while the widget shows the other"
+        )
 
         // One run's token answers nothing on the other, in either direction.
         #expect(!viewModel.approveParkedRun(first, token: secondToken))
@@ -474,8 +488,12 @@ struct RunAttributedApprovalTests {
         #expect(try String(contentsOf: alpha, encoding: .utf8) == "existing alpha")
         #expect(try String(contentsOf: beta, encoding: .utf8) == "existing beta")
 
-        // The second run's own token answers the second run, and only it.
-        #expect(viewModel.approveParkedRun(second, token: secondToken))
+        // The second run's own announcement, carried the way the banner carries it — written into a
+        // notification's userInfo and read back — answers the second run, and only it (F3).
+        let secondAnnouncement = try #require(announced.last)
+        let carried = try #require(ApprovalTarget(notificationUserInfo: secondAnnouncement.notificationUserInfo))
+        #expect(carried == ApprovalTarget(runID: second, token: secondToken))
+        #expect(viewModel.approveParkedRun(carried.runID, token: carried.token))
         try await HangBackstop.waitOrAbandon(for: "the approved run to finish") {
             viewModel.runSlots.allSatisfy { !$0.isRunning }
         }
@@ -487,8 +505,9 @@ struct RunAttributedApprovalTests {
     }
 
     /// A question asked again is a new question: the token an earlier answer carries — a
-    /// notification posted for the first asking — answers nothing, and the new one does.
-    /// `performApproval`'s stale-approval re-arm asks again exactly this way.
+    /// notification posted for the first asking — answers nothing, and the new one does. This asks
+    /// again by setting the same request straight over itself; `performApproval`'s stale-approval
+    /// re-arm clears to `nil` first and then parks, and either step alone retires the old token.
     @Test
     func aTokenFromBeforeTheQuestionWasAskedAgainAnswersNothing() async throws {
         let fixture = try makeDispatchFixture()
@@ -521,59 +540,125 @@ struct RunAttributedApprovalTests {
         #expect(try String(contentsOf: fixture.draftOutput, encoding: .utf8) != "existing draft")
     }
 
-    /// What the notification is posted with: every parked approval is announced with its own run
-    /// and the token the slot holds, so the banner carries exactly what `approveParkedRun` checks.
+    /// A failure is announced with the run it belongs to, and the notification's hold lands on that
+    /// run (F2 of PR #279's review). Before SONNY-456 this was `@Published`'s own behaviour; it is
+    /// one explicit line in `errorMessage`'s setter now, so it needs a test that would notice the
+    /// line gone or naming the run on screen — which a single run cannot tell apart.
     @Test
-    func everyParkedApprovalIsAnnouncedWithItsRunAndTheTokenItHolds() async throws {
+    func aFailureIsAnnouncedWithTheRunItBelongsToAndItsHoldLandsThere() throws {
         let fixture = try makeDispatchFixture()
         defer { fixture.tearDown() }
         let viewModel = fixture.viewModel
-        try "existing draft".write(to: fixture.draftOutput, atomically: true, encoding: .utf8)
-        var announced: [(RunID, UUID)] = []
-        let subscription = viewModel.approvalParked.sink { runID, token, _ in
-            announced.append((runID, token))
-        }
+        var raised: [(RunID, String)] = []
+        let subscription = viewModel.errorMessageRaised.sink { raised.append(($0, $1)) }
         defer { subscription.cancel() }
 
-        let run = viewModel.focusedRunID
-        viewModel.command = "Draft notes"
-        viewModel.start()
-        try await HangBackstop.waitOrAbandon(for: "the run to park its approval") {
-            slot(run, in: viewModel).map { $0.approvalRequest != nil && !$0.isRunning } == true
+        let first = viewModel.focusedRunID
+        let second = viewModel.addRunSlotForTests()
+        // `start()` with nothing typed fails synchronously with its own sentence, inside whichever
+        // run is in scope — here the second, with the widget left on the first.
+        RunScope.$current.withValue(second) {
+            viewModel.command = ""
+            viewModel.start()
         }
 
-        #expect(announced.count == 1)
-        #expect(announced.first?.0 == run)
-        #expect(announced.first?.1 == slot(run, in: viewModel)?.approvalToken)
+        #expect(raised.count == 1)
+        #expect(raised.first?.0 == second, "the failure was announced as the run on screen's")
+        #expect(raised.first?.1 == "Enter a natural-language command first.")
+        #expect(slot(second, in: viewModel)?.errorMessage == "Enter a natural-language command first.")
+        #expect(slot(first, in: viewModel)?.errorMessage == nil, "the failure landed on the run on screen")
+
+        viewModel.markOutcomeAsNotified(for: second)
+        #expect(slot(second, in: viewModel)?.outcomeWasNotified == true)
+        #expect(slot(first, in: viewModel)?.outcomeWasNotified == false, "the hold landed on the run on screen")
     }
 
     /// The banner's Allow answers the run and the approval it was posted for — read off the wiring,
     /// because `SonnyNotificationService.init?` returns nil without bundle identity and neither the
-    /// subscription nor the response handler exists in a test process. Before SONNY-456 this closure
-    /// was `viewModel.start()`, which approves whatever the focused run has parked when the banner is
-    /// pressed; that is why the absence of `start()` is asserted beside the presence of the new door.
+    /// subscription nor the response handler exists in a test process. The encoding and decoding
+    /// themselves are `ApprovalTarget`'s, held by `ApprovalNotificationRoundTripTests`; this pins
+    /// that the notification uses exactly those two members on each side. Before SONNY-456 the
+    /// Allow closure was `viewModel.start()`, which approves whatever the focused run has parked
+    /// when the banner is pressed; that is why the absence of `start()` is asserted beside the new
+    /// door.
     @Test
     func theBannersAllowAnswersTheRunAndApprovalItWasPostedFor() throws {
         let delegate = try MacAgentSource.read("AppDelegate.swift")
         let allow = try MacAgentSource.region(of: delegate, from: "onAllow:", to: "onRetry:")
-        #expect(MacAgentSource.count(of: "viewModel.approveParkedRun(runID, token: token)", inText: allow) == 1)
+        #expect(MacAgentSource.count(of: "viewModel.approveParkedRun(target.runID, token: target.token)", inText: allow) == 1)
         #expect(MacAgentSource.count(of: "start()", inText: allow) == 0)
-        #expect(MacAgentSource.count(of: "guard let runID, let token else { return }", inText: allow) == 1)
+        #expect(MacAgentSource.count(of: "guard let target else { return }", inText: allow) == 1)
 
         let posting = try MacAgentSource.region(of: delegate, from: "viewModel.approvalParked", to: ".store(in: &cancellables)")
-        #expect(MacAgentSource.count(of: "runID: runID.description", inText: posting) == 1)
-        #expect(MacAgentSource.count(of: "approvalToken: token.uuidString", inText: posting) == 1)
+        #expect(MacAgentSource.count(of: "target: target", inText: posting) == 1)
 
         let service = try MacAgentSource.read("SonnyNotificationService.swift")
         let post = try MacAgentSource.braceBlock(
             of: service,
-            openedBy: "func postPermissionNotification(resource: String, runID: String, approvalToken: String) {"
+            openedBy: "func postPermissionNotification(resource: String, target: ApprovalTarget) {"
         )
-        #expect(MacAgentSource.count(of: "content.userInfo[SonnyNotificationUserInfo.runID] = runID", inText: post) == 1)
+        #expect(MacAgentSource.count(of: "target.notificationUserInfo", inText: post) == 1)
+        let received = try MacAgentSource.region(of: service, from: "didReceive response", to: "case SonnyNotificationAction.retry:")
         #expect(
-            MacAgentSource.count(of: "content.userInfo[SonnyNotificationUserInfo.approvalToken] = approvalToken", inText: post) == 1
+            MacAgentSource.count(
+                of: "ApprovalTarget(notificationUserInfo: response.notification.request.content.userInfo)",
+                inText: received
+            ) == 1
         )
-        #expect(MacAgentSource.count(of: "self?.onAllow(runID, approvalToken)", inText: service) == 1)
+        #expect(MacAgentSource.count(of: "self?.onAllow(approvalTarget)", inText: received) == 1)
+    }
+}
+
+/// The notification's half of an approval's address, written and read back (F3 of PR #279's
+/// review). A mismatch between the two turns every banner's Allow into a silent refusal — the safe
+/// direction, and still a dead control — with nothing else in the suite noticing.
+@Suite
+struct ApprovalNotificationRoundTripTests {
+    @Test
+    func anAddressWrittenIntoANotificationReadsBackAsTheSameAddress() throws {
+        let one = ApprovalTarget(runID: RunID(), token: UUID())
+        let other = ApprovalTarget(runID: RunID(), token: UUID())
+        #expect(ApprovalTarget(notificationUserInfo: one.notificationUserInfo) == one)
+        #expect(ApprovalTarget(notificationUserInfo: other.notificationUserInfo) == other)
+        // The run is written from its UUID, so nothing about how a `RunID` prints can move it.
+        #expect(Set(one.notificationUserInfo.values) == [one.runID.value.uuidString, one.token.uuidString])
+    }
+
+    @Test
+    func aNotificationThatCarriesNoReadableAddressAnswersNothing() {
+        let target = ApprovalTarget(runID: RunID(), token: UUID())
+        let written = target.notificationUserInfo
+        #expect(ApprovalTarget(notificationUserInfo: [:]) == nil)
+        for key in written.keys {
+            var missingOne: [AnyHashable: Any] = written
+            missingOne[key] = nil
+            #expect(ApprovalTarget(notificationUserInfo: missingOne) == nil, "read with \(key) missing")
+
+            var malformed: [AnyHashable: Any] = written
+            malformed[key] = "not a uuid"
+            #expect(ApprovalTarget(notificationUserInfo: malformed) == nil, "read with \(key) malformed")
+
+            var wrongType: [AnyHashable: Any] = written
+            wrongType[key] = 7
+            #expect(ApprovalTarget(notificationUserInfo: wrongType) == nil, "read with \(key) not a string")
+        }
+    }
+
+    /// The two halves are read from their own keys: an address with its halves swapped reads back
+    /// as a different address, which `approveParkedRun` then refuses like any other stranger.
+    @Test
+    func theRunAndTheTokenAreReadFromTheirOwnKeys() throws {
+        let target = ApprovalTarget(runID: RunID(), token: UUID())
+        let written = target.notificationUserInfo
+        #expect(written.count == 2)
+        let keys = Array(written.keys)
+        var swapped: [AnyHashable: Any] = [:]
+        swapped[keys[0]] = written[keys[1]]
+        swapped[keys[1]] = written[keys[0]]
+        let readBack = try #require(ApprovalTarget(notificationUserInfo: swapped))
+        #expect(readBack.runID == RunID(target.token))
+        #expect(readBack.token == target.runID.value)
+        #expect(readBack != target)
     }
 }
 

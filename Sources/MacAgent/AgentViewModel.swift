@@ -28,16 +28,20 @@ final class AgentViewModel: ObservableObject {
     }
 
     /// The slot of the run in scope. A run whose slot has gone reads as an empty slot rather than
-    /// as another run's: `removeSettledRunSlots` never removes a slot with work in flight, so this is
-    /// a belt, and the failure it guards against is a run writing into a different run.
+    /// as another run's — the failure this guards against is a run writing into a different run.
+    /// **Nothing removes a slot yet**, so on this branch the fallback cannot be reached. The layer
+    /// that lets slots come and go owes the rule that makes it a belt rather than a path: a slot
+    /// with work in flight, or with a `Task` still holding its `RunScope`, is never removed.
     var runSlotInScope: RunSlot {
         let id = runIDInScope
         return runSlots.first { $0.id == id } ?? RunSlot(id: id)
     }
 
     /// Writes to the slot of the run in scope, and to no other. A write for a run whose slot has
-    /// gone is dropped, for the reason `runSlotInScope` gives.
-    func updateRunSlotInScope(_ change: (inout RunSlot) -> Void) {
+    /// gone is dropped, for the reason `runSlotInScope` gives. `private`, so the forwarded properties
+    /// in this file are the only writers of a slot, and the approval pair is written only through
+    /// `RunSlot.setApprovalRequest(_:)`.
+    private func updateRunSlotInScope(_ change: (inout RunSlot) -> Void) {
         let id = runIDInScope
         guard let index = runSlots.firstIndex(where: { $0.id == id }) else {
             return
@@ -50,9 +54,9 @@ final class AgentViewModel: ObservableObject {
     /// fails exactly as loudly as the one on screen.
     let errorMessageRaised = PassthroughSubject<(RunID, String), Never>()
 
-    /// Every approval a run parks, named with the run and the token that approval was minted with,
+    /// Every approval a run parks, with its address — the run and the token it was minted with —
     /// so the notification's Allow answers that approval and nothing else.
-    let approvalParked = PassthroughSubject<(RunID, UUID, RiskApprovalRequest), Never>()
+    let approvalParked = PassthroughSubject<(ApprovalTarget, RiskApprovalRequest), Never>()
 
     var isRunning: Bool {
         get { runSlotInScope.isRunning }
@@ -272,13 +276,10 @@ final class AgentViewModel: ObservableObject {
     var approvalRequest: RiskApprovalRequest? {
         get { runSlotInScope.approvalRequest }
         set {
-            let token: UUID? = newValue == nil ? nil : UUID()
-            updateRunSlotInScope {
-                $0.approvalRequest = newValue
-                $0.approvalToken = token
-            }
+            var token: UUID?
+            updateRunSlotInScope { token = $0.setApprovalRequest(newValue) }
             if let newValue, let token {
-                approvalParked.send((runIDInScope, token, newValue))
+                approvalParked.send((ApprovalTarget(runID: runIDInScope, token: token), newValue))
             }
         }
     }

@@ -39,9 +39,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // The run and the approval travel with the notification (SONNY-456): with more than one
         // run, "whatever is parked now" can be a different run's question, or a later one on the
         // same run, and a banner's Allow must answer only the question it was posted for.
-        onAllow: { [weak self] runID, token in
-            guard let runID, let token else { return }
-            self?.viewModel.approveParkedRun(runID, token: token)
+        onAllow: { [weak self] target in
+            guard let target else { return }
+            self?.viewModel.approveParkedRun(target.runID, token: target.token)
         },
         onRetry: { [weak self] in self?.viewModel.retryLastCommand() },
         // Routed through the presentation counter rather than calling `show()` directly, so every
@@ -374,14 +374,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Every run's approvals and failures, not only the focused run's (SONNY-456): a run in the
         // background needs the user exactly as much as the one on screen.
         viewModel.approvalParked
-            .sink { [weak self] runID, token, request in
+            .sink { [weak self] target, request in
                 guard let self, !isUserWorkingInSonny else {
                     return
                 }
                 notificationService.postPermissionNotification(
                     resource: request.approvalCopy.involvedResource,
-                    runID: runID.description,
-                    approvalToken: token.uuidString
+                    target: target
                 )
             }
             .store(in: &cancellables)
