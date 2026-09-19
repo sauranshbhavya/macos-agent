@@ -47,9 +47,9 @@
       "url": "https://teams.microsoft.com/",
       "landedURL": "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
       "title": "Sign in to your account",
-      "heading": "",
+      "heading": "Sign in",
       "offers": "sign-in",
-      "read": "2026-09-18"
+      "read": "2026-09-19"
     }
   ]
 }
