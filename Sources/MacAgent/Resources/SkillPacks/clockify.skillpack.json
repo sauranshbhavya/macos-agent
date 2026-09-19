@@ -36,7 +36,7 @@
       "steps": [
         "Go to Projects and click Create new project.",
         "Name the project and select its client. A new client can be created here too, by typing a name and clicking Create client.",
-        "Choose a project color from the Custom section or the color picker, and choose its visibility, public or private.",
+        "Choose a project color from the Custom section or the color picker, and choose its visibility. On the Free plan only Public can be set; if the person wants the project Private and Private is not offered, stop and tell them, and never change the plan.",
         "Click Create."
       ],
       "source": "https://clockify.me/help/projects/creating-projects"

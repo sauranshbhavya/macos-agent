@@ -14,9 +14,10 @@
       "title": "Download a statement",
       "startURL": "https://wise.com/login",
       "steps": [
+        "Stop and ask the person before continuing when Wise asks for the download to be confirmed: that step asks them to confirm their identity, which only they can do. Type nothing into it.",
         "On the website, click your initials in the top corner and select Statements and reports, then Statements.",
         "Select Create a statement, and choose the currencies or jars, the time period, the file format and the language. One statement covers at most 365 days; for longer, create one per period. For accounting statements, tick the box to show fees separately.",
-        "Wise asks for the download to be confirmed by the person signed in, which that person does themselves. Statements made this way appear in the Custom tab."
+        "Hand the confirmation to the person. Once they have confirmed it, statements made this way appear in the Custom tab."
       ],
       "source": "https://wise.com/help/articles/2736049/how-do-i-download-a-statement"
     },
