@@ -1,7 +1,7 @@
 ### Deep Skills packs for the finance and billing group (new 2026-09-18, SONNY-519)
 
-Ten finance and billing sites gain deep packs so far: Stripe, Wise Business, Square, Toggl Track,
-Clockify, Wave, GoCardless, Dext, Qonto and Lemon Squeezy. What is being checked is that a pack
+Twelve finance and billing sites gain deep packs so far: Stripe, Wise Business, Square, Toggl Track,
+Clockify, Wave, GoCardless, Dext, Qonto, Lemon Squeezy, Airwallex and Ramp. What is being checked is that a pack
 reaches the planner at all and that its steps are the ones the site actually uses — not that Sonny
 completes the task on a live account. **Sign in to nothing.** Every row below can be read from the
 plan Sonny shows before it acts.
