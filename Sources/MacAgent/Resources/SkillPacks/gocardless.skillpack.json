@@ -8,6 +8,28 @@
   "signInURL": "https://manage.gocardless.com/sign-in",
   "triggers": ["gocardless", "gocardless.com"],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Invite a team member",
+      "startURL": "https://manage.gocardless.com/sign-in",
+      "steps": [
+        "Open the dashboard, click Settings, and select Team.",
+        "Click Invite a team member.",
+        "Enter the team member's details and choose the lowest access level the person needs: Read-only, which can view but not create or update anything, Read-write or Administrator. Each person gets their own user, so permissions are set per person.",
+        "Click Invite team member. GoCardless emails the person an invitation, and they finish joining from its link."
+      ],
+      "source": "https://support.gocardless.com/hc/en-gb/articles/360014298099-Add-team-members"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://manage.gocardless.com/sign-in",
+      "landedURL": "https://manage.gocardless.com/sign-in",
+      "title": "GoCardless",
+      "heading": "Sign in to your account",
+      "offers": "sign-in",
+      "read": "2026-09-19"
+    }
+  ]
 }

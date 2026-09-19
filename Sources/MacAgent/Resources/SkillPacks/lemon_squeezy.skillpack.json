@@ -8,6 +8,27 @@
   "signInURL": "https://app.lemonsqueezy.com/login",
   "triggers": ["lemon squeezy", "lemonsqueezy.com"],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Export a store's orders",
+      "startURL": "https://app.lemonsqueezy.com/login",
+      "steps": [
+        "Open the store's Orders page.",
+        "Click the Export button. A store's orders can be exported at any time.",
+        "The CSV file it generates is emailed to the store owner's email address. It lists each order's number, the product and variant, and the customer's name and email address."
+      ],
+      "source": "https://docs.lemonsqueezy.com/help/orders/exporting-orders"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://app.lemonsqueezy.com/login",
+      "landedURL": "https://auth.lemonsqueezy.com/login",
+      "title": "Lemon Squeezy",
+      "heading": "Sign in to Lemon Squeezy",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
+  ]
 }

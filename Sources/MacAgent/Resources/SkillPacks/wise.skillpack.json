@@ -8,6 +8,38 @@
   "signInURL": "https://wise.com/login",
   "triggers": ["wise business", "wise.com"],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Download a statement",
+      "startURL": "https://wise.com/login",
+      "steps": [
+        "Stop and ask the person before continuing when Wise asks for the download to be confirmed: that step asks them to confirm their identity, which only they can do. Type nothing into it.",
+        "On the website, click your initials in the top corner and select Statements and reports, then Statements.",
+        "Select Create a statement, and choose the currencies or jars, the time period, the file format and the language. One statement covers at most 365 days; for longer, create one per period. For accounting statements, tick the box to show fees separately.",
+        "Hand the confirmation to the person. Once they have confirmed it, statements made this way appear in the Custom tab."
+      ],
+      "source": "https://wise.com/help/articles/2736049/how-do-i-download-a-statement"
+    },
+    {
+      "title": "Download a list of transfers",
+      "startURL": "https://wise.com/login",
+      "steps": [
+        "On the website's Home page, next to Transactions, select See all. This is not available in the mobile app.",
+        "Use Filter to narrow the list by date, recipient, type, status, direction, category or currency, or use the search bar.",
+        "Click Download and choose CSV or PDF to get the current view, covering up to 365 days."
+      ],
+      "source": "https://wise.com/help/articles/2489458/how-do-i-download-a-list-of-my-transfers"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://wise.com/login",
+      "landedURL": "https://wise.com/login",
+      "title": "Wise - Login",
+      "heading": "Welcome back",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
+  ]
 }
