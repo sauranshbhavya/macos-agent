@@ -5,7 +5,7 @@
   "domain": "microsoft365.com",
   "category": "it_accounts_security",
   "summary": "Microsoft's home for Word, Excel, Outlook and other apps.",
-  "signInURL": "https://www.microsoft365.com/",
+  "signInURL": "https://www.microsoft365.com/login",
   "triggers": [
     "microsoft 365",
     "microsoft365.com"
@@ -53,7 +53,7 @@
       "url": "https://www.microsoft365.com/login",
       "landedURL": "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
       "title": "Sign in to your account",
-      "heading": "",
+      "heading": "Sign in",
       "offers": "sign-in",
       "read": "2026-09-18"
     }
