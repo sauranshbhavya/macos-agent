@@ -604,10 +604,11 @@ enum SkillPackCredentialRule {
 /// - **it is one clause** — no full stop (a closing one included: the frame ends the sentence),
 ///   no `!`, `?`, `;`, `:`, dash or line break — so it cannot carry a second sentence. A full stop
 ///   inside a word is left alone, which is `.env` and `netlify.toml`;
-/// - **it grants no exception** (`exceptionWords`).
+/// - **it grants no exception and sets no condition** (`exceptionWords`): "unless the person
+///   asked" hands the act back, and "if the plan is full" leaves it open the rest of the time.
 ///
 /// **What this cannot guarantee.** `exceptionWords` is a word list, so a stop can still be written
-/// to grant in words it does not hold ("pressing Buy before the person agrees"). What binds then is
+/// to grant in words it does not hold ("pressing Buy should the person agree"). What binds then is
 /// the frame, which says never whatever the text says, and the consequence rule, which no pack can
 /// make ask less. And a stop names an act; whether the page really offers it is, like every step,
 /// the citation's to show.
@@ -622,10 +623,14 @@ enum SkillPackStopRule {
         "Stop before \(stop)."
     }
 
-    /// Words that turn a stop back into permission. Whole words, folded.
+    /// Words that turn a stop back into permission, or make it hold only some of the time. Whole
+    /// words, folded. A stop is unconditional, so the words a condition is built from are here beside
+    /// the ones that hand the act back; what each costs is a stop that has to be reworded ("typing
+    /// into the box Wise shows for a download", not "before the download"), and a control whose own
+    /// name holds one ("Ask AI") cannot be named in a stop at all. Both are loud and fail closed.
     static let exceptionWords: Set<String> = [
         "unless", "until", "except", "without", "only", "then", "instead", "otherwise", "but",
-        "ask", "asks", "asked", "asking"
+        "if", "when", "once", "after", "before", "ask", "asks", "asked", "asking"
     ]
 
     /// Punctuation that ends a clause wherever it stands. A full stop is read separately, because

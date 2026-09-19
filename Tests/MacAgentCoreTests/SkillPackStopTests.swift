@@ -38,7 +38,7 @@ struct SkillPackStopTests {
              .movesMoney(field: "flows[0]", words: "create + charge")),
             ("upgrading the plan to make Private available", "Upgrade the plan to make Private available.",
              .movesMoney(field: "flows[0]", words: "upgrade + plan")),
-            ("typing anything into the password box Wise shows before the download", "Type the password into the box Wise shows.",
+            ("typing anything into the password box Wise shows for a download", "Type the password into the box Wise shows.",
              .mentionsCredential(field: "flows.steps", phrase: "password")),
             ("typing, pasting or reading a secret, an API key or any other credential in a variable's value",
              "Type the secret, the API key or the credential into the variable's value.",
@@ -131,10 +131,16 @@ struct SkillPackStopTests {
             ("pressing Buy instead of Cancel", .grantsAnException(word: "instead")),
             ("pressing Buy, otherwise Confirm", .grantsAnException(word: "otherwise")),
             ("pressing anything but Cancel", .grantsAnException(word: "but")),
-            ("pressing Buy before you ask", .grantsAnException(word: "ask")),
-            ("pressing Buy before the person asks", .grantsAnException(word: "asks")),
-            ("pressing Buy before being asked", .grantsAnException(word: "asked")),
-            ("pressing Buy before asking", .grantsAnException(word: "asking"))
+            // A condition leaves the act open the rest of the time.
+            ("pressing Buy if the plan is full", .grantsAnException(word: "if")),
+            ("pressing Buy when the plan is full", .grantsAnException(word: "when")),
+            ("pressing Buy once the person agrees", .grantsAnException(word: "once")),
+            ("pressing Buy after the person agrees", .grantsAnException(word: "after")),
+            ("pressing Buy before the person agrees", .grantsAnException(word: "before")),
+            ("pressing Buy should you ask", .grantsAnException(word: "ask")),
+            ("pressing Buy whatever the person asks", .grantsAnException(word: "asks")),
+            ("pressing Buy having asked", .grantsAnException(word: "asked")),
+            ("pressing Buy and asking later", .grantsAnException(word: "asking"))
         ]
         for row in rows {
             #expect(
@@ -154,7 +160,7 @@ struct SkillPackStopTests {
             "reading the values in a .env file",
             "editing netlify.toml to add a value",
             "pressing Generate new token (classic)",
-            "pressing Buttons, Askew or Thenceforth",
+            "pressing Buttons, Askew, Thenceforth or Iffy",
             "changing the plan, the user bundle or the number of users the plan allows"
         ] {
             #expect(SkillPackTests.error(Self.object(stops: [stop])) == nil, "refused: \(stop)")
