@@ -812,6 +812,7 @@ struct EveryDeleteReachesTheServerTests {
         // token expiry, so the client would refresh and the assertion would be reading the wrong
         // request. The direction does not matter to what is being tested: the bound follows the
         // gateway's clock rather than this Mac's, whichever way the two differ.
+        let built = Date()
         let fixture = try TaskDeletionFixture(serverClockAhead: -3600)
         defer { fixture.tearDown() }
         let record = try fixture.writeTaskRecord(id: "task-a")
@@ -821,15 +822,25 @@ struct EveryDeleteReachesTheServerTests {
         fixture.seen.removeAll()
         fixture.viewModel.deleteLocalData()
         await fixture.viewModel.localDataWipeForTests?.value
+        let wipeReturned = Date()
 
         let sent = try fixture.seen.only
         #expect(sent.path == "/v1/account/content")
         let bound = try #require(Self.boundOnTheWire(of: sent))
-        // Nearer the gateway's hour-behind clock than this Mac's — with a second of slack for the
-        // wire format, which carries no fractional seconds and truncates toward the past. On the
-        // Mac's own clock this would be within a second of zero.
-        #expect(bound.timeIntervalSince(Date()) < -3500)
-        #expect(bound.timeIntervalSince(Date()) > -3700)
+        // **Bracketed by instants this test read itself, so no stall anywhere can move it outside**
+        // (SONNY-515). This compared the bound with `Date()` read at the assertion, allowing 100 s of
+        // slack, and two reviews on two branches failed it under load — 134 s stale at a load
+        // average near 110, 112 s at 93 — in a wording no declaration covers, so a battery counted
+        // each as a kill. The arithmetic that makes the bracket exact: the stub's `Date` header is
+        // formatted once, when the fixture is built, so it reads at most an hour behind `built`
+        // and at least an hour and a second behind it (the header carries whole seconds);
+        // `SonnyBackendClient` resets its offset to that header minus its own `now()` on every
+        // response, all on the wall clock; and the wire truncates the bound toward the past by up
+        // to a second more. So the bound is no earlier than `built` less an hour and two seconds,
+        // and no later than an hour before the wipe returned. On this Mac's own clock it would sit
+        // an hour past that upper edge; with the offset applied twice, an hour below the lower.
+        #expect(bound >= built.addingTimeInterval(-3602))
+        #expect(bound <= wipeReturned.addingTimeInterval(-3600))
     }
 
     /// Parses the `before=` the request carried, or `nil` when it carried none.
@@ -1460,7 +1471,6 @@ private final class NetworkState: @unchecked Sendable {
         let next = outcome
         lock.unlock()
         guard let held else { return next }
-
         return held.wait(timeout: .now() + 30) == .success ? next : Self.gateNeverOpened
     }
 
