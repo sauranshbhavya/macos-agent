@@ -1,12 +1,15 @@
 # SONNY-456, the first layer: a run's state lives in its own slot, and an approval is answered for a
-# named run. Every killer is in Tests/MacAgentTests/ConsequenceRuleDispatchTests.swift's
-# RunAttributedApprovalTests suite. Swift half only.
+# named run. Every killer is in Tests/MacAgentTests/ConsequenceRuleDispatchTests.swift, in the
+# RunAttributedApprovalTests and ApprovalNotificationRoundTripTests suites. Swift half only.
 #
-# Each mutant was applied by hand at the commit that added this plan, built, and killed by the test
-# named in this branch's changelog entry. A sixth was written and left out on purpose: dropping the
-# RunScope binding inside start()'s Task is equivalent on this branch, because an unstructured Task
-# inherits its creator's task-local and nothing here can move the focused run while a run is going.
-# The rest of SONNY-456 makes focus movable, and owes that mutant with a test that kills it.
+# Each mutant was applied by hand at the commit this plan was last written at, built, and killed by
+# the tests named in this branch's changelog entry.
+#
+# Three more are owed by the rest of SONNY-456 and are deliberately not here: dropping the RunScope
+# binding inside the Task of start(), of approvePendingRun() and of the scheduled routine. Each is
+# equivalent on this branch, because an unstructured Task inherits its creator's task-local and
+# nothing here can move the focused run while a run is going (focusedRunID is written only in init).
+# The layer that makes focus movable owes all three, each with a test that moves focus mid-run.
 
 >>> mutant R1 one run's approval token answers another run's question (the token check dropped)
 >>> file Sources/MacAgent/AgentViewModel.swift
@@ -36,25 +39,68 @@
 >>> mutant R3 the banner's Allow goes back to approving whatever is on screen
 >>> file Sources/MacAgent/AppDelegate.swift
 >>> from
-        onAllow: { [weak self] runID, token in
-            guard let runID, let token else { return }
-            self?.viewModel.approveParkedRun(runID, token: token)
+        onAllow: { [weak self] target in
+            guard let target else { return }
+            self?.viewModel.approveParkedRun(target.runID, token: target.token)
         },
 >>> to
-        onAllow: { [weak self] _, _ in self?.viewModel.start() },
+        onAllow: { [weak self] _ in self?.viewModel.start() },
 >>> end
 
->>> mutant R4 the banner is posted without the run it was posted for
+>>> mutant R4 the banner is written without the run it was posted for
 >>> file Sources/MacAgent/SonnyNotificationService.swift
 >>> from
-        content.userInfo[SonnyNotificationUserInfo.runID] = runID
+            SonnyNotificationUserInfo.runID: runID.value.uuidString,
 >>> to
 >>> end
 
 >>> mutant R5 asking the same run's question again keeps the old token, so an old answer still works
+>>> file Sources/MacAgent/RunSlot.swift
+>>> from
+        approvalToken = request == nil ? nil : UUID()
+>>> to
+        approvalToken = request == nil ? nil : (approvalToken ?? UUID())
+>>> end
+
+>>> mutant R6 a parked approval is announced as the run on screen's rather than its own
 >>> file Sources/MacAgent/AgentViewModel.swift
 >>> from
-            let token: UUID? = newValue == nil ? nil : UUID()
+                approvalParked.send((ApprovalTarget(runID: runIDInScope, token: token), newValue))
 >>> to
-            let token: UUID? = newValue == nil ? nil : (runSlotInScope.approvalToken ?? UUID())
+                approvalParked.send((ApprovalTarget(runID: focusedRunID, token: token), newValue))
+>>> end
+
+>>> mutant R7 a failure is announced as the run on screen's rather than its own
+>>> file Sources/MacAgent/AgentViewModel.swift
+>>> from
+                errorMessageRaised.send((runIDInScope, newValue))
+>>> to
+                errorMessageRaised.send((focusedRunID, newValue))
+>>> end
+
+>>> mutant R8 a failure is never announced, so no failure notification posts and no hold is recorded
+>>> file Sources/MacAgent/AgentViewModel.swift
+>>> from
+            if let newValue {
+                errorMessageRaised.send((runIDInScope, newValue))
+            }
+>>> to
+>>> end
+
+>>> mutant R9 the notification's hold lands on the run on screen rather than the run that failed
+>>> file Sources/MacAgent/AgentViewModel.swift
+>>> from
+        RunScope.$current.withValue(runID) {
+            markOutcomeAsNotified()
+        }
+>>> to
+        markOutcomeAsNotified()
+>>> end
+
+>>> mutant R10 the banner's Allow reads the token from the run's key
+>>> file Sources/MacAgent/SonnyNotificationService.swift
+>>> from
+              let token = (userInfo[SonnyNotificationUserInfo.approvalToken] as? String).flatMap(UUID.init(uuidString:))
+>>> to
+              let token = (userInfo[SonnyNotificationUserInfo.runID] as? String).flatMap(UUID.init(uuidString:))
 >>> end
