@@ -585,9 +585,11 @@ struct FirstRunSequenceTests {
         // could be set anywhere.
         #expect(presentation.contains("firstRunCoordinator.presentedStep != nil"))
         // And the sheet's own dismissal records nothing (SONNY-448). This asserted the opposite —
-        // that it declined the step, as Escape or a drag — and what writes `false` here is quitting:
+        // that it declined the step, as Escape or a drag — and quitting writes `false` here too:
         // SwiftUI takes the sheet down that way inside `terminate`, so a skip wired here turns ⌘Q
-        // into "sign in later". Escape declines inside the sheet instead, held below.
+        // into "sign in later". Escape declines inside the sheet instead, held below. (⌘. with the
+        // sheet window first responder also reaches this binding and so records nothing, which is
+        // accepted — PR #276's review, F2.)
         #expect(MacAgentSource.count(of: "firstRunCoordinator.withdrawUnanswered()", inText: presentation) == 1)
         #expect(MacAgentSource.count(of: "skipCurrentStep()", inText: presentation) == 0)
         // And that binding is the one caller in the target, so nothing a user presses can reach the

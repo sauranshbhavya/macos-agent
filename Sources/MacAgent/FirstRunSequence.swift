@@ -232,7 +232,7 @@ final class FirstRunCoordinator: ObservableObject {
     /// next launch lands on the same step — test 3's "quitting mid-sequence resumes on the same
     /// step".
     ///
-    /// **Quitting is what does this** (SONNY-448). A SwiftUI sheet dismisses itself for termination
+    /// **Quitting is what this is for** (SONNY-448). A SwiftUI sheet dismisses itself for termination
     /// by writing `false` to the binding that presents it, inside `terminate` and before the
     /// delegate is asked, so the sheet's own binding cannot tell a quit from a decision. That binding
     /// used to call `skipCurrentStep()`, which was harmless only while AppKit refused to quit under a
@@ -241,11 +241,17 @@ final class FirstRunCoordinator: ObservableObject {
     /// have recorded screen access as declined — so the relaunched app skipped the Accessibility
     /// half that the relaunch exists to come back for.
     ///
-    /// **Declining never passes here.** It is the dialogs' own close control, the deferral bar, and
-    /// Escape — which `FirstRunSequenceView` answers itself with `onExitCommand`, because left to
-    /// the sheet, Escape with a field focused is exactly this binding written `false`, the same
-    /// write a quit makes. Nothing is persisted and the published step is cleared, so the binding's
-    /// getter agrees with the sheet SwiftUI has already taken down rather than asking for it back.
+    /// **Declining passes here in one case, and it is accepted.** Declining is the dialogs' own close
+    /// control, the deferral bar, and Escape — which `FirstRunSequenceView` answers itself with
+    /// `onExitCommand`, because left to the sheet, Escape with a field focused is exactly this
+    /// binding written `false`, the same write a quit makes. **⌘. is the exception**: with the sheet
+    /// window itself first responder (the screen-access step with nothing clicked), the sheet
+    /// answers it by writing `false` here, measured in PR #276's review (F2). That records nothing,
+    /// so the step is asked again at the next launch where `main` recorded it declined — the safe
+    /// direction, and left as it is.
+    ///
+    /// Nothing is persisted and the published step is cleared, so the binding's getter agrees with
+    /// the sheet SwiftUI has already taken down rather than asking for it back.
     func withdrawUnanswered() {
         presentedStep = nil
     }
@@ -329,10 +335,12 @@ struct FirstRunSequenceView: View {
         .background(SonnyTheme.ink)
         // **Escape declines the step on screen, and says so here rather than through the sheet**
         // (SONNY-448). Without this, Escape with a field focused — the sign-in step's own state — is
-        // answered by the sheet itself, which writes `false` to the binding presenting it: the one
-        // write a quit also makes, and which therefore records nothing. With the window itself first
+        // answered by the sheet itself, which writes `false` to the binding presenting it: the write
+        // a quit also makes, and which therefore records nothing. With the window itself first
         // responder instead, Escape reaches the close control's `.cancelAction` and declines through
-        // `skipBinding`; this covers the other case, so both reach the same call.
+        // `skipBinding`; this covers the other case, so both reach the same call. (⌘. with the window
+        // first responder is the cancel gesture measured still reaching the sheet — see
+        // `withdrawUnanswered()`.)
         .onExitCommand { coordinator.skipCurrentStep() }
         // Live state moved: a session was verified, or a grant landed. The sequence advances off the
         // same values it was begun with rather than off anything it recorded about the user's

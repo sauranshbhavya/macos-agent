@@ -32,14 +32,16 @@ one Sonny.
 - [ ] **The Dock's Quit, with the same sheet up.** Right-click Sonny's Dock icon → **Quit**. Same
       result. This one was not in your report. It reached the same refusal by a route that never
       passes through Sonny's own Quit, which is why the fix is where it is.
-- [ ] **Escape still declines, and does not just make the sheet go away.** Reset **(b)** (and
-      **(a)** if signed in). Launch, **click into the email field** so the cursor is in it, and
-      press **Escape**. The sheet must move to the **screen-access** step. It must not disappear, and
-      it must not stay on sign in. Press **Escape** again on screen access, without clicking anything
-      first. The sheet goes away and first run is over. Quit and reopen: first run must **not** come
-      back, because both steps were declined. (This row guards the one behaviour this fix had to
-      move by hand: left to the sheet itself, Escape with a field focused is indistinguishable from a
-      quit.)
+- [ ] **Escape still declines, and does not just make the sheet go away.** Reset **(b)** and
+      **(c)**, and **(a)** if signed in. **(c) is not optional here**: with both grants already held,
+      the screen-access step counts as done, so declining sign-in correctly ends first run and the
+      sheet goes away — which is exactly what this row treats as the failure. Launch, **click into
+      the email field** so the cursor is in it, and press **Escape**. The sheet must move to the
+      **screen-access** step. It must not disappear, and it must not stay on sign in. Press
+      **Escape** again on screen access, without clicking anything first. The sheet goes away and
+      first run is over. Quit and reopen: first run must **not** come back, because both steps were
+      declined. (This row guards the one behaviour this fix had to move by hand: left to the sheet
+      itself, Escape with a field focused is indistinguishable from a quit.)
 - [ ] **Relaunch Sonny from first run ends the old copy — test 77.** Reset **(b)** and **(c)**
       (leave yourself signed out). Launch, press **Sign in later** to reach screen access, press
       **Request access** under Screen Recording, switch Sonny on in System Settings, and press
@@ -47,12 +49,16 @@ one Sonny.
       menu bar has one Sonny icon. The copy that came back must open **on the screen-access step with
       Screen Recording showing Granted**, still asking for Accessibility. If it opens on nothing, the
       relaunch recorded screen access as declined, and that is a failure of this row.
-- [ ] **Relaunch Sonny from Settings ends the old copy too.** Reset **(c)** alone. If first run
-      appears, decline both steps. Open **Settings → Security & Access**, and under **Screen Access** press **Set up**:
-      that dialog is a sheet on top of the Settings sheet. Press **Request access**, grant Screen
-      Recording in System Settings, and press **Relaunch Sonny**. `pgrep` must print one line.
+- [ ] **Relaunch Sonny from Settings ends the old copy too.** Reset **(c)**, then **(d)**: quit
+      and reopen the packaged app, as the reset's last step says. If first run comes back, it is on
+      the **screen-access** step only, because the row above recorded sign-in as declined; press
+      **Set up later in Settings** to get it out of the way. Open **Settings → Security & Access**,
+      and under **Screen Access** press **Set up**: that dialog is a sheet on top of the Settings
+      sheet. Press **Request access**, grant Screen Recording in System Settings, and press
+      **Relaunch Sonny**. `pgrep` must print one line.
 - [ ] **⌘Q with Settings open.** Press **⌘,** to open Settings, then **⌘Q**. Sonny quits.
-- [ ] **⌘Q with an "are you sure" dialog up does not do the thing it was asking about.** Open a task
-      in **Tasks**, choose **Delete task** from its actions, and while the delete confirmation is on
-      screen press **⌘Q**. Sonny quits. Open it again: **the task must still be there**. Quitting
-      closed the question; it did not answer it.
+- [ ] **⌘Q with an "are you sure" dialog up does not do the thing it was asking about.** This needs
+      at least one task in **Tasks**; if it is empty, run anything in the widget first (a
+      calculation will do). Open a task in **Tasks**, choose **Delete task** from its actions, and
+      while the delete confirmation is on screen press **⌘Q**. Sonny quits. Open it again: **the
+      task must still be there**. Quitting closed the question; it did not answer it.
