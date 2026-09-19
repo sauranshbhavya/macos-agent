@@ -9,6 +9,9 @@
 # values built downstream of it (SONNY-388). The F mutants weaken the first-step check itself, which
 # lives in the test file; its held samples are what must catch them, and D3 is the shipped-data shape
 # the check exists for: eBay's Watchlist flow put back under the one `product` record.
+#
+# The fix round on PR #282 added K1 to K3 for the query read as keys and values (a key whole, a value by
+# runs, a route's own query too) and F4 for the step's text in a finding line.
 
 >>> mutant A1 a start-page date is read for its shape only: 2026-13-45 loads again (SONNY-529)
 >>> file Sources/MacAgentCore/SkillPack.swift
@@ -157,4 +160,36 @@
         return labels.suffix(underACountry ? 3 : 2).joined(separator: ".")
 >>> to
         return labels.suffix(2).joined(separator: ".")
+>>> end
+
+>>> mutant K1 a query key is read by runs again: Snov's signup_source= refuses its own sign-in address (the founders' ruling on PR #282)
+>>> file Sources/MacAgentCore/SkillPackStartPages.swift
+>>> from
+            || keys.contains { accountCreationParts.contains(foldedWhole($0)) }
+>>> to
+            || keys.contains { !accountCreationWords(in: $0).isEmpty }
+>>> end
+
+>>> mutant K2 a query key is not read at all: ?signup loads
+>>> file Sources/MacAgentCore/SkillPackStartPages.swift
+>>> from
+            || keys.contains { accountCreationParts.contains(foldedWhole($0)) }
+>>> to
+            || false
+>>> end
+
+>>> mutant K3 a route's own query is not read: #/login?screen_hint=signup loads
+>>> file Sources/MacAgentCore/SkillPackStartPages.swift
+>>> from
+        let queries = [components?.query ?? "", String(fragment.dropFirst(route.count + 1))]
+>>> to
+        let queries = [components?.query ?? ""]
+>>> end
+
+>>> mutant F4 a finding line drops the step's text: a judged step rewritten with the same words passes as judged (review-282's F5)
+>>> file Tests/MacAgentCoreTests/SkillPackTests.swift
+>>> from
+                    findings.insert("\(pack.id) | \(flow.title) | a signed-in place: \(places.joined(separator: ", ")) | \(firstStep)")
+>>> to
+                    findings.insert("\(pack.id) | \(flow.title) | a signed-in place: \(places.joined(separator: ", "))")
 >>> end

@@ -18,6 +18,10 @@
 # population test let through because that test read its expected answer out of the list, and I5, which
 # narrows the sign-in-only check back to off-site landings.
 #
+# SONNY-529's fix round on PR #282 re-anchored M6 and M14, with their meaning unchanged, when the matcher
+# began reading a query as keys and values rather than as one joined string: the line both anchored on,
+# `let text = [components?.path, components?.fragment, components?.query]`, is gone.
+#
 # **What a plan of this shape cannot do**, as the review put it: every mutant here deletes or narrows a
 # guard that exists, so none can find a guard that was never written.
 # Review-272's F3 (the sign-in host admitted any word) and F4 (the declared URL's query was never read)
@@ -69,9 +73,9 @@
 >>> mutant M6 the fragment is not read: a single-page app's #/signup route loads
 >>> file Sources/MacAgentCore/SkillPackStartPages.swift
 >>> from
-        let text = [components?.path, components?.fragment, components?.query]
+        let fragment = components?.fragment ?? ""
 >>> to
-        let text = [components?.path, components?.query]
+        let fragment = ""
 >>> end
 
 >>> mutant M7 the declared URL is not read for account creation, only the landing: a start URL of /signup loads
@@ -141,9 +145,9 @@
 >>> mutant M14 the declared URL's query is not read: a start URL of /login?mode=signup loads (review-272's F4)
 >>> file Sources/MacAgentCore/SkillPackStartPages.swift
 >>> from
-        let text = [components?.path, components?.fragment, components?.query]
+        let queries = [components?.query ?? "", String(fragment.dropFirst(route.count + 1))]
 >>> to
-        let text = [components?.path, components?.fragment]
+        let queries = ["", String(fragment.dropFirst(route.count + 1))]
 >>> end
 
 >>> mutant M15 a query inside a landing's fragment loads: #/login?redirect=/ is recorded as a page (review-272's item 9)

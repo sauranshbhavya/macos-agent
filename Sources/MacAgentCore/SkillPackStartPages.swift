@@ -139,22 +139,39 @@ public enum SkillPackStartPageOffer: String, Sendable, Equatable {
 /// The loader's reading of a pack's start-page records against its flows. `SkillPackStartPage` has the
 /// rule and why it exists.
 enum SkillPackStartPageRule {
-    /// The words that name account creation. A URL names it when one of its path, fragment or query parts,
-    /// or a host label left of the site's own name, carries one of these as a run of its words
-    /// (`accountCreationWords(in:)`): so `sign-up`, `sign_up` and `SignUp` are one word, and so are
-    /// `/signup-free`, `/register-now` and `signup.<site>`. Ghost's `/signup` and PartnerStack's
-    /// `/handshake/signup` are the measured cases (SONNY-510's comments).
+    /// The words that name account creation. A URL names it when one of these is a run of the words
+    /// (`accountCreationWords(in:)`) in a part of its path or its fragment's route, in a query value, or
+    /// in a host label left of the last two — so `sign-up`, `sign_up` and `SignUp` are one word, and so are
+    /// `/signup-free`, `/register-now`, `?intent=signup_free` and `signup.<site>` — or when a query key is
+    /// one of them whole. Ghost's `/signup` and PartnerStack's `/handshake/signup` are the measured cases
+    /// (SONNY-510's comments).
     ///
     /// **Deliberately short, and the list stayed short when the match widened** (SONNY-529). The words are
     /// the same four; what changed is that a word may now be part of a longer slug or be a host's first
-    /// label, which review-272b found missed. Measured before widening, over every declared and landed URL
-    /// the shipped start pages record: the wider match refuses none of them, and neither does the old one.
-    /// A match on a word's *prefix* was measured too and rejected: `/registered-users` starts with
-    /// `register` and is not account creation, and a prefix match refuses it. `join` is not here because
-    /// Zoom's `join.zoom.us` and `/join` are joining a meeting, and `start`, `trial` and `get-started` are
-    /// not because each is as often a product's own page as a sales one. What this list misses is left to
-    /// `offers`, which is where a page that offers account creation under an ordinary path is refused
-    /// (StreamYard's home has no path at all).
+    /// label, which review-272b found missed. A match on a word's *prefix* was measured and rejected:
+    /// `/registered-users` starts with `register` and is not account creation, and a prefix match refuses
+    /// it. `join` is not here because Zoom's `join.zoom.us` and `/join` are joining a meeting, and `start`,
+    /// `trial` and `get-started` are not because each is as often a product's own page as a sales one.
+    /// What this list misses is left to `offers`, which is where a page that offers account creation under
+    /// an ordinary path is refused (StreamYard's home has no path at all).
+    ///
+    /// **A query key is read whole, and only its value is read by runs** (founders' ruling on PR #282,
+    /// review-282's F4). The query is where tracking parameters live: Snov's own sign-in address carries
+    /// `signup_source=landing`, which says where a visitor came from and not what the page does, and a
+    /// match on runs inside the key refused it. The query was read at all for values that state an intent
+    /// (`?mode=signup`, Auth0's `?screen_hint=signup`), and those are values.
+    ///
+    /// **Known refusals: pages the wider match refuses although they may not create an account.** None is
+    /// an address a shipped pack carries — the branch's changelog entry has the measurement over every
+    /// address the packs carry — and each fails closed, so a pack that needs one sees the refusal.
+    /// `/event-registration`, `/domain-registration`, `/Register-Domain`, `/account/register-device`,
+    /// `/un-register`, `/de-register`, `/newsletter-signup`, `?next=/register-success`,
+    /// `?utm_campaign=signup-q3` and `?ref=signup_page` are refused for a run naming a word. A site whose
+    /// own name is one of the words, under a suffix of two labels, is refused for being itself:
+    /// `www.register.co.uk` (the host check drops only the last two labels). And Trello's sign-in address
+    /// on `id.atlassian.com` carries `application=trello--direct-signup`, a value, so it would be refused as
+    /// a start page; it cannot be one, because it is off Trello's own site. `SkillPackTests` holds each of
+    /// these, so a later narrowing that frees one is a change somebody has to make on purpose.
     static let accountCreationParts: Set<String> = ["signup", "register", "registration", "createaccount"]
 
     /// The first day any start page was read under this rule: SONNY-510 was filed on 2026-09-17 and its
@@ -261,21 +278,36 @@ enum SkillPackStartPageRule {
         }
     }
 
-    /// Whether any part of `url`'s path, fragment or query, or any host label left of the last two, names
-    /// account creation (`accountCreationParts`). The fragment is read because a single-page app routes
-    /// there (`#/signup`), and the query because a sign-up intent is often carried there (`?mode=signup`,
-    /// Auth0's `?screen_hint=signup`) — which only a declared start URL can have, since a landing is
-    /// recorded without one (review-272's F4). The host is read because a site can put its sign-up on a
-    /// host of its own (`signup.<site>`, SONNY-529); its last two labels are left out, so a site whose own
-    /// name is one of the words is not refused for being itself.
+    /// Whether `url` names account creation (`accountCreationParts` has what is read and how). The fragment
+    /// is read because a single-page app routes there (`#/signup`), and a `?` inside it starts a query of
+    /// the route's own, read the way the URL's query is. The query is read because a sign-up intent is
+    /// often carried there (`?mode=signup`, Auth0's `?screen_hint=signup`) — which only a declared start URL
+    /// can have, since a landing is recorded without one (review-272's F4). The host is read because a site
+    /// can put its sign-up on a host of its own (`signup.<site>`, SONNY-529). Its last two labels are left
+    /// out, so a site whose own name is one of the words is not refused for being itself under a suffix of
+    /// one label (`signup.com`); under a suffix of two (`register.co.uk`) its name is the third label from
+    /// the end and is read — a known refusal, since this type does not know which suffixes have two labels.
     static func namesAccountCreation(_ url: URL) -> Bool {
         let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
-        let text = [components?.path, components?.fragment, components?.query]
-            .map { $0 ?? "" }
+        let fragment = components?.fragment ?? ""
+        let route = fragment.prefix { $0 != "?" }
+        let queries = [components?.query ?? "", String(fragment.dropFirst(route.count + 1))]
+        let pairs = queries.flatMap { $0.split(separator: "&").map { $0.split(separator: "=", maxSplits: 1) } }
+        let keys = pairs.compactMap { $0.first.map(String.init) }
+        let values = pairs.compactMap { $0.count > 1 ? String($0[1]) : nil }
+        let parts = ([components?.path ?? "", String(route)] + values)
             .joined(separator: "/")
-        let parts = text.split(whereSeparator: { "/#?&=.".contains($0) }).map(String.init)
+            .split(whereSeparator: { "/#?&=.".contains($0) })
+            .map(String.init)
         let hostLabels = (components?.host ?? "").split(separator: ".").dropLast(2).map(String.init)
         return (parts + hostLabels).contains { !accountCreationWords(in: $0).isEmpty }
+            || keys.contains { accountCreationParts.contains(foldedWhole($0)) }
+    }
+
+    /// A query key as one word: lowercased, with `-` and `_` dropped, so `sign_up` and `Sign-Up` are
+    /// `signup` and `signup_source` is `signupsource`.
+    static func foldedWhole(_ key: String) -> String {
+        key.lowercased().replacingOccurrences(of: "-", with: "").replacingOccurrences(of: "_", with: "")
     }
 
     /// The account-creation words a single URL part carries, as runs of its words. A part's words are cut

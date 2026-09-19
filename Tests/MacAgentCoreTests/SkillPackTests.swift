@@ -1223,8 +1223,11 @@ struct SkillPackTests {
     /// **The same four words, inside a longer slug or as a host's first label** (SONNY-529). review-272b
     /// found `/signup-free`, `/register-now` and `signup.<site>` passing; each is refused now, in the landed
     /// URL and in the declared one. The near misses that decided how far the match reaches still load:
-    /// `registered-users` (why a prefix match was rejected), a `join` host (Zoom's), and a site whose own
-    /// name is one of the words, which the host check leaves alone by reading only the labels left of it.
+    /// `registered-users` (why a prefix match was rejected), a `join` host (Zoom's), a site whose own name
+    /// is one of the words under a suffix of one label, which the host check leaves alone by reading only
+    /// the labels left of the last two, and a query key that merely contains a word (founders' ruling on
+    /// PR #282: Snov's own sign-in address carries `signup_source=landing`). A key that is one of the words
+    /// whole is still read.
     @Test
     func aStartPageNamingAccountCreationInsideASlugOrAHostDoesNotLoad() throws {
         for landed in [
@@ -1234,8 +1237,18 @@ struct SkillPackTests {
         ] {
             #expect(Self.landing(start: "https://www.notion.so/", landed: landed) == .startPageCreatesAnAccount(url: landed), "\(landed)")
         }
-        for start in ["https://signup.notion.so/", "https://www.notion.so/login?intent=signup_free"] {
+        for start in [
+            "https://signup.notion.so/", "https://www.notion.so/login?intent=signup_free", "https://www.notion.so/login?signup",
+            "https://www.notion.so/login?Sign-Up=1", "https://www.notion.so/#/login?screen_hint=signup"
+        ] {
             #expect(Self.landing(start: start, landed: "https://www.notion.so/login") == .startPageCreatesAnAccount(url: start), "\(start)")
+        }
+        // A key is read whole: a tracking key that only contains a word loads, in the query and in a route's.
+        for start in [
+            "https://www.notion.so/login?lang=en&signup_source=landing&signup_page=notion.so%2Findex&cta_type=button",
+            "https://www.notion.so/#/login?signup_source=landing"
+        ] {
+            #expect(Self.landing(start: start, landed: "https://www.notion.so/login") == nil, "\(start) was refused")
         }
         for landed in [
             "https://www.notion.so/registered-users", "https://join.notion.so/", "https://www.notion.so/signin-help",
@@ -1243,13 +1256,41 @@ struct SkillPackTests {
         ] {
             #expect(Self.landing(start: "https://www.notion.so/", landed: landed) == nil, "\(landed) was refused")
         }
-        // A site whose registrable name is one of the words is not refused for being itself.
+        // A site whose registrable name is one of the words is not refused for being itself — under a suffix
+        // of one label. Under a suffix of two it is: `knownRefusalsOfTheWiderMatchAreHeld`.
         #expect(Self.landing(start: "https://www.signup.com/", landed: "https://www.signup.com/login", domain: "signup.com") == nil)
         // The runs, read directly: what each slug carries, and that a word of its own is not a run.
         #expect(SkillPackStartPageRule.accountCreationWords(in: "sign-up-free") == ["signup"])
         #expect(SkillPackStartPageRule.accountCreationWords(in: "Create_Account_Now") == ["createaccount"])
         #expect(SkillPackStartPageRule.accountCreationWords(in: "registered-users") == [])
         #expect(SkillPackStartPageRule.accountCreationWords(in: "register") == ["register"])
+    }
+
+    /// **What the wider match refuses although the page may not create an account** (review-282's F4,
+    /// recorded as known refusals by the founders' ruling on PR #282). No address a shipped pack carries is
+    /// one of these; each is here so that a change freeing one is made on purpose, and so the doc comment on
+    /// `SkillPackStartPageRule.accountCreationParts` that lists them cannot drift from what the loader does.
+    @Test
+    func knownRefusalsOfTheWiderMatchAreHeld() throws {
+        for landed in [
+            "https://www.notion.so/event-registration", "https://www.notion.so/domain-registration",
+            "https://www.notion.so/Register-Domain", "https://www.notion.so/account/register-device",
+            "https://www.notion.so/un-register", "https://www.notion.so/de-register", "https://www.notion.so/newsletter-signup"
+        ] {
+            #expect(Self.landing(start: "https://www.notion.so/", landed: landed) == .startPageCreatesAnAccount(url: landed), "\(landed)")
+        }
+        for start in [
+            "https://www.notion.so/login?next=%2Fregister-success", "https://www.notion.so/login?utm_campaign=signup-q3",
+            "https://www.notion.so/login?ref=signup_page"
+        ] {
+            #expect(Self.landing(start: start, landed: "https://www.notion.so/login") == .startPageCreatesAnAccount(url: start), "\(start)")
+        }
+        // A site named for one of the words under a suffix of two labels: the host check drops only two.
+        #expect(Self.landing(start: "https://www.register.co.uk/", landed: "https://www.register.co.uk/login", domain: "register.co.uk")
+            == .startPageCreatesAnAccount(url: "https://www.register.co.uk/"))
+        // Trello's shipped sign-in address, which cannot be a start page because it is off Trello's site.
+        let trello = try #require(URL(string: "https://id.atlassian.com/login?application=trello--direct-signup&continue=https%3A%2F%2Ftrello.com%2F"))
+        #expect(SkillPackStartPageRule.namesAccountCreation(trello))
     }
 
     /// **Only two words load**, and a near miss of either is not one of them — so a reader who has to
@@ -1420,13 +1461,13 @@ struct SkillPackTests {
         ebay["startPages"] = [SkillPackFixtures.startPage(on: "ebay.com", landedURL: "https://www.ebay.com/", offers: "product")]
         #expect(Self.firstStepFindings(in: [try decoded(ebay)]) == [
             "ebay | https://www.ebay.com/ | one product record starts 2 flows",
-            "ebay | View and tidy your Watchlist | a signed-in place: My eBay, Watching"
+            "ebay | View and tidy your Watchlist | a signed-in place: My eBay, Watching | Go to My eBay and select Watching."
         ])
 
         var signUp = SkillPackFixtures.object()
         signUp["flows"] = [SkillPackFixtures.flow(steps: ["Click Sign up and create an account."])]
         #expect(Self.firstStepFindings(in: [try decoded(signUp)]) == [
-            "notion | Create a page | account creation: Sign up, create an account"
+            "notion | Create a page | account creation: Sign up, create an account | Click Sign up and create an account."
         ])
 
         var search = SkillPackFixtures.object(id: "ebay", name: "eBay", domain: "ebay.com", category: "websites_apps_commerce")
@@ -1439,8 +1480,10 @@ struct SkillPackTests {
 
     /// What `everyFlowIsJudgedAtItsOwnFirstStep` asks of each flow, as one line per finding:
     /// `<pack id> | <start URL> | one product record starts N flows`, `<pack id> | <flow title> | a signed-in
-    /// place: …` and `<pack id> | <flow title> | account creation: …`, the words in the order the step
-    /// names them.
+    /// place: … | <first step>` and `<pack id> | <flow title> | account creation: … | <first step>`, the
+    /// words in the order the step names them. **The step's whole text is in the line** (review-282's F5):
+    /// a finding keyed on the matched words alone let a judged step be rewritten to start somewhere
+    /// signed-in, with the same words, and still pass as judged.
     static func firstStepFindings(in packs: [SkillPack]) -> Set<String> {
         var findings: Set<String> = []
         for pack in packs {
@@ -1453,11 +1496,11 @@ struct SkillPackTests {
                 let firstStep = flow.steps.first ?? ""
                 let places = matches(of: signedInPlaces, in: firstStep)
                 if offers[flow.startURL] == .product, !places.isEmpty {
-                    findings.insert("\(pack.id) | \(flow.title) | a signed-in place: \(places.joined(separator: ", "))")
+                    findings.insert("\(pack.id) | \(flow.title) | a signed-in place: \(places.joined(separator: ", ")) | \(firstStep)")
                 }
                 let creation = matches(of: accountCreationSteps, in: firstStep)
                 if !creation.isEmpty {
-                    findings.insert("\(pack.id) | \(flow.title) | account creation: \(creation.joined(separator: ", "))")
+                    findings.insert("\(pack.id) | \(flow.title) | account creation: \(creation.joined(separator: ", ")) | \(firstStep)")
                 }
             }
         }
@@ -1495,9 +1538,14 @@ struct SkillPackTests {
     ///   signed out on 2026-09-18 and found usable. It is also the control that both patterns find their
     ///   words in real step text.
     static let judgedFirstStepFindings: Set<String> = [
-        "grok | Ask Grok a question | a signed-in place: Settings, Sign in",
-        "grok | Ask Grok a question | account creation: Sign up"
+        "grok | Ask Grok a question | a signed-in place: Settings, Sign in | \(grokFirstStep)",
+        "grok | Ask Grok a question | account creation: Sign up | \(grokFirstStep)"
     ]
+
+    /// The judged step, whole. Review-282 re-read it on screen on 2026-09-19 and the judgement stands: the
+    /// "Ask Grok anything" box is present and enabled signed out, and the top-right row holds Imagine, a
+    /// settings icon, Sign in and Sign up. Editing this string is re-judging the step, which is the point.
+    static let grokFirstStep = "Go to grok.com. There is no side navigation: Imagine, Settings, Sign in and Sign up sit in one row across the top right, and the prompt box is in the middle of the page."
 
     /// A deep fixture pack whose one flow starts at `start` and whose record says it landed on `landed`.
     static func startPageObject(
