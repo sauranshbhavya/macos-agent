@@ -228,6 +228,28 @@ final class FirstRunCoordinator: ObservableObject {
         )
     }
 
+    /// The sheet went away and the user did not answer the step on it. Nothing is recorded, so the
+    /// next launch lands on the same step — test 3's "quitting mid-sequence resumes on the same
+    /// step".
+    ///
+    /// **Quitting is what does this** (SONNY-448). A SwiftUI sheet dismisses itself for termination
+    /// by writing `false` to the binding that presents it, inside `terminate` and before the
+    /// delegate is asked, so the sheet's own binding cannot tell a quit from a decision. It used to
+    /// route here through `skipCurrentStep()`, which was harmless only while AppKit refused to quit
+    /// under a sheet at all; with that fixed (`SheetTerminationRelease`), ⌘Q on the sign-in step
+    /// would have recorded sign-in as declined, and Relaunch Sonny on the screen-access step would
+    /// have recorded screen access as declined — so the relaunched app skipped the Accessibility
+    /// half that the relaunch exists to come back for.
+    ///
+    /// **Declining is the dialogs' own close control and the deferral bar, and neither passes
+    /// here.** Escape reaches the close control, whose `.keyboardShortcut(.cancelAction)` answers it
+    /// before the sheet does. Nothing is persisted and the published step is cleared, so the
+    /// binding's getter agrees with the sheet SwiftUI has already taken down rather than asking for
+    /// it back.
+    func withdrawUnanswered() {
+        presentedStep = nil
+    }
+
     private func resolve(isSignedIn: Bool, screenRecordingGranted: Bool, accessibilityTrusted: Bool) {
         self.isSignedIn = isSignedIn
         self.screenRecordingGranted = screenRecordingGranted
