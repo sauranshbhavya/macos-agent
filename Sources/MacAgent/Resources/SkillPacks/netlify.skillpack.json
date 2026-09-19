@@ -8,6 +8,37 @@
   "signInURL": "https://app.netlify.com/login",
   "triggers": ["netlify", "netlify.com"],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Add a domain alias to a site",
+      "startURL": "https://app.netlify.com/",
+      "steps": [
+        "Open the site and go to its configuration settings under Domain management > Production domains.",
+        "Select Add domain alias, and follow the prompts to assign the domain to the site.",
+        "Optionally, to make an alias the primary domain, select the Options button next to it, then select Set as primary domain."
+      ],
+      "source": "https://docs.netlify.com/manage/domains/configure-domains/add-a-domain-alias/"
+    },
+    {
+      "title": "Create a site environment variable",
+      "startURL": "https://app.netlify.com/",
+      "steps": [
+        "Open the project and go to Project configuration > Environment variables.",
+        "Create the variable there individually, or import variables from a .env file.",
+        "Build and deploy the site again for the addition to take effect. A variable with the same key set in a netlify.toml file overrides the one set in the Netlify UI."
+      ],
+      "source": "https://docs.netlify.com/build/environment-variables/get-started/"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://app.netlify.com/",
+      "landedURL": "https://app.netlify.com/",
+      "title": "Netlify",
+      "heading": "Log in",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
+  ]
 }

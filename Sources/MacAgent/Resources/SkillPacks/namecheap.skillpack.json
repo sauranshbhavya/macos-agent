@@ -8,6 +8,39 @@
   "signInURL": "https://www.namecheap.com/myaccount/login/",
   "triggers": ["namecheap", "namecheap.com"],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Set up free email forwarding for a domain",
+      "startURL": "https://www.namecheap.com/myaccount/login/",
+      "steps": [
+        "Select Domain List from the left sidebar and click the Manage button next to the domain.",
+        "Go to the Advanced DNS tab, find the Mail Settings section and select Email Forwarding from the drop-down menu. The MX records are set once all changes are saved, and the SPF record shown is needed for forwarding and cannot be deleted.",
+        "Choose the Domain tab, scroll down to the Redirect Email section and click the Add Forwarder button.",
+        "Fill in the Alias field with the mailbox name, such as admin, and the Forward to field with the full destination email address, then click the checkmark icon. New forwarders take about an hour to be set up."
+      ],
+      "source": "https://www.namecheap.com/support/knowledgebase/article.aspx/308/2214/how-to-set-up-free-email-forwarding/"
+    },
+    {
+      "title": "Point a domain at custom nameservers",
+      "startURL": "https://www.namecheap.com/myaccount/login/",
+      "steps": [
+        "Select Domain List from the left sidebar and click the Manage button next to the domain.",
+        "In the Nameservers section, select Custom DNS from the drop-down menu.",
+        "Fill in the nameservers the hosting or third-party DNS provider gave, in the ns1.example.tld format. Enter only the nameservers, not their IP addresses.",
+        "Click the green checkmark to save the changes."
+      ],
+      "source": "https://www.namecheap.com/support/knowledgebase/article.aspx/767/10/how-to-change-dns-for-a-domain/"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://www.namecheap.com/myaccount/login/",
+      "landedURL": "https://www.namecheap.com/myaccount/login/",
+      "title": "Namecheap.com • Login",
+      "heading": "",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
+  ]
 }

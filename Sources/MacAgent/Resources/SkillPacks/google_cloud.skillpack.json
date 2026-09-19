@@ -8,6 +8,50 @@
   "signInURL": "https://console.cloud.google.com/",
   "triggers": ["google cloud", "cloud.google.com"],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Create a project",
+      "startURL": "https://console.cloud.google.com/",
+      "steps": [
+        "In the Google Cloud console, go to the Manage resources page and click Create project.",
+        "In the New project window, enter a project name. It may contain only letters, numbers, single quotes, hyphens, spaces or exclamation points, and must be 4 to 30 characters long.",
+        "In the Parent resource box, enter the parent organization or folder. Where No organization is offered, selecting it makes the project the top of its own hierarchy.",
+        "Click Create."
+      ],
+      "source": "https://docs.cloud.google.com/resource-manager/docs/creating-managing-projects"
+    },
+    {
+      "title": "Enable an API for a project",
+      "startURL": "https://console.cloud.google.com/",
+      "steps": [
+        "In the Google Cloud console, go to the APIs & Services > API Library page.",
+        "Select a recent project, or use the resource selector on the console toolbar to select the project the API is for.",
+        "Click the API, or search for it in the Search for APIs & Services box.",
+        "Click Enable."
+      ],
+      "source": "https://docs.cloud.google.com/service-usage/docs/enable-disable"
+    },
+    {
+      "title": "Grant a role to a principal",
+      "startURL": "https://console.cloud.google.com/",
+      "steps": [
+        "In the Google Cloud console, go to the IAM page and select a project, folder or organization.",
+        "For a principal with no roles there yet, click Grant Access and enter its identifier, such as an email address. For one that already has roles, find its row, click Edit principal, then Add another role.",
+        "Click Select a role and search by role name, product, permission or job function. Choose a role that includes only the permissions the principal needs.",
+        "Optionally add a condition to the role, then click Save."
+      ],
+      "source": "https://docs.cloud.google.com/iam/docs/granting-changing-revoking-access"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://console.cloud.google.com/",
+      "landedURL": "https://accounts.google.com/v3/signin/identifier",
+      "title": "Google Cloud Platform",
+      "heading": "Sign in",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
+  ]
 }

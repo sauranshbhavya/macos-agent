@@ -8,6 +8,39 @@
   "signInURL": "https://dashboard.render.com/",
   "triggers": ["render.com"],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Roll back a service to a previous deploy",
+      "startURL": "https://dashboard.render.com/",
+      "steps": [
+        "In the Render Dashboard, go to the service's Deploys page.",
+        "Find a recent successful deploy and click Rollback.",
+        "On the confirmation page, click Rollback to this deploy. Render starts a new deploy from that deploy's build artifact.",
+        "A rollback from the dashboard turns off automatic deploys for the service. Once the underlying issue is resolved, turn them back on from the service's Settings page."
+      ],
+      "source": "https://render.com/docs/rollbacks"
+    },
+    {
+      "title": "Add an environment variable to a service",
+      "startURL": "https://dashboard.render.com/",
+      "steps": [
+        "In the Render Dashboard, select the service and click Environment in the left pane.",
+        "Under Environment Variables, click + Add Environment Variable, or click Add from .env to add variables in bulk.",
+        "Provide a Key and Value for each new environment variable.",
+        "Save the changes with one of the dropdown's three options: Save, rebuild, and deploy; Save and deploy; or Save only, which leaves the service on its old variables until its next deploy."
+      ],
+      "source": "https://render.com/docs/configure-environment-variables"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://dashboard.render.com/",
+      "landedURL": "https://dashboard.render.com/login",
+      "title": "Render Dashboard",
+      "heading": "Sign In to Render",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
+  ]
 }
