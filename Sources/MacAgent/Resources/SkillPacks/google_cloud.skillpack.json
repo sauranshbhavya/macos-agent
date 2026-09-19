@@ -22,17 +22,6 @@
       "source": "https://docs.cloud.google.com/resource-manager/docs/creating-managing-projects"
     },
     {
-      "title": "Enable an API for a project",
-      "startURL": "https://console.cloud.google.com/",
-      "steps": [
-        "In the Google Cloud console, go to the APIs & Services > API Library page.",
-        "Select a recent project, or use the resource selector on the console toolbar to select the project the API is for.",
-        "Click the API, or search for it in the Search for APIs & Services box.",
-        "Click Enable."
-      ],
-      "source": "https://docs.cloud.google.com/service-usage/docs/enable-disable"
-    },
-    {
       "title": "Grant a role to a principal",
       "startURL": "https://console.cloud.google.com/",
       "steps": [

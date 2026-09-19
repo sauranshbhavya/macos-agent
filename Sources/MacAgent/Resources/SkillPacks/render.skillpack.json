@@ -25,6 +25,7 @@
       "title": "Add an environment variable to a service",
       "startURL": "https://dashboard.render.com/",
       "steps": [
+        "Stop and ask before adding or reading a value. Environment variables often hold sensitive values that the user enters themselves, so this flow never types or reads one without the user saying so.",
         "In the Render Dashboard, select the service and click Environment in the left pane.",
         "Under Environment Variables, click + Add Environment Variable, or click Add from .env to add variables in bulk.",
         "Provide a Key and Value for each new environment variable.",

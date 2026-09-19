@@ -24,6 +24,7 @@
       "title": "Create a site environment variable",
       "startURL": "https://app.netlify.com/",
       "steps": [
+        "Stop and ask before adding or reading a value. Environment variables often hold sensitive values that the user enters themselves, so this flow never types or reads one without the user saying so.",
         "Open the project and go to Project configuration > Environment variables.",
         "Create the variable there individually, or import variables from a .env file.",
         "Build and deploy the site again for the addition to take effect. A variable with the same key set in a netlify.toml file overrides the one set in the Netlify UI."
