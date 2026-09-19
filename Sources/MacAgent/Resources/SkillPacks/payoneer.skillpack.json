@@ -8,6 +8,37 @@
   "signInURL": "https://myaccount.payoneer.com/",
   "triggers": ["payoneer", "payoneer.com"],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Download a monthly statement",
+      "startURL": "https://myaccount.payoneer.com/",
+      "steps": [
+        "From the Manage page, select Your transactions.",
+        "At the top right side of the Transactions table, click Monthly statement.",
+        "Select the currency balance, card or bank the statement is for, and the month, the year and the file format, PDF or CSV.",
+        "Click Download. The statement opens in a new window."
+      ],
+      "source": "https://payoneer.custhelp.com/app/answers/detail/a_id/27046"
+    },
+    {
+      "title": "Export the list of transactions",
+      "startURL": "https://myaccount.payoneer.com/",
+      "steps": [
+        "From the Manage page, select Your transactions, and filter the list if only some transactions are wanted; only the filtered results are exported.",
+        "Use the icons at the top right corner of the Transactions section to export a CSV or PDF file, or to print the table."
+      ],
+      "source": "https://payoneer.custhelp.com/app/answers/detail/a_id/27046"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://myaccount.payoneer.com/",
+      "landedURL": "https://login.payoneer.com/",
+      "title": "Payoneer Login",
+      "heading": "",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
+  ]
 }
