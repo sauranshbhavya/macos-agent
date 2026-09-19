@@ -905,8 +905,12 @@ struct ResumableTaskRunTests {
         fixture.viewModel.checkScheduledRoutines(now: ResumableTaskRunTests.tenAM)
         try await fixture.waitForIdle()
 
-        // The routine really ran — otherwise "no record" says nothing about the scheduled path.
-        #expect(fixture.viewModel.scheduledRunNotice?.contains("Morning") == true)
+        // The routine really ran — otherwise "no record" says nothing about the scheduled path. The
+        // notice has to say it *ran*: this read `contains("Morning")` until SONNY-418, and the notice
+        // for an occurrence missed past the catch-up window names the routine too, so on a Mac
+        // outside Eastern — where the fixture's pinned 9am was never due — this passed with nothing
+        // having run at all.
+        #expect(fixture.viewModel.scheduledRunNotice?.contains("ran on schedule") == true)
         #expect(try fixture.resumableTaskStore.loadAll().isEmpty)
 
         // The control.
