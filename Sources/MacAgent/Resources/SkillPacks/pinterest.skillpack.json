@@ -11,6 +11,47 @@
     "pinterest.com"
   ],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Create a board",
+      "startURL": "https://pinterest.com/login",
+      "steps": [
+        "Go to your profile.",
+        "Click the Saved tab.",
+        "Click the plus icon on the right of your screen underneath Saved.",
+        "Select Board.",
+        "Enter a name for your board, add collaborators, or turn on the switch next to Keep board secret.",
+        "Tap Create.",
+        "Select Pins for your board and click Done when you are finished."
+      ],
+      "source": "https://help.pinterest.com/en/business/article/create-a-board"
+    },
+    {
+      "title": "Claim your website with an HTML tag",
+      "startURL": "https://pinterest.com/login",
+      "steps": [
+        "Click the chevron-down icon at the top-right corner to open your menu.",
+        "Select Settings.",
+        "Click Link to Pinterest from the left-side navigation.",
+        "Click Claim next to Websites.",
+        "Click the text in the box below Add HTML tag to copy it.",
+        "Click Continue.",
+        "Go to the index.html file of your website and add the tag to the head section before the body section.",
+        "Return to Pinterest and enter your website URL in the text box.",
+        "Click Verify."
+      ],
+      "source": "https://help.pinterest.com/en/business/article/claim-your-website"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://pinterest.com/login",
+      "landedURL": "https://www.pinterest.com/login/",
+      "title": "Pinterest Login",
+      "heading": "Welcome to Pinterest",
+      "offers": "sign-in",
+      "read": "2026-09-19"
+    }
+  ]
 }
