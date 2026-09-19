@@ -238,9 +238,10 @@ struct FirstRunSequenceTests {
         #expect(suite.store.hasFinished)
     }
 
-    /// Skipping with nothing on screen does nothing at all. The sheet's own dismissal routes here,
-    /// and a sheet closing because the sequence *ended* must not record a skip against a step that
-    /// is no longer presented.
+    /// Skipping with nothing on screen does nothing at all: a declining control that lands after the
+    /// sequence *ended* must not record a skip against a step that is no longer presented. (The
+    /// sheet's own dismissal routed here until SONNY-448 and now goes to `withdrawUnanswered()`,
+    /// which records nothing whatever is presented — the next test.)
     @Test
     func skippingWithNothingPresentedRecordsNothing() {
         let suite = FirstRunDefaultsSuite()
@@ -253,6 +254,37 @@ struct FirstRunSequenceTests {
 
         #expect(coordinator.presentedStep == nil)
         #expect(suite.store.skippedSteps.isEmpty)
+    }
+
+    /// **Quitting mid-sequence resumes on the same step** (SONNY-448; the founders' test 3). A sheet
+    /// that SwiftUI takes down for termination writes `false` to the binding presenting it, and that
+    /// binding reaches `withdrawUnanswered()`; the second coordinator is the next launch on the same
+    /// Mac. Both steps, because each one has its own way to be quit from: ⌘Q on sign-in, and on
+    /// screen access the Relaunch Sonny button, whose whole purpose is that the relaunched app comes
+    /// back to this step for its Accessibility half — so a skip recorded here would end first run
+    /// early rather than merely asking again. `aDeclinedStepIsNotAskedAgainOnThisLaunchOrTheNext` is
+    /// the control: the same launch declined rather than quit moves the next launch on, so a
+    /// `skipCurrentStep()` that recorded nothing could not pass both.
+    @Test(arguments: [FirstRunStep.signIn, .screenAccess])
+    func quittingWithAStepOnScreenRecordsNothingAndTheNextLaunchLandsOnIt(_ step: FirstRunStep) {
+        let suite = FirstRunDefaultsSuite()
+        defer { suite.removeAtEndOfTest() }
+        // Signed in only for the second step, so the resolver's own order puts each one on screen.
+        let isSignedIn = step == .screenAccess
+        let firstLaunch = suite.makeCoordinator()
+        firstLaunch.begin(isSignedIn: isSignedIn, screenRecordingGranted: false, accessibilityTrusted: false)
+        #expect(firstLaunch.presentedStep == step)
+
+        firstLaunch.withdrawUnanswered()
+
+        #expect(firstLaunch.presentedStep == nil, "the getter agrees with the sheet SwiftUI took down")
+        #expect(suite.store.skippedSteps.isEmpty, "nothing the user did not answer is recorded as declined")
+        #expect(!suite.store.hasFinished, "and first run is not over")
+
+        let secondLaunch = suite.makeCoordinator()
+        secondLaunch.begin(isSignedIn: isSignedIn, screenRecordingGranted: false, accessibilityTrusted: false)
+
+        #expect(secondLaunch.presentedStep == step)
     }
 
     // MARK: - Completing it, once
@@ -552,8 +584,17 @@ struct FirstRunSequenceTests {
         // What decides whether it is on screen is the coordinator's own step, not a local flag that
         // could be set anywhere.
         #expect(presentation.contains("firstRunCoordinator.presentedStep != nil"))
-        // And the sheet's own dismissal — Escape, a drag — declines the step rather than losing it.
-        #expect(presentation.contains("firstRunCoordinator.skipCurrentStep()"))
+        // And the sheet's own dismissal records nothing (SONNY-448). This asserted the opposite —
+        // that it declined the step, as Escape or a drag — and quitting writes `false` here too:
+        // SwiftUI takes the sheet down that way inside `terminate`, so a skip wired here turns ⌘Q
+        // into "sign in later". Escape declines inside the sheet instead, held below. (⌘. with the
+        // sheet window first responder also reaches this binding and so records nothing, which is
+        // accepted — PR #276's review, F2.)
+        #expect(MacAgentSource.count(of: "firstRunCoordinator.withdrawUnanswered()", inText: presentation) == 1)
+        #expect(MacAgentSource.count(of: "skipCurrentStep()", inText: presentation) == 0)
+        // And that binding is the one caller in the target, so nothing a user presses can reach the
+        // call that records nothing.
+        #expect(try Self.sitesOf(".withdrawUnanswered()") == ["CommandCenterView.swift": 1])
 
         // M5: the hosted dialog's close control, which is the *primary* declining mechanism, routes
         // to the same call rather than to a setter that discards it.
@@ -569,11 +610,18 @@ struct FirstRunSequenceTests {
             openedBy: "private var stepContent: some View {"
         )
         #expect(MacAgentSource.count(of: "isPresented: skipBinding", inText: stepContent) == 2)
-        // Two routes into that call in this file and no third: the binding both dialogs are handed,
-        // and the deferral button. (This comment said *three* beside the correct `== 2` — the count
-        // was right and the sentence beside it was not, which is the shape a reader trusts and a
-        // compiler cannot see. PR #159's cycle-2 review.)
-        #expect(MacAgentSource.count(of: "coordinator.skipCurrentStep()", inText: sequence) == 2)
+        // Escape declines through the sequence's own handler (SONNY-448). With a field focused the
+        // sheet would otherwise answer it by writing `false` to the binding above — the write a quit
+        // makes, which records nothing — so without this line Escape stops declining and the sheet
+        // simply goes away until the next launch.
+        let body = try MacAgentSource.braceBlock(of: sequence, openedBy: "var body: some View {")
+        #expect(MacAgentSource.count(of: ".onExitCommand { coordinator.skipCurrentStep() }", inText: body) == 1)
+        // Three routes into that call in this file and no fourth: the binding both dialogs are
+        // handed, the deferral button, and Escape. (This said *two* before SONNY-448 added Escape's;
+        // before that it once said *three* beside a correct `== 2` — the count was right and the
+        // sentence beside it was not, which is the shape a reader trusts and a compiler cannot see.
+        // PR #159's cycle-2 review.)
+        #expect(MacAgentSource.count(of: "coordinator.skipCurrentStep()", inText: sequence) == 3)
     }
 
     /// **Both dialogs have exactly two doors each: the manual one, and the sequence.** An exact map

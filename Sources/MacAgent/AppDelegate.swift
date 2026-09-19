@@ -84,6 +84,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         isEnabled: { [notificationPreferences] kind in notificationPreferences.isEnabled(kind) }
     )
     private var pushToTalkHotKey: PushToTalkHotKey?
+    /// What lets every quit route — this delegate's `quit()`, the relauncher, the Dock — end the app
+    /// while a sheet is up (SONNY-448). Held for the life of the process; see
+    /// `SheetTerminationRelease`.
+    private var sheetTerminationObservation: NSObjectProtocol?
     private var cancellables: Set<AnyCancellable> = []
 
     /// Nothing about the delegate is touched at construction time: every AppKit-owning collaborator
@@ -126,6 +130,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Before any window exists, so the first frame is drawn in the chosen appearance.
         appearanceModel.apply()
         registerBundledFonts()
+
+        // Before any sheet can exist, so none is ever up with the hold still on it — the first-run
+        // sheet arrives within this method's own tasks.
+        sheetTerminationObservation = SheetTerminationRelease.install(
+            on: .default,
+            windows: { NSApp.windows }
+        )
 
         // The app shipped with no main menu at all until 2026-07-30 — `main.swift` is a bare
         // AppKit lifecycle with no SwiftUI Scene to synthesize one — which silently broke every

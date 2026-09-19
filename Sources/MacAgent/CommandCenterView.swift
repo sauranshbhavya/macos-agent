@@ -205,13 +205,21 @@ struct CommandCenterView: View {
         //
         // **`isPresented`, not `item:`.** An `item:` binding re-presents the sheet when the step
         // changes, so a user who signs in would watch the panel dismiss and a second one appear;
-        // `presentedStep != nil` keeps one sheet up and swaps its content. Setting it false is the
-        // sheet's own dismissal — Escape, or a drag — and means the same thing the hosted dialog's
-        // close control means: skip this step.
+        // `presentedStep != nil` keeps one sheet up and swaps its content.
+        //
+        // **Setting it false is not read as a decision, and records none** (SONNY-448). This said it
+        // meant "skip this step", as Escape or a drag. A macOS sheet has no drag, and Escape is
+        // answered inside the sheet now (`FirstRunSequenceView`'s `onExitCommand`, and the close
+        // control's `.cancelAction`). Two things are measured still writing `false` here: quitting,
+        // as SwiftUI takes every sheet down that way inside `terminate`; and ⌘. while the sheet
+        // window itself is first responder, which the sheet answers itself (PR #276's review, F2).
+        // The second is accepted — nothing is recorded, so the step is asked again at the next
+        // launch, where `main` had recorded it declined. `withdrawUnanswered()` says why a skip
+        // recorded here was wrong.
         .sheet(isPresented: Binding(
             get: { firstRunCoordinator.presentedStep != nil },
             set: { isPresented in
-                if !isPresented { firstRunCoordinator.skipCurrentStep() }
+                if !isPresented { firstRunCoordinator.withdrawUnanswered() }
             }
         )) {
             FirstRunSequenceView(
