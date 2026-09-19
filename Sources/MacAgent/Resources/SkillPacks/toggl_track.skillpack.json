@@ -16,7 +16,7 @@
       "steps": [
         "In the Toggl Track web app, click the Projects tab in the menu bar on the left.",
         "Click + New Project in the top right corner, and enter the project's name in the popup.",
-        "For more detail, click Advanced Options: select the client the project belongs to, set its start and end dates, and choose which workspace it belongs to. Leave the project Public: private projects are not part of the Free plan, so if the person wants one and Private is not offered, stop and tell them, and never change the plan.",
+        "For more detail, click Advanced Options: select the client the project belongs to, set its start and end dates, and choose which workspace it belongs to. Leave the project Public: private projects are not part of the Free plan, so if the person wants one and Private is missing, locked or leads to another page, stop and tell them, and never change the plan.",
         "Click Create Project to save it."
       ],
       "source": "https://support.toggl.com/en-us/article/creating-projects-jrbd27/"

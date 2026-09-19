@@ -18,7 +18,7 @@
         "Go to the Clients section and select the New Client button, or on the Dashboard select Create New, then Client.",
         "Enter the First Name and Last Name, or the Company name; one of the two is required.",
         "If needed, enter the Email Address and Phone Number, and select Add Address to choose a Country and enter the street, city, state and zip code.",
-        "Leave the Client Settings below those fields as they are unless the person asked for one of them, and select Save."
+        "Leave the Client Settings below those fields as they are, and select Save."
       ],
       "source": "https://support.freshbooks.com/hc/en-us/articles/217181797-What-are-clients"
     },
