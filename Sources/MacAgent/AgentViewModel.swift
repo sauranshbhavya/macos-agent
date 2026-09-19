@@ -51,8 +51,12 @@ final class AgentViewModel: ObservableObject {
 
     /// Every failure a run publishes, named with the run it belongs to. `AppDelegate` posts the
     /// failure notification off this rather than off one property, because a run in the background
-    /// fails exactly as loudly as the one on screen.
-    let errorMessageRaised = PassthroughSubject<(RunID, String), Never>()
+    /// fails exactly as loudly as the one on screen. A failed task also carries the address its
+    /// notification's Retry answers to (SONNY-533).
+    ///
+    /// **A `PassthroughSubject`, which does not replay, by the founders' ruling of 2026-09-19**: an
+    /// error already set when a subscriber arrives is not a task failing, and must not post one.
+    let errorMessageRaised = PassthroughSubject<RaisedFailure, Never>()
 
     /// Every approval a run parks, with its address — the run and the token it was minted with —
     /// so the notification's Allow answers that approval and nothing else.
@@ -87,11 +91,21 @@ final class AgentViewModel: ObservableObject {
     var errorMessage: String? {
         get { runSlotInScope.errorMessage }
         set {
-            updateRunSlotInScope { $0.errorMessage = newValue }
-            if let newValue {
-                errorMessageRaised.send((runIDInScope, newValue))
-            }
+            publishFailure(newValue, ofTheRunsOwnTask: false)
         }
+    }
+
+    /// The one writer of a run's failure, and the one place it is announced (SONNY-533). Only
+    /// `setRunFailure(_:)` passes `true`, so a failure that is nobody's task — and every clear —
+    /// leaves the run with no retry token, and its notification with no Retry.
+    private func publishFailure(_ message: String?, ofTheRunsOwnTask: Bool) {
+        updateRunSlotInScope { _ = $0.setErrorMessage(message, ofTheRunsOwnTask: ofTheRunsOwnTask) }
+        guard let message else {
+            return
+        }
+        errorMessageRaised.send(
+            RaisedFailure(runID: runIDInScope, message: message, retry: runSlotInScope.failedTask)
+        )
     }
     /// Whether the current `errorMessage` is a persistent configuration problem (missing API key,
     /// denied mic permission, unavailable hotkey) that will keep being true until the user actually
@@ -575,6 +589,34 @@ final class AgentViewModel: ObservableObject {
         }
         RunScope.$current.withValue(runID) {
             approvePendingRun()
+        }
+        return true
+    }
+
+    /// Retries the task that failed on `runID`, and only if its failure is still the one raised
+    /// with `token` (SONNY-533). Returns `false` when the run and the token name no failed task that
+    /// is showing now, and `true` when they did and it was handed to `retryLastCommand` — which
+    /// still declines, as it always has, while that run has anything in flight.
+    ///
+    /// **The one door by which a Retry reaches a named run**, and `approveParkedRun`'s twin. The
+    /// notification's Retry used to call `retryLastCommand()` bare, which re-runs the last command
+    /// of the run on screen when the banner is pressed: task X fails while the user is elsewhere,
+    /// they come back and run Y, then press Retry on X's banner, and Y runs again. A stale Allow
+    /// lands nowhere; a stale Retry starts something. The token is cleared by everything that
+    /// retires the failure — a clear, a newer failure, and a new submission on the run — so a press
+    /// that arrives after any of them finds nothing.
+    @discardableResult
+    func retryFailedRun(_ runID: RunID, token: UUID) -> Bool {
+        // The token alone: `RunSlot` holds one only beside the failure it was minted for, so a
+        // second condition here would be one no test could tell from its absence.
+        guard let slot = runSlots.first(where: { $0.id == runID }),
+              slot.retryToken == token
+        else {
+            logStore.append(.observe, "Not retried: that failure is no longer showing.")
+            return false
+        }
+        RunScope.$current.withValue(runID) {
+            retryLastCommand()
         }
         return true
     }
@@ -1192,7 +1234,7 @@ final class AgentViewModel: ObservableObject {
     private(set) var lastCommand: String {
         get { runSlotInScope.lastCommand }
         set {
-            updateRunSlotInScope { $0.lastCommand = newValue }
+            updateRunSlotInScope { $0.setLastCommand(newValue) }
         }
     }
     /// Not `private`, for the reason `scheduleVoiceRecordingAutoStop` gives its own visibility: the
@@ -3171,7 +3213,7 @@ final class AgentViewModel: ObservableObject {
                 // and Command Center both surface errors, but neither renders a `.prepared`
                 // prior-task-context status.
                 markAllSteps(.complete)
-                setError("The current approval policy limits this action to a preview, so Sonny did not run it.")
+                setRunFailure("The current approval policy limits this action to a preview, so Sonny did not run it.")
                 logStore.append(.summarize, "Preview-only approval policy")
                 recordPriorTaskContext(
                     command: submittedCommand,
@@ -3183,7 +3225,7 @@ final class AgentViewModel: ObservableObject {
                 return
             case .refuse:
                 markAllSteps(.failed)
-                setError("Sonny refused this action under the current approval policy.")
+                setRunFailure("Sonny refused this action under the current approval policy.")
                 logStore.append(.summarize, "Refused by approval policy")
                 recordPriorTaskContext(
                     command: submittedCommand,
@@ -3300,7 +3342,7 @@ final class AgentViewModel: ObservableObject {
                 }
             } else {
                 markAllSteps(.failed)
-                setError(Self.failureMessage(for: error))
+                setRunFailure(Self.failureMessage(for: error))
                 logStore.append(.summarize, "Stopped: \(error.localizedDescription)")
                 if let preparedRun {
                     recordPriorTaskContext(
@@ -3563,6 +3605,17 @@ final class AgentViewModel: ObservableObject {
     func setError(_ message: String, persistent: Bool = false) {
         errorMessage = message
         errorIsPersistent = persistent
+    }
+
+    /// The failure of the task the run in scope was running — the only kind a Retry can re-run
+    /// (SONNY-533). `setError` is every other failure: a control that could not do what it was
+    /// pressed for, a recording that would not start, a command that was never submitted. Those
+    /// share the channel and the widget's panel, and none of them is a task, so none mints a retry
+    /// token and none posts a notification that offers to retry. Never persistent: a task failing
+    /// is an outcome, not a problem with the user's setup.
+    private func setRunFailure(_ message: String) {
+        publishFailure(message, ofTheRunsOwnTask: true)
+        errorIsPersistent = false
     }
 
     /// The failure a run shows for a thrown error (SONNY-449). Almost always the error's own
@@ -7789,7 +7842,7 @@ final class AgentViewModel: ObservableObject {
             }
         } catch {
             markAllSteps(.failed)
-            setError(Self.failureMessage(for: error))
+            setRunFailure(Self.failureMessage(for: error))
             logStore.append(.summarize, "Stopped: \(error.localizedDescription)")
             if let pendingCommandForPriorTaskContext {
                 recordPriorTaskContext(

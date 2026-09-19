@@ -43,7 +43,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let target else { return }
             self?.viewModel.approveParkedRun(target.runID, token: target.token)
         },
-        onRetry: { [weak self] in self?.viewModel.retryLastCommand() },
+        // The same for Retry (SONNY-533), and it matters more: a stale Allow lands nowhere, while
+        // `retryLastCommand()` pressed from a stale banner re-ran whatever had been asked since.
+        onRetry: { [weak self] target in
+            guard let target else { return }
+            self?.viewModel.retryFailedRun(target.runID, token: target.token)
+        },
         // Routed through the presentation counter rather than calling `show()` directly, so every
         // hand-driven summon converges on the one mechanism SONNY-8 built. That also buys the
         // expansion this ticket needs for free: `FloatingWidgetView` already observes
@@ -391,16 +396,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .store(in: &cancellables)
 
         viewModel.errorMessageRaised
-            .sink { [weak self] runID, message in
+            .sink { [weak self] failure in
                 guard let self, !isUserWorkingInSonny else {
                     return
                 }
-                notificationService.postErrorNotification(message: message)
+                notificationService.postErrorNotification(message: failure.message, retry: failure.retry)
                 // The user was pulled away, so this outcome must still be here when they come back
                 // (SONNY-121). The gate above is the only thing that knows they were elsewhere, so
                 // recording it here is not a convenience — the view model cannot work it out. It is
                 // recorded on the run that failed, which need not be the one on screen.
-                viewModel.markOutcomeAsNotified(for: runID)
+                viewModel.markOutcomeAsNotified(for: failure.runID)
             }
             .store(in: &cancellables)
 

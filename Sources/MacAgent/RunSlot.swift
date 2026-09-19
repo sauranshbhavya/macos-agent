@@ -30,6 +30,23 @@ struct ApprovalTarget: Hashable, Sendable {
     let token: UUID
 }
 
+/// One failed task's address: the run it failed on and the token that failure was raised with
+/// (SONNY-533). A Retry that carries this re-runs that task and no other.
+struct FailureTarget: Hashable, Sendable {
+    let runID: RunID
+    let token: UUID
+}
+
+/// One failure as `AgentViewModel.errorMessageRaised` announces it (SONNY-533).
+///
+/// `retry` is `nil` for a failure that is nobody's task — a control that could not do what it was
+/// pressed for, a recording that would not start — because there is then nothing a Retry could mean.
+struct RaisedFailure: Equatable, Sendable {
+    let runID: RunID
+    let message: String
+    let retry: FailureTarget?
+}
+
 /// Which run the code executing right now belongs to (SONNY-456).
 ///
 /// **Bound at the one place each run's work begins, and inherited by everything under it.** Every
@@ -90,7 +107,25 @@ struct RunSlot {
     var isRunning = false
     var plan: AgentPlan?
     var finalSummary = ""
-    var errorMessage: String?
+    /// Written only through `setErrorMessage(_:ofTheRunsOwnTask:)`, together with `retryToken`.
+    private(set) var errorMessage: String?
+    /// Minted when this run's own task publishes its failure, and `nil` for every other failure and
+    /// while none is showing (SONNY-533).
+    ///
+    /// A notification's Retry names the run *and* this token, for the reason an Allow names
+    /// `approvalToken`: the banner outlives the moment it was posted for. Without it the press
+    /// re-ran whatever this run — or, with several runs, the run on screen — had been asked most
+    /// recently, which is a different task whenever anything was submitted in between.
+    private(set) var retryToken: UUID?
+
+    /// The one way to publish or clear a failure: both halves in one write. Returns the token
+    /// minted, or `nil` when the failure is not the run's own task's, or is a clear.
+    mutating func setErrorMessage(_ message: String?, ofTheRunsOwnTask: Bool) -> UUID? {
+        errorMessage = message
+        retryToken = message != nil && ofTheRunsOwnTask ? UUID() : nil
+        return retryToken
+    }
+
     var errorIsPersistent = false
     var clarificationQuestion: String?
     var clarificationAnswer = ""
@@ -144,7 +179,17 @@ struct RunSlot {
     var explicitWorkspaceBinding: String?
     var clarificationWorkspaceBinding: String?
     var clarificationSubmittedCommand: String?
-    var lastCommand = ""
+    /// Written only through `setLastCommand(_:)`.
+    private(set) var lastCommand = ""
+
+    /// A new submission on this run. The token goes with it, synchronously: `start()` writes the
+    /// command a main-actor turn before `performStart` clears the last failure, and in that turn
+    /// the old banner's Retry would otherwise name a failure whose command is no longer the one
+    /// `retryLastCommand()` would run.
+    mutating func setLastCommand(_ command: String) {
+        lastCommand = command
+        retryToken = nil
+    }
     var pendingCommandForPriorTaskContext: String?
     var pendingTaskHistoryStartedAt: Date?
     var activeResumableTask: ResumableTask?
@@ -160,6 +205,12 @@ struct RunSlot {
     /// The address of the approval parked on this run now, or `nil` when none is.
     var parkedApproval: ApprovalTarget? {
         approvalToken.map { ApprovalTarget(runID: id, token: $0) }
+    }
+
+    /// The address of the failed task this run is showing now, or `nil` when it shows none that a
+    /// Retry could re-run.
+    var failedTask: FailureTarget? {
+        retryToken.map { FailureTarget(runID: id, token: $0) }
     }
 
     /// Running, or parked on a question only the user can answer — the three terms

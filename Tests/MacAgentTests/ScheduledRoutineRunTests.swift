@@ -1883,7 +1883,9 @@ struct ScheduledRoutineRunTests {
         // The click goes to Command Center, not the widget: the notice strip renders there and the
         // Routines page is where a paused schedule is switched back on.
         #expect(service.contains("case SonnyNotificationCategory.scheduled:"))
-        #expect(service.contains("self?.onOpenScheduledRun()"))
+        // Two steps since SONNY-533: the category chooses the landing, and the landing's closure runs.
+        #expect(service.contains("case SonnyNotificationCategory.scheduled:\n                self = .openScheduledRun"))
+        #expect(service.contains("case .openScheduledRun:\n            onOpenScheduledRun()"))
         let wiring = try MacAgentSource.region(
             of: delegate,
             from: "onOpenScheduledRun: { [weak self] in",

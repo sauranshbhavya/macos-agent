@@ -1391,9 +1391,11 @@ struct ProductShellTests {
             // shows, and a slot's `id` is its identity; none is data a wipe could find, and each
             // property inside a slot is classified by name. `approvalToken` is written only by
             // `approvalRequest`'s setter, beside it, so it is cleared exactly when that is — it has
-            // no assignment of its own for the function to make. The two subjects are channels
-            // the delegate listens on, not state.
-            "runSlots", "focusedRunID", "id", "approvalToken",
+            // no assignment of its own for the function to make. `retryToken` is the same beside
+            // `errorMessage` (SONNY-533): `RunSlot.setErrorMessage` writes both, so the wipe's own
+            // clear of the failure is what clears it. The two subjects are channels the delegate
+            // listens on, not state.
+            "runSlots", "focusedRunID", "id", "approvalToken", "retryToken",
             "errorMessageRaised", "approvalParked"
         ]
 
