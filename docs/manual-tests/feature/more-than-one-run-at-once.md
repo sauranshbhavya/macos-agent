@@ -1,15 +1,16 @@
 ### A notification's Allow answers only the question it was posted for (new 2026-09-18, SONNY-456)
 
-This is the one thing this branch changes that you can see. **Before it**, pressing Allow on an
-"Approval needed" notification approved whatever question Sonny had waiting *at the moment you
-pressed it*, not the question the notification was about. With one task at a time that could
-already go wrong: an old notification left in Notification Center could approve a newer, different
-question. **Now** each notification remembers its own question, and its Allow does nothing once
-that question has gone.
+One of the two things this branch changes that you can see (the other is the last section of this
+file). **Before it**, pressing Allow on an "Approval needed" notification acted on whatever Sonny had
+in front of it *at the moment you pressed it*, not on the question the notification was about. With
+one task at a time that could already go wrong: an old notification left in Notification Center
+approved a newer, different question; with nothing waiting it started whatever was typed in the
+widget, or put "Enter a natural-language command first." on the widget. **Now** each notification
+remembers its own question, and its Allow does nothing once that question has gone.
 
 Setup: the packaged app (`./scripts/package-app.sh`, then open it). In Settings › Notifications,
-"Approval needed" is on. Make a folder on the Desktop called `sonny-test` holding two empty text
-files, `a.txt` and `c.txt`. Any command that asks before acting will do in place of the renames
+"Approval needed" is on. Make a folder on the Desktop called `sonny-test` holding three empty text
+files, `a.txt`, `c.txt` and `e.txt`. Any command that asks before acting will do in place of the renames
 below; renames are what the founders use for "a command that asks first".
 
 A notification only posts while Sonny is not the app you are working in, so after each command
@@ -25,8 +26,13 @@ press Return and then click straight onto the Desktop or another app.
       `a.txt`. **Nothing happens**: `c.txt` is not renamed, and the pill still says Sonny needs
       you. (Before this branch, this press would have renamed `c.txt`.)
 - [ ] Press **Allow on the second notification**, the one for `c.txt`. `c.txt` becomes `d.txt`.
-- [ ] Put the folder back (`b.txt` stays absent, `d.txt` back to `c.txt`) if you want to run this
-      again.
+- [ ] A stale notification with nothing waiting. Type `rename e.txt in the sonny-test folder on my
+      Desktop to f.txt`, press Return, click onto the Desktop, and **leave the notification**. Bring
+      the widget back and press ✗. Now type `hello` in the widget **without pressing Return**, click
+      onto the Desktop, and press Allow on that notification. **Nothing starts**, `e.txt` is not
+      renamed, and `hello` is still in the widget, unsent. (Before this branch, this press sent
+      `hello` as a task.)
+- [ ] Put the folder back (`a.txt`, `c.txt` and `e.txt`) if you want to run this again.
 
 ### Nothing else changed: the ordinary answers still work (new 2026-09-18, SONNY-456)
 
@@ -46,3 +52,21 @@ Setup: the same packaged app and folder.
       and the failure is still on the widget when you come back to it.
 - [ ] The menu-bar icon still changes while a task runs, turns to the attention colour while a
       question waits, and to the failure colour after a failure.
+
+### A shortcut that cannot be set up at launch no longer claims a task failed (new 2026-09-19, SONNY-456)
+
+The second thing this branch changes, and it is on purpose (founder decision 2026-09-19). **Before
+it**, when the push-to-talk shortcut (⌃⌥Space) could not be set up at launch, usually because
+another app already holds it, Sonny posted a **"Task failed"** notification carrying the reason,
+though no task had run. **Now** no notification posts, and the reason is shown in the widget.
+That the reason is shown *only* in the widget is known, and SONNY-535 is where a proper launch-time
+surface is decided; this row checks the new behaviour, not that ticket's.
+
+Setup: the packaged app. In Settings › Notifications, "Task failed" is on. Give another app ⌃⌥Space
+as its own shortcut — a launcher such as Raycast or Alfred lets you set one — so Sonny cannot take it.
+
+- [ ] Quit Sonny, then launch it from Finder and leave it without opening the widget. **No "Task
+      failed" notification arrives**, then or in the next minute.
+- [ ] Open the widget. It says the shortcut could not be set up.
+- [ ] Take ⌃⌥Space away from the other app and relaunch Sonny. Holding ⌃⌥Space starts a recording
+      again.
