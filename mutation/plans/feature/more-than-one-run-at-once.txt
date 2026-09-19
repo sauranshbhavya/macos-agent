@@ -1,0 +1,83 @@
+# SONNY-456, the first layer: a run's state lives in its own slot, and an approval is answered for a
+# named run. Every killer is in Tests/MacAgentTests/ConsequenceRuleDispatchTests.swift's
+# RunAttributedApprovalTests suite. Swift half only.
+
+>>> mutant R1 one run's approval token answers another run's question (the token check dropped)
+>>> file Sources/MacAgent/AgentViewModel.swift
+>>> from
+        guard let slot = runSlots.first(where: { $0.id == runID }),
+              slot.approvalRequest != nil,
+              slot.approvalToken == token
+        else {
+>>> to
+        guard let slot = runSlots.first(where: { $0.id == runID }),
+              slot.approvalRequest != nil
+        else {
+>>> end
+
+>>> mutant R2 an approval named for one run approves whatever run is on screen
+>>> file Sources/MacAgent/AgentViewModel.swift
+>>> from
+        RunScope.$current.withValue(runID) {
+            approvePendingRun()
+        }
+        return true
+>>> to
+        approvePendingRun()
+        return true
+>>> end
+
+>>> mutant R3 the banner's Allow goes back to approving whatever is on screen
+>>> file Sources/MacAgent/AppDelegate.swift
+>>> from
+        onAllow: { [weak self] runID, token in
+            guard let runID, let token else { return }
+            self?.viewModel.approveParkedRun(runID, token: token)
+        },
+>>> to
+        onAllow: { [weak self] _, _ in self?.viewModel.start() },
+>>> end
+
+>>> mutant R4 the banner is posted without the run it was posted for
+>>> file Sources/MacAgent/SonnyNotificationService.swift
+>>> from
+        content.userInfo[SonnyNotificationUserInfo.runID] = runID
+>>> to
+>>> end
+
+>>> mutant R5 asking the same run's question again keeps the old token, so an old answer still works
+>>> file Sources/MacAgent/AgentViewModel.swift
+>>> from
+            let token: UUID? = newValue == nil ? nil : UUID()
+>>> to
+            let token: UUID? = newValue == nil ? nil : (runSlotInScope.approvalToken ?? UUID())
+>>> end
+
+>>> mutant R6 a run's work is not bound to its slot, so every run collapses onto the one on screen
+>>> file Sources/MacAgent/AgentViewModel.swift
+>>> from
+        currentTask = Task {
+            await RunScope.$current.withValue(runID) {
+                await performStart(
+                    submittedCommand: submittedCommand,
+                    autoExecute: autoExecute,
+                    origin: origin,
+                    prebuiltPlan: prebuiltPlan,
+                    prebuiltPlanSource: prebuiltPlanSource,
+                    continuing: continuation
+                )
+            }
+        }
+>>> to
+        _ = runID
+        currentTask = Task {
+            await performStart(
+                submittedCommand: submittedCommand,
+                autoExecute: autoExecute,
+                origin: origin,
+                prebuiltPlan: prebuiltPlan,
+                prebuiltPlanSource: prebuiltPlanSource,
+                continuing: continuation
+            )
+        }
+>>> end

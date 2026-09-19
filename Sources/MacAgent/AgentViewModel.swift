@@ -553,7 +553,9 @@ final class AgentViewModel: ObservableObject {
     }
 
     /// Approves the approval parked on `runID`, and only if it is still the one minted with `token`
-    /// (SONNY-456). Returns whether it approved anything.
+    /// (SONNY-456). Returns `false` when the run and the token name no approval that is parked now,
+    /// and `true` when they did and it was handed to `approvePendingRun` — which still declines, as
+    /// it always has, while that run is mid-execution or a wipe is in progress.
     ///
     /// **The one door by which an approval is answered for a named run.** Every other Allow reaches
     /// `approvePendingRun` through `start()` and acts on the run in scope, which outside a run is the
@@ -574,6 +576,17 @@ final class AgentViewModel: ObservableObject {
             approvePendingRun()
         }
         return true
+    }
+
+    /// Adds an empty slot and returns its id. **A test seam, and until the rest of SONNY-456 lands
+    /// the only way a second slot can exist**: nothing in `Sources/` calls it, so the product still
+    /// holds one run. It is here because the property this branch exists for — an answer reaches the
+    /// run it names and no other — cannot be shown with one slot, and a test that parks two real
+    /// approvals in two slots can show it. The feature's own slot creation replaces it.
+    func addRunSlotForTests() -> RunID {
+        let slot = RunSlot()
+        runSlots.append(slot)
+        return slot.id
     }
     /// Local-storage health, kept deliberately separate from `errorMessage`: a corrupt store or
     /// a failed save is about Sonny's own data, not about the task the user just ran, and must

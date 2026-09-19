@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 import MacAgentTestSupport
 import Testing
@@ -275,8 +276,16 @@ private struct DispatchFixture {
 /// through the real planner seam (so the typed-command branch of `performStart` runs without a network
 /// key), the fixture root as the whitelist (so the draft is writable hermetically), and the
 /// hermetic side-effect seams every view-model suite injects.
+///
+/// `planner` is the one knob, and it defaults to the draft planner every test above uses. The run
+/// attribution suite below hands in a planner whose output depends on the command, so two runs park
+/// two different approvals over two different files (SONNY-456).
 @MainActor
-private func makeDispatchFixture() throws -> DispatchFixture {
+private func makeDispatchFixture(
+    planner: @escaping @MainActor @Sendable (_ projectFolder: URL) -> any Planning = {
+        DraftPlanner(output: $0.appendingPathComponent("notes.md"))
+    }
+) throws -> DispatchFixture {
     let root = FileManager.default.temporaryDirectory
         .appendingPathComponent("ConsequenceRuleDispatchTests-\(UUID().uuidString)", isDirectory: true)
     let projectFolder = root.appendingPathComponent("ClientAlpha", isDirectory: true)
@@ -344,7 +353,7 @@ private func makeDispatchFixture() throws -> DispatchFixture {
         backendClient: makeHermeticBackendClient(),
         priorTaskContextStore: PriorTaskContextStore(),
         taskUsageRecorder: TaskUsageRecorder(),
-        makePlanner: { _, _ in DraftPlanner(output: draftOutput) },
+        makePlanner: { _, _ in planner(projectFolder) },
         userDefaults: userDefaults,
         whitelist: PathWhitelist(roots: [root])
     )
@@ -399,5 +408,200 @@ private struct DraftPlanner: Planning {
 private struct EmptyDispatchShortcutCatalog: ShortcutCatalogProviding {
     func shortcutNames() throws -> [String] {
         []
+    }
+}
+
+// MARK: - SONNY-456: an answer reaches the run it names, and no other
+
+/// An approval is answered against a named run and the token that approval was parked with, through
+/// the real dispatch path, the real gate and the real execution — the property SONNY-456's first
+/// layer exists for.
+///
+/// **Two real runs in two slots, and the widget left on the first.** `addRunSlotForTests()` is the
+/// only way a second slot can exist on this branch; the second run is started inside that slot's
+/// `RunScope`, exactly as the rest of SONNY-456 will start one. With the focus left on the first
+/// run, every way an answer could fall back to "whatever is on screen" lands on the wrong run, so
+/// the file each approval guards says which run was answered.
+@Suite(.serialized)
+@MainActor
+struct RunAttributedApprovalTests {
+    @Test
+    func anApprovalNamedForOneRunRunsThatRunAndLeavesTheOtherParked() async throws {
+        let fixture = try makeDispatchFixture(planner: { PerCommandDraftPlanner(folder: $0) })
+        defer { fixture.tearDown() }
+        let viewModel = fixture.viewModel
+        let alpha = fixture.projectFolder.appendingPathComponent("alpha.md")
+        let beta = fixture.projectFolder.appendingPathComponent("beta.md")
+        // Both files exist, so each draft is an overwrite and each run parks at tier 3.
+        try "existing alpha".write(to: alpha, atomically: true, encoding: .utf8)
+        try "existing beta".write(to: beta, atomically: true, encoding: .utf8)
+
+        let first = viewModel.focusedRunID
+        viewModel.command = "Draft alpha"
+        viewModel.start()
+        try await HangBackstop.waitOrAbandon(for: "the first run to park its approval") {
+            slot(first, in: viewModel).map { $0.approvalRequest != nil && !$0.isRunning } == true
+        }
+        let firstToken = try #require(slot(first, in: viewModel)?.approvalToken)
+
+        let second = viewModel.addRunSlotForTests()
+        RunScope.$current.withValue(second) {
+            viewModel.command = "Draft beta"
+            viewModel.start()
+        }
+        // Ends on the first run's token moving too, so a second run that wrote into the first
+        // run's slot fails at an assertion below rather than as a wait that gave up.
+        try await HangBackstop.waitOrAbandon(for: "the second run to park, or the first run's slot to move") {
+            let parked = slot(second, in: viewModel).map { $0.approvalRequest != nil && !$0.isRunning } == true
+            return parked || slot(first, in: viewModel)?.approvalToken != firstToken
+        }
+
+        let firstSlot = try #require(slot(first, in: viewModel))
+        let secondSlot = try #require(slot(second, in: viewModel))
+        #expect(firstSlot.approvalToken == firstToken, "starting the second run moved the first run's question")
+        #expect(firstSlot.lastCommand == "Draft alpha")
+        #expect(secondSlot.lastCommand == "Draft beta")
+        #expect(secondSlot.approvalRequest?.assessment.effectiveTier == .tier3)
+        let secondToken = try #require(secondSlot.approvalToken, "the second run parked no approval of its own")
+        #expect(firstToken != secondToken)
+        #expect(viewModel.focusedRunID == first, "precondition: the widget is on the first run")
+
+        // One run's token answers nothing on the other, in either direction.
+        #expect(!viewModel.approveParkedRun(first, token: secondToken))
+        #expect(!viewModel.approveParkedRun(second, token: firstToken))
+        #expect(slot(first, in: viewModel)?.approvalToken == firstToken)
+        #expect(slot(second, in: viewModel)?.approvalToken == secondToken)
+        #expect(try String(contentsOf: alpha, encoding: .utf8) == "existing alpha")
+        #expect(try String(contentsOf: beta, encoding: .utf8) == "existing beta")
+
+        // The second run's own token answers the second run, and only it.
+        #expect(viewModel.approveParkedRun(second, token: secondToken))
+        try await HangBackstop.waitOrAbandon(for: "the approved run to finish") {
+            viewModel.runSlots.allSatisfy { !$0.isRunning }
+        }
+        #expect(try String(contentsOf: beta, encoding: .utf8) != "existing beta", "the named run did not run")
+        #expect(try String(contentsOf: alpha, encoding: .utf8) == "existing alpha", "the run on screen ran instead")
+        #expect(slot(second, in: viewModel)?.approvalRequest == nil)
+        #expect(slot(second, in: viewModel)?.approvalToken == nil)
+        #expect(slot(first, in: viewModel)?.approvalToken == firstToken, "the first run's question must still be waiting")
+    }
+
+    /// A question asked again is a new question: the token an earlier answer carries — a
+    /// notification posted for the first asking — answers nothing, and the new one does.
+    /// `performApproval`'s stale-approval re-arm asks again exactly this way.
+    @Test
+    func aTokenFromBeforeTheQuestionWasAskedAgainAnswersNothing() async throws {
+        let fixture = try makeDispatchFixture()
+        defer { fixture.tearDown() }
+        let viewModel = fixture.viewModel
+        try "existing draft".write(to: fixture.draftOutput, atomically: true, encoding: .utf8)
+
+        let run = viewModel.focusedRunID
+        viewModel.command = "Draft notes"
+        viewModel.start()
+        try await HangBackstop.waitOrAbandon(for: "the run to park its approval") {
+            slot(run, in: viewModel).map { $0.approvalRequest != nil && !$0.isRunning } == true
+        }
+        let stale = try #require(slot(run, in: viewModel)?.approvalToken)
+        let request = try #require(viewModel.approvalRequest)
+
+        viewModel.approvalRequest = request
+        let fresh = try #require(slot(run, in: viewModel)?.approvalToken)
+        #expect(fresh != stale, "asking again must mint a new token")
+
+        #expect(!viewModel.approveParkedRun(run, token: stale))
+        #expect(!viewModel.approveParkedRun(RunID(), token: fresh), "a run that does not exist was answered")
+        #expect(viewModel.approvalRequest != nil)
+        #expect(try String(contentsOf: fixture.draftOutput, encoding: .utf8) == "existing draft")
+
+        #expect(viewModel.approveParkedRun(run, token: fresh))
+        try await HangBackstop.waitOrAbandon(for: "the approved run to finish") {
+            viewModel.runSlots.allSatisfy { !$0.isRunning }
+        }
+        #expect(try String(contentsOf: fixture.draftOutput, encoding: .utf8) != "existing draft")
+    }
+
+    /// What the notification is posted with: every parked approval is announced with its own run
+    /// and the token the slot holds, so the banner carries exactly what `approveParkedRun` checks.
+    @Test
+    func everyParkedApprovalIsAnnouncedWithItsRunAndTheTokenItHolds() async throws {
+        let fixture = try makeDispatchFixture()
+        defer { fixture.tearDown() }
+        let viewModel = fixture.viewModel
+        try "existing draft".write(to: fixture.draftOutput, atomically: true, encoding: .utf8)
+        var announced: [(RunID, UUID)] = []
+        let subscription = viewModel.approvalParked.sink { runID, token, _ in
+            announced.append((runID, token))
+        }
+        defer { subscription.cancel() }
+
+        let run = viewModel.focusedRunID
+        viewModel.command = "Draft notes"
+        viewModel.start()
+        try await HangBackstop.waitOrAbandon(for: "the run to park its approval") {
+            slot(run, in: viewModel).map { $0.approvalRequest != nil && !$0.isRunning } == true
+        }
+
+        #expect(announced.count == 1)
+        #expect(announced.first?.0 == run)
+        #expect(announced.first?.1 == slot(run, in: viewModel)?.approvalToken)
+    }
+
+    /// The banner's Allow answers the run and the approval it was posted for — read off the wiring,
+    /// because `SonnyNotificationService.init?` returns nil without bundle identity and neither the
+    /// subscription nor the response handler exists in a test process. Before SONNY-456 this closure
+    /// was `viewModel.start()`, which approves whatever the focused run has parked when the banner is
+    /// pressed; that is why the absence of `start()` is asserted beside the presence of the new door.
+    @Test
+    func theBannersAllowAnswersTheRunAndApprovalItWasPostedFor() throws {
+        let delegate = try MacAgentSource.read("AppDelegate.swift")
+        let allow = try MacAgentSource.region(of: delegate, from: "onAllow:", to: "onRetry:")
+        #expect(MacAgentSource.count(of: "viewModel.approveParkedRun(runID, token: token)", inText: allow) == 1)
+        #expect(MacAgentSource.count(of: "start()", inText: allow) == 0)
+        #expect(MacAgentSource.count(of: "guard let runID, let token else { return }", inText: allow) == 1)
+
+        let posting = try MacAgentSource.region(of: delegate, from: "viewModel.approvalParked", to: ".store(in: &cancellables)")
+        #expect(MacAgentSource.count(of: "runID: runID.description", inText: posting) == 1)
+        #expect(MacAgentSource.count(of: "approvalToken: token.uuidString", inText: posting) == 1)
+
+        let service = try MacAgentSource.read("SonnyNotificationService.swift")
+        let post = try MacAgentSource.braceBlock(
+            of: service,
+            openedBy: "func postPermissionNotification(resource: String, runID: String, approvalToken: String) {"
+        )
+        #expect(MacAgentSource.count(of: "content.userInfo[SonnyNotificationUserInfo.runID] = runID", inText: post) == 1)
+        #expect(
+            MacAgentSource.count(of: "content.userInfo[SonnyNotificationUserInfo.approvalToken] = approvalToken", inText: post) == 1
+        )
+        #expect(MacAgentSource.count(of: "self?.onAllow(runID, approvalToken)", inText: service) == 1)
+    }
+}
+
+@MainActor
+private func slot(_ id: RunID, in viewModel: AgentViewModel) -> RunSlot? {
+    viewModel.runSlots.first { $0.id == id }
+}
+
+/// A draft whose file depends on the command, so two runs park two approvals over two files and the
+/// file that changed says which run an approval reached.
+private struct PerCommandDraftPlanner: Planning {
+    let folder: URL
+
+    func plan(command: String, priorTaskContext: PriorTaskContext?) async throws -> AgentPlan {
+        let name = command.localizedCaseInsensitiveContains("beta") ? "beta" : "alpha"
+        return AgentPlan(
+            summary: "Draft \(name).",
+            requiresConfirmation: true,
+            steps: [
+                AgentStep(
+                    id: "draft",
+                    operation: .createLocalDraft,
+                    description: "Draft \(name).",
+                    outputPath: folder.appendingPathComponent("\(name).md").path,
+                    draftTitle: "Notes",
+                    draftContent: "Outline for \(name)."
+                )
+            ]
+        )
     }
 }
