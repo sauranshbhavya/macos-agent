@@ -166,6 +166,12 @@ public struct SkillPack: Equatable, Sendable, Identifiable {
             lines.append("Tasks:")
             for flow in flows {
                 lines.append("- \(flow.title), starting at \(flow.startURL.absoluteString):")
+                // Above step 1, so a stop is read before anything the flow does (the founders' ruling
+                // of 2026-09-19 on SONNY-510 put a stop first for the same reason).
+                if !flow.stops.isEmpty {
+                    lines.append("  \(SkillPackStopRule.header)")
+                    lines.append(contentsOf: flow.stops.map { "  \(SkillPackStopRule.line(for: $0))" })
+                }
                 for (index, step) in flow.steps.enumerated() {
                     lines.append("  \(index + 1). \(step)")
                 }
@@ -186,14 +192,19 @@ public struct SkillPackFlow: Equatable, Sendable {
     public let title: String
     public let startURL: URL
     public let steps: [String]
+    /// The acts this flow stops before and never performs, each naming its hazard in the page's own
+    /// words (SONNY-536). Empty for most flows. `SkillPackStopRule` has what one may say and why the
+    /// content rules do not read it.
+    public let stops: [String]
     /// The public page these steps were taken from. Required: a flow nobody can check against a
     /// page is a flow nobody can trust on a live account.
     public let source: URL
 
-    public init(title: String, startURL: URL, steps: [String], source: URL) {
+    public init(title: String, startURL: URL, steps: [String], stops: [String], source: URL) {
         self.title = title
         self.startURL = startURL
         self.steps = steps
+        self.stops = stops
         self.source = source
     }
 }
@@ -235,7 +246,19 @@ public enum SkillPackLoadError: Error, Equatable, Sendable {
     case movesMoney(field: String, words: String)
     case mentionsCredential(field: String, phrase: String)
     case urlCarriesCredential(field: String)
+    /// One of `flow`'s `stops` is not the name of one act to stop before (`SkillPackStopRule`).
+    case stopIsNotOneAct(flow: String, problem: SkillPackStopProblem)
     case guidanceTooLong(bytes: Int)
+}
+
+/// What is wrong with a stop, named as the thing its author has to fix.
+public enum SkillPackStopProblem: Error, Equatable, Sendable {
+    /// Its first word is not an "-ing" word, so "Stop before …" would not read as a sentence.
+    case doesNotOpenWithAnAct
+    /// It holds a sentence or clause boundary, so it could carry a second instruction.
+    case holdsMoreThanOneClause
+    /// It holds `word`, which turns a stop into permission ("unless the person asked").
+    case grantsAnException(word: String)
 }
 
 /// One file that did not become a pack, and why.
@@ -338,7 +361,7 @@ public enum SkillPackDecoder {
         "format", "id", "name", "domain", "category", "summary", "signInURL",
         "triggers", "sections", "depth", "flows", "startPages"
     ]
-    static let flowFields: Set<String> = ["title", "startURL", "steps", "source"]
+    static let flowFields: Set<String> = ["title", "startURL", "steps", "stops", "source"]
     static let startPageFields: Set<String> = ["url", "landedURL", "title", "otherTitles", "heading", "offers", "read"]
 
     public static func decode(_ data: Data) throws -> SkillPack {
@@ -395,6 +418,13 @@ public enum SkillPackDecoder {
         // The money rule reads everything that reaches the planner as description of the site: each
         // flow as one unit (its money act is often split between title and steps), the summary, and
         // each section on its own, so two section labels cannot pair into a refusal.
+        //
+        // **A flow's `stops` are in neither this rule's units nor the credential rule's texts, and
+        // that is the whole of SONNY-536's exemption.** Both rules refuse wording that leads
+        // somewhere; a stop is the flow refusing to go there, and it has to name the hazard in the
+        // guards' own vocabulary to do it. `SkillPackStopRule` is what holds a stop to being one —
+        // checked in `decodeFlow`, and framed by code in `guidance` — and every other text here is
+        // read exactly as it was, a flow's title and steps included, whatever its stops say.
         let moneyUnits: [(field: String, texts: [String])] =
             flows.enumerated().map { index, flow in ("flows[\(index)]", [flow.title] + flow.steps) }
             + [("summary", [summary])]
@@ -454,7 +484,17 @@ public enum SkillPackDecoder {
         guard !steps.isEmpty else {
             throw SkillPackLoadError.flowHasNoSteps(flow: title)
         }
-        return SkillPackFlow(title: title, startURL: startURL, steps: steps, source: source)
+        // Optional, and never empty when present, like `otherTitles`: most flows stop before nothing,
+        // and one that says it does has to say what.
+        let stops = flow["stops"] == nil
+            ? []
+            : try requiredTextList(flow, "stops", prefix: prefix, allowEmpty: false)
+        for stop in stops {
+            if let problem = SkillPackStopRule.problem(in: stop) {
+                throw SkillPackLoadError.stopIsNotOneAct(flow: title, problem: problem)
+            }
+        }
+        return SkillPackFlow(title: title, startURL: startURL, steps: steps, stops: stops, source: source)
     }
 
     /// The pack's own site: its domain, or a subdomain of it. `host` is already lowercased.
