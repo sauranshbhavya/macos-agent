@@ -3,8 +3,9 @@
 **Both tickets change tests and nothing else.** SONNY-515 changes how the test harness waits on the
 stub backend and how a mutation battery reads a wait that gave up; SONNY-418 moves four test
 fixtures onto the machine's own time zone. Nothing under `Sources/`, `Package.swift` or `server/`
-changes on this branch (`git diff --name-only 8f3d1d02 HEAD -- Sources Package.swift server`
-prints nothing), so there is no app behaviour for a founder to check in the app.
+changes on this branch (`git diff --name-only 30ef8c12 HEAD -- Sources Package.swift server`,
+against the `main` it was rebased onto, prints nothing), so there is no app behaviour for a
+founder to check in the app.
 
 What a founder can run instead, if they want to see SONNY-418's property for themselves, is the
 routine suites under a zone that is not Eastern. They failed there before this branch and pass on
