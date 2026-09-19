@@ -227,6 +227,28 @@ extension AgentViewModel: VisionSessionInteracting {
             || visionDelegationRequest != nil
     }
 
+    /// The hop a parked question's `onCancel` makes back onto the main actor, bound to the run the
+    /// question was parked on (SONNY-456).
+    ///
+    /// **`onCancel` runs in the context of whoever cancelled, not of the run that parked**, so a bare
+    /// `Task { @MainActor in … }` there inherits the canceller's `RunScope` — outside any run, the
+    /// run the widget is showing. With one run that was the right run. With two, stopping run B
+    /// while the widget shows A read A's continuation: B's was never resumed, so B never ended and
+    /// held its slot against the cap for good; or, when A had a question of its own parked, A was
+    /// declined instead (PR #279's review). Each of the four questions captures its run before it
+    /// parks and hops through here, so the hop reads the continuation of the run that parked it
+    /// whoever cancelled and whatever is on screen.
+    nonisolated func afterCancellation(
+        ofAQuestionParkedOn runID: RunID,
+        _ resume: @escaping @MainActor @Sendable () -> Void
+    ) {
+        Task { @MainActor in
+            RunScope.$current.withValue(runID) {
+                resume()
+            }
+        }
+    }
+
     /// A mid-loop approval, on the same surface every other approval uses.
     ///
     /// Writes the real `approvalRequest`, so the floating widget's permission card and Command
@@ -252,6 +274,7 @@ extension AgentViewModel: VisionSessionInteracting {
     /// than defensive: the guard is what makes a cancellation racing a real answer a no-op instead of
     /// a double resume.
     func requestVisionActionApproval(_ request: RiskApprovalRequest) async throws -> RiskApprovalDecision? {
+        let parkedOn = runIDInScope
         approvalRequest = request
         finalSummary = "Sonny needs your approval before this step."
         logStore.append(
@@ -264,7 +287,7 @@ extension AgentViewModel: VisionSessionInteracting {
                 visionApprovalContinuation = continuation
             }
         } onCancel: {
-            Task { @MainActor in
+            self.afterCancellation(ofAQuestionParkedOn: parkedOn) {
                 guard let continuation = self.visionApprovalContinuation else { return }
                 self.visionApprovalContinuation = nil
                 self.approvalRequest = nil
@@ -289,6 +312,7 @@ extension AgentViewModel: VisionSessionInteracting {
     /// questions per iteration in Safe mode, and they are genuinely two moments — this one happens
     /// before the model has seen anything, so it cannot name the action it will produce.
     func confirmVisionCaptureBeforeSending(_ preview: VisionCapturePreview) async throws -> Bool {
+        let parkedOn = runIDInScope
         visionCapturePreview = preview
         finalSummary = "Sonny wants to send this screenshot of \(preview.appDisplayName)."
 
@@ -297,7 +321,7 @@ extension AgentViewModel: VisionSessionInteracting {
                 visionCaptureContinuation = continuation
             }
         } onCancel: {
-            Task { @MainActor in
+            self.afterCancellation(ofAQuestionParkedOn: parkedOn) {
                 guard let continuation = self.visionCaptureContinuation else { return }
                 self.visionCaptureContinuation = nil
                 self.visionCapturePreview = nil
@@ -317,6 +341,7 @@ extension AgentViewModel: VisionSessionInteracting {
     /// that resumed itself the moment a Mac woke would be a program moving the cursor of someone who
     /// has not yet looked at the screen.
     func awaitVisionResume(_ pause: VisionSessionPause) async throws -> Bool {
+        let parkedOn = runIDInScope
         visionSessionPause = pause
         finalSummary = "Sonny paused: \(pause.reason.userFacingReason)."
 
@@ -325,7 +350,7 @@ extension AgentViewModel: VisionSessionInteracting {
                 visionResumeContinuation = continuation
             }
         } onCancel: {
-            Task { @MainActor in
+            self.afterCancellation(ofAQuestionParkedOn: parkedOn) {
                 guard let continuation = self.visionResumeContinuation else { return }
                 self.visionResumeContinuation = nil
                 self.visionSessionPause = nil
@@ -358,6 +383,7 @@ extension AgentViewModel: VisionSessionInteracting {
     /// whatever the delegated plan turns out to *do*. This one asks whether Sonny should use its own
     /// tools at all instead of clicking, and a Safe-mode user answering it is choosing a method.
     func confirmVisionDelegation(_ request: VisionDelegationRequest) async throws -> Bool {
+        let parkedOn = runIDInScope
         visionDelegationRequest = request
         finalSummary = "Sonny wants to use its own tools for one step."
 
@@ -366,7 +392,7 @@ extension AgentViewModel: VisionSessionInteracting {
                 visionDelegationContinuation = continuation
             }
         } onCancel: {
-            Task { @MainActor in
+            self.afterCancellation(ofAQuestionParkedOn: parkedOn) {
                 guard let continuation = self.visionDelegationContinuation else { return }
                 self.visionDelegationContinuation = nil
                 self.visionDelegationRequest = nil
