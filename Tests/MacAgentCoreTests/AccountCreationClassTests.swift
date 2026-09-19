@@ -150,11 +150,12 @@ struct AccountCreationClassTests {
         #expect(Self.mainRefused("xxxxxx") == nil)
     }
 
-    /// **The walk can fail, and names what failed.** A matcher that refuses nothing is reported for every
-    /// address `main` refused, so every one of them is asked about (6,026 to four tokens: the first four
-    /// figures above, summed). One that refuses everything is reported for none. And one that lets a
-    /// single address through is reported for exactly that address, which is the doubled `?` at its
-    /// shortest.
+    /// **The walk can fail, and names what failed.** None of the three matchers here is the real one, so
+    /// this holds the walk and the table whatever the rule decides. A matcher that refuses nothing is
+    /// reported for every address `main` refused, so every one of them is asked about (6,026 to four
+    /// tokens: the first four figures above, summed). One that refuses everything is reported for none.
+    /// And one that refuses everything but a single address is reported for exactly that address, which
+    /// is the doubled `?` at its shortest.
     @Test
     func theWalkReportsEveryAddressAMatcherLetsThrough() {
         let nothingRefused = Self.walk(toLength: 4, asking: { _ in false })
@@ -163,9 +164,7 @@ struct AccountCreationClassTests {
         #expect(Self.walk(toLength: 4, asking: { _ in true }).refusedLess.isEmpty)
 
         let doubled = "https://example.com/??signup"
-        let oneLetThrough = Self.walk(toLength: 3) { url in
-            url.absoluteString != doubled && SkillPackStartPageRule.namesAccountCreation(url)
-        }
+        let oneLetThrough = Self.walk(toLength: 3, asking: { $0.absoluteString != doubled })
         #expect(oneLetThrough.refusedLess == [doubled])
     }
 }
