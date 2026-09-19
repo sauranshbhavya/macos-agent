@@ -6,8 +6,45 @@
   "category": "sales_crm",
   "summary": "Data enrichment and outbound sales platform.",
   "signInURL": "https://app.clay.com/login",
-  "triggers": ["clay.com"],
+  "triggers": [
+    "clay.com"
+  ],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Build a table of companies with Find Companies",
+      "startURL": "https://app.clay.com/login",
+      "steps": [
+        "In a workbook, click + Add at the bottom, search for Find Companies, and choose it as the source.",
+        "Configure the filters you need, such as industries to include or exclude, company size, location, and keywords. Wrap a multi-word keyword in quotes to match that exact phrase, and add a free-text description of your ideal company to rank the results.",
+        "Set Limit results. It defaults to 10,000, which is also the maximum.",
+        "Click Preview companies, and when the results look good, click Import to new table.",
+        "Choose the import options — additional enrichments such as Company Headcount Growth or Most Recent News, and whether auto-update and auto-dedupe are on — then click Continue."
+      ],
+      "source": "https://university.clay.com/docs/find-companies"
+    },
+    {
+      "title": "Set up a Signal for new hires, job changes or promotions",
+      "startURL": "https://app.clay.com/login",
+      "steps": [
+        "Open a table of the companies or contacts to monitor. It needs professional social URLs for people, or a company identifier such as the website.",
+        "Click Tools → Signals, then select one of the Monitor for... options: new hires, job changes or promotions.",
+        "Select the table you want to monitor, identify the correct identifiers, and configure the Signal's filters.",
+        "Set how often the Signal should run. Optionally add enrichments to the table, or Add sample results to preview how the data will appear after a change happens.",
+        "Click Save and run X rows to finish the Signal. To change it later, click the Signal's column title — it has a 📡 icon and is usually called Event — click Edit signal, then click Save only or Save and re-run."
+      ],
+      "source": "https://university.clay.com/docs/signals"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://app.clay.com/login",
+      "landedURL": "https://app.clay.com/login",
+      "title": "Go to market with unique data — and the ability to act on it",
+      "heading": "Welcome back!",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
+  ]
 }

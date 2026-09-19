@@ -6,8 +6,45 @@
   "category": "sales_crm",
   "summary": "Contact information lookup for professionals.",
   "signInURL": "https://app.rocketreach.co/login",
-  "triggers": ["rocketreach", "rocketreach.co"],
+  "triggers": [
+    "rocketreach",
+    "rocketreach.co"
+  ],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Export contacts to a CSV file",
+      "startURL": "https://app.rocketreach.co/login",
+      "steps": [
+        "Select My Contacts from the navigation menu. Contacts can be exported to a CSV only from this page — if Export to CSV is missing, you are on the Search page.",
+        "Use the filters to show the contacts you want, or the checkboxes on the far left to pick specific ones. With neither, the export includes all your contacts.",
+        "Click the Actions button and select Export to CSV.",
+        "In the confirmation window, choose Standard to receive all columns or Advanced to pick your columns.",
+        "Wait a few minutes: RocketReach emails a Download button for the prepared CSV to your account's email address. On an account with Export Credits, each verified contact exported uses one credit."
+      ],
+      "source": "https://knowledgebase.rocketreach.co/hc/en-us/articles/115000135153-How-do-I-export-my-contacts"
+    },
+    {
+      "title": "Filter My Contacts by tag or other criteria",
+      "startURL": "https://app.rocketreach.co/login",
+      "steps": [
+        "Navigate to My Contacts from the left-hand navigation.",
+        "Click Show Filters on the right-hand side of the page, then type your criteria, such as a tag, into the fields and let the contact list adjust.",
+        "To pick particular contacts, click the checkbox on the left of each profile row, or the checkbox at the top left to select the whole page view. Up to 500 contacts can be selected this way; for more, use tags and filters instead.",
+        "Click Clear Filters when you want to change the criteria and view different contacts."
+      ],
+      "source": "https://knowledgebase.rocketreach.co/hc/en-us/articles/32103228933403-How-can-I-filter-and-download-contacts"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://app.rocketreach.co/login",
+      "landedURL": "https://rocketreach.co/login",
+      "title": "Log in to your RocketReach.co account",
+      "heading": "",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
+  ]
 }

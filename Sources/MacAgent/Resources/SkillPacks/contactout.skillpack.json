@@ -6,8 +6,45 @@
   "category": "sales_crm",
   "summary": "Email and phone finder for recruiters and sales teams.",
   "signInURL": "https://contactout.com/login",
-  "triggers": ["contactout", "contactout.com"],
+  "triggers": [
+    "contactout",
+    "contactout.com"
+  ],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Build and export a list of leads in the Search Portal",
+      "startURL": "https://contactout.com/login",
+      "steps": [
+        "In your ContactOut dashboard, click Search to open the ContactOut search portal.",
+        "Use the filters to find the contacts that match the details you are looking for. Save the search if you run it often; saved searches are in the Saved Searches drop-down menu.",
+        "To look closer at one lead, click the LinkedIn icon beside them to open their LinkedIn profile.",
+        "When you are happy with the list, select the contacts you want and export them to a CSV file, or save them in a folder you have already created in your dashboard."
+      ],
+      "source": "https://contactout.freshdesk.com/support/solutions/articles/70000626112-how-to-build-a-leads-list-with-contactout-search"
+    },
+    {
+      "title": "Create an email campaign",
+      "startURL": "https://contactout.com/login",
+      "steps": [
+        "In Email Campaigns, click + Create new campaign.",
+        "Enter the campaign's name at the top of the page.",
+        "Each new campaign has one email step. To add more, click Add email at the bottom of the last email step.",
+        "Click Save & Exit at the bottom of the page to save the campaign.",
+        "Click Continue at the bottom of the campaign details page to start adding recipients. Emails start sending once the campaign is started, and anyone added later to an active campaign from the Chrome extension is also sent the first email."
+      ],
+      "source": "https://contactout.freshdesk.com/support/solutions/articles/70000634451-creating-a-campaign"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://contactout.com/login",
+      "landedURL": "https://contactout.com/login",
+      "title": "Login - Contactout",
+      "heading": "Login",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
+  ]
 }

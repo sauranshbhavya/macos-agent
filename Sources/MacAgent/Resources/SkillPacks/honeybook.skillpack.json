@@ -6,8 +6,45 @@
   "category": "sales_crm",
   "summary": "Client management platform for independent businesses.",
   "signInURL": "https://app.honeybook.com/app/login",
-  "triggers": ["honeybook", "honeybook.com"],
+  "triggers": [
+    "honeybook",
+    "honeybook.com"
+  ],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Create a project",
+      "startURL": "https://app.honeybook.com/app/login",
+      "steps": [
+        "From your homepage, select + New in the top-right corner > Project.",
+        "Enter the project's details. The project name and date are required; you can skip the other fields and update them later.",
+        "Select Create Project.",
+        "Add a participant to the project, either by selecting an existing one or by creating a new one and entering the client's details, then select Add."
+      ],
+      "source": "https://help.honeybook.com/en/articles/11116252-create-your-first-project"
+    },
+    {
+      "title": "Import leads and clients from a spreadsheet into your pipeline",
+      "startURL": "https://app.honeybook.com/app/login",
+      "steps": [
+        "Prepare a CSV, XLS or XLSX file of at most 500 leads or clients. One project is created for each contact imported, and this works on the web only.",
+        "From the navigation menu, select Projects, then the dropdown by Create new > Import spreadsheet.",
+        "Drag and drop your file, or select Browse files to upload it. Review the list of projects and contacts and uncheck any you want to exclude; if the file has several sheets, select which to import.",
+        "Select Manage fields to map your file's columns to HoneyBook fields. Unmatched fields are not imported, and Do not import skips a column. If the file has no column headers, uncheck My file has headers and label each column with the dropdowns.",
+        "Select Preview, then Import. The leads and clients are added to your pipeline and your Contacts page."
+      ],
+      "source": "https://help.honeybook.com/en/articles/9986450-import-leads-and-clients-into-your-pipeline-in-honeybook"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://app.honeybook.com/app/login",
+      "landedURL": "https://app.honeybook.com/app/login",
+      "title": "Login | HoneyBook",
+      "heading": "",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
+  ]
 }

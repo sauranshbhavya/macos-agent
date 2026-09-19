@@ -6,8 +6,45 @@
   "category": "sales_crm",
   "summary": "CRM platform for marketing, sales and service.",
   "signInURL": "https://app.hubspot.com/login",
-  "triggers": ["hubspot", "hubspot.com"],
+  "triggers": [
+    "hubspot",
+    "hubspot.com"
+  ],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Create a task",
+      "startURL": "https://app.hubspot.com/login",
+      "steps": [
+        "Click More, then navigate to CRM > Tasks. If More does not appear in your account, navigate to CRM > Tasks directly.",
+        "In the upper right, click Create task.",
+        "In the right panel, enter the task's details: a title, the type (Call, Email or To-do), the priority, the records to associate it with, who it is assigned to, the due date, and when the reminder email should go to the task owner.",
+        "To make the task recurring, select the Set to repeat checkbox and choose the interval, for example every 2 months. Recurring tasks need an assigned Core, Sales or Service seat.",
+        "Click Create, or Create and add another to start the next task."
+      ],
+      "source": "https://knowledge.hubspot.com/tasks/create-tasks"
+    },
+    {
+      "title": "Edit a property value on a contact's record",
+      "startURL": "https://app.hubspot.com/login",
+      "steps": [
+        "Click More, then navigate to CRM > Contacts. If More does not appear in your account, navigate to CRM > Contacts directly.",
+        "Click the name of the record.",
+        "On a property list card in the left sidebar or the middle column, click the property and edit its value: type into the text box for a text or number property, or select a value for a list or user property. Changes save automatically.",
+        "If the property is not shown, click Actions in the upper right of the left sidebar and select View all properties, then search for the property in the right panel and set its value there. Read-only properties, such as Original source, cannot be edited."
+      ],
+      "source": "https://knowledge.hubspot.com/records/update-a-property-value-for-a-record"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://app.hubspot.com/login",
+      "landedURL": "https://app.hubspot.com/login",
+      "title": "HubSpot Login and Sign in",
+      "heading": "",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
+  ]
 }
