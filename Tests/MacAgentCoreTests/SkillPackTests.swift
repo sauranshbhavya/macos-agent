@@ -1549,10 +1549,19 @@ struct SkillPackTests {
     ///   top of the page. Its action is the prompt box in the middle, which SONNY-510's round four read
     ///   signed out on 2026-09-18 and found usable. It is also the control that both patterns find their
     ///   words in real step text.
+    /// - Pipedrive's import flow names "Get started" as the import wizard's own button, reached through the
+    ///   account menu, Tools and apps and Import data inside the signed-in app; the flow starts at a
+    ///   `sign-in` record, and the button imports a spreadsheet rather than creating an account. Judged on
+    ///   the step's own text when SONNY-518's pack arrived at this branch's hop (2026-09-19); the cited
+    ///   support article was not re-opened for it.
     static let judgedFirstStepFindings: Set<String> = [
         "grok | Ask Grok a question | a signed-in place: Settings, Sign in | \(grokFirstStep)",
-        "grok | Ask Grok a question | account creation: Sign up | \(grokFirstStep)"
+        "grok | Ask Grok a question | account creation: Sign up | \(grokFirstStep)",
+        "pipedrive | Import people, organizations or deals from a spreadsheet | account creation: Get started | \(pipedriveImportFirstStep)"
     ]
+
+    /// Pipedrive's judged import step, whole. Editing it is re-judging the step.
+    static let pipedriveImportFirstStep = "Go to the account menu > Tools and apps > Import data > Import from spreadsheet, click Get started, then click Next."
 
     /// The judged step, whole. Review-282 re-read it on screen on 2026-09-19 and the judgement stands: the
     /// "Ask Grok anything" box is present and enabled signed out, and the top-right row holds Imagine, a
