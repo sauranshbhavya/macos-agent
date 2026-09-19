@@ -1,24 +1,94 @@
 import AppKit
+import Combine
 import Foundation
 import MacAgentCore
 
 @MainActor
 final class AgentViewModel: ObservableObject {
     @Published var command: String = ""
-    @Published var isRunning: Bool = false {
-        didSet {
+
+    // MARK: - Runs (SONNY-456)
+
+    /// Every run the view model holds, oldest first. Never empty: the widget is always focused on
+    /// one slot, and a slot with nothing in it is the composer's.
+    ///
+    /// Each property below that used to describe "the" run — `isRunning`, `plan`, `approvalRequest`
+    /// and the rest — reads and writes the slot of the run in scope (`runIDInScope`). Publishing the
+    /// array is what publishes every one of them, so a view observing the view model redraws on a
+    /// change to any run exactly as it did on a change to the one.
+    @Published private(set) var runSlots: [RunSlot]
+
+    /// The run the widget shows, and the run every caller outside a run's own work acts on.
+    @Published private(set) var focusedRunID: RunID
+
+    /// The run the code executing now belongs to: the run whose work bound `RunScope`, or the
+    /// focused run for everything else. `RunScope`'s doc comment says why both halves are right.
+    var runIDInScope: RunID {
+        RunScope.current ?? focusedRunID
+    }
+
+    /// The slot of the run in scope. A run whose slot has gone reads as an empty slot rather than
+    /// as another run's: `removeSettledRunSlots` never removes a slot with work in flight, so this is
+    /// a belt, and the failure it guards against is a run writing into a different run.
+    var runSlotInScope: RunSlot {
+        let id = runIDInScope
+        return runSlots.first { $0.id == id } ?? RunSlot(id: id)
+    }
+
+    /// Writes to the slot of the run in scope, and to no other. A write for a run whose slot has
+    /// gone is dropped, for the reason `runSlotInScope` gives.
+    func updateRunSlotInScope(_ change: (inout RunSlot) -> Void) {
+        let id = runIDInScope
+        guard let index = runSlots.firstIndex(where: { $0.id == id }) else {
+            return
+        }
+        change(&runSlots[index])
+    }
+
+    /// Every failure a run publishes, named with the run it belongs to. `AppDelegate` posts the
+    /// failure notification off this rather than off one property, because a run in the background
+    /// fails exactly as loudly as the one on screen.
+    let errorMessageRaised = PassthroughSubject<(RunID, String), Never>()
+
+    /// Every approval a run parks, named with the run and the token that approval was minted with,
+    /// so the notification's Allow answers that approval and nothing else.
+    let approvalParked = PassthroughSubject<(RunID, UUID, RiskApprovalRequest), Never>()
+
+    var isRunning: Bool {
+        get { runSlotInScope.isRunning }
+        set {
+            let wasRunning = runSlotInScope.isRunning
+            updateRunSlotInScope { $0.isRunning = newValue }
             // A run starting minimises the widget into the run pill (SONNY-450): every run, from
             // every origin, because the founders asked for the widget to get out of the way the
             // moment Sonny starts. The flag is the user's half of the rule; `isWidgetMinimised`
             // derives the rest.
-            if isRunning, !oldValue {
+            if newValue, !wasRunning {
                 widgetWasExpandedForThisRun = false
             }
         }
     }
-    @Published var plan: AgentPlan?
-    @Published var finalSummary: String = ""
-    @Published var errorMessage: String?
+    var plan: AgentPlan? {
+        get { runSlotInScope.plan }
+        set {
+            updateRunSlotInScope { $0.plan = newValue }
+        }
+    }
+    var finalSummary: String {
+        get { runSlotInScope.finalSummary }
+        set {
+            updateRunSlotInScope { $0.finalSummary = newValue }
+        }
+    }
+    var errorMessage: String? {
+        get { runSlotInScope.errorMessage }
+        set {
+            updateRunSlotInScope { $0.errorMessage = newValue }
+            if let newValue {
+                errorMessageRaised.send((runIDInScope, newValue))
+            }
+        }
+    }
     /// Whether the current `errorMessage` is a persistent configuration problem (missing API key,
     /// denied mic permission, unavailable hotkey) that will keep being true until the user actually
     /// fixes their setup — as opposed to a transient, one-off outcome (a failed task, an empty
@@ -27,11 +97,36 @@ final class AgentViewModel: ObservableObject {
     /// undismissable overlay, so a persistent problem needs to keep saying so, but a transient one
     /// sitting there forever after the moment has passed is exactly as stale as the bug this was
     /// built to fix. Set via `setError(_:persistent:)`, never assigned directly.
-    @Published private(set) var errorIsPersistent: Bool = false
-    @Published var clarificationQuestion: String?
-    @Published var clarificationAnswer: String = ""
-    @Published var suggestions: [RunSuggestion] = []
-    @Published var stepStatuses: [String: AgentStepStatus] = [:]
+    private(set) var errorIsPersistent: Bool {
+        get { runSlotInScope.errorIsPersistent }
+        set {
+            updateRunSlotInScope { $0.errorIsPersistent = newValue }
+        }
+    }
+    var clarificationQuestion: String? {
+        get { runSlotInScope.clarificationQuestion }
+        set {
+            updateRunSlotInScope { $0.clarificationQuestion = newValue }
+        }
+    }
+    var clarificationAnswer: String {
+        get { runSlotInScope.clarificationAnswer }
+        set {
+            updateRunSlotInScope { $0.clarificationAnswer = newValue }
+        }
+    }
+    var suggestions: [RunSuggestion] {
+        get { runSlotInScope.suggestions }
+        set {
+            updateRunSlotInScope { $0.suggestions = newValue }
+        }
+    }
+    var stepStatuses: [String: AgentStepStatus] {
+        get { runSlotInScope.stepStatuses }
+        set {
+            updateRunSlotInScope { $0.stepStatuses = newValue }
+        }
+    }
     @Published var isPreparingVoiceRecording: Bool = false
     @Published var isRecordingVoice: Bool = false
     @Published var isTranscribingVoice: Bool = false
@@ -171,18 +266,53 @@ final class AgentViewModel: ObservableObject {
     /// refreshes this one too rather than needing to learn about it.
     @Published var standingWatchers: [StandingWatcher] = []
     @Published var savedWorkspaces: [StoredWorkspace] = []
-    @Published var approvalRequest: RiskApprovalRequest?
+    /// The approval parked on the run in scope. Setting one mints the run's `approvalToken` and
+    /// announces it on `approvalParked`; clearing it clears the token, so a stale answer finds
+    /// nothing to approve (SONNY-456).
+    var approvalRequest: RiskApprovalRequest? {
+        get { runSlotInScope.approvalRequest }
+        set {
+            let token: UUID? = newValue == nil ? nil : UUID()
+            updateRunSlotInScope {
+                $0.approvalRequest = newValue
+                $0.approvalToken = token
+            }
+            if let newValue, let token {
+                approvalParked.send((runIDInScope, token, newValue))
+            }
+        }
+    }
     /// The Safe-mode capture preview waiting for an answer, or `nil`. Safe mode only — founder
     /// decision 2 (2026-08-14) has Safe show each capture before it is sent.
-    @Published var visionCapturePreview: VisionCapturePreview?
+    var visionCapturePreview: VisionCapturePreview? {
+        get { runSlotInScope.visionCapturePreview }
+        set {
+            updateRunSlotInScope { $0.visionCapturePreview = newValue }
+        }
+    }
     /// What the running vision session is doing, for the HUD. `nil` when no session is live.
-    @Published var visionSessionProgress: VisionSessionProgress?
+    var visionSessionProgress: VisionSessionProgress? {
+        get { runSlotInScope.visionSessionProgress }
+        set {
+            updateRunSlotInScope { $0.visionSessionProgress = newValue }
+        }
+    }
     /// The delegation waiting for a Safe-mode answer, or `nil`. Safe mode only — founder decision 4
     /// (2026-08-14) has Safe ask before a delegation fires while Normal and Power never do.
-    @Published var visionDelegationRequest: VisionDelegationRequest?
+    var visionDelegationRequest: VisionDelegationRequest? {
+        get { runSlotInScope.visionDelegationRequest }
+        set {
+            updateRunSlotInScope { $0.visionDelegationRequest = newValue }
+        }
+    }
     /// A session paused because the user stopped being at the Mac, or `nil`. Resuming is an explicit
     /// action (SONNY-94): nothing here resolves on a timer or on the screen simply unlocking.
-    @Published var visionSessionPause: VisionSessionPause?
+    var visionSessionPause: VisionSessionPause? {
+        get { runSlotInScope.visionSessionPause }
+        set {
+            updateRunSlotInScope { $0.visionSessionPause = newValue }
+        }
+    }
     /// The ran-without-asking trace for the last completed run (SONNY-99, reshaped by the
     /// consequence rule 2026-08-13), or `nil` when the run's silence was ordinary — tier 0/1, a
     /// prompt that was answered, or a routine covered by its own trust toggle. The sentence itself
@@ -190,7 +320,12 @@ final class AgentViewModel: ObservableObject {
     /// SwiftUI inspection harness exists to pin what a view renders. Set only after a silent run
     /// actually executed (a run that drifted to a prompt was disclosed by the prompt), cleared at
     /// the start of every task, and untouched by the scheduled path, which never writes it.
-    @Published private(set) var ranWithoutAskingTrace: String?
+    private(set) var ranWithoutAskingTrace: String? {
+        get { runSlotInScope.ranWithoutAskingTrace }
+        set {
+            updateRunSlotInScope { $0.ranWithoutAskingTrace = newValue }
+        }
+    }
     @Published var clipboardHistoryEnabled: Bool = true
     /// The Memory section's switches, composed from the user's own choices and the enterprise
     /// policy (SONNY-208). `private(set)` because every write goes through `setMemoryEnabled(_:)`
@@ -238,7 +373,12 @@ final class AgentViewModel: ObservableObject {
     /// runs", 2026-08-31); it is what the user watches, not something Sonny remembers, so it must not
     /// be gated on a memory switch. The two are computed by the same `ItemJobProgress.of` from the
     /// same three inputs, so they cannot disagree about what they both cover.
-    @Published private(set) var itemJobProgress: ItemJobProgress?
+    private(set) var itemJobProgress: ItemJobProgress? {
+        get { runSlotInScope.itemJobProgress }
+        set {
+            updateRunSlotInScope { $0.itemJobProgress = newValue }
+        }
+    }
     /// Every store whose file will not read, as of the last probe (SONNY-239).
     ///
     /// **The one source both the Memory page's words and its Delete read**, which is the whole of
@@ -298,7 +438,12 @@ final class AgentViewModel: ObservableObject {
     /// the files the press removes are one listing.
     @Published private(set) var setAsideFilesSummary: SetAsideFilesSummary = .none
     @Published var priorTaskContext: PriorTaskContext?
-    @Published var taskUsageSummary: TaskUsageSummary = .empty
+    var taskUsageSummary: TaskUsageSummary {
+        get { runSlotInScope.taskUsageSummary }
+        set {
+            updateRunSlotInScope { $0.taskUsageSummary = newValue }
+        }
+    }
     @Published var taskHistoryRecords: [CompletedTaskRecord] = []
     /// The Tasks page's search query.
     ///
@@ -385,13 +530,50 @@ final class AgentViewModel: ObservableObject {
     /// **Acknowledged means the user acted**, not that the widget came forward: it clears when they
     /// retry or submit another command, and deliberately *not* when the panel is merely fronted.
     /// Being on screen is not the same as being read, which is this ticket's whole premise.
-    @Published private(set) var outcomeWasNotified: Bool = false
+    private(set) var outcomeWasNotified: Bool {
+        get { runSlotInScope.outcomeWasNotified }
+        set {
+            updateRunSlotInScope { $0.outcomeWasNotified = newValue }
+        }
+    }
 
     /// Records that the outcome now on screen reached the user as a notification. Called by
     /// `AppDelegate` immediately after it posts one, because the gate that decided to post is its
     /// to evaluate.
     func markOutcomeAsNotified() {
         outcomeWasNotified = true
+    }
+
+    /// The same, for a named run rather than the one in scope — the failure the delegate notified
+    /// about may belong to a run the widget is not showing (SONNY-456).
+    func markOutcomeAsNotified(for runID: RunID) {
+        RunScope.$current.withValue(runID) {
+            markOutcomeAsNotified()
+        }
+    }
+
+    /// Approves the approval parked on `runID`, and only if it is still the one minted with `token`
+    /// (SONNY-456). Returns whether it approved anything.
+    ///
+    /// **The one door by which an approval is answered for a named run.** Every other Allow reaches
+    /// `approvePendingRun` through `start()` and acts on the run in scope, which outside a run is the
+    /// run the widget is focused on — right for a control drawn on that run's own panel, and wrong for
+    /// anything that was drawn for a run and pressed later, like a notification. So the run and the
+    /// token travel with the control, and this refuses when either no longer matches: another run's
+    /// question, a question since answered, or a later question on the same run all find nothing.
+    @discardableResult
+    func approveParkedRun(_ runID: RunID, token: UUID) -> Bool {
+        guard let slot = runSlots.first(where: { $0.id == runID }),
+              slot.approvalRequest != nil,
+              slot.approvalToken == token
+        else {
+            logStore.append(.observe, "Not approved: that question is no longer waiting.")
+            return false
+        }
+        RunScope.$current.withValue(runID) {
+            approvePendingRun()
+        }
+        return true
     }
     /// Local-storage health, kept deliberately separate from `errorMessage`: a corrupt store or
     /// a failed save is about Sonny's own data, not about the task the user just ran, and must
@@ -452,7 +634,12 @@ final class AgentViewModel: ObservableObject {
     /// through `start()` and reassign this, but `submitClarification()` passes the preserved
     /// original origin, so the observable value still doesn't change across the pause. See
     /// `TaskOrigin`.
-    @Published private(set) var activeTaskOrigin: TaskOrigin = .commandCenter
+    private(set) var activeTaskOrigin: TaskOrigin {
+        get { runSlotInScope.activeTaskOrigin }
+        set {
+            updateRunSlotInScope { $0.activeTaskOrigin = newValue }
+        }
+    }
     /// Bump counter every hand-driven "bring the widget forward and take focus" entry point goes
     /// through — Command Center's "New routine"/"Create workspace" quick actions (which pre-fill
     /// `command` with a starting phrase and need somewhere for the user to finish typing it, now
@@ -536,18 +723,53 @@ final class AgentViewModel: ObservableObject {
 
     let logStore = AgentLogStore()
 
-    private var preparedRun: PreparedAgentRun?
-    private var runner: AgentRunner?
-    private var currentTask: Task<Void, Never>?
+    private var preparedRun: PreparedAgentRun? {
+        get { runSlotInScope.preparedRun }
+        set {
+            updateRunSlotInScope { $0.preparedRun = newValue }
+        }
+    }
+    private var runner: AgentRunner? {
+        get { runSlotInScope.runner }
+        set {
+            updateRunSlotInScope { $0.runner = newValue }
+        }
+    }
+    private var currentTask: Task<Void, Never>? {
+        get { runSlotInScope.currentTask }
+        set {
+            updateRunSlotInScope { $0.currentTask = newValue }
+        }
+    }
     /// The parked mid-loop vision approval, and the parked Safe-mode capture preview.
     ///
     /// `var` rather than `private var` so the vision extension in
     /// `AgentViewModel+VisionSession.swift` can reach them — Swift's `private` is file-scoped, and
     /// the alternative was putting 200 lines of vision code in this 2,600-line file.
-    var visionApprovalContinuation: CheckedContinuation<RiskApprovalDecision?, Never>?
-    var visionCaptureContinuation: CheckedContinuation<Bool, Never>?
-    var visionDelegationContinuation: CheckedContinuation<Bool, Never>?
-    var visionResumeContinuation: CheckedContinuation<Bool, Never>?
+    var visionApprovalContinuation: CheckedContinuation<RiskApprovalDecision?, Never>? {
+        get { runSlotInScope.visionApprovalContinuation }
+        set {
+            updateRunSlotInScope { $0.visionApprovalContinuation = newValue }
+        }
+    }
+    var visionCaptureContinuation: CheckedContinuation<Bool, Never>? {
+        get { runSlotInScope.visionCaptureContinuation }
+        set {
+            updateRunSlotInScope { $0.visionCaptureContinuation = newValue }
+        }
+    }
+    var visionDelegationContinuation: CheckedContinuation<Bool, Never>? {
+        get { runSlotInScope.visionDelegationContinuation }
+        set {
+            updateRunSlotInScope { $0.visionDelegationContinuation = newValue }
+        }
+    }
+    var visionResumeContinuation: CheckedContinuation<Bool, Never>? {
+        get { runSlotInScope.visionResumeContinuation }
+        set {
+            updateRunSlotInScope { $0.visionResumeContinuation = newValue }
+        }
+    }
     /// The wrapper the HUD's Pause writes to, held so the resume path can clear it. Set when the
     /// vision environment is built; `nil` in a build with no screen-control wiring.
     var visionUserPauseMonitor: UserPausableAttentionMonitor?
@@ -563,7 +785,12 @@ final class AgentViewModel: ObservableObject {
     }
     /// The journal id of the session this task is running, or `nil`. Read once when the task's
     /// history row is written, then cleared with the rest of the per-task state.
-    var activeVisionSessionID: String?
+    var activeVisionSessionID: String? {
+        get { runSlotInScope.activeVisionSessionID }
+        set {
+            updateRunSlotInScope { $0.activeVisionSessionID = newValue }
+        }
+    }
     /// The grants file's contents for the iteration currently running, or `nil` outside one.
     ///
     /// Non-`nil` only between `visionIterationWillBegin()` and the run teardown that clears it, so
@@ -571,7 +798,12 @@ final class AgentViewModel: ObservableObject {
     /// (SONNY-202). Deliberately not a session-long cache: `visionAppControlState`'s contract is
     /// that a grant revoked mid-session ends the session at the *next* iteration, and a cache that
     /// outlived an iteration would defer that to the next launch.
-    private var approvedAppsForThisVisionIteration: (apps: [ApprovedApp], failure: String?)?
+    private var approvedAppsForThisVisionIteration: (apps: [ApprovedApp], failure: String?)? {
+        get { runSlotInScope.approvedAppsForThisVisionIteration }
+        set {
+            updateRunSlotInScope { $0.approvedAppsForThisVisionIteration = newValue }
+        }
+    }
     private let audioRecorder: AudioCommandRecorder
     /// The scheduled auto-stop for the recording currently running, `nil` when none is scheduled.
     ///
@@ -745,7 +977,12 @@ final class AgentViewModel: ObservableObject {
     /// have nothing to join them on. `beginNewTaskIdentity()` is the one place it moves, and it
     /// moves with the usage recorder's reset — the two have exactly the same lifetime, which is why
     /// they are one function rather than two lines that have to be remembered together.
-    private(set) var currentTaskID = UUID().uuidString
+    private(set) var currentTaskID: String {
+        get { runSlotInScope.currentTaskID }
+        set {
+            updateRunSlotInScope { $0.currentTaskID = newValue }
+        }
+    }
     private let userDefaults: UserDefaults
     /// The one whitelist every path this view model owns reasons with. Injectable so the
     /// ProductShell suite can drive the *real* dispatch path against a temp directory — the class
@@ -766,13 +1003,28 @@ final class AgentViewModel: ObservableObject {
     /// Label for the currently-running scheduled routine. Separate from `lastCommand` so a
     /// background run can drive the running indicator without becoming the retry or follow-up
     /// target — see `performScheduledRun`.
-    private var scheduledRunDisplayCommand: String?
+    private var scheduledRunDisplayCommand: String? {
+        get { runSlotInScope.scheduledRunDisplayCommand }
+        set {
+            updateRunSlotInScope { $0.scheduledRunDisplayCommand = newValue }
+        }
+    }
     private var wakeObserver: (any NSObjectProtocol)?
-    private var clarificationAutoExecute = false
+    private var clarificationAutoExecute: Bool {
+        get { runSlotInScope.clarificationAutoExecute }
+        set {
+            updateRunSlotInScope { $0.clarificationAutoExecute = newValue }
+        }
+    }
     /// Preserves the original task's origin across the clarification pause, same pattern as
     /// `clarificationAutoExecute` — `submitClarification()`
     /// re-calls `start()`, which would otherwise silently reset origin to its default.
-    private var clarificationOrigin: TaskOrigin = .commandCenter
+    private var clarificationOrigin: TaskOrigin {
+        get { runSlotInScope.clarificationOrigin }
+        set {
+            updateRunSlotInScope { $0.clarificationOrigin = newValue }
+        }
+    }
     /// The workspace this **in-flight task** is bound to, and the value handed to both
     /// `AgentRunner.approvalRequest` and `AgentRunner.execute`.
     ///
@@ -791,14 +1043,24 @@ final class AgentViewModel: ObservableObject {
     /// every `activeTaskScope = .unscoped` site happens to sit in the same synchronous scope as some
     /// other published write (`isRunning`, `approvalRequest`). Nothing in the type system held that
     /// pairing, so the chip's correctness was incidental.
-    @Published private(set) var activeTaskScope: TaskWorkspaceScope = .unscoped
+    private(set) var activeTaskScope: TaskWorkspaceScope {
+        get { runSlotInScope.activeTaskScope }
+        set {
+            updateRunSlotInScope { $0.activeTaskScope = newValue }
+        }
+    }
     /// The scope the most recent task was *assessed* under, kept after `activeTaskScope` is cleared.
     ///
     /// `activeTaskScope` is the live binding and is `.unscoped` again the moment a task terminates,
     /// which is correct but makes the value unobservable exactly when a test wants to check it. This
     /// records what the run actually used. Not consumed by any view — it exists so the binding's
     /// behaviour is assertable rather than inferred from a side effect.
-    private(set) var lastAssessedScope: TaskWorkspaceScope = .unscoped
+    private(set) var lastAssessedScope: TaskWorkspaceScope {
+        get { runSlotInScope.lastAssessedScope }
+        set {
+            updateRunSlotInScope { $0.lastAssessedScope = newValue }
+        }
+    }
 
     /// The workspace the composer is currently bound to, for the widget's indicator — the in-flight
     /// binding once a task is running, otherwise the one a card dispatch queued for the next
@@ -815,11 +1077,21 @@ final class AgentViewModel: ObservableObject {
     /// `nil` means "no dispatch named one", which is honestly the case for every caller today and is
     /// why this default is safe where a defaulted `scope:` would not be: `nil` does not switch a
     /// check off, it hands the question to `WorkspaceTaskTagging` instead.
-    private var explicitWorkspaceBinding: String?
+    private var explicitWorkspaceBinding: String? {
+        get { runSlotInScope.explicitWorkspaceBinding }
+        set {
+            updateRunSlotInScope { $0.explicitWorkspaceBinding = newValue }
+        }
+    }
     /// Preserves the explicit binding across a clarification pause, exactly as
     /// `clarificationOrigin` preserves the origin — `submitClarification()` re-enters `start()`,
     /// which would otherwise drop it.
-    private var clarificationWorkspaceBinding: String?
+    private var clarificationWorkspaceBinding: String? {
+        get { runSlotInScope.clarificationWorkspaceBinding }
+        set {
+            updateRunSlotInScope { $0.clarificationWorkspaceBinding = newValue }
+        }
+    }
     /// What the paused run was submitted with, held across a clarification pause so that answering
     /// the question continues the user's **request** rather than replacing it (SONNY-248).
     ///
@@ -845,7 +1117,12 @@ final class AgentViewModel: ObservableObject {
     ///
     /// Cleared at the same three sites as the three values above — answering, abandoning, and the
     /// local-data wipe — because its lifecycle is exactly theirs.
-    private var clarificationSubmittedCommand: String?
+    private var clarificationSubmittedCommand: String? {
+        get { runSlotInScope.clarificationSubmittedCommand }
+        set {
+            updateRunSlotInScope { $0.clarificationSubmittedCommand = newValue }
+        }
+    }
     /// The workspace a card dispatch named for the **next** command, before one has been typed.
     ///
     /// A pre-dispatch slot, not a second lifecycle: `start()` consumes it into SONNY-38's
@@ -898,14 +1175,29 @@ final class AgentViewModel: ObservableObject {
     /// readable so a test can assert what a dispatch actually *submitted*. `start` clears `command`
     /// synchronously right after capturing it, so the live property is empty by the time any caller
     /// returns — this is the only observable record of the text a run was started with.
-    private(set) var lastCommand = ""
+    private(set) var lastCommand: String {
+        get { runSlotInScope.lastCommand }
+        set {
+            updateRunSlotInScope { $0.lastCommand = newValue }
+        }
+    }
     /// Not `private`, for the reason `scheduleVoiceRecordingAutoStop` gives its own visibility: the
     /// only real path that sets it (`beginPushToTalkVoice`) reaches `AVCaptureDevice.requestAccess`,
     /// which a test cannot cross, so a test that needs the physical key still held while a
     /// recording ends on its own (the auto-stop) sets this directly instead.
     var isPushToTalkHotKeyDown = false
-    private var pendingCommandForPriorTaskContext: String?
-    private var pendingTaskHistoryStartedAt: Date?
+    private var pendingCommandForPriorTaskContext: String? {
+        get { runSlotInScope.pendingCommandForPriorTaskContext }
+        set {
+            updateRunSlotInScope { $0.pendingCommandForPriorTaskContext = newValue }
+        }
+    }
+    private var pendingTaskHistoryStartedAt: Date? {
+        get { runSlotInScope.pendingTaskHistoryStartedAt }
+        set {
+            updateRunSlotInScope { $0.pendingTaskHistoryStartedAt = newValue }
+        }
+    }
     /// The unfinished-run record this task is checkpointing into, or `nil` when it has none —
     /// because memory is off for it, because "Don't save this task" is on, because the plan was too
     /// large to keep, or because the run never reached a plan (row 13, SONNY-210).
@@ -914,16 +1206,36 @@ final class AgentViewModel: ObservableObject {
     /// `executePreparedRun` reads `chainedArtifactPath` to seed a resumed chain, and a settle needs
     /// the id. One slot answers all three, and the alternative — an id plus a re-read per unit — is
     /// a decrypt on the hot path to recover something this object already had.
-    private var activeResumableTask: ResumableTask?
+    private var activeResumableTask: ResumableTask? {
+        get { runSlotInScope.activeResumableTask }
+        set {
+            updateRunSlotInScope { $0.activeResumableTask = newValue }
+        }
+    }
     /// The three inputs `itemJobProgress` is computed from, for the run in flight (SONNY-235).
     ///
     /// Reset by `initializeStepStatuses(for:)`, which is the single site every dispatch passes with
     /// the plan it is about to run — so a run that is not a job clears what the last one left, and a
     /// finished job's final "38 of 40" stays readable beside its result until the next dispatch
     /// rather than blanking the moment the run returns.
-    private var activeItemJobPlan: AgentPlan?
-    private var activeItemJobCompletedStepIDs: [String] = []
-    private var activeItemJobFailures: [ItemJobFailure] = []
+    private var activeItemJobPlan: AgentPlan? {
+        get { runSlotInScope.activeItemJobPlan }
+        set {
+            updateRunSlotInScope { $0.activeItemJobPlan = newValue }
+        }
+    }
+    private var activeItemJobCompletedStepIDs: [String] {
+        get { runSlotInScope.activeItemJobCompletedStepIDs }
+        set {
+            updateRunSlotInScope { $0.activeItemJobCompletedStepIDs = newValue }
+        }
+    }
+    private var activeItemJobFailures: [ItemJobFailure] {
+        get { runSlotInScope.activeItemJobFailures }
+        set {
+            updateRunSlotInScope { $0.activeItemJobFailures = newValue }
+        }
+    }
     /// The record the **next dispatch** carries on, or `nil` when that dispatch is a task of its
     /// own (row 13, SONNY-210; the second kind added by PR #105 review F1).
     ///
@@ -991,7 +1303,12 @@ final class AgentViewModel: ObservableObject {
     /// publish**; the other one, `resumableTasks`, already does, and
     /// `decliningTheOfferPublishesSoTheWidgetRepaints` holds this one.
     @Published private var declinedResumeOfferIDs: Set<String> = []
-    private var preserveUsageForNextStart = false
+    private var preserveUsageForNextStart: Bool {
+        get { runSlotInScope.preserveUsageForNextStart }
+        set {
+            updateRunSlotInScope { $0.preserveUsageForNextStart = newValue }
+        }
+    }
     private let finderRevealer: @MainActor @Sendable ([URL]) -> Void
     private var localStorageLoadFailures: [LocalStorageLoadFailureSource: String] = [:]
     /// Last clipboard-poll failure text, so a repeating 1s failure is reported once, not 60×/min.
@@ -1423,6 +1740,9 @@ final class AgentViewModel: ObservableObject {
         userDefaults: UserDefaults = .standard,
         whitelist: PathWhitelist = PathWhitelist()
     ) {
+        let firstSlot = RunSlot()
+        runSlots = [firstSlot]
+        focusedRunID = firstSlot.id
         self.userDefaults = userDefaults
         usePointerCursors = userDefaults.object(forKey: UserDefaultsKeys.usePointerCursors) as? Bool ?? true
         displayFullNames = userDefaults.object(forKey: UserDefaultsKeys.displayFullNames) as? Bool ?? false
@@ -2452,15 +2772,20 @@ final class AgentViewModel: ObservableObject {
         // beside a calculation. A published pair that is read together is assigned together.
         plan = nil
         isRunning = true
+        // The run's work is bound to its own slot here, the one place it begins (SONNY-456), and
+        // everything `performStart` awaits inherits the binding — `RunScope` says why.
+        let runID = runIDInScope
         currentTask = Task {
-            await performStart(
-                submittedCommand: submittedCommand,
-                autoExecute: autoExecute,
-                origin: origin,
-                prebuiltPlan: prebuiltPlan,
-                prebuiltPlanSource: prebuiltPlanSource,
-                continuing: continuation
-            )
+            await RunScope.$current.withValue(runID) {
+                await performStart(
+                    submittedCommand: submittedCommand,
+                    autoExecute: autoExecute,
+                    origin: origin,
+                    prebuiltPlan: prebuiltPlan,
+                    prebuiltPlanSource: prebuiltPlanSource,
+                    continuing: continuation
+                )
+            }
         }
     }
 
@@ -7335,8 +7660,13 @@ final class AgentViewModel: ObservableObject {
 
         currentTask?.cancel()
         isRunning = true
+        // The approved run executes in the slot it parked in, which is the slot these four reads
+        // came from (SONNY-456).
+        let runID = runIDInScope
         currentTask = Task {
-            await performApproval(preparedRun: preparedRun, runner: runner, approvalRequest: approvalRequest)
+            await RunScope.$current.withValue(runID) {
+                await performApproval(preparedRun: preparedRun, runner: runner, approvalRequest: approvalRequest)
+            }
         }
     }
 
@@ -8411,12 +8741,18 @@ final class AgentViewModel: ObservableObject {
             // submission: it feeds `hasRetryableCommand` and `retryLastCommand()`, so overwriting
             // it here would point the widget's Retry button at a routine the user never ran.
             // `runningCommandDisplayText` reads the scheduled label separately while this runs.
+            // Bound to the slot it started in, like every run (SONNY-456): the timer that got here
+            // is outside any run, so without the binding the routine's own `isRunning = false`
+            // would land on whichever run the widget was focused on when it finished.
+            let runID = runIDInScope
             currentTask = Task {
-                await performScheduledRun(
-                    next.routine,
-                    occurrence: occurrence,
-                    restoringOriginTo: previousOrigin
-                )
+                await RunScope.$current.withValue(runID) {
+                    await performScheduledRun(
+                        next.routine,
+                        occurrence: occurrence,
+                        restoringOriginTo: previousOrigin
+                    )
+                }
             }
         }
     }

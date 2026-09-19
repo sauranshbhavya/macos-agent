@@ -1381,7 +1381,20 @@ struct ProductShellTests {
             "clientVersionState",
             "clientVersionObservation",
             "hasDismissedUpdateAvailablePrompt",
-            "openUpgradeLink"
+            "openUpgradeLink",
+
+            // 8. The runs themselves (SONNY-456). Every property that used to describe "the" run
+            // lives in a `RunSlot` now and is classified above under its own name, in the group it
+            // was always in — the population below reads a slot's properties beside the view
+            // model's, so none of them left the check by moving. What is left here is the
+            // container: `runSlots` holds the slots, `focusedRunID` names the one the widget
+            // shows, and a slot's `id` is its identity; none is data a wipe could find, and each
+            // property inside a slot is classified by name. `approvalToken` is written only by
+            // `approvalRequest`'s setter, beside it, so it is cleared exactly when that is — it has
+            // no assignment of its own for the function to make. The two subjects are channels
+            // the delegate listens on, not state.
+            "runSlots", "focusedRunID", "id", "approvalToken",
+            "errorMessageRaised", "approvalParked"
         ]
 
         let fixture = try makeProductShellFixture()
@@ -1389,11 +1402,15 @@ struct ProductShellTests {
 
         // The population: every stored property of the real instance, published or not. Property
         // wrappers store under a leading underscore, so `_plan` is `plan`.
+        //
+        // **And every property of a run's slot** (SONNY-456). The run's state moved out of the view
+        // model into `RunSlot`, so reflecting the view model alone would have let every per-run
+        // property leave this check silently — the opposite of what the check is for.
         let stored = Set(
             Mirror(reflecting: fixture.viewModel).children
                 .compactMap(\.label)
                 .map { $0.hasPrefix("_") ? String($0.dropFirst()) : $0 }
-        )
+        ).union(Mirror(reflecting: RunSlot()).children.compactMap(\.label))
         #expect(
             stored.count > 60,
             "Reflection saw \(stored.count) stored properties — too few to be the real view model."

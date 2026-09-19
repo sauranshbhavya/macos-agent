@@ -262,7 +262,15 @@ struct StandingWatcherRunTests {
         )
         #expect(!subscription.contains("isUserWorkingInSonny"))
 
-        for gated in ["viewModel.$scheduledRunNotice", "viewModel.$localStorageNotice", "viewModel.$errorMessage"] {
+        // The failure channel is `errorMessageRaised` since SONNY-456, which reads every run's
+        // failures rather than one published property's; the gate it must carry is unchanged, and so
+        // are the approval channel's (`approvalParked`), which is listed beside it for that reason.
+        for gated in [
+            "viewModel.$scheduledRunNotice",
+            "viewModel.$localStorageNotice",
+            "viewModel.errorMessageRaised",
+            "viewModel.approvalParked"
+        ] {
             let other = try MacAgentSource.region(of: delegate, from: gated, to: ".store(in: &cancellables)")
             #expect(
                 other.contains("!isUserWorkingInSonny"),

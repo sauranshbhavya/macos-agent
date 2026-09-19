@@ -36,7 +36,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// window only on a change.
     private var appliedWidgetMinimised = false
     private lazy var notificationService = SonnyNotificationService(
-        onAllow: { [weak self] in self?.viewModel.start() },
+        // The run and the approval travel with the notification (SONNY-456): with more than one
+        // run, "whatever is parked now" can be a different run's question, or a later one on the
+        // same run, and a banner's Allow must answer only the question it was posted for.
+        onAllow: { [weak self] runID, token in
+            guard let runID, let token else { return }
+            self?.viewModel.approveParkedRun(runID, token: token)
+        },
         onRetry: { [weak self] in self?.viewModel.retryLastCommand() },
         // Routed through the presentation counter rather than calling `show()` directly, so every
         // hand-driven summon converges on the one mechanism SONNY-8 built. That also buys the
@@ -365,27 +371,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        viewModel.$approvalRequest
-            .compactMap { $0 }
-            .sink { [weak self] request in
+        // Every run's approvals and failures, not only the focused run's (SONNY-456): a run in the
+        // background needs the user exactly as much as the one on screen.
+        viewModel.approvalParked
+            .sink { [weak self] runID, token, request in
                 guard let self, !isUserWorkingInSonny else {
                     return
                 }
-                notificationService.postPermissionNotification(resource: request.approvalCopy.involvedResource)
+                notificationService.postPermissionNotification(
+                    resource: request.approvalCopy.involvedResource,
+                    runID: runID.description,
+                    approvalToken: token.uuidString
+                )
             }
             .store(in: &cancellables)
 
-        viewModel.$errorMessage
-            .compactMap { $0 }
-            .sink { [weak self] message in
+        viewModel.errorMessageRaised
+            .sink { [weak self] runID, message in
                 guard let self, !isUserWorkingInSonny else {
                     return
                 }
                 notificationService.postErrorNotification(message: message)
                 // The user was pulled away, so this outcome must still be here when they come back
                 // (SONNY-121). The gate above is the only thing that knows they were elsewhere, so
-                // recording it here is not a convenience — the view model cannot work it out.
-                viewModel.markOutcomeAsNotified()
+                // recording it here is not a convenience — the view model cannot work it out. It is
+                // recorded on the run that failed, which need not be the one on screen.
+                viewModel.markOutcomeAsNotified(for: runID)
             }
             .store(in: &cancellables)
 
@@ -516,19 +527,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// **Placed after the notification subscriptions on purpose.** `StandingWatcherRunTests` finds the
-    /// notification channels by the *first* `viewModel.$errorMessage` in this file and reads the
+    /// notification channels by the *first* `viewModel.errorMessageRaised` in this file and reads the
     /// region up to its `.store`, expecting the `!isUserWorkingInSonny` gate; this observer reads the
-    /// same publisher with no gate (it is not a notification), so it has to come later in the file.
+    /// runs with no gate (it is not a notification), so it has to come later in the file.
     /// The menu-bar glyph follows Sonny's state, so a user in another app can see whether Sonny is
     /// working, waiting for them, or stopped on a failure without opening anything. The mapping
     /// lives in `StatusItemPresentation`; this only applies it. Template images take
     /// `contentTintColor` on a status-bar button, so the idle state hands the tint back to the bar.
+    ///
+    /// **Across every run** (SONNY-456): the glyph says whether *anything* is running, waiting or
+    /// failed, because a menu bar that described only the run the widget is focused on would read
+    /// idle while a second run waits for an answer.
     private func observeStatusItemState() {
-        Publishers.CombineLatest3(
-            viewModel.$isRunning,
-            viewModel.$approvalRequest.map { $0 != nil },
-            viewModel.$errorMessage.map { $0 != nil }
-        )
+        viewModel.$runSlots
+        .map { slots in
+            (
+                slots.contains { $0.isRunning },
+                slots.contains { $0.approvalRequest != nil },
+                slots.contains { $0.errorMessage != nil }
+            )
+        }
         .map { isRunning, isAwaitingApproval, hasFailure in
             StatusItemPresentation.forState(
                 isRunning: isRunning,
