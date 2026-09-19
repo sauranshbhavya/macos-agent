@@ -15,7 +15,7 @@ Same packaged app. Sign in to HubSpot yourself first.
 - [ ] Ask it to change a property on one of your HubSpot contacts. It opens CRM → Contacts, the contact's record, and the property on a card in the left sidebar or middle column. If the property is not shown, it uses Actions → View all properties.
 - [ ] Nothing in either proposal touches billing, a subscription or a payment.
 
-### The twelve new packs' start pages sign in an existing account, with account creation a separate route (new 2026-09-18, SONNY-518)
+### The fourteen new packs' start pages sign in an existing account, with account creation a separate route or none at all (new 2026-09-18, SONNY-518)
 
 No app needed — a browser signed out of everything, which is what Sonny meets on a fresh Mac. Each was read twice on 2026-09-18. If a page has moved, note what it shows now. Type nothing and press no provider button.
 
@@ -26,8 +26,10 @@ No app needed — a browser signed out of everything, which is what Sonny meets 
 - [ ] `https://www.kommo.com/login/` — "Log in": email and password, Google and Facebook. "Sign up" in the header opens a different "Create your account" form.
 - [ ] `https://login.insightly.com/User/Login` — "Log in to continue": Google, Microsoft or email, with "Create an account" linking to `/User/Signup`.
 - [ ] `https://app.clay.com/login` — "Welcome back!": Google or email, with "Don't have an account? Sign up" linking to `/signup`.
-- [ ] `https://app.honeybook.com/app/login` — "Welcome back": email and password, Google and Apple, with "Don't have a business account? Create one". The page can take ten seconds or more to draw.
+- [ ] `https://app.honeybook.com/app/login` — "Welcome back": email and password, Google and Apple, with "Don't have a business account? Create one". The page can take ten seconds or more to draw. The tab's title is sometimes "Login | HoneyBook" and sometimes empty; note which one you see.
 - [ ] `https://contactout.com/login` — "Login": email and password, with "Sign up" linking to `/register`.
 - [ ] `https://app.rocketreach.co/login` — goes to `rocketreach.co/login`: email and password, with "Don't have an account? Sign up!" linking to `/signup`.
-- [ ] `https://app.hubspot.com/login` — "Sign in or create an account" over one email field. "create an account" is a link to a separate page, `/signup-hubspot/crm`, not part of the form. This is the one close to the line: say whether you read it the same way.
-- [ ] `https://app.gong.io/` — goes to `/welcome/sign-in`: Google, Salesforce, Office 365 or email, with "Don't have an account? Request a demo" and no sign-up. It passes because Gong has no self-serve sign-up anywhere: www.gong.io offers Book a demo and Talk to sales, and its pricing page is a form asking for a proposal.
+- [ ] `https://app.hubspot.com/login` — the page reads, verbatim, "Sign in or create an account". The form itself is only "Email" and "Continue": no password field, no provider button, no heading. "create an account" is a link outside the form to a separate page, `/signup-hubspot/crm`. It passes as a boundary case (SONNY-510, beside Plaud); say whether the page still reads that way.
+- [ ] `https://app.gong.io/` — goes to `/welcome/sign-in`: Google, Salesforce, Office 365 or email, with "Don't have an account? Request a demo" and no sign-up. It passes because Gong has no self-serve sign-up anywhere. www.gong.io offers Book a demo and Talk to sales, its pricing page is a form asking for a proposal, and `www.gong.io/signup` is "Page Not Found".
+- [ ] `https://web.outreach.io/` — goes to `login.outreach.io`, "Sign in" over one email field, with no sign-up. It passes because Outreach has no self-serve sign-up anywhere: www.outreach.io now goes to www.outreach.ai, which offers only demo requests, pricing and contact; its pricing page has no free or trial offer; and `www.outreach.ai/signup` is a 404.
+- [ ] `https://www.linkedin.com/sales/home` — goes to `/sales/login`, "Sign in to Sales Navigator": email or phone and password, with "New to LinkedIn? Join now" linking to a separate sign-up page. The form is drawn in a frame, so the page itself looks empty to a text reader; judge what you see.
