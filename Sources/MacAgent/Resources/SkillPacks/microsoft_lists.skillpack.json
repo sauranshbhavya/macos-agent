@@ -5,7 +5,7 @@
   "domain": "lists.live.com",
   "category": "project_tracking",
   "summary": "Microsoft's app for tracking information in lists.",
-  "signInURL": "https://login.live.com/",
+  "signInURL": "https://lists.live.com/",
   "triggers": ["microsoft lists", "lists.live.com"],
   "sections": [],
   "depth": "deep",

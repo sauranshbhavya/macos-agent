@@ -5,7 +5,7 @@
   "domain": "teams.microsoft.com",
   "category": "communication",
   "summary": "Microsoft's chat, meetings and calling for work.",
-  "signInURL": "https://login.microsoftonline.com/",
+  "signInURL": "https://teams.microsoft.com",
   "triggers": ["microsoft teams", "teams.microsoft.com"],
   "sections": [],
   "depth": "deep",
