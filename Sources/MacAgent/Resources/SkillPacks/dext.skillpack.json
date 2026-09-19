@@ -8,6 +8,28 @@
   "signInURL": "https://app.dext.com/login/",
   "triggers": ["dext", "dext.com"],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Add a user",
+      "startURL": "https://app.dext.com/login/",
+      "steps": [
+        "In the Dext web app, go to Users and select Add a user. Only Admins can add users; if Users is not in the sidebar, the person signed in does not have permission.",
+        "Enter the user's details and choose whether to give them login access, then select Next and choose a role for them.",
+        "Review and add any additional permissions if needed, and choose whether to send the invitation by email or by text message.",
+        "Select Add to send the invitation. How many users an account can have depends on its Dext plan; if the limit is reached, stop and tell the person rather than changing the plan."
+      ],
+      "source": "https://help.dext.com/en/articles/105778-how-to-add-users-to-your-business-account"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://app.dext.com/login/",
+      "landedURL": "https://app.dext.com/login/",
+      "title": "Log in to Dext - The world's smartest accounting toolkit",
+      "heading": "",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
+  ]
 }

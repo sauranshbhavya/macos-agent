@@ -8,6 +8,38 @@
   "signInURL": "https://accounts.toggl.com/app/login/",
   "triggers": ["toggl track"],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Create a project",
+      "startURL": "https://track.toggl.com/timer",
+      "steps": [
+        "In the Toggl Track web app, click the Projects tab in the menu bar on the left.",
+        "Click + New Project in the top right corner, and enter the project's name in the popup.",
+        "For more detail, click Advanced Options: select the client the project belongs to, set it Private or Public, set its start and end dates or estimates, and choose which workspace it belongs to.",
+        "Click Create Project to save it."
+      ],
+      "source": "https://support.toggl.com/en-us/article/creating-projects-jrbd27/"
+    },
+    {
+      "title": "Create a client",
+      "startURL": "https://track.toggl.com/timer",
+      "steps": [
+        "In the Toggl Track web app, click the Clients page in the menu on the left. If the workspace lets only admins create projects and clients, only an admin can do this.",
+        "Click + New client in the top right corner.",
+        "Type the client's name in the Client name box and click Create. Existing projects can be assigned to the client, or new ones created for it, from here."
+      ],
+      "source": "https://support.toggl.com/en-us/article/managing-clients-12r3oug/"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://track.toggl.com/timer",
+      "landedURL": "https://accounts.toggl.com/track/login/",
+      "title": "Login | Toggl Track",
+      "heading": "Log in and get tracking!",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
+  ]
 }

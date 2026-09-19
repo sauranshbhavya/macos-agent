@@ -8,6 +8,38 @@
   "signInURL": "https://dashboard.stripe.com/login",
   "triggers": ["stripe.com"],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Invite a team member",
+      "startURL": "https://dashboard.stripe.com/",
+      "steps": [
+        "Go to the Team tab in the Dashboard and click Add member.",
+        "Add one or more email addresses, separated by a space or comma. People added together get the same roles and access.",
+        "Select which roles to assign. Review what each role can and cannot do first, and grant the lowest permission the person needs for their job.",
+        "Review the configuration and click Send invites, which emails each person the steps to accept. Invites expire after 10 days; a role can be edited later from the overflow menu beside the member, then Edit."
+      ],
+      "source": "https://docs.stripe.com/get-started/account/teams"
+    },
+    {
+      "title": "Search the Dashboard",
+      "startURL": "https://dashboard.stripe.com/",
+      "steps": [
+        "Type a search term into the Dashboard's search: a name or email address, the last four digits of a card, an email receipt number, an invoice number, a date such as last week, or an object's ID.",
+        "The top results appear immediately. Click View all results or press Enter to see every match, then View all on a group for an expanded list with column headings, some of which sort.",
+        "To narrow a search, put a filter before the term, such as email:, name:, status: or created:, wrap a term containing a space in quotation marks, and put a hyphen before a filter to leave its matches out."
+      ],
+      "source": "https://docs.stripe.com/dashboard/search"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://dashboard.stripe.com/",
+      "landedURL": "https://dashboard.stripe.com/login",
+      "title": "Stripe Login | Sign in to the Stripe Dashboard",
+      "heading": "",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
+  ]
 }
