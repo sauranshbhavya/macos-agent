@@ -1243,15 +1243,30 @@ struct SkillPackTests {
         ] {
             #expect(Self.landing(start: start, landed: "https://www.notion.so/login") == .startPageCreatesAnAccount(url: start), "\(start)")
         }
-        // A key that is a path, or a dotted name, is cut at `/` and `.` and each piece read whole, so a page
-        // routed through the query is refused as it is on `main` (review-282's delta pass: all four loaded
-        // while the key was read as one word). `index.php?/register` is how an app without URL rewriting
-        // routes.
+        // A key is cut at `/#?&=.`, `main`'s own separators, and each piece read whole, so a page routed
+        // through the query is refused as it is on `main` (review-282's delta pass: the first four loaded
+        // while the key was read as one word).
+        // `index.php?/register` is how an app without URL rewriting routes.
         for start in [
             "https://www.notion.so/index.php?/register", "https://www.notion.so/index.php?/auth/signup",
-            "https://www.notion.so/?/signup", "https://www.notion.so/login?user.register=1"
+            "https://www.notion.so/?/signup", "https://www.notion.so/login?user.register=1",
+            // A second `?` inside the query carries the word behind it (review-282's scoped pass: all five
+            // loaded while the key was cut at `/` and `.` only).
+            "https://www.notion.so/index.php?/register?ref=home", "https://www.notion.so/?/signup?utm=x",
+            "https://www.notion.so/login?register?x", "https://www.notion.so/login?a?signup",
+            "https://www.notion.so/#/login?/register?x=1"
         ] {
             #expect(Self.landing(start: start, landed: "https://www.notion.so/login") == .startPageCreatesAnAccount(url: start), "\(start)")
+        }
+        // And a second `#` inside a route's own query, which a cut at `/`, `.` and `?` still let through:
+        // found by testing every short URL of the class rather than a list of examples. The decoder writes
+        // the second `#` as `%23`, and the matcher reads the fragment decoded, so the refusal names the
+        // decoder's spelling.
+        for (start, named) in [
+            ("https://www.notion.so/#/login?register#top", "https://www.notion.so/#/login?register%23top"),
+            ("https://www.notion.so/#?signup#x", "https://www.notion.so/#?signup%23x")
+        ] {
+            #expect(Self.landing(start: start, landed: "https://www.notion.so/login") == .startPageCreatesAnAccount(url: named), "\(start)")
         }
         // A piece is read whole: a tracking key that only contains a word loads, in the query and in a route's.
         for start in [
@@ -1552,8 +1567,9 @@ struct SkillPackTests {
     /// - Pipedrive's import flow names "Get started" as the import wizard's own button, reached through the
     ///   account menu, Tools and apps and Import data inside the signed-in app; the flow starts at a
     ///   `sign-in` record, and the button imports a spreadsheet rather than creating an account. Judged on
-    ///   the step's own text when SONNY-518's pack arrived at this branch's hop (2026-09-19); the cited
-    ///   support article was not re-opened for it.
+    ///   the step's own text when SONNY-518's pack arrived at this branch's hop (2026-09-19), and confirmed
+    ///   on the cited support article by review-282, read in a drawing window at 19:33:59Z that day: "Go to
+    ///   account menu > Tools and apps > Import data > Import from spreadsheet, then click 'Get started'".
     static let judgedFirstStepFindings: Set<String> = [
         "grok | Ask Grok a question | a signed-in place: Settings, Sign in | \(grokFirstStep)",
         "grok | Ask Grok a question | account creation: Sign up | \(grokFirstStep)",

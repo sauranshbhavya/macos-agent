@@ -143,7 +143,7 @@ enum SkillPackStartPageRule {
     /// (`accountCreationWords(in:)`) in a part of its path or its fragment's route, in a query value, or
     /// in a host label left of the last two — so `sign-up`, `sign_up` and `SignUp` are one word, and so are
     /// `/signup-free`, `/register-now`, `?intent=signup_free` and `signup.<site>` — or when a piece of a
-    /// query key, cut at `/` and `.`, is one of them whole. Ghost's `/signup` and PartnerStack's
+    /// query key, cut at the separators `main` read the whole query with, is one of them whole. Ghost's `/signup` and PartnerStack's
     /// `/handshake/signup` are the measured cases (SONNY-510's comments).
     ///
     /// **Deliberately short, and the list stayed short when the match widened** (SONNY-529). The words are
@@ -161,13 +161,18 @@ enum SkillPackStartPageRule {
     /// a match on runs inside the key refused it. The query was read at all for values that state an
     /// intent (`?mode=signup`, Auth0's `?screen_hint=signup`), and those are values.
     ///
-    /// **But a key can be a path, so it is cut at `/` and `.` before each piece is read whole** (review-282's
-    /// delta pass). An app that routes without URL rewriting puts the page's path in the query as its only
-    /// key — `index.php?/register`, `?/auth/signup` — and a dotted name does the same (`?user.register=1`).
-    /// The first version of this rule read the key as one word, so every one of those, refused on `main`,
-    /// loaded: a widening of the query rule that looked like a narrowing, and no measurement over shipped
-    /// addresses could see it, because no shipped address has that shape. `signup_source` has no `/` or
-    /// `.`, so it is still one piece and still loads.
+    /// **But a key can be a path, so it is cut at `/#?&=.`, the separators `main` read the whole query
+    /// with, before each piece is read whole** (review-282's passes on PR #282). An app that routes without
+    /// URL rewriting puts the page's path in the query as its only key — `index.php?/register`,
+    /// `?/auth/signup` — and a dotted name does the same (`?user.register=1`). A second `?` can sit inside a
+    /// query (`index.php?/register?ref=home`, `?a?signup`), and a second `#` inside a single-page route's
+    /// own query (`#/login?register#top`). Cutting at exactly `main`'s set is what makes a key read at least
+    /// as much as `main` read it; every smaller set has let a shape through. The first version read each key
+    /// as one word, the second cut it at `/` and `.`, and `/`, `.` and `?` would still have missed the `#`:
+    /// three widenings that each looked like a narrowing, and no measurement over shipped addresses could
+    /// see any of them, because no shipped address has those shapes. A test over the whole class of short
+    /// URLs found the third. `signup_source` has none of the separators, so it is still one piece and still
+    /// loads.
     ///
     /// **Known refusals: pages the wider match refuses although they may not create an account.** None is
     /// an address a shipped pack carries — the branch's changelog entry has the measurement over every
@@ -309,7 +314,7 @@ enum SkillPackStartPageRule {
             .map(String.init)
         let hostLabels = (components?.host ?? "").split(separator: ".").dropLast(2).map(String.init)
         return (parts + hostLabels).contains { !accountCreationWords(in: $0).isEmpty }
-            || keys.flatMap { $0.split(whereSeparator: { "/.".contains($0) }) }.contains { accountCreationParts.contains(foldedWhole(String($0))) }
+            || keys.flatMap { $0.split(whereSeparator: { "/#?&=.".contains($0) }) }.contains { accountCreationParts.contains(foldedWhole(String($0))) }
     }
 
     /// One piece of a query key as one word: lowercased, with `-` and `_` dropped, so `sign_up` and

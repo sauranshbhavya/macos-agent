@@ -15,6 +15,10 @@
 # The scoped round after it added K4: the key cut at / and . before each piece is read whole. That cut is
 # what the first version left out, and it came from a widening that looked like a narrowing, which is
 # why it has a mutant of its own.
+# The scoped round after the hop added K5: the cut at ? as well, which the scoped round's own cut left out,
+# the same widening-that-looked-like-a-narrowing a second time.
+# Testing every short URL of the class then found a third shape, a second # in a route's own query, so the
+# key is cut at exactly main's separators /#?&=. and K6 drops the #.
 
 >>> mutant A1 a start-page date is read for its shape only: 2026-13-45 loads again (SONNY-529)
 >>> file Sources/MacAgentCore/SkillPack.swift
@@ -168,7 +172,7 @@
 >>> mutant K1 a query key is read by runs again: Snov's signup_source= refuses its own sign-in address (the founders' ruling on PR #282)
 >>> file Sources/MacAgentCore/SkillPackStartPages.swift
 >>> from
-            || keys.flatMap { $0.split(whereSeparator: { "/.".contains($0) }) }.contains { accountCreationParts.contains(foldedWhole(String($0))) }
+            || keys.flatMap { $0.split(whereSeparator: { "/#?&=.".contains($0) }) }.contains { accountCreationParts.contains(foldedWhole(String($0))) }
 >>> to
             || keys.contains { !accountCreationWords(in: $0).isEmpty }
 >>> end
@@ -176,7 +180,7 @@
 >>> mutant K2 a query key is not read at all: ?signup loads
 >>> file Sources/MacAgentCore/SkillPackStartPages.swift
 >>> from
-            || keys.flatMap { $0.split(whereSeparator: { "/.".contains($0) }) }.contains { accountCreationParts.contains(foldedWhole(String($0))) }
+            || keys.flatMap { $0.split(whereSeparator: { "/#?&=.".contains($0) }) }.contains { accountCreationParts.contains(foldedWhole(String($0))) }
 >>> to
             || false
 >>> end
@@ -200,7 +204,23 @@
 >>> mutant K4 a query key is read as one word again, not cut at / and .: index.php?/register and ?user.register=1 load, which main refused (review-282's delta pass)
 >>> file Sources/MacAgentCore/SkillPackStartPages.swift
 >>> from
-            || keys.flatMap { $0.split(whereSeparator: { "/.".contains($0) }) }.contains { accountCreationParts.contains(foldedWhole(String($0))) }
+            || keys.flatMap { $0.split(whereSeparator: { "/#?&=.".contains($0) }) }.contains { accountCreationParts.contains(foldedWhole(String($0))) }
 >>> to
             || keys.contains { accountCreationParts.contains(foldedWhole($0)) }
+>>> end
+
+>>> mutant K5 a query key is not cut at ?: index.php?/register?ref=home and ?a?signup load, which main refused (review-282's scoped pass)
+>>> file Sources/MacAgentCore/SkillPackStartPages.swift
+>>> from
+            || keys.flatMap { $0.split(whereSeparator: { "/#?&=.".contains($0) }) }.contains { accountCreationParts.contains(foldedWhole(String($0))) }
+>>> to
+            || keys.flatMap { $0.split(whereSeparator: { "/#&=.".contains($0) }) }.contains { accountCreationParts.contains(foldedWhole(String($0))) }
+>>> end
+
+>>> mutant K6 a query key is not cut at #: a route's own query with a second # (#/login?register#top) loads, which main refused (found by the class test)
+>>> file Sources/MacAgentCore/SkillPackStartPages.swift
+>>> from
+            || keys.flatMap { $0.split(whereSeparator: { "/#?&=.".contains($0) }) }.contains { accountCreationParts.contains(foldedWhole(String($0))) }
+>>> to
+            || keys.flatMap { $0.split(whereSeparator: { "/?&=.".contains($0) }) }.contains { accountCreationParts.contains(foldedWhole(String($0))) }
 >>> end
