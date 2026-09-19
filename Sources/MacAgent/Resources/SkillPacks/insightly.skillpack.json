@@ -6,8 +6,44 @@
   "category": "sales_crm",
   "summary": "CRM and project management.",
   "signInURL": "https://login.insightly.com/User/Login?ReturnUrl=%2F",
-  "triggers": ["insightly", "insightly.com"],
+  "triggers": [
+    "insightly",
+    "insightly.com"
+  ],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Add a Finish Action to a link, file, form or list email",
+      "startURL": "https://login.insightly.com/User/Login",
+      "steps": [
+        "Open the redirect link, hosted file, form handler or list email you want the action to run from.",
+        "Go to its Finish Actions tab and click Add Finish Action.",
+        "Give the action a name and set the criteria that decide when it runs. The actions are the same library Journeys uses, such as adding the Prospect to a list, adjusting their score or assigning an owner.",
+        "Click Save. Finish Actions do not expire: one attached to an old email fires whenever that email is opened, even months later."
+      ],
+      "source": "https://insightly.zendesk.com/hc/en-us/articles/51914449218580-How-to-Use-Finish-Actions"
+    },
+    {
+      "title": "Limit which events start an AppConnect recipe",
+      "startURL": "https://login.insightly.com/User/Login",
+      "steps": [
+        "In AppConnect, create a new recipe, then create a new trigger and select an object, such as a new Insightly Contact.",
+        "Enable the Set Trigger condition toggle and add a field to the Trigger data field — for example, to process only Contacts from California.",
+        "Add further conditions with +, choosing OR or AND. From the third condition on, the operator already selected applies to all of them.",
+        "Write values exactly: they are case sensitive. Conditions are applied after events are fetched and check a record's state rather than a change, so a new-Contact trigger never picks up a Contact that is later updated to match."
+      ],
+      "source": "https://insightly.zendesk.com/hc/en-us/articles/51896735147156-Building-AppConnect-Recipes"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://login.insightly.com/User/Login",
+      "landedURL": "https://login.insightly.com/User/Login",
+      "title": "Insightly",
+      "heading": "",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
+  ]
 }

@@ -6,8 +6,44 @@
   "category": "sales_crm",
   "summary": "Client management for creative businesses.",
   "signInURL": "https://www.dubsado.com/login",
-  "triggers": ["dubsado", "dubsado.com"],
+  "triggers": [
+    "dubsado",
+    "dubsado.com"
+  ],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Share a lead capture form (Dubsado 2.0)",
+      "startURL": "https://hello.dubsado.com/user/login",
+      "steps": [
+        "Go to Templates >> Forms.",
+        "Click the lead capture form you want to share.",
+        "Click the Sharing icon on the sidebar. If the icon is grayed out, click Save form first.",
+        "Copy either the Embed code, to display the form on your website, or the Direct link, to share it on social media, as a button or as a text link. Later changes to the form update both automatically."
+      ],
+      "source": "https://help.dubsado.com/en/articles/467061-share-a-lead-capture-form"
+    },
+    {
+      "title": "Map a custom URL to your own domain (Dubsado 2.0)",
+      "startURL": "https://hello.dubsado.com/user/login",
+      "steps": [
+        "This needs a CNAME record at your domain host — for example portal — whose value points to ssl.dubsado.com, created there and fully propagated, which can take up to 48 hours. Dubsado cannot create it for you.",
+        "In Dubsado, go to Settings >> Domain names.",
+        "Under Custom URL mapping, enter your new CNAME URL in the URL field, for example portal.yourdomain.com, and click Verify.",
+        "Stay on the page until Dubsado confirms. If verification succeeds, your custom URL appears; an error usually means the CNAME was not set up correctly, which your domain host has to fix."
+      ],
+      "source": "https://help.dubsado.com/en/articles/1750071-customize-your-dubsado-urls-in-2-0"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://hello.dubsado.com/user/login",
+      "landedURL": "https://hello.dubsado.com/user/login",
+      "title": "Dubsado CRM For Creatives",
+      "heading": "Log in to Dubsado",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
+  ]
 }

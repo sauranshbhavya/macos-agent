@@ -6,8 +6,43 @@
   "category": "sales_crm",
   "summary": "LinkedIn's prospecting tool for sales teams.",
   "signInURL": "https://www.linkedin.com/login",
-  "triggers": ["linkedin sales navigator"],
+  "triggers": [
+    "linkedin sales navigator"
+  ],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Save a lead or account search",
+      "startURL": "https://www.linkedin.com/sales/home",
+      "steps": [
+        "Click Lead filters or Account filters at the top of the Sales Navigator homepage, or enter a lead or account name or a phrase in the search bar and press Enter.",
+        "Refine the search by adding or removing filters. The results update as you change the criteria.",
+        "Turn on the Save search to get notified of new results toggle near the top of the search filters pane on the left. New matches then arrive by weekly email and in the All alerts tab on the homepage.",
+        "To rename the search, hover over it in the pop-up in the lower-left of the screen, click the Edit icon, enter a name and click Save. You can keep up to 50 lead searches and 50 account searches."
+      ],
+      "source": "https://www.linkedin.com/help/sales-navigator/answer/a102024"
+    },
+    {
+      "title": "Send an InMail message to a lead",
+      "startURL": "https://www.linkedin.com/sales/home",
+      "steps": [
+        "Click Messaging in the top menu, then the Edit icon in the top left to start a message. Or open the lead's Sales Navigator profile and click Message; if the profile is locked, click Unlock full profile first.",
+        "Add a subject line (up to 200 characters) and your message (up to 1,900 characters). Sending uses InMail credits, and your current count shows in the compose window; InMails cannot be sent to several leads at once.",
+        "Optionally, click the Edit icon next to your signature to change it, or the Attach icon to add an attachment of up to 200 MB.",
+        "Click Send. The conversation appears in your Sales Navigator inbox, which is separate from your LinkedIn inbox."
+      ],
+      "source": "https://www.linkedin.com/help/sales-navigator/answer/a107018/"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://www.linkedin.com/sales/home",
+      "landedURL": "https://www.linkedin.com/sales/login",
+      "title": "Sales Navigator",
+      "heading": "Sign in to Sales Navigator",
+      "offers": "sign-in",
+      "read": "2026-09-19"
+    }
+  ]
 }
