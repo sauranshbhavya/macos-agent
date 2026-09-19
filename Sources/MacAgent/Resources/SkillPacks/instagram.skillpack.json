@@ -5,7 +5,7 @@
   "domain": "instagram.com",
   "category": "marketing_growth",
   "summary": "Photo and video social network.",
-  "signInURL": "https://instagram.com/login",
+  "signInURL": "https://www.instagram.com/accounts/login/",
   "triggers": ["instagram", "instagram.com"],
   "sections": [],
   "depth": "shallow",

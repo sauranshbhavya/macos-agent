@@ -1,0 +1,226 @@
+# SONNY-529, SONNY-526 and SONNY-524 — the skills follow-ups from wave 12's start-page work.
+# Swift half only; no file under server/ changes on this branch.
+#
+# Every mutant below undoes one property this branch claims, in the direction that lets through what
+# the branch says is refused, except W4 and W5, which widen a refusal past the near misses the tests
+# hold on purpose (/registered-users, and a site whose own name is one of the words).
+#
+# The samples that kill the loader mutants are JSON decoded through SkillPackDecoder.decode, never
+# values built downstream of it (SONNY-388). The F mutants weaken the first-step check itself, which
+# lives in the test file; its held samples are what must catch them, and D3 is the shipped-data shape
+# the check exists for: eBay's Watchlist flow put back under the one `product` record.
+#
+# The fix round on PR #282 added K1 to K3 for the query read as keys and values (a key whole, a value by
+# runs, a route's own query too) and F4 for the step's text in a finding line.
+# The scoped round after it added K4: the key cut at / and . before each piece is read whole. That cut is
+# what the first version left out, and it came from a widening that looked like a narrowing, which is
+# why it has a mutant of its own.
+# The scoped round after the hop added K5: the cut at ? as well, which the scoped round's own cut left out,
+# the same widening-that-looked-like-a-narrowing a second time.
+# Testing every short URL of the class then found a third shape, a second # in a route's own query, so the
+# key is cut at exactly main's separators /#?&=. and K6 drops the #.
+
+>>> mutant A1 a start-page date is read for its shape only: 2026-13-45 loads again (SONNY-529)
+>>> file Sources/MacAgentCore/SkillPack.swift
+>>> from
+            guard SkillPackStartPageRule.isAReadingDay(read) else {
+                throw SkillPackLoadError.wrongType(prefix + "read")
+            }
+>>> to
+>>> end
+
+>>> mutant A2 the floor goes: a placeholder date such as 1970-01-01 loads
+>>> file Sources/MacAgentCore/SkillPackStartPages.swift
+>>> from
+        return day.isValidDate && text >= firstReadingDay
+>>> to
+        return day.isValidDate
+>>> end
+
+>>> mutant A3 the calendar goes: a month 13 or a 30 February loads if it is late enough
+>>> file Sources/MacAgentCore/SkillPackStartPages.swift
+>>> from
+        return day.isValidDate && text >= firstReadingDay
+>>> to
+        return text >= firstReadingDay
+>>> end
+
+>>> mutant W1 a host's labels are not read: signup.<site> loads
+>>> file Sources/MacAgentCore/SkillPackStartPages.swift
+>>> from
+        return (parts + hostLabels).contains { !accountCreationWords(in: $0).isEmpty }
+>>> to
+        return parts.contains { !accountCreationWords(in: $0).isEmpty }
+>>> end
+
+>>> mutant W2 a part is read whole again, as before SONNY-529: /signup-free and /register-now load
+>>> file Sources/MacAgentCore/SkillPackStartPages.swift
+>>> from
+        let folded = words.filter { !$0.isEmpty }.map { $0.lowercased() }
+>>> to
+        let folded = [words.joined().lowercased()]
+>>> end
+
+>>> mutant W3 the case boundary is not a cut: /SignUpNow loads
+>>> file Sources/MacAgentCore/SkillPackStartPages.swift
+>>> from
+                if let previous, previous.isLowercase, character.isUppercase {
+>>> to
+                if false {
+>>> end
+
+>>> mutant W4 the widening measured and rejected: a word's prefix counts, so /registered-users is refused
+>>> file Sources/MacAgentCore/SkillPackStartPages.swift
+>>> from
+                if accountCreationParts.contains(run) {
+>>> to
+                if accountCreationParts.contains(where: { run.hasPrefix($0) }) {
+>>> end
+
+>>> mutant W5 the host check reads the site's own name: a pack on signup.com is refused for being itself
+>>> file Sources/MacAgentCore/SkillPackStartPages.swift
+>>> from
+        let hostLabels = (components?.host ?? "").split(separator: ".").dropLast(2).map(String.init)
+>>> to
+        let hostLabels = (components?.host ?? "").split(separator: ".").dropLast(1).map(String.init)
+>>> end
+
+>>> mutant P1 Zoho Desk's pairing is dropped: its start page on accounts.zoho.com is refused again
+>>> file Sources/MacAgentCore/SkillPackStartPages.swift
+>>> from
+        "accounts.zoho.com": ["zoho.com"],
+>>> to
+>>> end
+
+>>> mutant P2 Microsoft 365's pairing is dropped: its start page on login.microsoftonline.com is refused again
+>>> file Sources/MacAgentCore/SkillPackStartPages.swift
+>>> from
+        "login.microsoftonline.com": ["office.com", "microsoft.com", "microsoft365.com"],
+>>> to
+        "login.microsoftonline.com": ["office.com", "microsoft.com"],
+>>> end
+
+>>> mutant P3 a pairing nobody read: Zoho's sign-in host paired with a site no shipped pack lands from
+>>> file Sources/MacAgentCore/SkillPackStartPages.swift
+>>> from
+        "accounts.zoho.com": ["zoho.com"],
+>>> to
+        "accounts.zoho.com": ["zoho.com", "bigin.com"],
+>>> end
+
+>>> mutant D2 a data mutant: Notion's pack names a sign-in page its catalogue row does not (SONNY-524)
+>>> file Sources/MacAgent/Resources/SkillPacks/notion.skillpack.json
+>>> from
+  "signInURL": "https://app.notion.com/login",
+>>> to
+  "signInURL": "https://notion.so/login",
+>>> end
+
+>>> mutant D3 a data mutant: eBay's Watchlist flow put back under its one product record, the shape round five removed
+>>> file Sources/MacAgent/Resources/SkillPacks/ebay.skillpack.json
+>>> from
+      "source": "https://www.ebay.com/help/buying/search-tips/saved-searches?id=4051"
+    }
+  ],
+>>> to
+      "source": "https://www.ebay.com/help/buying/search-tips/saved-searches?id=4051"
+    },
+    {
+      "title": "View and tidy your Watchlist",
+      "startURL": "https://www.ebay.com/",
+      "steps": [
+        "Go to My eBay and select Watching.",
+        "Select Remove beside an item to stop watching it."
+      ],
+      "source": "https://www.ebay.com/help/buying/search-tips/saved-searches?id=4051"
+    }
+  ],
+>>> end
+
+>>> mutant F1 the first-step check stops asking whether one product record starts several flows
+>>> file Tests/MacAgentCoreTests/SkillPackTests.swift
+>>> from
+            for (url, count) in Dictionary(productStarts.map { ($0, 1) }, uniquingKeysWith: +) where count > 1 {
+>>> to
+            for (url, count) in Dictionary(productStarts.map { ($0, 1) }, uniquingKeysWith: +) where count > 99 {
+>>> end
+
+>>> mutant F2 the first-step check stops reading signed-in places under a product record
+>>> file Tests/MacAgentCoreTests/SkillPackTests.swift
+>>> from
+                if offers[flow.startURL] == .product, !places.isEmpty {
+>>> to
+                if false, !places.isEmpty {
+>>> end
+
+>>> mutant F3 the first-step check stops reading account creation
+>>> file Tests/MacAgentCoreTests/SkillPackTests.swift
+>>> from
+                if !creation.isEmpty {
+>>> to
+                if false {
+>>> end
+
+>>> mutant S1 a pack's site is its domain's last two labels again: a pack on app.example.co.uk would ask for co.uk
+>>> file Tests/MacAgentCoreTests/SkillPackTests.swift
+>>> from
+        return labels.suffix(underACountry ? 3 : 2).joined(separator: ".")
+>>> to
+        return labels.suffix(2).joined(separator: ".")
+>>> end
+
+>>> mutant K1 a query key is read by runs again: Snov's signup_source= refuses its own sign-in address (the founders' ruling on PR #282)
+>>> file Sources/MacAgentCore/SkillPackStartPages.swift
+>>> from
+            || keys.flatMap { $0.split(whereSeparator: { "/#?&=.".contains($0) }) }.contains { accountCreationParts.contains(foldedWhole(String($0))) }
+>>> to
+            || keys.contains { !accountCreationWords(in: $0).isEmpty }
+>>> end
+
+>>> mutant K2 a query key is not read at all: ?signup loads
+>>> file Sources/MacAgentCore/SkillPackStartPages.swift
+>>> from
+            || keys.flatMap { $0.split(whereSeparator: { "/#?&=.".contains($0) }) }.contains { accountCreationParts.contains(foldedWhole(String($0))) }
+>>> to
+            || false
+>>> end
+
+>>> mutant K3 a route's own query is not read: #/login?screen_hint=signup loads
+>>> file Sources/MacAgentCore/SkillPackStartPages.swift
+>>> from
+        let queries = [components?.query ?? "", String(fragment.dropFirst(route.count + 1))]
+>>> to
+        let queries = [components?.query ?? ""]
+>>> end
+
+>>> mutant F4 a finding line drops the step's text: a judged step rewritten with the same words passes as judged (review-282's F5)
+>>> file Tests/MacAgentCoreTests/SkillPackTests.swift
+>>> from
+                    findings.insert("\(pack.id) | \(flow.title) | a signed-in place: \(places.joined(separator: ", ")) | \(firstStep)")
+>>> to
+                    findings.insert("\(pack.id) | \(flow.title) | a signed-in place: \(places.joined(separator: ", "))")
+>>> end
+
+>>> mutant K4 a query key is read as one word again, not cut at / and .: index.php?/register and ?user.register=1 load, which main refused (review-282's delta pass)
+>>> file Sources/MacAgentCore/SkillPackStartPages.swift
+>>> from
+            || keys.flatMap { $0.split(whereSeparator: { "/#?&=.".contains($0) }) }.contains { accountCreationParts.contains(foldedWhole(String($0))) }
+>>> to
+            || keys.contains { accountCreationParts.contains(foldedWhole($0)) }
+>>> end
+
+>>> mutant K5 a query key is not cut at ?: index.php?/register?ref=home and ?a?signup load, which main refused (review-282's scoped pass)
+>>> file Sources/MacAgentCore/SkillPackStartPages.swift
+>>> from
+            || keys.flatMap { $0.split(whereSeparator: { "/#?&=.".contains($0) }) }.contains { accountCreationParts.contains(foldedWhole(String($0))) }
+>>> to
+            || keys.flatMap { $0.split(whereSeparator: { "/#&=.".contains($0) }) }.contains { accountCreationParts.contains(foldedWhole(String($0))) }
+>>> end
+
+>>> mutant K6 a query key is not cut at #: a route's own query with a second # (#/login?register#top) loads, which main refused (found by the class test)
+>>> file Sources/MacAgentCore/SkillPackStartPages.swift
+>>> from
+            || keys.flatMap { $0.split(whereSeparator: { "/#?&=.".contains($0) }) }.contains { accountCreationParts.contains(foldedWhole(String($0))) }
+>>> to
+            || keys.flatMap { $0.split(whereSeparator: { "/?&=.".contains($0) }) }.contains { accountCreationParts.contains(foldedWhole(String($0))) }
+>>> end

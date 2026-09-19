@@ -5,7 +5,7 @@
   "domain": "midjourney.com",
   "category": "ai_assistants",
   "summary": "AI image generation.",
-  "signInURL": "https://midjourney.com/login",
+  "signInURL": "https://www.midjourney.com/",
   "triggers": [
     "midjourney",
     "midjourney.com"

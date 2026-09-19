@@ -28,6 +28,9 @@ struct SkillPackTests {
             let row = try #require(rowsByID[pack.id], "\(pack.id) ships as a pack but is not a catalogue row")
             #expect(row["domain"] == pack.domain, "\(pack.id)'s domain disagrees with its catalogue row")
             #expect(row["category"] == pack.category, "\(pack.id)'s category disagrees with its catalogue row")
+            // The pack's `signInURL` decides and the row mirrors it (SONNY-524): `SkillPack.signInURL`'s doc
+            // comment says why. An empty cell is a pack with no sign-in page of its own.
+            #expect(row["sign_in_url"] == (pack.signInURL?.absoluteString ?? ""), "\(pack.id)'s sign-in page disagrees with its catalogue row")
             // A deep pack needs a row whose flows rest on evidence somebody read — documentation
             // (`deep`) or the live site (`site`). A shallow pack may sit on any row: every site gets one
             // before its flows are written (founders, SONNY-463 decision 2).
@@ -1012,7 +1015,7 @@ struct SkillPackTests {
         #expect(Self.landing(
             start: "https://ads.google.com/", landed: "https://business.google.com/us/google-ads/",
             domain: "ads.google.com", signIn: "https://ads.google.com/nav/login"
-        ) == .landedOnUnpairedHost(url: "https://ads.google.com/", host: "business.google.com", site: "ads.google.com"))
+        ) == .landingHostNotPairedWithSite(url: "https://ads.google.com/", host: "business.google.com", site: "ads.google.com"))
         // 3. StreamYard: nothing moved, and the page is itself the sign-up.
         #expect(Self.landing(
             start: "https://streamyard.com/", landed: "https://streamyard.com/", offers: "sign-up", domain: "streamyard.com"
@@ -1076,26 +1079,26 @@ struct SkillPackTests {
     @Test
     func aLandingOnAnotherSiteIsRefusedWhateverTheRecordSays() throws {
         #expect(Self.landing(start: "https://www.notion.so/", landed: "https://notnotion.so/login")
-            == .landedOnUnpairedHost(url: "https://www.notion.so/", host: "notnotion.so", site: "notion.so"))
+            == .landingHostNotPairedWithSite(url: "https://www.notion.so/", host: "notnotion.so", site: "notion.so"))
         #expect(Self.landing(
             start: "https://meet.google.com/landing", landed: "https://evil.accounts.google.com/signin",
             domain: "meet.google.com", signIn: "https://accounts.google.com/ServiceLogin"
-        ) == .landedOnUnpairedHost(url: "https://meet.google.com/landing", host: "evil.accounts.google.com", site: "meet.google.com"))
+        ) == .landingHostNotPairedWithSite(url: "https://meet.google.com/landing", host: "evil.accounts.google.com", site: "meet.google.com"))
         // Google's sign-in host signs in for Google's sites, not Notion's, however the pack names it.
         for signIn in [nil, "https://accounts.google.com/ServiceLogin"] {
             #expect(Self.landing(
                 start: "https://www.notion.so/", landed: "https://accounts.google.com/signin", signIn: signIn
-            ) == .landedOnUnpairedHost(url: "https://www.notion.so/", host: "accounts.google.com", site: "notion.so"), "\(signIn ?? "no signInURL")")
+            ) == .landingHostNotPairedWithSite(url: "https://www.notion.so/", host: "accounts.google.com", site: "notion.so"), "\(signIn ?? "no signInURL")")
         }
         // `offers: product` buys nothing here: the host rule reads the URL, not the reader's word.
         #expect(Self.landing(start: "https://ads.google.com/", landed: "https://business.google.com/", offers: "product", domain: "ads.google.com")
-            == .landedOnUnpairedHost(url: "https://ads.google.com/", host: "business.google.com", site: "ads.google.com"))
+            == .landingHostNotPairedWithSite(url: "https://ads.google.com/", host: "business.google.com", site: "ads.google.com"))
         // Review-272's probe: the sign-in page edited to be the marketing host. Refused as either word.
         for offers in ["product", "sign-in"] {
             #expect(Self.landing(
                 start: "https://ads.google.com/", landed: "https://business.google.com/us/google-ads/", offers: offers,
                 domain: "ads.google.com", signIn: "https://business.google.com/"
-            ) == .landedOnUnpairedHost(url: "https://ads.google.com/", host: "business.google.com", site: "ads.google.com"), "\(offers)")
+            ) == .landingHostNotPairedWithSite(url: "https://ads.google.com/", host: "business.google.com", site: "ads.google.com"), "\(offers)")
         }
         // A listed identity host that does sign in for the pack's site admits a sign-in page only.
         #expect(Self.landing(
@@ -1109,7 +1112,7 @@ struct SkillPackTests {
         #expect(Self.landing(
             start: "https://www.figma.com/", landed: "https://accounts.google.com/v3/signin/identifier",
             domain: "figma.com", signIn: nil
-        ) == .landedOnUnpairedHost(url: "https://www.figma.com/", host: "accounts.google.com", site: "figma.com"))
+        ) == .landingHostNotPairedWithSite(url: "https://www.figma.com/", host: "accounts.google.com", site: "figma.com"))
         // A listed identity host admits a sign-in page only even on the pack's own site: the Google
         // pack's domain is google.com, so accounts.google.com is its own site (the full review's F4).
         #expect(Self.landing(
@@ -1125,8 +1128,8 @@ struct SkillPackTests {
     /// **The identity-host list is exactly the landings the shipped packs make, and its expected answer
     /// never comes from the list.** For every shipped pack file, read as raw JSON rather than through
     /// the loader (which consults the list), every start page that lands off its pack's own site
-    /// contributes its landed host, paired with the pack's registrable site: the last two labels of its
-    /// domain, `mail.google.com` → `google.com`. That map, built without reading
+    /// contributes its landed host, paired with the pack's registrable site (`registrableSite(of:)`:
+    /// `mail.google.com` → `google.com`, and `app.example.co.uk` → `example.co.uk`). That map, built without reading
     /// `SkillPackStartPageRule.identityHosts`, must equal the list. So a site added to a host nobody
     /// lands from fails here, a host added that no pack lands on fails here, and a pairing a pack needs
     /// fails `everyShippedPackLoads…` instead. The first version of this test read each host's sites
@@ -1145,13 +1148,47 @@ struct SkillPackTests {
                 let landed = try #require(URL(string: landedText))
                 let host = (landed.host ?? "").lowercased()
                 guard host != domain, !host.hasSuffix("." + domain) else { continue }
-                landings[host, default: []].insert(domain.split(separator: ".").suffix(2).joined(separator: "."))
+                landings[host, default: []].insert(Self.registrableSite(of: domain))
             }
         }
         #expect(files.count > 100, "the walk found \(files.count) pack files")
         #expect(!landings.isEmpty, "no shipped start page lands off its own site")
         #expect(SkillPackStartPageRule.identityHosts == landings)
     }
+
+    /// **A pack's site is not always its domain's last two labels** (SONNY-529, from review-272b's delta
+    /// pass). Taking two labels made a pack on `app.example.co.uk` demand a pairing for `co.uk`, which is
+    /// not a site, and the failure read as a missing pairing — sending its reader to
+    /// `SkillPackStartPageRule.identityHosts` for a fault in this test. No shipped pack sits on such a
+    /// domain yet, so these samples are the whole guard for it, and each goes through the one helper the
+    /// population test uses.
+    @Test
+    func aPacksSiteIsItsRegistrableDomainEvenUnderACountrysSecondLevel() {
+        let samples: [(domain: String, site: String)] = [
+            ("mail.google.com", "google.com"), ("google.com", "google.com"), ("calendar.notion.so", "notion.so"),
+            ("zcal.co", "zcal.co"), ("app.zcal.co", "zcal.co"), ("desk.zoho.com", "zoho.com"),
+            ("example.co.uk", "example.co.uk"), ("app.example.co.uk", "example.co.uk"),
+            ("shop.example.com.au", "example.com.au"), ("Portal.Example.Co.JP", "example.co.jp")
+        ]
+        for sample in samples {
+            #expect(Self.registrableSite(of: sample.domain) == sample.site, "\(sample.domain)")
+        }
+    }
+
+    /// The registrable site of `domain`: its last two labels, or its last three when the two before the
+    /// country code are one of the second levels countries sell names under (`co.uk`, `com.au`, `co.jp`).
+    /// This is a short rule, not the public-suffix list: Foundation carries no copy of that list, and a
+    /// vendored one is a file nobody here would review. What the rule gets wrong it gets wrong loudly —
+    /// the population test fails naming the host and the site it derived.
+    static func registrableSite(of domain: String) -> String {
+        let labels = domain.lowercased().split(separator: ".").map(String.init)
+        let underACountry = labels.count >= 3
+            && labels[labels.count - 1].count == 2
+            && secondLevelsUnderACountry.contains(labels[labels.count - 2])
+        return labels.suffix(underACountry ? 3 : 2).joined(separator: ".")
+    }
+
+    static let secondLevelsUnderACountry: Set<String> = ["co", "com", "net", "org", "ac", "gov", "edu", "ne", "or", "go", "ltd", "plc"]
 
     /// Every spelling of account creation `accountCreationParts` folds together, in the landed path, in
     /// a single-page app's fragment, and in the declared URL itself — and the near misses a sign-in or
@@ -1181,6 +1218,106 @@ struct SkillPackTests {
         ] {
             #expect(Self.landing(start: "https://www.notion.so/", landed: landed) == nil, "\(landed) was refused")
         }
+    }
+
+    /// **The same four words, inside a longer slug or as a host's first label** (SONNY-529). review-272b
+    /// found `/signup-free`, `/register-now` and `signup.<site>` passing; each is refused now, in the landed
+    /// URL and in the declared one. The near misses that decided how far the match reaches still load:
+    /// `registered-users` (why a prefix match was rejected), a `join` host (Zoom's), a site whose own name
+    /// is one of the words under a suffix of one label, which the host check leaves alone by reading only
+    /// the labels left of the last two, and a query key that merely contains a word (founders' ruling on
+    /// PR #282: Snov's own sign-in address carries `signup_source=landing`). A key that is one of the words
+    /// whole is still read.
+    @Test
+    func aStartPageNamingAccountCreationInsideASlugOrAHostDoesNotLoad() throws {
+        for landed in [
+            "https://www.notion.so/signup-free", "https://www.notion.so/register-now", "https://www.notion.so/sign-up-free",
+            "https://www.notion.so/SignUpNow", "https://www.notion.so/create-account-now", "https://www.notion.so/#/free_signup",
+            "https://signup.notion.so/", "https://register.notion.so/login"
+        ] {
+            #expect(Self.landing(start: "https://www.notion.so/", landed: landed) == .startPageCreatesAnAccount(url: landed), "\(landed)")
+        }
+        for start in [
+            "https://signup.notion.so/", "https://www.notion.so/login?intent=signup_free", "https://www.notion.so/login?signup",
+            "https://www.notion.so/login?Sign-Up=1", "https://www.notion.so/#/login?screen_hint=signup"
+        ] {
+            #expect(Self.landing(start: start, landed: "https://www.notion.so/login") == .startPageCreatesAnAccount(url: start), "\(start)")
+        }
+        // A key is cut at `/#?&=.`, `main`'s own separators, and each piece read whole, so a page routed
+        // through the query is refused as it is on `main` (review-282's delta pass: the first four loaded
+        // while the key was read as one word).
+        // `index.php?/register` is how an app without URL rewriting routes.
+        for start in [
+            "https://www.notion.so/index.php?/register", "https://www.notion.so/index.php?/auth/signup",
+            "https://www.notion.so/?/signup", "https://www.notion.so/login?user.register=1",
+            // A second `?` inside the query carries the word behind it (review-282's scoped pass: all five
+            // loaded while the key was cut at `/` and `.` only).
+            "https://www.notion.so/index.php?/register?ref=home", "https://www.notion.so/?/signup?utm=x",
+            "https://www.notion.so/login?register?x", "https://www.notion.so/login?a?signup",
+            "https://www.notion.so/#/login?/register?x=1"
+        ] {
+            #expect(Self.landing(start: start, landed: "https://www.notion.so/login") == .startPageCreatesAnAccount(url: start), "\(start)")
+        }
+        // And a second `#` inside a route's own query, which a cut at `/`, `.` and `?` still let through:
+        // found by testing every short URL of the class rather than a list of examples. The decoder writes
+        // the second `#` as `%23`, and the matcher reads the fragment decoded, so the refusal names the
+        // decoder's spelling.
+        for (start, named) in [
+            ("https://www.notion.so/#/login?register#top", "https://www.notion.so/#/login?register%23top"),
+            ("https://www.notion.so/#?signup#x", "https://www.notion.so/#?signup%23x")
+        ] {
+            #expect(Self.landing(start: start, landed: "https://www.notion.so/login") == .startPageCreatesAnAccount(url: named), "\(start)")
+        }
+        // A piece is read whole: a tracking key that only contains a word loads, in the query and in a route's.
+        for start in [
+            "https://www.notion.so/login?lang=en&signup_source=landing&signup_page=notion.so%2Findex&cta_type=button",
+            "https://www.notion.so/#/login?signup_source=landing"
+        ] {
+            #expect(Self.landing(start: start, landed: "https://www.notion.so/login") == nil, "\(start) was refused")
+        }
+        for landed in [
+            "https://www.notion.so/registered-users", "https://join.notion.so/", "https://www.notion.so/signin-help",
+            "https://www.notion.so/SignIn"
+        ] {
+            #expect(Self.landing(start: "https://www.notion.so/", landed: landed) == nil, "\(landed) was refused")
+        }
+        // A site whose registrable name is one of the words is not refused for being itself — under a suffix
+        // of one label. Under a suffix of two it is: `knownRefusalsOfTheWiderMatchAreHeld`.
+        #expect(Self.landing(start: "https://www.signup.com/", landed: "https://www.signup.com/login", domain: "signup.com") == nil)
+        // The runs, read directly: what each slug carries, and that a word of its own is not a run.
+        #expect(SkillPackStartPageRule.accountCreationWords(in: "sign-up-free") == ["signup"])
+        #expect(SkillPackStartPageRule.accountCreationWords(in: "Create_Account_Now") == ["createaccount"])
+        #expect(SkillPackStartPageRule.accountCreationWords(in: "registered-users") == [])
+        #expect(SkillPackStartPageRule.accountCreationWords(in: "register") == ["register"])
+    }
+
+    /// **What the wider match refuses although the page may not create an account** (review-282's F4,
+    /// recorded as known refusals by the founders' ruling on PR #282). No address a shipped pack carries is
+    /// one of the path, query and host samples. **Trello's is the exception, held last:** its shipped sign-in
+    /// address is refused for a run in a value, and it can never be a start page because it is off Trello's
+    /// own site. Each is here so that a change freeing one is made on purpose, and so the doc comment on
+    /// `SkillPackStartPageRule.accountCreationParts` that lists them cannot drift from what the loader does.
+    @Test
+    func knownRefusalsOfTheWiderMatchAreHeld() throws {
+        for landed in [
+            "https://www.notion.so/event-registration", "https://www.notion.so/domain-registration",
+            "https://www.notion.so/Register-Domain", "https://www.notion.so/account/register-device",
+            "https://www.notion.so/un-register", "https://www.notion.so/de-register", "https://www.notion.so/newsletter-signup"
+        ] {
+            #expect(Self.landing(start: "https://www.notion.so/", landed: landed) == .startPageCreatesAnAccount(url: landed), "\(landed)")
+        }
+        for start in [
+            "https://www.notion.so/login?next=%2Fregister-success", "https://www.notion.so/login?utm_campaign=signup-q3",
+            "https://www.notion.so/login?ref=signup_page"
+        ] {
+            #expect(Self.landing(start: start, landed: "https://www.notion.so/login") == .startPageCreatesAnAccount(url: start), "\(start)")
+        }
+        // A site named for one of the words under a suffix of two labels: the host check drops only two.
+        #expect(Self.landing(start: "https://www.register.co.uk/", landed: "https://www.register.co.uk/login", domain: "register.co.uk")
+            == .startPageCreatesAnAccount(url: "https://www.register.co.uk/"))
+        // Trello's shipped sign-in address, which cannot be a start page because it is off Trello's site.
+        let trello = try #require(URL(string: "https://id.atlassian.com/login?application=trello--direct-signup&continue=https%3A%2F%2Ftrello.com%2F"))
+        #expect(SkillPackStartPageRule.namesAccountCreation(trello))
     }
 
     /// **Only two words load**, and a near miss of either is not one of them — so a reader who has to
@@ -1263,6 +1400,14 @@ struct SkillPackTests {
         for read in ["18 September 2026", "2026-9-18", "2026-09-18T10:00", "20260918"] {
             #expect(withField("read", read) == .wrongType("startPages[0].read"), "\(read)")
         }
+        // The right shape is not a date (SONNY-529): a month or a day that does not exist, a leap day in a
+        // year without one, and a day before any reading under this rule could have been taken.
+        for read in ["2026-13-45", "2026-00-10", "2026-09-00", "2026-02-30", "2027-02-29", "1970-01-01", "0000-00-00", "2026-09-16"] {
+            #expect(withField("read", read) == .wrongType("startPages[0].read"), "\(read)")
+        }
+        for read in ["2026-09-17", "2026-09-18", "2028-02-29", "2031-12-31"] {
+            #expect(withField("read", read) == nil, "\(read) was refused")
+        }
         #expect(withField("signedIn", true) == .unknownField("startPages[0].signedIn"))
         // A racing page records its other titles; the field is optional, and never empty when present.
         #expect(withField("otherTitles", ["Otter Voice Meeting Notes - Otter.ai"]) == nil)
@@ -1292,6 +1437,152 @@ struct SkillPackTests {
             #expect(pack.startPages.isEmpty, "\(pack.id) is shallow and records a start page")
         }
     }
+
+    /// **Every flow is judged at its own first step, and the check that found eBay's Watchlist flow runs
+    /// here** (SONNY-529). SONNY-510's round five built it as a command in its changelog entry, and nothing
+    /// ran it, so the next pack to bring the shape back would have met no guard. It asks three things of
+    /// every shipped flow, through `firstStepFindings(in:)`:
+    /// - a `product` record that more than one flow starts at, because one record standing for flows reached
+    ///   differently is how eBay's Watchlist flow rode on its search flow's word;
+    /// - a flow under a `product` record whose first step names a place a visitor who is not signed in may
+    ///   not reach (My …, Watching, Settings, Account and the rest of `signedInPlaces`);
+    /// - a flow of any kind whose first step names account creation (`accountCreationSteps`).
+    ///
+    /// **It reads words, so what it finds is judged, not refused.** A finding a person has read and judged
+    /// is written into `judgedFirstStepFindings` with the reason, and the two sets must be equal both ways:
+    /// a new finding fails here until somebody reads the flow, and a judgement whose flow has changed or
+    /// gone fails too. A first step that names a signed-in place in other words passes; that is the limit
+    /// of reading words, and the judgements are why a person reads each `product` flow as well.
+    ///
+    /// **Its guard travelled with it.** The command's first draft printed a clean zero by globbing the
+    /// wrong folder, and it gained an exit 1 on reading no packs; here that is the `#require` on the pack
+    /// count, and the counts after it are the control that the population it judges is not empty.
+    @Test
+    func everyFlowIsJudgedAtItsOwnFirstStep() throws {
+        let catalogue = SkillPackCatalog.load(fileURLs: SkillPackCatalog.packFileURLs(in: Self.shippedPacksDirectory))
+        try #require(catalogue.packs.count > 100, "the walk loaded \(catalogue.packs.count) packs")
+        let flows = catalogue.packs.flatMap(\.flows)
+        let productRecords = catalogue.packs.flatMap(\.startPages).filter { $0.offers == .product }
+        #expect(flows.count > 100, "the walk found \(flows.count) flows")
+        #expect(!productRecords.isEmpty, "no shipped start page says product, so the first two questions ask nothing")
+
+        #expect(Self.firstStepFindings(in: catalogue.packs) == Self.judgedFirstStepFindings)
+    }
+
+    /// The check, held on the shapes it exists for, each decoded through `SkillPackDecoder` and sent
+    /// through the same `firstStepFindings(in:)` the shipped packs meet (SONNY-388: a sample that enters
+    /// downstream of the mechanism tests only what already works). eBay's pack as it stood before round
+    /// five raises the first two questions; a sign-in flow that starts at "Sign up" raises the third; and
+    /// the controls — a `product` flow in a search box, and a `sign-in` flow that starts in Settings, which
+    /// is where a signed-in visitor begins — raise nothing.
+    @Test
+    func theFirstStepCheckFindsEachShapeItExistsFor() throws {
+        func decoded(_ object: [String: Any]) throws -> SkillPack {
+            try SkillPackDecoder.decode(SkillPackFixtures.data(object))
+        }
+        var ebay = SkillPackFixtures.object(id: "ebay", name: "eBay", domain: "ebay.com", category: "websites_apps_commerce")
+        ebay["flows"] = [
+            SkillPackFixtures.flow(title: "Save a search", steps: ["Search eBay for the item."], on: "ebay.com"),
+            SkillPackFixtures.flow(title: "View and tidy your Watchlist", steps: ["Go to My eBay and select Watching."], on: "ebay.com")
+        ]
+        ebay["startPages"] = [SkillPackFixtures.startPage(on: "ebay.com", landedURL: "https://www.ebay.com/", offers: "product")]
+        #expect(Self.firstStepFindings(in: [try decoded(ebay)]) == [
+            "ebay | https://www.ebay.com/ | one product record starts 2 flows",
+            "ebay | View and tidy your Watchlist | a signed-in place: My eBay, Watching | Go to My eBay and select Watching."
+        ])
+
+        var signUp = SkillPackFixtures.object()
+        signUp["flows"] = [SkillPackFixtures.flow(steps: ["Click Sign up and create an account."])]
+        #expect(Self.firstStepFindings(in: [try decoded(signUp)]) == [
+            "notion | Create a page | account creation: Sign up, create an account | Click Sign up and create an account."
+        ])
+
+        var search = SkillPackFixtures.object(id: "ebay", name: "eBay", domain: "ebay.com", category: "websites_apps_commerce")
+        search["flows"] = [SkillPackFixtures.flow(title: "Save a search", steps: ["Type the item into the search box."], on: "ebay.com")]
+        search["startPages"] = [SkillPackFixtures.startPage(on: "ebay.com", landedURL: "https://www.ebay.com/", offers: "product")]
+        var settings = SkillPackFixtures.object()
+        settings["flows"] = [SkillPackFixtures.flow(steps: ["Open Settings, then My connections."])]
+        #expect(Self.firstStepFindings(in: [try decoded(search), try decoded(settings)]) == [])
+    }
+
+    /// What `everyFlowIsJudgedAtItsOwnFirstStep` asks of each flow, as one line per finding:
+    /// `<pack id> | <start URL> | one product record starts N flows`, `<pack id> | <flow title> | a signed-in
+    /// place: … | <first step>` and `<pack id> | <flow title> | account creation: … | <first step>`, the
+    /// words in the order the step names them. **The step's whole text is in the line** (review-282's F5):
+    /// a finding keyed on the matched words alone let a judged step be rewritten to start somewhere
+    /// signed-in, with the same words, and still pass as judged.
+    static func firstStepFindings(in packs: [SkillPack]) -> Set<String> {
+        var findings: Set<String> = []
+        for pack in packs {
+            let offers = Dictionary(uniqueKeysWithValues: pack.startPages.map { ($0.url, $0.offers) })
+            let productStarts = pack.flows.filter { offers[$0.startURL] == .product }.map(\.startURL)
+            for (url, count) in Dictionary(productStarts.map { ($0, 1) }, uniquingKeysWith: +) where count > 1 {
+                findings.insert("\(pack.id) | \(url.absoluteString) | one product record starts \(count) flows")
+            }
+            for flow in pack.flows {
+                let firstStep = flow.steps.first ?? ""
+                let places = matches(of: signedInPlaces, in: firstStep)
+                if offers[flow.startURL] == .product, !places.isEmpty {
+                    findings.insert("\(pack.id) | \(flow.title) | a signed-in place: \(places.joined(separator: ", ")) | \(firstStep)")
+                }
+                let creation = matches(of: accountCreationSteps, in: firstStep)
+                if !creation.isEmpty {
+                    findings.insert("\(pack.id) | \(flow.title) | account creation: \(creation.joined(separator: ", ")) | \(firstStep)")
+                }
+            }
+        }
+        return findings
+    }
+
+    /// Places a first step can name that a visitor who is not signed in may not reach. The pattern is
+    /// round five's, word for word, including its case: "Settings" as a place and not "settings" in a
+    /// sentence.
+    static let signedInPlaces = #"\bMy \w+|\bWatch(?:ing|list)\b|\bSaved\b|\bSettings\b|\bAccount\b|\bProfile\b|\bHistory\b|\bLibrary\b|\bDashboard\b|\bInbox\b|\bWorkspaces?\b|\bProjects?\b|\bSign in\b|\bLog in\b"#
+
+    /// Words a first step can use to send a visitor into account creation, in any case. Round five's
+    /// pattern, word for word.
+    static let accountCreationSteps = #"(?i)\bsign ?up\b|\bcreate (?:an |a |your )?(?:free )?account\b|\bregister\b|\bfree trial\b|\bget started\b"#
+
+    /// Each distinct match of `pattern` in `text`, in the order the text names them.
+    static func matches(of pattern: String, in text: String) -> [String] {
+        guard let expression = try? NSRegularExpression(pattern: pattern) else {
+            Issue.record("the pattern did not compile: \(pattern)")
+            return []
+        }
+        let found = expression.matches(in: text, range: NSRange(text.startIndex..., in: text)).compactMap { match in
+            Range(match.range, in: text).map { String(text[$0]) }
+        }
+        return found.reduce(into: []) { unique, word in
+            if !unique.contains(word) { unique.append(word) }
+        }
+    }
+
+    /// The findings a person has read and judged, each with the reason it stands. A flow here passed that
+    /// reading; a new finding fails the check until somebody reads its flow too.
+    ///
+    /// - Grok's question flow names Settings, Sign in and Sign up only while describing the row across the
+    ///   top of the page. Its action is the prompt box in the middle, which SONNY-510's round four read
+    ///   signed out on 2026-09-18 and found usable. It is also the control that both patterns find their
+    ///   words in real step text.
+    /// - Pipedrive's import flow names "Get started" as the import wizard's own button, reached through the
+    ///   account menu, Tools and apps and Import data inside the signed-in app; the flow starts at a
+    ///   `sign-in` record, and the button imports a spreadsheet rather than creating an account. Judged on
+    ///   the step's own text when SONNY-518's pack arrived at this branch's hop (2026-09-19), and confirmed
+    ///   on the cited support article by review-282, read in a drawing window at 19:33:59Z that day: "Go to
+    ///   account menu > Tools and apps > Import data > Import from spreadsheet, then click 'Get started'".
+    static let judgedFirstStepFindings: Set<String> = [
+        "grok | Ask Grok a question | a signed-in place: Settings, Sign in | \(grokFirstStep)",
+        "grok | Ask Grok a question | account creation: Sign up | \(grokFirstStep)",
+        "pipedrive | Import people, organizations or deals from a spreadsheet | account creation: Get started | \(pipedriveImportFirstStep)"
+    ]
+
+    /// Pipedrive's judged import step, whole. Editing it is re-judging the step.
+    static let pipedriveImportFirstStep = "Go to the account menu > Tools and apps > Import data > Import from spreadsheet, click Get started, then click Next."
+
+    /// The judged step, whole. Review-282 re-read it on screen on 2026-09-19 and the judgement stands: the
+    /// "Ask Grok anything" box is present and enabled signed out, and the top-right row holds Imagine, a
+    /// settings icon, Sign in and Sign up. Editing this string is re-judging the step, which is the point.
+    static let grokFirstStep = "Go to grok.com. There is no side navigation: Imagine, Settings, Sign in and Sign up sit in one row across the top right, and the prompt box is in the middle of the page."
 
     /// A deep fixture pack whose one flow starts at `start` and whose record says it landed on `landed`.
     static func startPageObject(
