@@ -5,6 +5,8 @@
 # NotificationRoundTripTests suites).
 # H1: a screen-control question's cancellation resumes the run that parked it. Killers are in
 # Tests/MacAgentTests/RunAttributedCancellationTests.swift.
+# V1 and V2: a voice recording writes to the run it started on. Killers are in
+# Tests/MacAgentTests/RunAttributedVoiceTests.swift.
 #
 # Proved by hand on this branch, applied together and read per killer because their killers are
 # disjoint: S1, S2 and H1. The rest are written and not run; the changelog entry says which.
@@ -106,4 +108,21 @@
             }
 >>> to
             resume()
+>>> end
+
+>>> mutant V1 a recording's stop writes to the run on screen rather than the run it started on
+>>> file Sources/MacAgent/AgentViewModel.swift
+>>> from
+        let recordingRun = voiceRecordingRunID ?? runIDInScope
+>>> to
+        let recordingRun = runIDInScope
+>>> end
+
+>>> mutant V2 a recording never records the run it started on
+>>> file Sources/MacAgent/AgentViewModel.swift
+>>> from
+        let recordingRun = runIDInScope
+        voiceRecordingRunID = recordingRun
+>>> to
+        let recordingRun = runIDInScope
 >>> end

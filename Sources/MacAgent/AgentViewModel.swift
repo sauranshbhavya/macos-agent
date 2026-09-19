@@ -145,6 +145,21 @@ final class AgentViewModel: ObservableObject {
             updateRunSlotInScope { $0.stepStatuses = newValue }
         }
     }
+    /// The run a voice recording belongs to: the run in scope when it started, which for every real
+    /// caller is the run the widget was showing (SONNY-456).
+    ///
+    /// **Captured once, beside `voiceRecordingOrigin` and `voiceRecordingPurpose`, and for their
+    /// reason.** The recording's three tasks — asking for the microphone, the auto-stop, the
+    /// transcription — run outside any run, so each read "the run the widget shows" at the moment
+    /// each line ran. That is the same run only while focus cannot move. Once it can, a transcript
+    /// that lands after the user has clicked a different pill would put its task id, its usage, its
+    /// error or its answer on that other run, and start its task there. Everything the pipeline
+    /// writes now lands on the run the user was looking at when they started speaking.
+    ///
+    /// Internal rather than private for the reason `deliverTranscript` is: the only code that sets
+    /// it goes on to `AVCaptureDevice.requestAccess`, which a test process cannot survive, so a
+    /// test names the recording's run itself and drives the stop.
+    var voiceRecordingRunID: RunID?
     @Published var isPreparingVoiceRecording: Bool = false
     @Published var isRecordingVoice: Bool = false
     @Published var isTranscribingVoice: Bool = false
@@ -7050,74 +7065,84 @@ final class AgentViewModel: ObservableObject {
         // the state at the transcript's arrival is the wrong thing to route on. The question's own
         // text goes with it, so delivery can tell "the question is still open" from "a question is".
         voiceRecordingPurpose = .forRecordingStarted(clarificationQuestion: clarificationQuestion)
+        // The run goes with them, for the same reason (SONNY-456): see `voiceRecordingRunID`.
+        let recordingRun = runIDInScope
+        voiceRecordingRunID = recordingRun
         isPreparingVoiceRecording = true
 
         Task {
-            let granted = await AudioCommandRecorder.requestMicrophonePermission()
-            guard granted else {
-                isPreparingVoiceRecording = false
-                setError("Microphone permission was denied. Allow microphone access for the launching app, then try again.", persistent: true)
-                return
+            await RunScope.$current.withValue(recordingRun) {
+                await beginRecordingOncePermitted(trigger: trigger)
             }
+        }
+    }
 
+    /// `startVoiceRecording`'s work, run inside the recording's own run (SONNY-456).
+    private func beginRecordingOncePermitted(trigger: VoiceRecordingTrigger) async {
+        let granted = await AudioCommandRecorder.requestMicrophonePermission()
+        guard granted else {
+            isPreparingVoiceRecording = false
+            setError("Microphone permission was denied. Allow microphone access for the launching app, then try again.", persistent: true)
+            return
+        }
+
+        if trigger == .hotKey && !isPushToTalkHotKeyDown {
+            isPreparingVoiceRecording = false
+            return
+        }
+
+        do {
+            try audioRecorder.start()
             if trigger == .hotKey && !isPushToTalkHotKeyDown {
+                audioRecorder.cancel()
                 isPreparingVoiceRecording = false
                 return
             }
 
-            do {
-                try audioRecorder.start()
-                if trigger == .hotKey && !isPushToTalkHotKeyDown {
-                    audioRecorder.cancel()
-                    isPreparingVoiceRecording = false
-                    return
-                }
-
-                isPreparingVoiceRecording = false
-                isRecordingVoice = true
-                let recordingStartedAt = Date()
-                voiceRecordingStartedAt = recordingStartedAt
-                scheduleVoiceRecordingAutoStop(startedAt: recordingStartedAt)
-                errorMessage = nil
-                switch voiceRecordingPurpose {
-                case .command:
-                    // A fresh recording is a fresh interaction — clear the *previous* task's
-                    // leftovers now, not only once a real submission reaches `performStart`.
-                    // Otherwise, if this new attempt fails before ever getting that far (e.g.
-                    // transcription comes back with no text), the failure panel reuses
-                    // `WidgetExistingStepRows` and renders the old, unrelated task's step rows
-                    // above the new error — a real, reported bug.
-                    finalSummary = ""
-                    plan = nil
-                    stepStatuses = [:]
-                    suggestions = []
-                case .clarificationAnswer:
-                    // **Nothing is cleared, because nothing here is a leftover** (SONNY-283). The
-                    // plan and its step statuses are the paused task's own, and the clarification
-                    // panel is drawing them above the question this recording answers — wiping
-                    // them would blank the panel the user is speaking into. The summary is that
-                    // pause's "Clarification needed" line, and neither this nor
-                    // `stopVoiceRecordingAndTranscribe` touches it, or the paused task's usage,
-                    // while the question is open (PR #119 review, F4).
-                    break
-                }
-                let recordingMessage: String
-                switch (voiceRecordingPurpose, trigger) {
-                case (.command, .hotKey):
-                    recordingMessage = "Recording voice command from hotkey"
-                case (.command, .button):
-                    recordingMessage = "Recording voice command"
-                case (.clarificationAnswer, .hotKey):
-                    recordingMessage = "Recording voice answer from hotkey"
-                case (.clarificationAnswer, .button):
-                    recordingMessage = "Recording voice answer"
-                }
-                logStore.append(.observe, recordingMessage)
-            } catch {
-                isPreparingVoiceRecording = false
-                setError(error.localizedDescription)
-                logStore.append(.summarize, "Voice recording failed: \(error.localizedDescription)")
+            isPreparingVoiceRecording = false
+            isRecordingVoice = true
+            let recordingStartedAt = Date()
+            voiceRecordingStartedAt = recordingStartedAt
+            scheduleVoiceRecordingAutoStop(startedAt: recordingStartedAt)
+            errorMessage = nil
+            switch voiceRecordingPurpose {
+            case .command:
+                // A fresh recording is a fresh interaction — clear the *previous* task's
+                // leftovers now, not only once a real submission reaches `performStart`.
+                // Otherwise, if this new attempt fails before ever getting that far (e.g.
+                // transcription comes back with no text), the failure panel reuses
+                // `WidgetExistingStepRows` and renders the old, unrelated task's step rows
+                // above the new error — a real, reported bug.
+                finalSummary = ""
+                plan = nil
+                stepStatuses = [:]
+                suggestions = []
+            case .clarificationAnswer:
+                // **Nothing is cleared, because nothing here is a leftover** (SONNY-283). The
+                // plan and its step statuses are the paused task's own, and the clarification
+                // panel is drawing them above the question this recording answers — wiping
+                // them would blank the panel the user is speaking into. The summary is that
+                // pause's "Clarification needed" line, and neither this nor
+                // `stopVoiceRecordingAndTranscribe` touches it, or the paused task's usage,
+                // while the question is open (PR #119 review, F4).
+                break
             }
+            let recordingMessage: String
+            switch (voiceRecordingPurpose, trigger) {
+            case (.command, .hotKey):
+                recordingMessage = "Recording voice command from hotkey"
+            case (.command, .button):
+                recordingMessage = "Recording voice command"
+            case (.clarificationAnswer, .hotKey):
+                recordingMessage = "Recording voice answer from hotkey"
+            case (.clarificationAnswer, .button):
+                recordingMessage = "Recording voice answer"
+            }
+            logStore.append(.observe, recordingMessage)
+        } catch {
+            isPreparingVoiceRecording = false
+            setError(error.localizedDescription)
+            logStore.append(.summarize, "Voice recording failed: \(error.localizedDescription)")
         }
     }
 
@@ -7147,96 +7172,108 @@ final class AgentViewModel: ObservableObject {
         }
     }
 
+    /// Every caller is outside any run — the mic's Stop, the hotkey's release, the auto-stop — so
+    /// the run the widget shows *now* need not be the run this recording started on (SONNY-456).
+    /// The whole stop, and the transcription it starts, run inside `voiceRecordingRunID`.
     private func stopVoiceRecordingAndTranscribe() {
-        // Cancelled unconditionally and first, whatever called this — the mic's own Stop, the
-        // hotkey release, or the auto-stop task above firing on itself. A `Task` cancelling itself
-        // mid-body is a harmless no-op, and clearing the property here (rather than leaving it for
-        // whichever branch below runs) is what makes "cancel it on every stop" true of every caller
-        // rather than of most of them.
-        voiceRecordingAutoStopTask?.cancel()
-        voiceRecordingAutoStopTask = nil
+        let recordingRun = voiceRecordingRunID ?? runIDInScope
+        RunScope.$current.withValue(recordingRun) {
+            // Cancelled unconditionally and first, whatever called this — the mic's own Stop, the
+            // hotkey release, or the auto-stop task above firing on itself. A `Task` cancelling itself
+            // mid-body is a harmless no-op, and clearing the property here (rather than leaving it for
+            // whichever branch below runs) is what makes "cancel it on every stop" true of every caller
+            // rather than of most of them.
+            voiceRecordingAutoStopTask?.cancel()
+            voiceRecordingAutoStopTask = nil
 
-        let recording: FinishedRecording
-        do {
-            recording = try audioRecorder.stop()
-            isRecordingVoice = false
-            voiceRecordingStartedAt = nil
-        } catch {
-            isRecordingVoice = false
-            voiceRecordingStartedAt = nil
-            isPushToTalkHotKeyDown = false
-            setError(error.localizedDescription)
-            return
-        }
-
-        Task {
-            switch voiceRecordingPurpose {
-            case .command:
-                // A command is a fresh task, and its transcription is the first cost of it: the
-                // recorder starts over here so the summary the run ends with is this task's alone.
-                // **And the `task_id` starts over with it** (SONNY-130) — the transcription is the
-                // first request this task makes, so it must already carry the id the run will use,
-                // or the voice half of a task is filed under the previous task's key.
-                // `performStart` sees `preserveUsageForNextStart` and keeps both.
-                beginNewTaskIdentity()
-                logStore.append(.act, "Transcribing voice command")
-            case .clarificationAnswer:
-                // **An answer belongs to the task that is paused, so nothing of that task's is
-                // reset** (PR #119 review, F4). The recorder keeps the pause's own cost and the
-                // transcription is added to it; `preserveUsageForNextStart` below then carries the
-                // whole of it into the answer's `start()`, so the continuation's usage line is the
-                // cost of the task the user asked for — the pause, the words, and the re-plan.
-                // (A *typed* answer's `start()` resets instead, which predates this branch and is
-                // left as it is.)
-                logStore.append(.act, "Transcribing voice answer")
-            }
-            isTranscribingVoice = true
-            errorMessage = nil
-            defer {
-                publishTaskUsageSummary()
-                try? FileManager.default.removeItem(at: recording.url)
-            }
-
+            let recording: FinishedRecording
             do {
-                let transcriber = OpenAITranscriber(
-                    client: backendClient,
-                    // A transcription belongs to the task it begins, so it carries that task's
-                    // retention answer too: a run the user started with "Don't save this task" on
-                    // sends `retention: "none"` for their voice, which is the most personally
-                    // sensitive of the four content types this branch moved.
-                    taskContext: backendTaskContext(recordingPolicy: taskRecordingPolicy),
-                    usageRecorder: taskUsageRecorder
-                )
-                let result = try await transcriber.transcribe(
-                    audioFileURL: recording.url,
-                    // How long the user held the key, not how long the file is — `FinishedRecording`
-                    // says why the two differ once the recorder bounds itself.
-                    recordedDuration: recording.heldFor
-                )
-                // Deliberately does *not* write `command` here. `dispatchTranscribedCommand` routes
-                // through `dispatch`, which assigns it and clears it again if the dispatch is
-                // refused — writing it first would reinstate exactly the residue this round removes,
-                // for a transcription that completed into a clarification pause.
-                if case .command = voiceRecordingPurpose {
-                    // The previous task's summary, cleared for a new one. An answer's paused task
-                    // keeps its "Clarification needed" line until the question is answered or
-                    // cancelled (F4 again).
-                    finalSummary = ""
-                }
-                isTranscribingVoice = false
-                preserveUsageForNextStart = true
-                // States only what is known here. "Sonny will act now" was written *before* the
-                // dispatch and was contradicted by it whenever the dispatch was refused — a
-                // transcription that completed into a pending approval left the spoken words gone,
-                // no error set, and this sentence as the last thing said about them. What happens
-                // next is `dispatch`'s to record, and it now does, on every door. (PR #40 review, F5.)
-                logStore.append(.observe, "Transcript ready.")
-                deliverTranscript(result.text, recordedFor: voiceRecordingPurpose, origin: voiceRecordingOrigin)
+                recording = try audioRecorder.stop()
+                isRecordingVoice = false
+                voiceRecordingStartedAt = nil
             } catch {
-                deliverTranscriptionError(error)
+                isRecordingVoice = false
+                voiceRecordingStartedAt = nil
+                isPushToTalkHotKeyDown = false
+                setError(error.localizedDescription)
+                return
             }
+
+            // Bound explicitly, as `start()` binds its own `Task`, rather than left to inheritance.
+            Task {
+                await RunScope.$current.withValue(recordingRun) {
+                    switch voiceRecordingPurpose {
+                    case .command:
+                        // A command is a fresh task, and its transcription is the first cost of it: the
+                        // recorder starts over here so the summary the run ends with is this task's alone.
+                        // **And the `task_id` starts over with it** (SONNY-130) — the transcription is the
+                        // first request this task makes, so it must already carry the id the run will use,
+                        // or the voice half of a task is filed under the previous task's key.
+                        // `performStart` sees `preserveUsageForNextStart` and keeps both.
+                        beginNewTaskIdentity()
+                        logStore.append(.act, "Transcribing voice command")
+                    case .clarificationAnswer:
+                        // **An answer belongs to the task that is paused, so nothing of that task's is
+                        // reset** (PR #119 review, F4). The recorder keeps the pause's own cost and the
+                        // transcription is added to it; `preserveUsageForNextStart` below then carries the
+                        // whole of it into the answer's `start()`, so the continuation's usage line is the
+                        // cost of the task the user asked for — the pause, the words, and the re-plan.
+                        // (A *typed* answer's `start()` resets instead, which predates this branch and is
+                        // left as it is.)
+                        logStore.append(.act, "Transcribing voice answer")
+                    }
+                    isTranscribingVoice = true
+                    errorMessage = nil
+                    defer {
+                        publishTaskUsageSummary()
+                        try? FileManager.default.removeItem(at: recording.url)
+                    }
+
+                    do {
+                        let transcriber = OpenAITranscriber(
+                            client: backendClient,
+                            // A transcription belongs to the task it begins, so it carries that task's
+                            // retention answer too: a run the user started with "Don't save this task" on
+                            // sends `retention: "none"` for their voice, which is the most personally
+                            // sensitive of the four content types this branch moved.
+                            taskContext: backendTaskContext(recordingPolicy: taskRecordingPolicy),
+                            usageRecorder: taskUsageRecorder
+                        )
+                        let result = try await transcriber.transcribe(
+                            audioFileURL: recording.url,
+                            // How long the user held the key, not how long the file is — `FinishedRecording`
+                            // says why the two differ once the recorder bounds itself.
+                            recordedDuration: recording.heldFor
+                        )
+                        // Deliberately does *not* write `command` here. `dispatchTranscribedCommand` routes
+                        // through `dispatch`, which assigns it and clears it again if the dispatch is
+                        // refused — writing it first would reinstate exactly the residue this round removes,
+                        // for a transcription that completed into a clarification pause.
+                        if case .command = voiceRecordingPurpose {
+                            // The previous task's summary, cleared for a new one. An answer's paused task
+                            // keeps its "Clarification needed" line until the question is answered or
+                            // cancelled (F4 again).
+                            finalSummary = ""
+                        }
+                        isTranscribingVoice = false
+                        preserveUsageForNextStart = true
+                        // States only what is known here. "Sonny will act now" was written *before* the
+                        // dispatch and was contradicted by it whenever the dispatch was refused — a
+                        // transcription that completed into a pending approval left the spoken words gone,
+                        // no error set, and this sentence as the last thing said about them. What happens
+                        // next is `dispatch`'s to record, and it now does, on every door. (PR #40 review, F5.)
+                        logStore.append(.observe, "Transcript ready.")
+                        deliverTranscript(result.text, recordedFor: voiceRecordingPurpose, origin: voiceRecordingOrigin)
+                    } catch {
+                        deliverTranscriptionError(error)
+                    }
+    
+                }
+            }
+    
         }
     }
+
 
     /// Where a transcription that produced no transcript ends — the one seam, called by the real
     /// catch above and driven directly by tests, for the same reason `deliverTranscript` below is.

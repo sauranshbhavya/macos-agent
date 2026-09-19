@@ -1396,6 +1396,8 @@ struct ProductShellTests {
             // clear of the failure is what clears it. The two subjects are channels the delegate
             // listens on, not state.
             "runSlots", "focusedRunID", "id", "approvalToken", "retryToken",
+            // Names the run a voice recording started on (SONNY-456); an id, not data.
+            "voiceRecordingRunID",
             "errorMessageRaised", "approvalParked"
         ]
 
