@@ -1,0 +1,76 @@
+# SONNY-539 — the exhaustive URL class run, as a permanent test on the account-creation matcher.
+# Swift half only; no file under server/ changes on this branch, and no file under Sources/ either: the C
+# mutants below edit the matcher to show the guard biting, and the branch itself leaves it alone.
+#
+# The property is one sentence: over every address of the class, none that main refused loads. C1 and C2
+# are the two cuts that shipped for a round each on SONNY-529, put back exactly as they were; the ticket
+# asks that each be watched dying, and the branch's changelog entry records that run. C3 and C4 undo the
+# same floor somewhere the key cut is not, in the path and in a route, because a guard that only fails on
+# the line it was written about is a held example with more steps.
+#
+# T1 and T2 mutate the table the suite holds main's verdicts in, which lives in the test target. T1 loses
+# refusals, which the counts by length catch. T2 swaps two of row 0's targets so that every count stays
+# exactly as it was, which is what the shapes held by name are for.
+#
+# W1 mutates the walk itself: it stops reporting. The guard then passes on anything at all, and the only
+# test that can say so is the one that drives the walk with a matcher that refuses nothing.
+
+>>> mutant C1 a query key is cut at / and . only, SONNY-529's first fix: a second ? inside a query loads (2,110 of the class)
+>>> file Sources/MacAgentCore/SkillPackStartPages.swift
+>>> from
+            || keys.flatMap { $0.split(whereSeparator: { "/#?&=.".contains($0) }) }.contains { accountCreationParts.contains(foldedWhole(String($0))) }
+>>> to
+            || keys.flatMap { $0.split(whereSeparator: { "/.".contains($0) }) }.contains { accountCreationParts.contains(foldedWhole(String($0))) }
+>>> end
+
+>>> mutant C2 a query key is cut at / . and ?, the one-character fix that was proposed: a second # in a route's own query loads (146 of the class)
+>>> file Sources/MacAgentCore/SkillPackStartPages.swift
+>>> from
+            || keys.flatMap { $0.split(whereSeparator: { "/#?&=.".contains($0) }) }.contains { accountCreationParts.contains(foldedWhole(String($0))) }
+>>> to
+            || keys.flatMap { $0.split(whereSeparator: { "/.?".contains($0) }) }.contains { accountCreationParts.contains(foldedWhole(String($0))) }
+>>> end
+
+>>> mutant C3 a path is not cut at a dot: /x.signup loads, which main refused (11,040 of the class)
+>>> file Sources/MacAgentCore/SkillPackStartPages.swift
+>>> from
+            .joined(separator: "/")
+            .split(whereSeparator: { "/#?&=.".contains($0) })
+>>> to
+            .joined(separator: "/")
+            .split(whereSeparator: { "/#?&=".contains($0) })
+>>> end
+
+>>> mutant C4 a route is not cut at a second #: ##signup loads, which main refused (1,750 of the class)
+>>> file Sources/MacAgentCore/SkillPackStartPages.swift
+>>> from
+            .joined(separator: "/")
+            .split(whereSeparator: { "/#?&=.".contains($0) })
+>>> to
+            .joined(separator: "/")
+            .split(whereSeparator: { "/?&=.".contains($0) })
+>>> end
+
+>>> mutant T1 the table loses refusals: every full-length address main refused reads as one it loaded
+>>> file Tests/MacAgentCoreTests/AccountCreationClassTable.swift
+>>> from
+        Shape(17, refused: true,  next: []), // 69520 of the class, shortest "signupsignupsignup/signup"
+>>> to
+        Shape(17, refused: false, next: []), // 69520 of the class, shortest "signupsignupsignup/signup"
+>>> end
+
+>>> mutant T2 row 0 sends signup where x goes and x where signup goes: every count by length is unchanged, and only a shape held by name can tell
+>>> file Tests/MacAgentCoreTests/AccountCreationClassTable.swift
+>>> from
+        Shape( 0, refused: false, next: [ 1,  1,  2,  3,  3,  3,  3,  3,  3,  3,  3]), // the bare address
+>>> to
+        Shape( 0, refused: false, next: [ 2,  1,  1,  3,  3,  3,  3,  3,  3,  3,  3]), // the bare address
+>>> end
+
+>>> mutant W1 the walk stops reporting: whatever a matcher lets through, the guard passes
+>>> file Tests/MacAgentCoreTests/AccountCreationClassTests.swift
+>>> from
+                        if !matcher(url) { walk.refusedLess.append(longer) }
+>>> to
+                        _ = matcher(url)
+>>> end
