@@ -1420,9 +1420,12 @@ struct ResumableTaskRunTests {
 
     // MARK: - Fixture
 
+    /// 9am on a fixed day in the machine's own zone — `MemoryCommandCenterTests.nineAM`'s shape, and
+    /// its reason: the scheduler reads the machine's calendar, so a fixture pinned to Eastern agreed
+    /// with it only on a Mac in Eastern (SONNY-418).
     static let nineAM: Date = {
         var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = TimeZone(identifier: "America/New_York") ?? .gmt
+        calendar.timeZone = .current
         return calendar.date(from: DateComponents(year: 2026, month: 7, day: 15, hour: 9, minute: 0))
             ?? Date(timeIntervalSince1970: 1_700_000_000)
     }()

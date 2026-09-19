@@ -2058,8 +2058,12 @@ struct ScheduledRoutineRunTests {
                 .appendingPathComponent("ScheduledRoutineRunTests-\(UUID().uuidString)", isDirectory: true)
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
 
+            // The scheduler's own zone, not a fixed one: `checkScheduledRoutines` hands
+            // `RoutineScheduler` no calendar, so it reads the machine's. A fixture pinned to a zone
+            // agrees with it only on a Mac in that zone — this one pinned Eastern and passed
+            // because the Mac running it was there (SONNY-418).
             var calendar = Calendar(identifier: .gregorian)
-            calendar.timeZone = try #require(TimeZone(identifier: "America/New_York"))
+            calendar.timeZone = .current
             nineAM = try #require(
                 calendar.date(from: DateComponents(year: 2026, month: 7, day: 15, hour: 9, minute: 0))
             )

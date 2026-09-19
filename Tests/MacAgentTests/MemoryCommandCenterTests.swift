@@ -4096,12 +4096,17 @@ private struct MemoryFixture {
         }
     }
 
-    /// 9am on a fixed day in a fixed zone, and the hour after it — the same shape
+    /// 9am on a fixed day in the machine's own zone, and the hour after it — the same shape
     /// `ScheduledRoutineRunTests` uses, so a scheduled run here fires for the same reason it does
     /// there rather than for one this file invented.
+    ///
+    /// **The machine's zone because it is the scheduler's**: `checkScheduledRoutines` hands
+    /// `RoutineScheduler` no calendar, so it reads the machine's. This pinned Eastern until SONNY-418
+    /// and passed because the Mac running it was there — in each of the four other zones the ticket
+    /// measured, the routine was never due and nothing downstream of it ran.
     static let nineAM: Date = {
         var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = TimeZone(identifier: "America/New_York") ?? .gmt
+        calendar.timeZone = .current
         return calendar.date(from: DateComponents(year: 2026, month: 7, day: 15, hour: 9, minute: 0))
             ?? Date(timeIntervalSince1970: 1_700_000_000)
     }()
