@@ -1243,7 +1243,17 @@ struct SkillPackTests {
         ] {
             #expect(Self.landing(start: start, landed: "https://www.notion.so/login") == .startPageCreatesAnAccount(url: start), "\(start)")
         }
-        // A key is read whole: a tracking key that only contains a word loads, in the query and in a route's.
+        // A key that is a path, or a dotted name, is cut at `/` and `.` and each piece read whole, so a page
+        // routed through the query is refused as it is on `main` (review-282's delta pass: all four loaded
+        // while the key was read as one word). `index.php?/register` is how an app without URL rewriting
+        // routes.
+        for start in [
+            "https://www.notion.so/index.php?/register", "https://www.notion.so/index.php?/auth/signup",
+            "https://www.notion.so/?/signup", "https://www.notion.so/login?user.register=1"
+        ] {
+            #expect(Self.landing(start: start, landed: "https://www.notion.so/login") == .startPageCreatesAnAccount(url: start), "\(start)")
+        }
+        // A piece is read whole: a tracking key that only contains a word loads, in the query and in a route's.
         for start in [
             "https://www.notion.so/login?lang=en&signup_source=landing&signup_page=notion.so%2Findex&cta_type=button",
             "https://www.notion.so/#/login?signup_source=landing"
@@ -1268,7 +1278,9 @@ struct SkillPackTests {
 
     /// **What the wider match refuses although the page may not create an account** (review-282's F4,
     /// recorded as known refusals by the founders' ruling on PR #282). No address a shipped pack carries is
-    /// one of these; each is here so that a change freeing one is made on purpose, and so the doc comment on
+    /// one of the path, query and host samples. **Trello's is the exception, held last:** its shipped sign-in
+    /// address is refused for a run in a value, and it can never be a start page because it is off Trello's
+    /// own site. Each is here so that a change freeing one is made on purpose, and so the doc comment on
     /// `SkillPackStartPageRule.accountCreationParts` that lists them cannot drift from what the loader does.
     @Test
     func knownRefusalsOfTheWiderMatchAreHeld() throws {

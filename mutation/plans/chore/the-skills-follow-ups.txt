@@ -12,6 +12,9 @@
 #
 # The fix round on PR #282 added K1 to K3 for the query read as keys and values (a key whole, a value by
 # runs, a route's own query too) and F4 for the step's text in a finding line.
+# The scoped round after it added K4: the key cut at / and . before each piece is read whole. That cut is
+# what the first version left out, and it came from a widening that looked like a narrowing, which is
+# why it has a mutant of its own.
 
 >>> mutant A1 a start-page date is read for its shape only: 2026-13-45 loads again (SONNY-529)
 >>> file Sources/MacAgentCore/SkillPack.swift
@@ -165,7 +168,7 @@
 >>> mutant K1 a query key is read by runs again: Snov's signup_source= refuses its own sign-in address (the founders' ruling on PR #282)
 >>> file Sources/MacAgentCore/SkillPackStartPages.swift
 >>> from
-            || keys.contains { accountCreationParts.contains(foldedWhole($0)) }
+            || keys.flatMap { $0.split(whereSeparator: { "/.".contains($0) }) }.contains { accountCreationParts.contains(foldedWhole(String($0))) }
 >>> to
             || keys.contains { !accountCreationWords(in: $0).isEmpty }
 >>> end
@@ -173,7 +176,7 @@
 >>> mutant K2 a query key is not read at all: ?signup loads
 >>> file Sources/MacAgentCore/SkillPackStartPages.swift
 >>> from
-            || keys.contains { accountCreationParts.contains(foldedWhole($0)) }
+            || keys.flatMap { $0.split(whereSeparator: { "/.".contains($0) }) }.contains { accountCreationParts.contains(foldedWhole(String($0))) }
 >>> to
             || false
 >>> end
@@ -192,4 +195,12 @@
                     findings.insert("\(pack.id) | \(flow.title) | a signed-in place: \(places.joined(separator: ", ")) | \(firstStep)")
 >>> to
                     findings.insert("\(pack.id) | \(flow.title) | a signed-in place: \(places.joined(separator: ", "))")
+>>> end
+
+>>> mutant K4 a query key is read as one word again, not cut at / and .: index.php?/register and ?user.register=1 load, which main refused (review-282's delta pass)
+>>> file Sources/MacAgentCore/SkillPackStartPages.swift
+>>> from
+            || keys.flatMap { $0.split(whereSeparator: { "/.".contains($0) }) }.contains { accountCreationParts.contains(foldedWhole(String($0))) }
+>>> to
+            || keys.contains { accountCreationParts.contains(foldedWhole($0)) }
 >>> end

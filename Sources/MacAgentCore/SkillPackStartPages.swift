@@ -142,9 +142,9 @@ enum SkillPackStartPageRule {
     /// The words that name account creation. A URL names it when one of these is a run of the words
     /// (`accountCreationWords(in:)`) in a part of its path or its fragment's route, in a query value, or
     /// in a host label left of the last two — so `sign-up`, `sign_up` and `SignUp` are one word, and so are
-    /// `/signup-free`, `/register-now`, `?intent=signup_free` and `signup.<site>` — or when a query key is
-    /// one of them whole. Ghost's `/signup` and PartnerStack's `/handshake/signup` are the measured cases
-    /// (SONNY-510's comments).
+    /// `/signup-free`, `/register-now`, `?intent=signup_free` and `signup.<site>` — or when a piece of a
+    /// query key, cut at `/` and `.`, is one of them whole. Ghost's `/signup` and PartnerStack's
+    /// `/handshake/signup` are the measured cases (SONNY-510's comments).
     ///
     /// **Deliberately short, and the list stayed short when the match widened** (SONNY-529). The words are
     /// the same four; what changed is that a word may now be part of a longer slug or be a host's first
@@ -155,11 +155,19 @@ enum SkillPackStartPageRule {
     /// What this list misses is left to `offers`, which is where a page that offers account creation under
     /// an ordinary path is refused (StreamYard's home has no path at all).
     ///
-    /// **A query key is read whole, and only its value is read by runs** (founders' ruling on PR #282,
-    /// review-282's F4). The query is where tracking parameters live: Snov's own sign-in address carries
-    /// `signup_source=landing`, which says where a visitor came from and not what the page does, and a
-    /// match on runs inside the key refused it. The query was read at all for values that state an intent
-    /// (`?mode=signup`, Auth0's `?screen_hint=signup`), and those are values.
+    /// **A query key is read in whole pieces, and only its value is read by runs** (founders' ruling on
+    /// PR #282, review-282's F4). The query is where tracking parameters live: Snov's own sign-in address
+    /// carries `signup_source=landing`, which says where a visitor came from and not what the page does, and
+    /// a match on runs inside the key refused it. The query was read at all for values that state an
+    /// intent (`?mode=signup`, Auth0's `?screen_hint=signup`), and those are values.
+    ///
+    /// **But a key can be a path, so it is cut at `/` and `.` before each piece is read whole** (review-282's
+    /// delta pass). An app that routes without URL rewriting puts the page's path in the query as its only
+    /// key — `index.php?/register`, `?/auth/signup` — and a dotted name does the same (`?user.register=1`).
+    /// The first version of this rule read the key as one word, so every one of those, refused on `main`,
+    /// loaded: a widening of the query rule that looked like a narrowing, and no measurement over shipped
+    /// addresses could see it, because no shipped address has that shape. `signup_source` has no `/` or
+    /// `.`, so it is still one piece and still loads.
     ///
     /// **Known refusals: pages the wider match refuses although they may not create an account.** None is
     /// an address a shipped pack carries — the branch's changelog entry has the measurement over every
@@ -301,11 +309,11 @@ enum SkillPackStartPageRule {
             .map(String.init)
         let hostLabels = (components?.host ?? "").split(separator: ".").dropLast(2).map(String.init)
         return (parts + hostLabels).contains { !accountCreationWords(in: $0).isEmpty }
-            || keys.contains { accountCreationParts.contains(foldedWhole($0)) }
+            || keys.flatMap { $0.split(whereSeparator: { "/.".contains($0) }) }.contains { accountCreationParts.contains(foldedWhole(String($0))) }
     }
 
-    /// A query key as one word: lowercased, with `-` and `_` dropped, so `sign_up` and `Sign-Up` are
-    /// `signup` and `signup_source` is `signupsource`.
+    /// One piece of a query key as one word: lowercased, with `-` and `_` dropped, so `sign_up` and
+    /// `Sign-Up` are `signup` and `signup_source` is `signupsource`.
     static func foldedWhole(_ key: String) -> String {
         key.lowercased().replacingOccurrences(of: "-", with: "").replacingOccurrences(of: "_", with: "")
     }
