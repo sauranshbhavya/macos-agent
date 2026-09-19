@@ -242,8 +242,12 @@ struct ResumeOfferPresentationTests {
 
         // And the routes into `performStart` that do not go through `dispatch`, counted across every
         // app source file: `dispatch`'s own, `submitClarification`'s, the vision envelope's, the
-        // widget composer's, and three Allow controls that answer a pending approval rather than
-        // starting anything. `webAuthenticationSession.start(` is excluded for the reason
+        // widget composer's, and two Allow controls that answer a pending approval rather than
+        // starting anything — the widget's and Command Center's. **Six since SONNY-456**: the third
+        // Allow was the notification's, which called `start()` and so approved whatever was parked
+        // on the focused run when the banner was pressed; it now answers the run and the approval
+        // it was posted for through `approveParkedRun(_:token:)`, which reaches `approvePendingRun`
+        // without passing through `start()`. `webAuthenticationSession.start(` is excluded for the reason
         // `audioRecorder.start(` is: it is the system browser session Sign in with Google opens
         // (SONNY-129, `SystemWebAuthenticator`), a `start()` that is not a task run.
         var startCallSites = 0
@@ -254,7 +258,7 @@ struct ResumeOfferPresentationTests {
                 - MacAgentSource.count(of: "audioRecorder.start(", inText: text)
                 - MacAgentSource.count(of: "webAuthenticationSession.start(", inText: text)
         }
-        #expect(startCallSites == 7, "a route into performStart was added or removed — classify it above")
+        #expect(startCallSites == 6, "a route into performStart was added or removed — classify it above")
     }
 
     /// **F6/M32: the launch-time read is what makes the offer reach someone who never opens Command
