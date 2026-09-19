@@ -120,8 +120,10 @@ struct RunSlot {
     }
 
     /// Running, or parked on a question only the user can answer — the three terms
-    /// `AgentViewModel.isTaskInFlight` has always used for its one run, plus the four questions a
-    /// screen-control session parks, which hold a continuation exactly as an approval does.
+    /// `AgentViewModel.isTaskInFlight` has always used for its one run, plus three of the four
+    /// questions a screen-control session parks, each holding a continuation exactly as an approval
+    /// does. The fourth, a mid-loop approval, is `approvalRequest` and is already counted. Nothing
+    /// reads this yet; it is what the cap of three will count once a second slot can exist.
     var isInFlight: Bool {
         isRunning || approvalRequest != nil || clarificationQuestion != nil
             || visionCapturePreview != nil || visionDelegationRequest != nil || visionSessionPause != nil
