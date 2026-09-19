@@ -103,10 +103,10 @@ struct AccountCreationClassTests {
         #expect(walk.addresses.reduce(0, +) == 177_155)
         #expect(walk.refusedByMain.reduce(0, +) == 75_546)
         #expect(walk.unparsed == 0)
-        #expect(
-            walk.refusedLess.isEmpty,
-            "\(walk.refusedLess.count) addresses main refused now load, first \(walk.refusedLess.prefix(15))"
-        )
+        // The count and not the list is what is expected, so a failure prints one number and the first
+        // fifteen addresses rather than every one of them.
+        let nowLoad = walk.refusedLess.count
+        #expect(nowLoad == 0, "\(nowLoad) addresses main refused now load, first \(walk.refusedLess.prefix(15))")
     }
 
     /// **The table is `main`'s verdicts and not an empty or a moved one**, read without any matcher. The
