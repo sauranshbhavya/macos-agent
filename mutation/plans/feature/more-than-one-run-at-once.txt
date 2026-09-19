@@ -1,6 +1,12 @@
 # SONNY-456, the first layer: a run's state lives in its own slot, and an approval is answered for a
 # named run. Every killer is in Tests/MacAgentTests/ConsequenceRuleDispatchTests.swift's
 # RunAttributedApprovalTests suite. Swift half only.
+#
+# Each mutant was applied by hand at the commit that added this plan, built, and killed by the test
+# named in this branch's changelog entry. A sixth was written and left out on purpose: dropping the
+# RunScope binding inside start()'s Task is equivalent on this branch, because an unstructured Task
+# inherits its creator's task-local and nothing here can move the focused run while a run is going.
+# The rest of SONNY-456 makes focus movable, and owes that mutant with a test that kills it.
 
 >>> mutant R1 one run's approval token answers another run's question (the token check dropped)
 >>> file Sources/MacAgent/AgentViewModel.swift
@@ -51,33 +57,4 @@
             let token: UUID? = newValue == nil ? nil : UUID()
 >>> to
             let token: UUID? = newValue == nil ? nil : (runSlotInScope.approvalToken ?? UUID())
->>> end
-
->>> mutant R6 a run's work is not bound to its slot, so every run collapses onto the one on screen
->>> file Sources/MacAgent/AgentViewModel.swift
->>> from
-        currentTask = Task {
-            await RunScope.$current.withValue(runID) {
-                await performStart(
-                    submittedCommand: submittedCommand,
-                    autoExecute: autoExecute,
-                    origin: origin,
-                    prebuiltPlan: prebuiltPlan,
-                    prebuiltPlanSource: prebuiltPlanSource,
-                    continuing: continuation
-                )
-            }
-        }
->>> to
-        _ = runID
-        currentTask = Task {
-            await performStart(
-                submittedCommand: submittedCommand,
-                autoExecute: autoExecute,
-                origin: origin,
-                prebuiltPlan: prebuiltPlan,
-                prebuiltPlanSource: prebuiltPlanSource,
-                continuing: continuation
-            )
-        }
 >>> end
