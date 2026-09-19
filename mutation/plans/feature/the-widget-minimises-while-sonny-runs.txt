@@ -10,14 +10,18 @@
 # (theOutcomeOfAMinimisedRunHoldsUntilTheWidgetIsExpanded); P5 by RunPillPlacementTests (both tests);
 # P6 by RunPillPresentationTests (aResultIsDoneWithItsFirstLine).
 
+# P1 re-anchored 2026-09-19 (SONNY-532, by the founder's decision that day to land it with that
+# ticket's pair). SONNY-456 turned isRunning from a stored property with a didSet into a computed
+# one over the run's slot, so `if isRunning, !oldValue {` became `if newValue, !wasRunning {` and
+# the old block matched nothing. Same id, same property, same one-word change.
 >>> mutant P1 a run starting no longer minimises the widget
 >>> file Sources/MacAgent/AgentViewModel.swift
 >>> from
-            if isRunning, !oldValue {
+            if newValue, !wasRunning {
                 widgetWasExpandedForThisRun = false
             }
 >>> to
-            if isRunning, !oldValue {
+            if newValue, !wasRunning {
                 widgetWasExpandedForThisRun = true
             }
 >>> end
