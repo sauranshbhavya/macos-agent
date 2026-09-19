@@ -8,6 +8,50 @@
   "signInURL": "https://cloud.digitalocean.com/login",
   "triggers": ["digitalocean", "digitalocean.com"],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Create a project",
+      "startURL": "https://cloud.digitalocean.com/",
+      "steps": [
+        "In the control panel's main menu, under the Projects section, click + New Project.",
+        "On the Create new project page, enter the project's name, an optional description, and what it is for. Every setting can be changed later on the project's Settings tab.",
+        "Click Create Project. The Move Resources page opens.",
+        "Optionally click the names of existing resources to move into the project and click Move Resources, or choose Skip for now. Either one finishes the project and opens its Resources tab."
+      ],
+      "source": "https://docs.digitalocean.com/products/projects/how-to/create/"
+    },
+    {
+      "title": "Add a DNS record to a domain",
+      "startURL": "https://cloud.digitalocean.com/",
+      "steps": [
+        "Click Networking in the main menu, click Domains, then click the domain to manage.",
+        "Click Create a record and select the record type.",
+        "Fill in the required fields. For an A record's Hostname, enter @ for the apex domain or a subdomain prefix such as www.",
+        "Click Create Record. To change a record later, open its … (More) menu on the right and click Edit record."
+      ],
+      "source": "https://docs.digitalocean.com/products/networking/dns/how-to/manage-records/"
+    },
+    {
+      "title": "Create a cloud firewall",
+      "startURL": "https://cloud.digitalocean.com/",
+      "steps": [
+        "Open the Create menu at the top of the control panel and choose Firewall.",
+        "Enter a name in the Name field. Four default rules are already defined, allowing inbound SSH on port 22 and all outbound traffic; keep, modify or delete them, and add rules of your own.",
+        "In the Apply to Droplets field, type the name of a Droplet or a tag. Droplets can be chosen by name, by tag, or both.",
+        "Click Create Firewall. Firewalls are listed under Networking, then Firewalls."
+      ],
+      "source": "https://docs.digitalocean.com/products/networking/firewalls/how-to/create/"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://cloud.digitalocean.com/",
+      "landedURL": "https://cloud.digitalocean.com/login",
+      "title": "Log in to your account | DigitalOcean",
+      "heading": "Log in to your account",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
+  ]
 }

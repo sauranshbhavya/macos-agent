@@ -8,6 +8,38 @@
   "signInURL": "https://id.heroku.com/login",
   "triggers": ["heroku", "heroku.com"],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Add a collaborator to an app",
+      "startURL": "https://dashboard.heroku.com/",
+      "steps": [
+        "Select the app in the dashboard and click the Access tab.",
+        "Click the Add collaborator button.",
+        "In the New collaborator window, type the person's email address.",
+        "Click Save changes. Heroku emails them that they were granted access to the app, or sends an invitation if no Heroku account matches the address."
+      ],
+      "source": "https://devcenter.heroku.com/articles/collaborating"
+    },
+    {
+      "title": "Remove a collaborator from an app",
+      "startURL": "https://dashboard.heroku.com/",
+      "steps": [
+        "Select the app in the dashboard and click the Access tab.",
+        "Click the x beside the collaborator's email address.",
+        "Click Delete Collaborator."
+      ],
+      "source": "https://devcenter.heroku.com/articles/collaborating"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://dashboard.heroku.com/",
+      "landedURL": "https://id.heroku.com/login",
+      "title": "Heroku | Login",
+      "heading": "Heroku",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
+  ]
 }

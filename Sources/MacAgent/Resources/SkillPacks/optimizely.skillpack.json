@@ -8,6 +8,48 @@
   "signInURL": "https://app.optimizely.com/login",
   "triggers": ["optimizely", "optimizely.com"],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Create an A/B test experiment",
+      "startURL": "https://app.optimizely.com/",
+      "steps": [
+        "Go to the Experiments or Optimizations dashboard, click Create New Experiment, and select A/B Test from the dropdown.",
+        "Enter a name for the experiment and, optionally, a description.",
+        "Set where the experiment runs: Target By URL to run it once, or Target By Saved Pages to run it on a set of URLs regularly.",
+        "Click Create Experiment. Before it can run, the website needs Optimizely's one-line JavaScript snippet and the experiment needs at least one metric."
+      ],
+      "source": "https://support.optimizely.com/hc/en-us/articles/39075638006541-Steps-to-create-an-experiment"
+    },
+    {
+      "title": "Add a metric to an experiment",
+      "startURL": "https://app.optimizely.com/",
+      "steps": [
+        "Open the experiment and go to Track > Metrics.",
+        "Click Add Metric and choose the metric type and event. The first metric added is the primary metric, which decides whether the experiment wins or loses.",
+        "Add secondary metrics or monitoring goals as needed, then click Save."
+      ],
+      "source": "https://support.optimizely.com/hc/en-us/articles/39075638006541-Steps-to-create-an-experiment"
+    },
+    {
+      "title": "Schedule an experiment",
+      "startURL": "https://app.optimizely.com/",
+      "steps": [
+        "Open the experiment and go to Plan.",
+        "Select the Start Time, End Time and Time Zone.",
+        "Click Save."
+      ],
+      "source": "https://support.optimizely.com/hc/en-us/articles/39075638006541-Steps-to-create-an-experiment"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://app.optimizely.com/",
+      "landedURL": "https://app.optimizely.com/signin",
+      "title": "Optimizely",
+      "heading": "Log In",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
+  ]
 }
