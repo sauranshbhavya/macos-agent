@@ -28,6 +28,9 @@ struct SkillPackTests {
             let row = try #require(rowsByID[pack.id], "\(pack.id) ships as a pack but is not a catalogue row")
             #expect(row["domain"] == pack.domain, "\(pack.id)'s domain disagrees with its catalogue row")
             #expect(row["category"] == pack.category, "\(pack.id)'s category disagrees with its catalogue row")
+            // The pack's `signInURL` decides and the row mirrors it (SONNY-524): `SkillPack.signInURL`'s doc
+            // comment says why. An empty cell is a pack with no sign-in page of its own.
+            #expect(row["sign_in_url"] == (pack.signInURL?.absoluteString ?? ""), "\(pack.id)'s sign-in page disagrees with its catalogue row")
             // A deep pack needs a row whose flows rest on evidence somebody read — documentation
             // (`deep`) or the live site (`site`). A shallow pack may sit on any row: every site gets one
             // before its flows are written (founders, SONNY-463 decision 2).

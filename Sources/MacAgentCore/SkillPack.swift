@@ -44,7 +44,10 @@ import Foundation
 /// The catalogue is validated in `SkillPackTests`, which allows a deep pack on a `deep` or a `site`
 /// row and on nothing else and requires that row to name at least one page the flows were read from;
 /// that narrowing is what stops a pack being deep on evidence nobody has, or on evidence no row
-/// records.
+/// records. The row's `domain`, `category` and `sign_in_url` are the pack's own values, held equal
+/// there; for `sign_in_url` the pack's `signInURL` is the one that decides, and its doc comment says why
+/// (SONNY-524). The file itself carries no note to say so: its first line is its header, and every
+/// reader of it takes any other line for a row.
 ///
 /// **What a lane owes before it writes `site` on a row — how those pages must have been read, and why
 /// a fetch of them is not a reading — is stated once, in `CLAUDE.md`'s Claims and evidence section,
@@ -95,6 +98,22 @@ public struct SkillPack: Equatable, Sendable, Identifiable {
     public let domain: String
     public let category: String
     public let summary: String
+    /// The page Sonny is told to sign in on, rendered into `guidance` as "Sign-in page: …": opened by a
+    /// visitor who is not signed in, it lands on a page where an account that already exists signs in.
+    /// `nil` for a site with no sign-in page of its own.
+    ///
+    /// **This field is the authoritative value, and the catalogue row's `sign_in_url` mirrors it**
+    /// (settled on SONNY-524, 2026-09-18). It is the one that reaches the planner, and it is the one a
+    /// person corrects after opening the page, as SONNY-510's sweep did for fifteen packs. The row was the
+    /// seed a pack was first written from, and SONNY-526 found what a seed can be worth: many rows guessed
+    /// `https://<domain>/login`, and Chatwork's named a user nobody has. So a row is never copied over a
+    /// pack; a correction is made here, after opening the page, and written into the row in the same
+    /// change. `SkillPackTests` holds the two equal, as it already held `domain` and `category`, because
+    /// two values that look like one fact and disagree get "fixed" by copying one over the other, and the
+    /// copy goes whichever way the next reader guesses.
+    ///
+    /// The start-page rule does not read it (the founders' decision C of 2026-09-18, on SONNY-524): a
+    /// landing off the pack's own site is admitted by `SkillPackStartPageRule.identityHosts` alone.
     public let signInURL: URL?
     public let triggers: [String]
     public let sections: [String]
@@ -206,7 +225,7 @@ public enum SkillPackLoadError: Error, Equatable, Sendable {
     /// has no pairing of `host` with `site`. It names the pairing because the list is kept one pairing at
     /// a time: the fix is either the record (the page landed somewhere a flow may not start) or, when
     /// `host` really is where `site` signs in, the pairing `host` → `site` added after reading the page.
-    case landedOnUnpairedHost(url: String, host: String, site: String)
+    case landingHostNotPairedWithSite(url: String, host: String, site: String)
     /// `host` is a listed identity host, on or off the pack's own site, and the record landing there
     /// says `product`: an identity host admits a sign-in page and nothing else.
     case identityHostLandingIsNotSignIn(url: String, host: String)
