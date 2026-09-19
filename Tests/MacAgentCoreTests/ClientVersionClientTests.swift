@@ -175,8 +175,9 @@ struct ClientVersionClientTests {
     ///
     /// **Bounded rather than eliminated, which is the honest wording — and now judged rather than
     /// timed** (SONNY-515). The handler waits with `CanaryBackstop.block`, whose deadline is
-    /// ``secondCallerBudget`` and whose witness is a canary down the second caller's own path: a
-    /// detached task hopping onto the same client. Before SONNY-515 a window that closed early
+    /// ``secondCallerBudget`` and whose witness is a canary down the second caller's kind of path: a
+    /// detached task hopping onto an actor — one of its own rather than this client, so that a
+    /// defect in the client cannot starve the witness that is judging it (PR #277's review, F3). Before SONNY-515 a window that closed early
     /// recorded a sentence no declaration covered, which a loaded battery counted as a kill. Now it
     /// says which of two things happened — the client kept answering the canary while the second
     /// caller never came back, a real failure, or nothing got through, a busy machine — and the
@@ -214,10 +215,7 @@ struct ClientVersionClientTests {
             window.hand(CanaryBackstop.block(
                 deadline: Self.secondCallerBudget,
                 ceiling: Self.windowCeiling,
-                canary: CanaryBackstop.Canary {
-                    _ = await client.metaDocument()
-                    return true
-                }
+                canary: .actorHop
             ) { secondCaller.count("returned") == 1 })
             return served
         }

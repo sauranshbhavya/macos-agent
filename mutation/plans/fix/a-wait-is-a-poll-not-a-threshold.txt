@@ -1,5 +1,5 @@
-# SONNY-515 — a wait on the stub transport is judged by a canary through the same pipeline, not by
-# the clock alone, and every stub request's handler runs on a thread of its own. SONNY-418 — the
+# SONNY-515 — a wait on the stub transport is judged by a canary through the same kind of pipeline,
+# not by the clock alone, and every stub request's handler runs on a thread of its own. SONNY-418 — the
 # routine fixtures build their 9am in the machine's own zone, the zone the scheduler reads.
 #
 # SWIFT HALF. Every path below is under Tests/, so scripts/mutate-all runs this plan against the
@@ -15,25 +15,34 @@
 #        and the second is no longer the stuck sentence). The kickoff's own mutant: without the second
 #        issue a stuck wait records only declared wordings and a battery reads a real kill as
 #        UNATTRIBUTED — CLAUDE.md's SONNY-259 rule.
-#   M2 — the same test and aStarvedOutcomeRecordsNoIssueThatCountsAsEvidence: the gate inverted, so a
-#        starved wait records the evidence sentence and a stuck one does not.
-#   M3 — both of those tests: the abandonment turned back into a return, so the line after the wait
-#        runs (PR #153's F2 shape).
+#   M2 — aFalseConditionBesideACanaryThatGetsNoAnswerIsStarvedAtTheCeiling,
+#        stuckOutranksBrokenAndBrokenOutranksStarved and theBlockingFormReachesTheSameFourVerdicts: a
+#        starved wait reported stuck, so a busy machine records the evidence sentence — the
+#        manufactured kill this branch exists to end.
+#   M3 — every abandonUnlessHeld test that records issues (stuck, broken, starved): the abandonment
+#        turned back into a return, so the line after the wait runs (PR #153's F2 shape).
 #   M4 — noCanaryIsSentBeforeTheDeadline and everyCanaryTripBeginsAfterTheDeadline: the canary
 #        started with the wait rather than at its deadline, so trips completed before a stall could
 #        vouch for a pipeline that was frozen when the verdict was taken.
 #   M5 — BackendStubURLProtocolTests.eightyHeldHandlersAllStartWhileEveryOneOfThemIsStillHeld: the
 #        handler back on a concurrent dispatch queue, served from GCD's constrained pool, which
 #        `sysctl kern.wq_max_constrained_threads` caps at 64 on the Mac this was written on. It dies
-#        on HangBackstop's stuck verdict and the second issue that wait records, so it takes that
-#        backstop's thirty seconds to die.
-#   M6 — aFalseConditionBesideACanaryThatCannotGetThroughIsStarvedAtTheCeiling and
-#        theBlockingFormReachesTheSameThreeVerdicts: a canary trip that failed counted as one that got
-#        through, which turns every starved wait into a stuck one — the manufactured kill this branch
-#        exists to end.
+#        on HangBackstop's stuck verdict and the second issue that wait records, which takes that
+#        backstop's thirty-second deadline and five hundred looks at the least — 100.7 s in the
+#        review's full run of it (PR #277, F5). Killing it never depended on this test alone: in that
+#        run about a hundred other backend tests failed on the client's own timeout.
+#   M6 — aFalseConditionBesideACanaryThatComesBackFailedIsBrokenRatherThanStarved and
+#        theBlockingFormReachesTheSameFourVerdicts: a canary trip that came back failed counted as one
+#        that completed, which turns a broken canary's path into a stuck verdict about the code.
 #   M7 — every ScheduledRoutineRunTests test that needs its routine to have run at tenAM, among them
 #        aTrustedRoutineRunsUnattendedAndRecordsItsRunEverywhere and
 #        aScheduledRunStoresWhatItProducedAndThePlanItRan.
+#   M8 — aFalseConditionBesideACanaryThatGetsNoAnswerIsStarvedAtTheCeiling and the blocking form's
+#        starved leg: a trip that got no answer counted as one that came back failed, which is PR
+#        #277's F3 the other way round — silence reported as "not a busy machine".
+#   M9 — stuckOutranksBrokenAndBrokenOutranksStarved, and the two broken-verdict waits, which then run
+#        to their 120 s ceiling and come back starved instead of hanging: the broken verdict removed,
+#        so a canary that keeps getting failures is called a busy machine again (PR #277's F3).
 #
 # **Why M7 pins a zone half a day from the machine's, and not America/New_York.** Pinning Eastern is
 # exactly SONNY-418's defect, and on a Mac in Eastern it is invisible by construction: the fixture and
@@ -46,29 +55,25 @@
 >>> mutant M1 a stuck wait records no second issue, so it can never count as a kill
 >>> file Tests/MacAgentTestSupport/CanaryBackstop.swift
 >>> from
-            if case .stuck = outcome {
-                Issue.record(
-                    Comment(rawValue: stuckMessage(description, canaryRoundTrips: trips)),
-                    sourceLocation: sourceLocation
-                )
-            }
+            evidence = stuckMessage(description, canaryRoundTrips: counts.completed)
 >>> to
+            evidence = nil
 >>> end
 
->>> mutant M2 the evidence sentence recorded for a starved wait instead of a stuck one
+>>> mutant M2 a wait that ran out of ceiling reported stuck instead of starved
 >>> file Tests/MacAgentTestSupport/CanaryBackstop.swift
 >>> from
-            if case .stuck = outcome {
+        if onCompletedTrips == .stuck { return .stuck }
 >>> to
-            if case .starved = outcome {
+        if onCompletedTrips != .keepWaiting { return .stuck }
 >>> end
 
 >>> mutant M3 a give-up returns to the test instead of ending it
 >>> file Tests/MacAgentTestSupport/CanaryBackstop.swift
 >>> from
-            throw HangBackstop.Abandoned(description: HangBackstop.abandonedMessage(description))
+        throw HangBackstop.Abandoned(description: HangBackstop.abandonedMessage(description))
 >>> to
-            return
+        return
 >>> end
 
 >>> mutant M4 the canary started with the wait rather than at its deadline
@@ -90,12 +95,12 @@
             guard let self else { return }
 >>> end
 
->>> mutant M6 a canary trip that failed counted as one that got through
+>>> mutant M6 a canary trip that came back failed counted as one that completed
 >>> file Tests/MacAgentTestSupport/CanaryBackstop.swift
 >>> from
-                        if await canary.roundTrip() {
+                            trips.increment("failed")
 >>> to
-                        if await canary.roundTrip() || true {
+                            trips.increment("completed")
 >>> end
 
 >>> mutant M7 the routine fixture pinned to a zone half a day from the machine's
@@ -105,4 +110,20 @@
 >>> to
             let offset = TimeZone.current.secondsFromGMT()
             calendar.timeZone = TimeZone(secondsFromGMT: offset > 0 ? offset - 43_200 : offset + 43_200) ?? .current
+>>> end
+
+>>> mutant M8 a canary trip that got no answer counted as one that came back failed
+>>> file Tests/MacAgentTestSupport/CanaryBackstop.swift
+>>> from
+                        case .unanswered:
+>>> to
+                        case .unanswered:
+                            trips.increment("failed")
+>>> end
+
+>>> mutant M9 the broken verdict removed, so a failing canary is a busy machine again
+>>> file Tests/MacAgentTestSupport/CanaryBackstop.swift
+>>> from
+        if elapsed >= deadline, failed >= canaryFloor { return .broken }
+>>> to
 >>> end

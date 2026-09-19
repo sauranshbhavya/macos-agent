@@ -1,6 +1,5 @@
 import Foundation
 import Testing
-@testable import MacAgentCore
 
 /// A wait on something another pipeline makes true — a request reaching a stub handler, a detached
 /// caller coming back — whose give-up is judged by a **canary sent through that same pipeline**, not
@@ -18,74 +17,138 @@ import Testing
 ///
 /// **The rule, which is `HangBackstop`'s with a different witness.** `HangBackstop` counts its own
 /// turns on the main actor, because the main actor is what its waits depend on. These waits depend
-/// on a different pipeline — a client's actor, `URLSession`, the stub's own threads — and a poller
-/// that is running fine says nothing about whether that pipeline is. So the witness is a canary: a
-/// trivial round trip through the same pipeline. Before ``deadline`` nothing is decided and no canary
-/// runs. From the deadline on, the canary runs back to back, and **only round trips that begin after
-/// the deadline count** — a burst of healthy trips before a stall began would otherwise vouch for a
-/// pipeline that was frozen when the verdict was taken. The verdict itself is
-/// `HangBackstop.verdict(elapsed:observations:deadline:ceiling:observationFloor:)`, fed the canary's
-/// count in place of looks:
+/// on a different pipeline — `URLSession`, the stub's own threads, the cooperative pool — and a
+/// poller that is running fine says nothing about whether that pipeline is. So the witness is a
+/// canary: a trivial round trip through the same kind of pipeline. Before ``deadline`` nothing is
+/// decided and no canary runs. From the deadline on, the canary runs back to back, and **only round
+/// trips that begin after the deadline count** — a burst of healthy trips before a stall began would
+/// otherwise vouch for a pipeline that was frozen when the verdict was taken. Each trip ends one of
+/// three ways (``Trip``), and ``verdict(elapsed:completed:failed:deadline:ceiling:canaryFloor:)``
+/// reads the counts:
 ///
 /// - the condition held: nothing is recorded and control returns;
-/// - ``canaryFloor`` fresh round trips completed while the condition stayed false — **stuck**. The
+/// - ``canaryFloor`` fresh trips **completed** while the condition stayed false — **stuck**. The
 ///   pipeline was demonstrably working, so the thing that should have made the condition true did
 ///   not happen, and that is a real failure. It records the declared give-up wording **and a second
 ///   issue in wording no declaration matches**, which is what lets `scripts/mutate` count the test
 ///   as a kill (`CLAUDE.md`'s SONNY-259 rule — a construct whose every wording is declared can never
 ///   be one);
-/// - the ceiling arrived first — **starved**. The canary could not get through either, so this run
-///   says nothing about the code, and only the declared wording is recorded.
+/// - ``canaryFloor`` fresh trips came back **failed** — **broken**. Something answered every time,
+///   so this is not a busy machine, and the test says so in a second issue nothing declares;
+/// - the ceiling arrived first — **starved**. The canary got no answer at all, so this run says
+///   nothing about the code, and only declared wordings are recorded.
 ///
-/// Both failures **end the test** by throwing `HangBackstop.Abandoned` (PR #153's F2): a wait that
+/// **The canary never runs through the code under test** (PR #277's review, F3). Its first version
+/// sent a real `SonnyBackendClient.send`, so a mutant that broke `send` failed every canary trip on
+/// an idle machine, and the wait called that a busy machine — the sentence was false and the log
+/// could not tell the two apart. ``Canary/stubTransport`` now asks `URLSession` and the stub
+/// directly, ``Canary/actorHop`` hops onto an actor of its own, and a trip that comes back failed is
+/// counted as an answer rather than as silence.
+///
+/// Every failure **ends the test** by throwing `HangBackstop.Abandoned` (PR #153's F2): a wait that
 /// gives up and returns leaves its test asserting against a precondition that never arrived, and
 /// every one of those assertions is an undeclared issue a battery reads as a kill.
 ///
 /// **What this does not cover, stated so it is not assumed.** A request a test holds open is still
 /// inside the client's own transport timeout (`SonnyBackendTimeouts`), which is the product's clock
 /// and not this type's; a test starved past it between two of its own steps still fails in the
-/// client's words. The thread-per-request change in `BackendStubURLProtocol` is what took the
-/// measured stall out of that window.
+/// client's words. That residue is SONNY-530, deferred by founder decision on 2026-09-19.
 public enum CanaryBackstop {
     /// The wall clock before which nothing is decided. Ten seconds is what the three waits this
     /// replaced already used; the number was never the defect, the lack of a witness was.
     public static let deadline: TimeInterval = 10
 
     /// The wall clock at which a wait whose canary never earned a verdict gives up as starved. Six
-    /// times the deadline, and well past the longest stall measured (6.98 s at a one-minute load
-    /// average of 240), while still bounded.
+    /// times the deadline, and still well past the longest waits measured on this branch — a stub
+    /// handler queued 7.352 s for a thread before the thread-per-request change, and three real
+    /// waits that ran to 12.7 s and 14.0 s after it, all of which ended held — while still bounded.
     public static let ceiling: TimeInterval = 60
 
-    /// How many canary round trips, each begun after the deadline, make "it stayed false" a
-    /// statement about the code. A held stub request that a working pipeline would have delivered
-    /// is still undelivered after this many fresh requests went through the same pipeline.
-    public static let canaryFloor = 20
+    /// How many canary trips, each begun after the deadline, make "it stayed false" a statement
+    /// about the code.
+    ///
+    /// **A hundred, and the margin is measured** (PR #277's review, F4). It was twenty. The review
+    /// raced the canary against a real flow of one and a half round trips, started at the same
+    /// instant — the worst timing, the one a stall ending exactly at the deadline produces — three
+    /// hundred times inside a full run under ten CPU burners at a load average up to 109.81: all
+    /// three hundred held, and the most trips the canary had completed when the flow landed was
+    /// 18, of twenty. A hundred is more than five times that. That was the first canary, which went
+    /// through a `SonnyBackendClient`; this one asks `URLSession` directly, and it is *slower* per
+    /// trip rather than faster, which was checked rather than assumed because a faster canary would
+    /// have eaten into the margin: a hundred trips took 0.060 to 0.143 s against 0.027 to 0.066 s for
+    /// the client's path, five batches each, at a load average between 23.50 and 58.81. So it reaches
+    /// fewer trips in the same window, the safe direction, and the raise costs the stuck path about a
+    /// tenth of a second.
+    public static let canaryFloor = 100
+
+    /// How one canary round trip ended.
+    public enum Trip: Equatable, Sendable {
+        /// It came back as the canary expected: the pipeline is carrying requests.
+        case completed
+        /// It came back, but not as expected. Something answered, so this is not silence.
+        case failed
+        /// It never got an answer — it timed out or was cancelled. Counts towards nothing.
+        case unanswered
+    }
+
+    /// What one look decided.
+    public enum Verdict: Equatable, Sendable {
+        case keepWaiting
+        case stuck
+        case broken
+        case starved
+    }
+
+    /// The counts a verdict was reached on.
+    public struct Tally: Equatable, Sendable {
+        public let elapsed: TimeInterval
+        public let completed: Int
+        public let failed: Int
+
+        public init(elapsed: TimeInterval, completed: Int, failed: Int) {
+            self.elapsed = elapsed
+            self.completed = completed
+            self.failed = failed
+        }
+    }
 
     /// How a wait ended.
     public enum Outcome: Equatable, Sendable {
         /// The condition was observed to be true.
         case held
         /// The condition stayed false while the canary completed at least the floor.
-        case stuck(elapsed: TimeInterval, canaryRoundTrips: Int)
-        /// The ceiling arrived before the canary could complete the floor.
-        case starved(elapsed: TimeInterval, canaryRoundTrips: Int)
+        case stuck(Tally)
+        /// The condition stayed false while the canary came back failed at least the floor.
+        case broken(Tally)
+        /// The ceiling arrived before the canary could reach the floor either way.
+        case starved(Tally)
     }
 
-    /// One round trip through the pipeline a wait depends on, answering whether it completed.
+    /// One round trip through the kind of pipeline a wait depends on.
     public struct Canary: Sendable {
-        public let roundTrip: @Sendable () async -> Bool
+        public let roundTrip: @Sendable () async -> Trip
 
-        public init(roundTrip: @escaping @Sendable () async -> Bool) {
+        public init(roundTrip: @escaping @Sendable () async -> Trip) {
             self.roundTrip = roundTrip
         }
 
-        /// A request through `BackendStubURLProtocol` from a `SonnyBackendClient` of its own, to a
-        /// stub host of its own that answers at once — the path every backend-client test's own
-        /// requests take. Its host is registered when the canary is built and unregistered when the
-        /// last round trip holding it is gone.
+        /// A request through `URLSession` and `BackendStubURLProtocol` to a stub host of its own that
+        /// answers at once — the transport every backend-client test's requests take, with nothing
+        /// from `Sources/` on the path. Its host is registered when the canary is built and
+        /// unregistered when the last trip holding it is gone.
         public static var stubTransport: Canary {
             let host = TransportCanaryHost()
             return Canary { await host.roundTrip() }
+        }
+
+        /// A detached task hopping onto an actor of its own — the cooperative pool and actor
+        /// scheduling that a detached caller's hop onto a client takes, without the client.
+        public static var actorHop: Canary {
+            let hop = CanaryHop()
+            return Canary {
+                await hop.touch()
+                return .completed
+            }
         }
     }
 
@@ -112,6 +175,34 @@ public enum CanaryBackstop {
             defer { lock.unlock() }
             return handed
         }
+    }
+
+    // MARK: - The verdict
+
+    /// The whole decision, as a pure function of the counts.
+    ///
+    /// Stuck, broken and starved are `HangBackstop.verdict`'s arithmetic with the canary's counts in
+    /// place of looks, and **stuck is checked first**, for that function's reason: a canary that got
+    /// through, enough times, outranks how long it took. Broken comes before starved because a
+    /// canary that keeps getting an answer is, whatever else, not evidence of a busy machine.
+    public static func verdict(
+        elapsed: TimeInterval,
+        completed: Int,
+        failed: Int,
+        deadline: TimeInterval = deadline,
+        ceiling: TimeInterval = ceiling,
+        canaryFloor: Int = canaryFloor
+    ) -> Verdict {
+        let onCompletedTrips = HangBackstop.verdict(
+            elapsed: elapsed,
+            observations: completed,
+            deadline: deadline,
+            ceiling: ceiling,
+            observationFloor: canaryFloor
+        )
+        if onCompletedTrips == .stuck { return .stuck }
+        if elapsed >= deadline, failed >= canaryFloor { return .broken }
+        return onCompletedTrips == .starved ? .starved : .keepWaiting
     }
 
     // MARK: - Waiting
@@ -188,52 +279,71 @@ public enum CanaryBackstop {
         canaryFloor: Int = canaryFloor,
         sourceLocation: SourceLocation = #_sourceLocation
     ) throws {
+        let tally: Tally
+        let evidence: String?
         switch outcome {
         case .held:
             return
-        case let .stuck(elapsed, trips), let .starved(elapsed, trips):
-            Issue.record(
-                Comment(rawValue: gaveUpMessage(description, elapsed: elapsed, canaryRoundTrips: trips, canaryFloor: canaryFloor)),
-                sourceLocation: sourceLocation
-            )
-            if case .stuck = outcome {
-                Issue.record(
-                    Comment(rawValue: stuckMessage(description, canaryRoundTrips: trips)),
-                    sourceLocation: sourceLocation
-                )
-            }
-            throw HangBackstop.Abandoned(description: HangBackstop.abandonedMessage(description))
+        case let .stuck(counts):
+            tally = counts
+            evidence = stuckMessage(description, canaryRoundTrips: counts.completed)
+        case let .broken(counts):
+            tally = counts
+            evidence = brokenMessage(description, failedRoundTrips: counts.failed)
+        case let .starved(counts):
+            tally = counts
+            evidence = nil
         }
+        Issue.record(
+            Comment(rawValue: gaveUpMessage(description, tally: tally, canaryFloor: canaryFloor)),
+            sourceLocation: sourceLocation
+        )
+        if let evidence {
+            Issue.record(Comment(rawValue: evidence), sourceLocation: sourceLocation)
+        }
+        throw HangBackstop.Abandoned(description: HangBackstop.abandonedMessage(description))
     }
 
     // MARK: - Wordings
 
-    /// Recorded whenever a wait gives up, stuck or starved, and the signature
+    /// Recorded whenever a wait gives up, whatever the verdict, and the signature
     /// `scripts/mutate-untrusted-failures` declares. Kept on one rendered line from `This is a`
     /// onward, because the harness matches a literal fragment of it.
     public static func gaveUpMessage(
         _ description: String,
-        elapsed: TimeInterval,
-        canaryRoundTrips: Int,
+        tally: Tally,
         canaryFloor: Int = canaryFloor
     ) -> String {
         """
-        gave up after \(String(format: "%.1f", elapsed))s waiting for: \(description), with \(canaryRoundTrips) of \
-        \(canaryFloor) canary round trips through the same pipeline completed after the deadline.
+        gave up after \(String(format: "%.1f", tally.elapsed))s waiting for: \(description). After the \
+        deadline, \(tally.completed) canary round trips completed and \(tally.failed) came back failed, \
+        against a floor of \(canaryFloor).
         This is a canary-judged backstop, not a timing assertion — on its own it says nothing about \
-        the code under test, and a run where the canary could not get through either is a busy \
+        the code under test, and a run in which no canary trip got an answer at all is a busy \
         machine rather than a defect.
         """
     }
 
-    /// Recorded beside ``gaveUpMessage(_:elapsed:canaryRoundTrips:canaryFloor:)`` only when the
-    /// canary proved the pipeline was working, and deliberately matching no declaration — it is the
-    /// issue that makes a stuck wait count as evidence.
+    /// Recorded beside the give-up wording only when the canary proved the pipeline was working, and
+    /// deliberately matching no declaration — it is the issue that makes a stuck wait count as
+    /// evidence.
     public static func stuckMessage(_ description: String, canaryRoundTrips: Int) -> String {
         """
         a real failure: \(canaryRoundTrips) requests through the same pipeline went through after the \
         deadline while this wait, for \(description), never saw it — so the pipeline was working, and \
         whatever should have made it true did not.
+        """
+    }
+
+    /// Recorded beside the give-up wording when the canary kept getting answers that were failures,
+    /// and deliberately matching no declaration: whatever is wrong, it is not a busy machine, and a
+    /// log that said so would send the reader after load that was never there.
+    public static func brokenMessage(_ description: String, failedRoundTrips: Int) -> String {
+        """
+        not a busy machine: \(failedRoundTrips) canary requests came back failed after the deadline \
+        while this wait, for \(description), never saw it — something answered every time, so the \
+        canary's own path is broken; for the canaries CanaryBackstop ships, that path is the test \
+        harness and never Sources/.
         """
     }
 
@@ -274,32 +384,43 @@ public enum CanaryBackstop {
                 let trips = trips
                 canaryTask = Task.detached {
                     while !Task.isCancelled {
-                        if await canary.roundTrip() {
-                            trips.increment("round trip")
+                        switch await canary.roundTrip() {
+                        case .completed:
+                            trips.increment("completed")
                             // A trip that never suspends would otherwise hold its thread until the
                             // wait gives up, and the wait needs a thread of its own to look.
                             await Task.yield()
-                        } else {
-                            // A trip that failed at once must not become a hot loop beside the wait.
+                        case .failed:
+                            trips.increment("failed")
+                            // A trip that fails at once must not become a hot loop beside the wait.
+                            try? await Task.sleep(nanoseconds: 1_000_000)
+                        case .unanswered:
                             try? await Task.sleep(nanoseconds: 1_000_000)
                         }
                     }
                 }
             }
-            let completed = trips.count("round trip")
-            switch HangBackstop.verdict(
+            let tally = Tally(
                 elapsed: elapsed,
-                observations: completed,
+                completed: trips.count("completed"),
+                failed: trips.count("failed")
+            )
+            switch CanaryBackstop.verdict(
+                elapsed: elapsed,
+                completed: tally.completed,
+                failed: tally.failed,
                 deadline: deadline,
                 ceiling: ceiling,
-                observationFloor: canaryFloor
+                canaryFloor: canaryFloor
             ) {
             case .keepWaiting:
                 return nil
             case .stuck:
-                return .stuck(elapsed: elapsed, canaryRoundTrips: completed)
+                return .stuck(tally)
+            case .broken:
+                return .broken(tally)
             case .starved:
-                return .starved(elapsed: elapsed, canaryRoundTrips: completed)
+                return .starved(tally)
             }
         }
 
@@ -309,38 +430,39 @@ public enum CanaryBackstop {
     }
 }
 
-/// The stub host and client ``CanaryBackstop/Canary/stubTransport`` sends through.
+/// The stub host ``CanaryBackstop/Canary/stubTransport`` sends through.
 private final class TransportCanaryHost: @unchecked Sendable {
     private let host: String
-    private let client: SonnyBackendClient
+    private let session: URLSession
+    private let url: URL
 
     init() {
         let stub = BackendStubURLProtocol.makeSession()
         host = stub.host
+        session = stub.session
+        url = stub.baseURL.appendingPathComponent("canary")
         BackendStubURLProtocol.register(host: stub.host) { _ in
-            .reply(statusCode: 200, headers: [:], body: Data("{}".utf8))
+            .reply(statusCode: 204, headers: [:], body: Data())
         }
-        client = SonnyBackendClient(
-            environment: SonnyBackendEnvironment(baseURL: stub.baseURL, source: .debugOverride),
-            tokenStore: KeychainAccountTokenStore(secretStore: InMemoryKeychainSecretStore()),
-            session: stub.session
-        )
     }
 
     deinit {
         BackendStubURLProtocol.unregister(host: host)
     }
 
-    func roundTrip() async -> Bool {
-        let request = SonnyBackendRequest(
-            method: "GET",
-            path: "/v1/canary",
-            body: nil,
-            authentication: .none,
-            idempotencyKey: nil,
-            timeout: SonnyBackendTimeouts.auth,
-            isRetrySafe: false
-        )
-        return (try? await client.send(request)) != nil
+    func roundTrip() async -> CanaryBackstop.Trip {
+        do {
+            let (_, response) = try await session.data(from: url)
+            return (response as? HTTPURLResponse)?.statusCode == 204 ? .completed : .failed
+        } catch let error as URLError where error.code == .timedOut || error.code == .cancelled {
+            return .unanswered
+        } catch {
+            return .failed
+        }
     }
+}
+
+/// The actor ``CanaryBackstop/Canary/actorHop`` hops onto.
+private actor CanaryHop {
+    func touch() {}
 }
