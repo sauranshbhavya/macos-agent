@@ -1020,6 +1020,31 @@ struct ScheduledRoutineRunTests {
         #expect(try fixture.routineStore.routine(named: "Morning").schedule?.lastRunAt == fixture.enabledAt)
     }
 
+    /// The same with the task in a run the widget is not showing (SONNY-456). The timer that calls
+    /// the scheduler is outside any run, so its guard used to read the focused run alone — idle
+    /// here — and the routine would have started on top of the user's task in the other slot.
+    @Test
+    func nothingFiresWhileATaskIsRunningInARunTheWidgetIsNotShowing() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.cleanUp() }
+        try fixture.saveRoutine(unattendedTrusted: true)
+        let background = fixture.viewModel.addRunSlotForTests()
+        RunScope.$current.withValue(background) { fixture.viewModel.isRunning = true }
+        try #require(!fixture.viewModel.isRunning, "precondition: the run on screen is idle")
+
+        fixture.viewModel.checkScheduledRoutines(now: fixture.tenAM)
+
+        #expect(!fixture.viewModel.isRunning, "the routine started in the run on screen")
+        #expect(fixture.viewModel.scheduledRunNotice == nil)
+        #expect(try fixture.routineStore.routine(named: "Morning").schedule?.lastRunAt == fixture.enabledAt)
+
+        // And it is a delay, not a loss: with every run idle again the same occurrence starts.
+        RunScope.$current.withValue(background) { fixture.viewModel.isRunning = false }
+        fixture.viewModel.checkScheduledRoutines(now: fixture.tenAM)
+        #expect(fixture.viewModel.isRunning, "the occurrence was lost rather than delayed")
+        try await HangBackstop.waitOrAbandon(for: "the scheduled run to finish") { !fixture.viewModel.isRunning }
+    }
+
     /// The race `performScheduledRun`'s missing-routine comment describes: `checkScheduledRoutines`
     /// reads the routine, decides `.due`, and spawns the run as a `Task` — a real suspension point
     /// before the run re-resolves the routine *by name*. Deleting it in that window must fail

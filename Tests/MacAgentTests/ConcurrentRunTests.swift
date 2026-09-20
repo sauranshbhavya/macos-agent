@@ -169,3 +169,82 @@ private struct NamedDraftPlanner: Planning {
         )
     }
 }
+
+// MARK: - SONNY-456: what deletes, and what starts unattended, reads every run
+
+/// A delete pressed while the widget shows an idle run, with a task running in another slot, is
+/// refused exactly as it is when the task is the one on screen. Each of the five guards used to
+/// read the run on screen alone.
+@Suite(.serialized)
+@MainActor
+struct EveryRunGuardTests {
+    enum Busy: String, CaseIterable, CustomTestStringConvertible {
+        case running, awaitingApproval
+        var testDescription: String { rawValue }
+    }
+
+    /// Puts a background slot into the named state and leaves the widget on the idle first run.
+    private func makeBusyBackgroundRun(_ busy: Busy) async throws -> (fixture: DispatchFixture, onScreen: RunID) {
+        let fixture = try makeDispatchFixture()
+        let viewModel = fixture.viewModel
+        let onScreen = viewModel.focusedRunID
+        let background = viewModel.addRunSlotForTests()
+        switch busy {
+        case .running:
+            RunScope.$current.withValue(background) { viewModel.isRunning = true }
+        case .awaitingApproval:
+            // A real parked approval: the draft's file exists, so the run stops at its question.
+            try "existing".write(to: fixture.draftOutput, atomically: true, encoding: .utf8)
+            RunScope.$current.withValue(background) {
+                viewModel.command = "Draft notes"
+                viewModel.start()
+            }
+            try await HangBackstop.waitOrAbandon(for: "the background run to park its approval") {
+                slot(background, in: viewModel).map { $0.approvalRequest != nil && !$0.isRunning } == true
+            }
+        }
+        try #require(viewModel.focusedRunID == onScreen)
+        try #require(!viewModel.isRunning && !viewModel.isAwaitingApproval, "precondition: the run on screen is idle")
+        return (fixture, onScreen)
+    }
+
+    @Test
+    func theWholeWipeAndTheSetAsideFilesAreRefusedWhileAnotherRunIsRunning() async throws {
+        let (fixture, _) = try await makeBusyBackgroundRun(.running)
+        defer { fixture.tearDown() }
+        let viewModel = fixture.viewModel
+
+        viewModel.deleteLocalData()
+        #expect(viewModel.errorMessage == "Stop the current run before deleting local data.")
+        #expect(!viewModel.isDeletingLocalData, "the wipe began under a running task")
+
+        viewModel.errorMessage = nil
+        viewModel.deleteSetAsideFiles()
+        #expect(viewModel.errorMessage == MemoryDeletionCopy.setAsideFilesRunGuard)
+    }
+
+    @Test(arguments: Busy.allCases)
+    func aRoutineAWorkspaceAndAMemoryRowAreNotDeletedWhileAnotherRunIsBusy(_ busy: Busy) async throws {
+        let (fixture, _) = try await makeBusyBackgroundRun(busy)
+        defer { fixture.tearDown() }
+        let viewModel = fixture.viewModel
+        let workspace = StoredWorkspace(name: "Client Alpha", apps: ["Safari"], urls: [])
+        try fixture.workspaceStore.save(workspace)
+
+        viewModel.deleteWorkspace(workspace)
+        #expect(viewModel.errorMessage == "Finish or stop the current task before deleting this workspace.")
+        // By name over the values: the store keys its dictionary by a normalised name.
+        #expect(
+            try fixture.workspaceStore.loadAll().values.contains { $0.name == "Client Alpha" },
+            "the workspace was deleted under a busy run"
+        )
+
+        viewModel.errorMessage = nil
+        viewModel.deleteRoutine(StoredRoutine(name: "Morning", steps: []))
+        #expect(viewModel.errorMessage == "Finish or stop the current task before deleting this routine.")
+
+        viewModel.errorMessage = nil
+        viewModel.deleteMemory(in: .taskHistory)
+        #expect(viewModel.errorMessage == "Finish or stop the current task before deleting memory.")
+    }
+}

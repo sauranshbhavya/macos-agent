@@ -1931,6 +1931,22 @@ final class AgentViewModel: ObservableObject {
         runSlots.filter(\.isInFlight).count
     }
 
+    /// Whether any run is running, whichever one the widget shows (SONNY-456).
+    ///
+    /// **What a control that deletes reads, and `isRunning` is not it.** The whole wipe, the
+    /// set-aside files, a Memory row, a routine and a workspace are each pressed outside any run, so
+    /// `isRunning` there is the focused run's. With a second run possible that lets a delete land
+    /// under a task running in another slot, which is the case each of those guards was written to
+    /// refuse. With one run the two read the same slot.
+    var isAnyRunRunning: Bool {
+        runSlots.contains(where: \.isRunning)
+    }
+
+    /// The same for a run parked on its approval, which three of those five guards also refuse.
+    var isAnyRunAwaitingApproval: Bool {
+        runSlots.contains { $0.approvalRequest != nil }
+    }
+
     /// A "Don't save this task" run that is running or parked — the one state in which the
     /// clipboard monitor must not start (SONNY-439). The setting alone is not it: the widget sets
     /// the policy before any task is sent, so the setting is on with nothing running whenever the
@@ -5011,7 +5027,7 @@ final class AgentViewModel: ObservableObject {
     /// standing decision it must, because it is promising something the network is the only way to
     /// keep. What it must not do is fail *silently*, which is what step 5 exists for.
     func deleteLocalData() {
-        guard !isRunning else {
+        guard !isAnyRunRunning else {
             setError("Stop the current run before deleting local data.")
             return
         }
@@ -5185,7 +5201,7 @@ final class AgentViewModel: ObservableObject {
     /// control sits. A failure also goes to `errorMessage`, as the whole wipe's does: this is a
     /// write the user pressed a control for, and the thing they asked for did not happen.
     func deleteSetAsideFiles() {
-        guard !isRunning else {
+        guard !isAnyRunRunning else {
             setError(MemoryDeletionCopy.setAsideFilesRunGuard)
             return
         }
@@ -5571,7 +5587,7 @@ final class AgentViewModel: ObservableObject {
         // the file it is about to write into. `deleteLocalData`'s narrower guard is not the
         // precedent to copy here — it is the whole-wipe path, which the user reaches from Settings
         // rather than from beside a live task.
-        guard !isRunning, !isAwaitingApproval else {
+        guard !isAnyRunRunning, !isAnyRunAwaitingApproval else {
             setError("Finish or stop the current task before deleting memory.")
             return
         }
@@ -6427,7 +6443,7 @@ final class AgentViewModel: ObservableObject {
     /// `deleteLocalData`'s narrower `isRunning`-only guard predates even this convention and is left
     /// as it is here. `deleteWorkspace` points at this comment rather than repeating it.
     func deleteRoutine(_ routine: StoredRoutine) {
-        guard !isRunning, !isAwaitingApproval else {
+        guard !isAnyRunRunning, !isAnyRunAwaitingApproval else {
             setError("Finish or stop the current task before deleting this routine.")
             return
         }
@@ -6442,7 +6458,7 @@ final class AgentViewModel: ObservableObject {
     /// Permanently deletes a saved workspace. See `deleteRoutine` for the in-flight guard's
     /// rationale.
     func deleteWorkspace(_ workspace: StoredWorkspace) {
-        guard !isRunning, !isAwaitingApproval else {
+        guard !isAnyRunRunning, !isAnyRunAwaitingApproval else {
             setError("Finish or stop the current task before deleting this workspace.")
             return
         }
@@ -8820,7 +8836,17 @@ final class AgentViewModel: ObservableObject {
         // **The unattended door, and the one the review named as needing no user action to enter**
         // (PR #207's F3): a scheduled routine sets `isRunning` from a timer, so the window the wipe
         // opens is one a routine can walk into with nobody watching.
-        guard !isRunning, !isDeletingLocalData, !isAwaitingApproval, clarificationQuestion == nil else {
+        //
+        // **Every run, not the one the widget shows** (SONNY-456). The timer that gets here is
+        // outside any run, so the four terms used to read the focused run alone: with a second run
+        // possible, a routine would have started in a free focused slot on top of a user's task in
+        // another. The founders' rule above is "a task already in flight, whoever started it", so
+        // each term is asked of every slot. It also leaves the focused slot free whenever a routine
+        // does fire, which is the slot it starts in.
+        let everyRunIsIdle = runSlots.allSatisfy {
+            !$0.isRunning && $0.approvalRequest == nil && $0.clarificationQuestion == nil
+        }
+        guard everyRunIsIdle, !isDeletingLocalData else {
             return
         }
 
