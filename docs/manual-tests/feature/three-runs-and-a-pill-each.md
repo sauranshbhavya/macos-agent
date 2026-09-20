@@ -46,7 +46,7 @@ that: System Settings › Privacy & Security › Microphone, switch Sonny off, a
 
 ### The rest of this branch owes no rows yet, and why (SONNY-456)
 
-Four more things changed on this branch, and none of them can be seen until two tasks can run at
+Six more things changed on this branch, and none of them can be seen until two tasks can run at
 once, which the rest of SONNY-456 delivers. Their rows arrive with it.
 
 - **Stopping a screen-control task ends that task and no other.** The row to come: stop the task in
@@ -56,6 +56,11 @@ once, which the rest of SONNY-456 delivers. Their rows arrive with it.
 - **A fourth task is refused while three are running.** The widget says "Sonny is already working on
   three tasks. Try again when one finishes." and keeps what you typed.
 - **⌃⌥⎋ stops every task**, not only the one the widget is showing.
+- **Nothing is deleted under a running task, whichever task the widget shows.** Deleting all local
+  data, the set-aside files, a Memory row, a routine or a workspace is refused while any task is
+  running, with the same sentence as today.
+- **A scheduled routine waits for every task to finish**, not only the one the widget shows, and
+  then runs.
 
 One thing you can check today, because it must not have changed:
 
