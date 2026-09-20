@@ -14,8 +14,7 @@ struct AboutSonnySheet: View {
                 ZStack {
                     RoundedRectangle(cornerRadius: SonnyRadius.card)
                         .fill(SonnyTheme.accentSubtle)
-                    Image(systemName: "wand.and.stars")
-                        .font(SonnyType.icon(SonnyMetrics.iconEmptyState, weight: .semibold))
+                    SonnyBrandMark(size: 36)
                         .foregroundStyle(SonnyTheme.accent)
                 }
                 .frame(width: 64, height: 64)

@@ -106,7 +106,7 @@ macOS may attribute prompts to Terminal, your editor, or the Swift process.
 - Keyboard shortcut registration for global push-to-talk. If `Control-Option-Space` is already claimed by another app, Sonny will still work from the `Speak` button.
 - Browser/app opening through `NSWorkspace`.
 - Apple Music or Spotify may ask to open provider links.
-- Keychain access for the local data encryption key (and, on an unsigned development build, may prompt for your login password — see the `feature/local-storage-privacy-foundation` entry in the changelog, which records why an unsigned build can loop that prompt). A packaged `MacAgent.app` is signed with a stable identity instead — see `Packaging/signing-identity` and `scripts/package-app.sh`.
+- Keychain access for the local data encryption key (and, on an unsigned development build, may prompt for your login password — see the `feature/local-storage-privacy-foundation` entry in the changelog, which records why an unsigned build can loop that prompt). A packaged `Sonny.app` is signed with a stable identity instead — see `Packaging/signing-identity` and `scripts/package-app.sh`.
 
 If a prompt is denied, allow the launching host app in System Settings, then relaunch Sonny.
 

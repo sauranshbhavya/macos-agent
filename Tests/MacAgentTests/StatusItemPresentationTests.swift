@@ -6,10 +6,9 @@ import Testing
 @Suite("Menu bar item state")
 struct StatusItemPresentationTests {
     @Test
-    func idleIsTheUntintedInverseGlyphWithTheBareName() {
+    func idleIsUntintedWithTheBareName() {
         let presentation = StatusItemPresentation.forState(isRunning: false, isAwaitingApproval: false, hasFailure: false)
         #expect(presentation == .idle)
-        #expect(presentation.systemImageName == "wand.and.stars.inverse")
         #expect(presentation.tint == .plain)
         #expect(presentation.accessibilityLabel == "Sonny")
     }
@@ -38,16 +37,7 @@ struct StatusItemPresentationTests {
         #expect(StatusItemPresentation.forState(isRunning: false, isAwaitingApproval: false, hasFailure: true) == .failed)
     }
 
-    /// Every state that is not idle draws the filled glyph; the inverse glyph is idle's alone, so a
-    /// glance at the bar distinguishes "nothing happening" from everything else before colour.
-    @Test
-    func onlyIdleUsesTheInverseGlyph() {
-        for presentation in [StatusItemPresentation.working, .waiting, .failed] {
-            #expect(presentation.systemImageName == "wand.and.stars")
-        }
-    }
-
-    /// The four presentations are told apart by tint and by name, not only by glyph: the tint is
+    /// The four presentations are told apart by tint and by name: the tint is
     /// what `AppDelegate` maps onto a colour, and the name is what VoiceOver reads, so a state that
     /// borrowed another's would look or sound like something Sonny is not doing. Pinned by value
     /// because `forState` returns the shared statics, so `== .failed` holds whatever `.failed` says.

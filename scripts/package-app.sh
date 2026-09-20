@@ -1,5 +1,5 @@
 #!/bin/bash
-# Packages the MacAgent executable into a real, code-signed MacAgent.app bundle.
+# Packages the MacAgent executable into a real, code-signed Sonny.app bundle.
 #
 # Why this exists: several macOS APIs Sonny depends on (UNUserNotificationCenter for system
 # notifications, AVCaptureDevice's microphone permission prompt, NSAppleEventsUsageDescription-
@@ -27,7 +27,7 @@
 # gated on the founder's Apple Developer enrolment; SONNY-106 section E is the condition it serves.
 #
 # Usage: ./scripts/package-app.sh [debug|release]
-# Output: .build/<triple>/<configuration>/MacAgent.app — launch with `open` or run the binary
+# Output: <SwiftPM bin path>/Sonny.app — launch with `open` or run the binary
 # inside it directly (Contents/MacOS/MacAgent) to see console output live.
 
 set -euo pipefail
@@ -133,16 +133,19 @@ if [ ! -d "$RESOURCE_BUNDLE" ]; then
   exit 1
 fi
 
-APP_DIR="$BIN_PATH/MacAgent.app"
+APP_DIR="$BIN_PATH/Sonny.app"
+LEGACY_APP_DIR="$BIN_PATH/MacAgent.app"
 CONTENTS_DIR="$APP_DIR/Contents"
 MACOS_DIR="$CONTENTS_DIR/MacOS"
 RESOURCES_DIR="$CONTENTS_DIR/Resources"
 
 echo "==> Assembling $APP_DIR"
-rm -rf "$APP_DIR"
+# Remove the old bundle too: launching it would keep showing the retired MacAgent Dock label.
+rm -rf "$APP_DIR" "$LEGACY_APP_DIR"
 mkdir -p "$MACOS_DIR" "$RESOURCES_DIR"
 cp "$EXECUTABLE" "$MACOS_DIR/MacAgent"
 cp "$ROOT_DIR/Packaging/Info.plist" "$CONTENTS_DIR/Info.plist"
+cp "$ROOT_DIR/Packaging/SonnyAppIcon.icns" "$RESOURCES_DIR/SonnyAppIcon.icns"
 
 # Deliberately Contents/Resources/, not the app's top level. SwiftPM's own auto-generated
 # resource_bundle_accessor.swift looks for this bundle at Bundle.main.bundleURL's top level

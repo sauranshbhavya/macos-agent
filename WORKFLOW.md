@@ -199,7 +199,7 @@ has documented consequences:
   merges, and what holds that now is step 7's review-depth rules rather than a lower session
   count. (Corrected 2026-08-29, SONNY-340.)
 - **Only one session's build runs as the live app at a time.** Worktrees isolate code,
-  not the machine: every `MacAgent.app` instance shares the same Keychain entries, local
+  not the machine: every `Sonny.app` instance shares the same Keychain entries, local
   encrypted stores, notification identity, and menu bar. Manual testing is serialized
   through the user anyway; never launch the packaged app — or a bare `swift run MacAgent`,
   which hits the same shared local stores despite lacking bundle identity — from a second

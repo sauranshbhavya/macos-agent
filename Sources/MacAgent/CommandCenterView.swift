@@ -307,8 +307,7 @@ struct CommandCenterView: View {
         ZStack {
             RoundedRectangle(cornerRadius: SonnyRadius.control)
                 .fill(SonnyTheme.accentSubtle)
-            Image(systemName: "wand.and.stars")
-                .font(SonnyType.icon(SonnyMetrics.iconButton, weight: .semibold))
+            SonnyBrandMark(size: 14)
                 .foregroundStyle(SonnyTheme.accent)
         }
         .frame(width: 22, height: 22)

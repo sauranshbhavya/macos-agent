@@ -1,5 +1,5 @@
 #!/bin/bash
-# Creates the local code-signing certificate that scripts/package-app.sh signs MacAgent.app with,
+# Creates the local code-signing certificate that scripts/package-app.sh signs Sonny.app with,
 # and authorises codesign to use it. Run once per Mac, from a terminal. Safe to re-run: it creates
 # nothing that already exists, and re-running is the way to answer the authorisation dialog again
 # if it was missed the first time.
@@ -194,7 +194,7 @@ Next, once only:
 
   2. Rebuild and launch:
          ./scripts/package-app.sh debug
-         open .build/arm64-apple-macosx/debug/MacAgent.app
+         open "\$(swift build --show-bin-path)/Sonny.app"
 
   3. Grant Screen Recording and Accessibility again, and relaunch when the app asks.
 

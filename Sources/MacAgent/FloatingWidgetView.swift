@@ -545,8 +545,7 @@ struct FloatingWidgetView: View {
     /// `WidgetControlNamingTests.everyTooltipInTheWidgetSitsBesideAVoiceOverName` reads.
     private var compactCapsule: some View {
         Button(action: expandFromCompact) {
-            Image(systemName: "wand.and.stars.inverse")
-                .font(WidgetType.iconLarge)
+            SonnyBrandMark(size: 18)
                 .foregroundStyle(WidgetTheme.textStrong)
         }
         .buttonStyle(.plain)
@@ -848,8 +847,7 @@ struct FloatingWidgetView: View {
             // here" affordance, so turning it down is the composer withdrawing the invitation — the
             // placeholder beside it carries the actual sentence, and stays at full `textMuted` so
             // that the one thing able to explain a dead click is the one thing not dimmed.
-            Image(systemName: "wand.and.stars.inverse")
-                .font(WidgetType.icon)
+            SonnyBrandMark(size: 14)
                 .foregroundStyle(isTaskInFlight ? WidgetTheme.textFaint : WidgetTheme.textMuted)
 
             TextField(

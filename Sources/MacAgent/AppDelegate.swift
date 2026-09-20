@@ -136,6 +136,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Before any window exists, so the first frame is drawn in the chosen appearance.
         appearanceModel.apply()
         registerBundledFonts()
+        if let appIcon = SonnyBrandAssets.appIcon {
+            NSApp.applicationIconImage = appIcon
+        }
 
         // Before any sheet can exist, so none is ever up with the hold still on it — the first-run
         // sheet arrives within this method's own tasks.
@@ -163,7 +166,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.helpMenu = mainMenu.item(withTitle: "Help")?.submenu
 
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        item.button?.image = NSImage(systemSymbolName: "wand.and.stars.inverse", accessibilityDescription: "Sonny")
+        item.button?.image = SonnyBrandAssets.mark
+            ?? NSImage(systemSymbolName: "wand.and.stars.inverse", accessibilityDescription: "Sonny")
+        item.button?.imageScaling = .scaleProportionallyDown
         item.button?.imagePosition = .imageOnly
         // A persistent `menu` (rather than a custom click handler) shows on any click, left or
         // right — modern macOS renders it with the same translucent, rounded-corner chrome as
@@ -563,10 +568,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func applyStatusItemPresentation(_ presentation: StatusItemPresentation) {
         guard let button = statusItem?.button else { return }
-        button.image = NSImage(
-            systemSymbolName: presentation.systemImageName,
-            accessibilityDescription: presentation.accessibilityLabel
-        )
+        button.image = SonnyBrandAssets.mark
+            ?? NSImage(systemSymbolName: "wand.and.stars.inverse", accessibilityDescription: presentation.accessibilityLabel)
+        button.setAccessibilityLabel(presentation.accessibilityLabel)
         switch presentation.tint {
         case .plain:
             button.contentTintColor = nil
