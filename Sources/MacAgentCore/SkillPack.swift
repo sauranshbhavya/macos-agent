@@ -255,9 +255,13 @@ public enum SkillPackLoadError: Error, Equatable, Sendable {
 public enum SkillPackStopProblem: Error, Equatable, Sendable {
     /// Its first word is not an "-ing" word, so "Stop before …" would not read as a sentence.
     case doesNotOpenWithAnAct
-    /// It holds a sentence or clause boundary, so it could carry a second instruction.
-    case holdsMoreThanOneClause
-    /// It holds `word`, which turns a stop into permission ("unless the person asked").
+    /// It holds a character a stop is not written in: anything but ASCII letters and digits, spaces
+    /// and `, ' " ( ) + &`, or a full stop or hyphen that is not inside a word.
+    case holdsACharacterOutsideItsAlphabet(String)
+    /// It is longer than `SkillPackStopRule.maximumWords`, and a stop names one act.
+    case isLongerThanOneAct(words: Int)
+    /// It holds `word`, which turns a stop into permission ("unless the person asked") or makes it
+    /// hold only some of the time ("if the plan is full").
     case grantsAnException(word: String)
 }
 

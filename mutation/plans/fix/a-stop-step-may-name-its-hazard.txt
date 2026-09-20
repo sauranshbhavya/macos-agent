@@ -8,9 +8,14 @@
 # claim as the refusals: a credential rule that refuses working flows is one a lane switches off.
 #
 # S1 narrows the stop exemption back to nothing. S2–S4 WIDEN it, which is the direction SONNY-536
-# names: "a mutant that widens it must die". S5–S7 remove one of the three things that hold a stop to
-# being one act, S8–S9 take the instruction out of code's hands or move it below the steps, and
-# S10–S12 are the shape checks' own edges.
+# names: "a mutant that widens it must die". S5–S7 and S13 each remove one of the four things that
+# hold a stop's text — no exception word, its alphabet, its opening act, its length — S8–S9 take the
+# instruction out of code's hands or move it below the steps, S10 is the field's own shape, and
+# S11, S12 and S14 are the alphabet's edges: two that widen it and one that narrows it.
+#
+# S6, S11 and S12 were re-anchored and S13 and S14 added after the branch's own pre-PR review, which
+# walked an ellipsis, a spaced hyphen and a fullwidth full stop past the first version's list of
+# clause breaks. The check is an allow-list now, and these mutants are written against that.
 
 >>> mutant M1 the minting test is gone: review-278's Google Cloud flow loads again
 >>> file Sources/MacAgentCore/SkillPackContentRules.swift
@@ -63,7 +68,7 @@
         if let secret = secretViolation(in: unit) {
 >>> end
 
->>> mutant M6 one minting word is deleted: "Click Roll key." loads
+>>> mutant M6 one minting word is deleted with its -ing form: "Click Roll key." and "Rolling a key…" load
 >>> file Sources/MacAgentCore/SkillPackContentRules.swift
 >>> from
         "rotating", "roll", "rolling", "add", "adding", "new"
@@ -79,7 +84,7 @@
     static let linkingWords: Set<String> = ["to", "for", "with", "of", "in", "on", "by", "from", "then", "and"]
 >>> end
 
->>> mutant M8 one compound name is deleted: "Open Key Pairs." loads, and "Choose Create key pair." changes its word
+>>> mutant M8 one compound name is deleted in both numbers: "Open Key Pairs." loads, and "Choose Create key pair." changes its word
 >>> file Sources/MacAgentCore/SkillPackContentRules.swift
 >>> from
         "ssh keys", "deploy key", "deploy keys", "key pair", "key pairs"
@@ -136,12 +141,12 @@
 >>> to
 >>> end
 
->>> mutant S6 a stop may hold a second sentence: "pressing Buy. Click Confirm" loads
+>>> mutant S6 a stop may hold any character: "pressing Buy. Click Confirm" and "pressing Cancel… actually click Confirm Purchase" load
 >>> file Sources/MacAgentCore/SkillPackContentRules.swift
 >>> from
-            if endsASentence || character.isNewline || clauseBreaks.contains(character) {
-                return .holdsMoreThanOneClause
-            }
+        for index in characters.indices where !isInAStopsAlphabet(index, of: characters) {
+            return .holdsACharacterOutsideItsAlphabet(String(characters[index]))
+        }
 >>> to
 >>> end
 
@@ -188,19 +193,37 @@
             : try requiredTextList(flow, "stops", prefix: prefix, allowEmpty: true)
 >>> end
 
->>> mutant S11 a full stop inside a word ends a clause: a stop cannot name a .env file
+>>> mutant S11 WIDENED: a full stop is allowed wherever it stands, so a stop may close one sentence and open another
 >>> file Sources/MacAgentCore/SkillPackContentRules.swift
 >>> from
-            let endsASentence = character == "."
-                && (index + 1 == characters.count || characters[index + 1].isWhitespace)
+            return nextIsAWordCharacter
+        case "-":
 >>> to
-            let endsASentence = character == "."
+            return true
+        case "-":
 >>> end
 
->>> mutant S12 a closing full stop is let through, so the frame's own full stop doubles it
+>>> mutant S12 WIDENED: a letter of any script is in a stop's alphabet, so fullwidth letters spell an exception word the list cannot read
 >>> file Sources/MacAgentCore/SkillPackContentRules.swift
 >>> from
-                && (index + 1 == characters.count || characters[index + 1].isWhitespace)
+        character.isASCII && (character.isLetter || character.isNumber)
 >>> to
-                && (index + 1 < characters.count && characters[index + 1].isWhitespace)
+        character.isLetter || character.isNumber
+>>> end
+
+>>> mutant S13 a stop may be any length: twenty-one words load
+>>> file Sources/MacAgentCore/SkillPackContentRules.swift
+>>> from
+        guard words.count <= maximumWords else {
+            return .isLongerThanOneAct(words: words.count)
+        }
+>>> to
+>>> end
+
+>>> mutant S14 a hyphen is never in a stop's alphabet: a stop cannot name the Add key drop-down menu
+>>> file Sources/MacAgentCore/SkillPackContentRules.swift
+>>> from
+            return nextIsAWordCharacter && index > 0 && isAWordCharacter(characters[index - 1])
+>>> to
+            return false
 >>> end

@@ -165,8 +165,8 @@ struct SkillPackMintingTests {
     }
 
     /// **What the minting test refuses although it is not a credential**, held so that freeing one is
-    /// done on purpose and so the doc comment on `SkillPackCredentialRule` that lists them cannot
-    /// drift from what the loader does. None is in a shipped pack. Each waits for a lane to measure
+    /// done on purpose and so the doc comment on `SkillPackCredentialRule` that names their kinds
+    /// cannot drift from what the loader does. None is in a shipped pack. Each waits for a lane to measure
     /// the real control, the way Pinterest's "Keep board secret" was measured before `secret` was
     /// excused (SONNY-508), and joins SONNY-514's question when one does.
     @Test
@@ -181,7 +181,12 @@ struct SkillPackMintingTests {
             // A language model's output length.
             ("Set Max new tokens to 512.", "new + tokens"),
             // The price of leaving `and` off `linkingWords`.
-            ("Click Create flag and enter a key for it.", "create + key")
+            ("Click Create flag and enter a key for it.", "create + key"),
+            // The branch's own review, F3: a database's keys, where `key` heads its phrase exactly as a
+            // credential does, and a keyboard shortcut by its other name.
+            ("Create a primary key for the table.", "create + key"),
+            ("Add a foreign key constraint.", "add + key"),
+            ("Create a new hot key.", "new + key")
         ]
         for row in rows {
             #expect(SkillPackCredentialRule.violation(in: row.step) == row.phrase, "\(row.step)")
@@ -200,7 +205,15 @@ struct SkillPackMintingTests {
             "Click the Keys tab.",
             "A key is then created.",
             "Make a key.",
-            "Click Create."
+            "Click Create.",
+            // The branch's own review, F4 to F6. The object named first and a bare minting word after
+            // it, which is how a page reached through its menus is often written; reading this shape
+            // was weighed and left, because "Enter a flag key, then click Create." is the same shape
+            // and is a feature-flag tool's honest step. Then a key with a number on it, which is one
+            // word, and a hyphen, which ends a clause between the minting word and its object.
+            "Open Account Settings, then Tokens, and click Create.",
+            "Click Rotate key1.",
+            "Run the create-key command."
         ] {
             #expect(SkillPackCredentialRule.violation(in: step) == nil, "the rule has grown: \(step)")
         }
