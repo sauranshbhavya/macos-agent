@@ -151,6 +151,13 @@ extension AgentViewModel: VisionSessionInteracting {
     /// `FloatingWidgetView`, `CommandCenterAttentionPanel`'s in `CommandCenterView`, and the run
     /// pill's in `RunPillView`. Hotkey plus four controls is the five. Every one ends in
     /// `cancelCurrentRun`, which is the point of the paragraph below.
+    ///
+    /// **Since SONNY-456 the closure below calls `stopEveryRun()` and no longer names that method**,
+    /// so the same command answers 4 over `Sources`, the four controls, and 0 over this file — both
+    /// at `49a245f7`, against 5 and 1 at `856bb7ee`, the head that branch was cut from and the
+    /// control that the command still finds what this paragraph says it found. There are still five
+    /// ways to stop and they still end in `cancelCurrentRun`; what changed is that the key names no
+    /// run, and `stopEveryRun`'s own doc says why it may not.
     func registerEmergencyStopHotKey() {
         guard visionEmergencyStopHotKey == nil else {
             return
@@ -186,7 +193,9 @@ extension AgentViewModel: VisionSessionInteracting {
         visionUserPauseMonitor?.pause()
     }
 
-    /// The emergency stop, from the hotkey or from any of the four Stop controls that call it.
+    /// The emergency stop, from any of the four Stop controls that call it. **The hotkey called it
+    /// too until SONNY-456**; it calls `stopEveryRun()` now, because a key press is outside any run
+    /// and this reads the run in scope.
     ///
     /// **Four, and this line has undercounted twice** — it named one of them until PR #132's review
     /// (F5), and said three until PR #237's delta review (N8). They are the HUD's Stop, the widget's
