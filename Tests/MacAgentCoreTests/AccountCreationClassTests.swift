@@ -7,12 +7,14 @@ import Testing
 ///
 /// **Why a class.** SONNY-529 rewrote `SkillPackStartPageRule.namesAccountCreation` to read a query as
 /// keys and values, and three rounds measured the result against every address the shipped packs carry.
-/// All three came back clean, and all three were wrong: a key that holds a second `?`
-/// (`index.php?/register?ref=home`) and a single-page route's own query that holds a second `#`
-/// (`#/login?register#top`) both loaded, though `main` refused them. No shipped address has either shape,
-/// so a population drawn from what exists could not see them. What found them was lane-529's run over
-/// every short address built from a few tokens, and this suite is that run made permanent, so the next
-/// change to the matcher is measured against the class and not against the catalogue again.
+/// All three came back clean while shapes `main` refused were loading: a key that holds a second `?`
+/// (`index.php?/register?ref=home`), and a single-page route's own query that holds a second `#`
+/// (`#/login?register#top`). The measurements were right about the shipped addresses and blind to
+/// these, because no shipped address has either shape: a population drawn from what exists cannot test
+/// what does not. A reviewer thinking about the class found the first. Lane-529's run over every short
+/// address built from a few tokens found the second and counted both, and this suite is that run made
+/// permanent, so the next change to the matcher is measured against the class and not against the
+/// catalogue again.
 ///
 /// **What it is compared with.** A test cannot fetch another commit, so `main`'s verdicts are held by
 /// value in `AccountCreationClassTable`, which has how they are generated and how to read a row. The floor
@@ -29,8 +31,8 @@ import Testing
 ///
 /// **It has to be able to fail, and is shown failing on every run.**
 /// `theWalkReportsEveryAddressAMatcherLetsThrough` drives the same walk with matchers that refuse
-/// nothing, everything, and everything but one address. The branch's mutation plan puts both historic
-/// cuts back into the real matcher, and its changelog entry records how many addresses each let through.
+/// nothing, everything, and everything but one address. The branch's mutation plan puts both of those
+/// cuts into the real matcher, and its changelog entry records how many addresses each let through.
 @Suite
 struct AccountCreationClassTests {
     private typealias Table = AccountCreationClassTable
@@ -117,8 +119,9 @@ struct AccountCreationClassTests {
     /// addresses, `main` refused `signup` and `Register`.
     ///
     /// Then the shapes this suite exists for, each by name. `??signup` and `?x?signup` are the doubled `?`
-    /// the first fix on SONNY-529 let through, and `#?signup#x` and `#?#signup` the second `#` the second
-    /// one would have. A table that did not hold them as refusals could not fail on either.
+    /// that a key cut at `/` and `.` let through on SONNY-529, and `#?signup#x` and `#?#signup` the second
+    /// `#` that a cut at `/`, `.` and `?` would have. A table that did not hold them as refusals could not
+    /// fail on either.
     @Test
     func theTableIsMainsVerdictsByValue() {
         #expect(Table.floorCommit == "8f3d1d02a14f9ebac84da2aaa3750667bcbfe40b")

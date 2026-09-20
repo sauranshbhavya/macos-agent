@@ -2,11 +2,12 @@
 # Swift half only; no file under server/ changes on this branch, and no file under Sources/ either: the C
 # mutants below edit the matcher to show the guard biting, and the branch itself leaves it alone.
 #
-# The property is one sentence: over every address of the class, none that main refused loads. C1 and C2
-# are the two cuts that shipped for a round each on SONNY-529, put back exactly as they were; the ticket
-# asks that each be watched dying, and the branch's changelog entry records that run. C3 and C4 undo the
-# same floor somewhere the key cut is not, in the path and in a route, because a guard that only fails on
-# the line it was written about is a held example with more steps.
+# The property is one sentence: over every address of the class, none that main refused loads. C1 is the
+# cut that shipped for a round on SONNY-529, put back exactly as it was, and C2 the one-character fix that
+# was proposed after it and measured before it was taken. The ticket asks that each be watched dying, and
+# the branch's changelog entry records that run. C3 and C4 undo the same floor somewhere the key cut is
+# not, in the path and in a route, because a guard that only fails on the line it was written about is a
+# held example with more steps.
 #
 # T1 and T2 mutate the table the suite holds main's verdicts in, which lives in the test target. T1 loses
 # refusals, which the counts by length catch. T2 swaps two of row 0's targets so that every count stays
@@ -15,7 +16,7 @@
 # W1 mutates the walk itself: it stops reporting. The guard then passes on anything at all, and the only
 # test that can say so is the one that drives the walk with a matcher that refuses nothing.
 
->>> mutant C1 a query key is cut at / and . only, SONNY-529's first fix: a second ? inside a query loads (2,110 of the class)
+>>> mutant C1 a query key is cut at / and . only, as it shipped for a round on SONNY-529: a second ? inside a query loads (2,110 of the class)
 >>> file Sources/MacAgentCore/SkillPackStartPages.swift
 >>> from
             || keys.flatMap { $0.split(whereSeparator: { "/#?&=.".contains($0) }) }.contains { accountCreationParts.contains(foldedWhole(String($0))) }
