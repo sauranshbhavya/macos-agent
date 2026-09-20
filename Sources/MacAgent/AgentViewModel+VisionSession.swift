@@ -157,7 +157,7 @@ extension AgentViewModel: VisionSessionInteracting {
         }
         do {
             visionEmergencyStopHotKey = try visionEmergencyStopHotKeyFactory { [weak self] in
-                self?.emergencyStopVisionSession()
+                self?.stopEveryRun()
             }
             logStore.append(.observe, "vision: \(EmergencyStopHotKey.displayName) stops this session")
         } catch {
@@ -213,6 +213,31 @@ extension AgentViewModel: VisionSessionInteracting {
         }
         logStore.append(.summarize, "vision: user_stopped - emergency stop")
         cancelCurrentRun()
+    }
+
+    /// `⌃⌥⎋`: every run stops (SONNY-456, the founders' feature text).
+    ///
+    /// **The key used to call `emergencyStopVisionSession()`, which reads the run in scope** — and a
+    /// key press is outside any run, so that is the run the widget is showing. With one run that is
+    /// the run holding the session. With two it need not be: the session can be on a run in the
+    /// background, and the press would have found no session on the run on screen and done nothing,
+    /// while Sonny went on moving the cursor. So the key names no run. It walks every slot and
+    /// stops, in that slot's own scope, whatever is in flight there — the same `cancelCurrentRun`
+    /// every other stop ends in, so there is still one stop path and not two.
+    ///
+    /// A slot with nothing in flight is left alone rather than handed to `cancelCurrentRun`, whose
+    /// last branch is `currentTask?.cancel()` and would be harmless, because "nothing was running
+    /// there" should not depend on reading that function to its end.
+    func stopEveryRun() {
+        logStore.append(.summarize, "vision: user_stopped - emergency stop")
+        for id in runSlots.map(\.id) {
+            RunScope.$current.withValue(id) {
+                guard isTaskInFlight || isVisionSessionLive else {
+                    return
+                }
+                cancelCurrentRun()
+            }
+        }
     }
 
     /// Whether a screen-control session is live in any of its states — running, paused, or holding

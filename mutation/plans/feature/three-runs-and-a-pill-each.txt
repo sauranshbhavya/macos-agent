@@ -7,9 +7,12 @@
 # Tests/MacAgentTests/RunAttributedCancellationTests.swift.
 # V1 and V2: a voice recording writes to the run it started on. Killers are in
 # Tests/MacAgentTests/RunAttributedVoiceTests.swift.
+# C1 and K1: the cap of three, and the emergency key stopping every run. Killers are in
+# Tests/MacAgentTests/ConcurrentRunTests.swift.
 #
 # Proved by hand on this branch, applied together and read per killer because their killers are
-# disjoint: S1, S2 and H1. The rest are written and not run; the changelog entry says which.
+# disjoint: S2 and H1 with an earlier form of S1, then V1, C1 and K1. The rest are written and not
+# run; the changelog entry says which.
 
 >>> mutant S1 a stale banner's Retry runs whatever the run holds now (the token check dropped)
 >>> file Sources/MacAgent/AgentViewModel.swift
@@ -125,4 +128,20 @@
         voiceRecordingRunID = recordingRun
 >>> to
         let recordingRun = runIDInScope
+>>> end
+
+>>> mutant C1 a fourth run starts while three are in flight (the cap is off by one)
+>>> file Sources/MacAgent/AgentViewModel.swift
+>>> from
+        guard runsInFlight < Self.maximumConcurrentRuns else {
+>>> to
+        guard runsInFlight < Self.maximumConcurrentRuns + 1 else {
+>>> end
+
+>>> mutant K1 the emergency key stops only the run the widget is showing
+>>> file Sources/MacAgent/AgentViewModel+VisionSession.swift
+>>> from
+                self?.stopEveryRun()
+>>> to
+                self?.emergencyStopVisionSession()
 >>> end

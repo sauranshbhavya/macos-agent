@@ -1912,6 +1912,25 @@ final class AgentViewModel: ObservableObject {
         isRunning || isAwaitingApproval || clarificationQuestion != nil
     }
 
+    /// How many runs may be in flight at once (SONNY-456, founder decision 2026-09-18). Screen
+    /// control stays one session at a time whatever this says, because there is one cursor.
+    static let maximumConcurrentRuns = 3
+
+    /// What a fourth command is told. Short, and it says what to do. The number is spelled from the
+    /// cap, in English like the sentence around it, so the two cannot drift.
+    static let tooManyRunsMessage: String = {
+        let formatter = NumberFormatter()
+        formatter.locale = Locale(identifier: "en_US")
+        formatter.numberStyle = .spellOut
+        let cap = formatter.string(from: NSNumber(value: maximumConcurrentRuns)) ?? "\(maximumConcurrentRuns)"
+        return "Sonny is already working on \(cap) tasks. Try again when one finishes."
+    }()
+
+    /// Runs that are running or parked on a question, across every slot — what the cap counts.
+    var runsInFlight: Int {
+        runSlots.filter(\.isInFlight).count
+    }
+
     /// A "Don't save this task" run that is running or parked — the one state in which the
     /// clipboard monitor must not start (SONNY-439). The setting alone is not it: the widget sets
     /// the policy before any task is sent, so the setting is on with nothing running whenever the
@@ -2804,6 +2823,17 @@ final class AgentViewModel: ObservableObject {
         guard !isDeletingLocalData else {
             // Refused rather than raced, and it says so rather than doing nothing (PR #207's F3).
             logStore.append(.observe, "Not started: Sonny is deleting your data.")
+            return
+        }
+        // **The cap** (SONNY-456, founder decision 2026-09-18): three runs at once, and a fourth is
+        // refused rather than queued. Here rather than in `dispatch`, for the reason the wipe's
+        // claim above is: this is where `isRunning` is set, so it is the door every caller passes
+        // through. `canSubmit` has already said this run has nothing in flight, so the count is of
+        // the *other* runs. The typed command is left in the composer, so it can be sent again the
+        // moment one finishes; `dispatch` clears it for a programmatic caller, as it does for every
+        // refusal. `setError`, not a run's own failure: nothing ran, so there is nothing to retry.
+        guard runsInFlight < Self.maximumConcurrentRuns else {
+            setError(Self.tooManyRunsMessage)
             return
         }
 
