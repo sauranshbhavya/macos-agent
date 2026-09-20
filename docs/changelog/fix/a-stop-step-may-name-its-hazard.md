@@ -19,6 +19,7 @@ Tests: every figure is measured at `849ef4c3`, clean tree. The commits above it 
 - Each of this branch's 13 tests, and `everyShippedPackLoadsAndEveryOneIsARowOfTheCommittedCatalogue`, printed one `started` line and one `passed` line in that run. So each ran, and none was skipped.
 - `scripts/warnings` → exit 0, `0 warnings`, stamped `849ef4c3 (clean)`, every file compiled, 161s.
 - `scripts/mutate mutation/plans/fix/a-stop-step-may-name-its-hazard.txt --check` → exit 0, all 21 mutants match once each. It runs no test and says so.
+- The gates every branch owes, run at `3a5af32f`, the commit that added this entry, and re-run at the head above it: `server/scripts/check-secrets.sh` → exit 0, `clean (1333 tracked files scanned, 12 patterns, 8 baselined fixtures)`; `scripts/no-attribution tree` → exit 0, `0 of 1329`; `scripts/no-attribution history` → exit 0, `0 of 2583` commit messages; `scripts/changelog-order` → exit 0, `26 entry file(s) under docs/changelog and 26 under docs/manual-tests resolve`.
 - No server command is owed: `server` is one tree hash at `856bb7ee` and at `849ef4c3`.
 
 Mutation plan: mutation/plans/fix/a-stop-step-may-name-its-hazard.txt (founder-triggered, not run on this branch). It has 21 mutants (`grep -c '^>>> mutant ' mutation/plans/fix/a-stop-step-may-name-its-hazard.txt` → 21 at `849ef4c3`).
