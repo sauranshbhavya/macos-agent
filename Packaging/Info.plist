@@ -10,6 +10,8 @@
 	<string>Sonny</string>
 	<key>CFBundleExecutable</key>
 	<string>MacAgent</string>
+	<key>CFBundleIconFile</key>
+	<string>SonnyAppIcon</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleInfoDictionaryVersion</key>

@@ -2,7 +2,7 @@ import Foundation
 import MacAgentCore
 
 /// The app target's resource bundle, found where a real packaged `.app` and a bare `swift run` each
-/// put it — and the shipped skill packs read out of it.
+/// put it — and the shipped skill packs and brand artwork read out of it.
 ///
 /// **Deliberately not `Bundle.module`** (SwiftPM's generated accessor). That code resolves the bundle
 /// at `Bundle.main.bundleURL`'s top level, which is right for a bare executable and wrong for a
