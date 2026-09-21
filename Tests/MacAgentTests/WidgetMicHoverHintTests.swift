@@ -440,7 +440,14 @@ struct MicHoverTrackerAndExpiryTests {
 
     @Test
     func theTrackerRegistersOneAreaAndKeepsItAcrossLayoutPasses() throws {
-        let tracker = AlwaysActiveHoverTracker.TrackingNSView(frame: NSRect(x: 0, y: 0, width: 36, height: 36))
+        let tracker = AlwaysActiveHoverTracker.TrackingNSView(
+            frame: NSRect(
+                x: 0,
+                y: 0,
+                width: WidgetTheme.satelliteControlSize,
+                height: WidgetTheme.satelliteControlSize
+            )
+        )
 
         tracker.updateTrackingAreas()
         let first = try #require(tracker.trackingAreas.first)
@@ -532,7 +539,7 @@ private struct MicReplica<Overlay: View>: View {
                 .foregroundStyle(.white)
         }
         .buttonStyle(.plain)
-        .frame(width: 36, height: 36)
+        .frame(width: WidgetTheme.satelliteControlSize, height: WidgetTheme.satelliteControlSize)
         .widgetCircularBackground(tint: WidgetTheme.secondaryCircular)
         .accessibilityLabel("Voice input")
         .overlay(overlay)
@@ -604,4 +611,3 @@ private final class HostedMicReplica {
         panel.close()
     }
 }
-

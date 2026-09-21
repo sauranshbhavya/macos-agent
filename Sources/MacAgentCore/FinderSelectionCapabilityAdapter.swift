@@ -82,7 +82,7 @@ public struct FinderSelectionCapabilityAdapter: CapabilityAdapter {
 ///
 /// **The count leads, and the names stop at a character budget, because the widget's result panel
 /// shows three lines** (SONNY-441, PR #228's F1). `WidgetResultPanel` caps its summary at
-/// `.lineLimit(3)` in a 472 pt panel with 18 pt of padding, at SF Pro 13; five names in the shape
+/// `.lineLimit(3)` in the widget panel with 18 pt of padding, at SF Pro 13; five names in the shape
 /// macOS gives screenshots ran to four lines, and the part that fell off the end was ", and 2
 /// more." — the one thing a clipped panel must not lose is how many items there are. So a
 /// selection of more than one item opens with its total, which no clipping can reach, and names

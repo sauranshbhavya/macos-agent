@@ -439,9 +439,7 @@ enum FollowUpPresentation {
 
     /// The most of the original command the chip shows.
     ///
-    /// The composer pill is 472 wide and the chip row has 444 of it. A workspace chip and the
-    /// "Won't be saved" chip take roughly 164 between them by estimate — their text at
-    /// `WidgetType.captionSmall` plus 8 points of padding a side — so this keeps three chips inside
+    /// The follow-up shares the chip row with an optional workspace chip, so this keeps both inside
     /// the row without relying on `Text` truncation to rescue the layout. Each chip is
     /// `lineLimit(1)` with tail truncation anyway, so an unusually long workspace name shortens a
     /// chip rather than overflowing the row. Commands longer than this are
@@ -492,12 +490,6 @@ enum FollowUpPresentation {
 enum TaskRecordingPresentation {
     /// The control's accessibility label and its only name.
     static let controlLabel = "Don't save this task"
-
-    /// The chip shown in the composer while it is on. Deliberately in the past-looking tense the
-    /// user cares about — what will be true of this task once it is done.
-    static let activeChipText = "Won't be saved"
-
-    static let clearAccessibilityLabel = "Turn off don't save this task"
 
     /// The on state has to be unmissable, because the two mistakes are not symmetrical: leaving it
     /// on costs a history row nobody minds losing, and forgetting it is off records something the
@@ -609,13 +601,13 @@ enum ResumeOfferPresentation {
     /// no more than that — where the task went is data on the Memory row, not a sentence here.
     static let declineLabel = "Don't ask again"
 
-    /// The width the message is actually drawn at: the panel's fixed 472pt less `styledPanel`'s
+    /// The width the message is actually drawn at: the panel's fixed 520pt less `styledPanel`'s
     /// 18pt of padding a side.
     ///
     /// **Here rather than in the view because the layout it feeds is a measured fact, not a taste**
     /// (SONNY-244). `theMessageNeverDrawsTallerThanThePanelReservesForIt` re-derives the numbers
     /// below from real font metrics, and it can only do that if they are reachable from a test.
-    static let panelContentWidth: CGFloat = 436
+    static let panelContentWidth: CGFloat = 484
 
     /// `WidgetType.caption` is SF Pro Regular 13, whose line height is 16pt
     /// (`NSLayoutManager().defaultLineHeight(for: .systemFont(ofSize: 13))` → 16.0, asserted by that
@@ -627,33 +619,19 @@ enum ResumeOfferPresentation {
     /// **Two, because a truncated command lands within a whisker of the one-versus-two-line
     /// boundary and essentially always crosses it.** `maximumCommandCharacters` squeezes every long
     /// command into the same band: measured at 13pt, the founder's two reported messages are 530.5pt
-    /// and 531.4pt on one line against 436pt of width, and a third realistic one is 524.7pt. So the
+    /// and 531.4pt on one line against 484pt of width, and a third realistic one is 524.7pt. So the
     /// panel is permanently balanced on that edge — every one of them wraps to two lines with about
     /// 95pt on the second.
     ///
-    /// **A third line arrives two different ways, and a count of characters is not either of them**
-    /// (PR #107 review, F5 and its re-check). This first said "a 60-character word with no space in
-    /// it", then "a run wider than two 436pt lines hold". Both were wrong, and the second is
-    /// disproved by its own examples — two 436pt lines hold 872pt and not one of the three crossings
-    /// below reaches it. The two real mechanisms:
-    ///
-    /// - **No break opportunity inside the quoted phrase.** A command with no space in it makes the
-    ///   whole quoted phrase one unbreakable run, because an opening quote binds to the word after
-    ///   it and a closing quote and period bind to the word before. Once that run exceeds a
-    ///   *single* 436pt line it cannot share line one with the lead-in and cannot fit on line two
-    ///   either, so it takes a line of its own and spills onto a third. Measured at 13pt, the run
-    ///   crosses 436 between `W` x33 (425.75pt) and `W` x34 (438.25pt), and between `w` x42
-    ///   (432.40pt) and `w` x43 (442.39pt) — one threshold, two different character counts, which
-    ///   is the whole reason a count cannot express this.
-    /// - **Packing, where nothing is unbreakable at all.** CJK breaks between characters, so no run
-    ///   is ever too wide; the message crosses because whole-character breaks leave part of each
-    ///   line unused. 54 of them need three lines at a message width of 871.21pt — *under* the
-    ///   872pt two lines nominally hold, which is the clearest statement of why "wider than two
-    ///   lines" was never the property.
-    ///
-    /// This cap tail-truncates all of them rather than letting the panel grow, and
-    /// `aThirdLineArrivesTwoWaysAndTheCapCoversBoth` holds both mechanisms with a control one
-    /// character under each Latin crossing.
+    /// **A third line remains reachable through a quoted phrase with no break opportunity** (PR
+    /// #107 review, F5 and its re-check). A command with no space makes the whole quoted phrase one
+    /// unbreakable run, because an opening quote binds to the word after it and a closing quote and
+    /// period bind to the word before. Once that run exceeds a single 484pt line it cannot share
+    /// line one with the lead-in and cannot fit on line two either, so it takes a line of its own and
+    /// spills onto a third. At this width the former CJK packing case fits inside two lines before
+    /// the 60-character truncation budget cuts it, so the cap now protects this one mechanism.
+    /// `anUnbreakableRunCanStillReachAThirdLineAndTheCapCoversIt` holds two glyph widths with a
+    /// control one character below each crossing.
     static let messageLineLimit = 2
 
     /// The height the panel holds open for the message, whatever it turns out to measure.
@@ -665,10 +643,9 @@ enum ResumeOfferPresentation {
     /// `.fixedSize(horizontal: false, vertical: true)` is on it: that modifier is precisely what
     /// turns "this text got less height than it needs" from a truncation into an overflow onto
     /// whatever sits below. And a mis-measure is *cheap* here for the reason `messageLineLimit`
-    /// gives. The widget's own outer content is 568pt wide — a 472pt pill, 12pt, and two 36pt
-    /// circular buttons 12pt apart — which leaves **532pt** inside this panel's 18pt padding, and
-    /// 532pt clears all three real messages on one line: 530.5, 531.4 and 524.7, the tightest of
-    /// them by **0.6pt**. Whether SwiftUI ever measures at that width is not something reading the
+    /// gives. The widget's own outer content is 572pt wide — a 520pt pill, 12pt, and one 40pt
+    /// circular button — which leaves **536pt** inside this panel's 18pt padding, enough to clear
+    /// all three real messages on one line. Whether SwiftUI ever measures at that width is not something reading the
     /// source can settle; that the panel sits two thirds of a point from flipping is.
     /// `everyTruncatedMessageSitsWithinAWhiskerOfTheOneLineBoundary` re-derives the comparison from
     /// live font metrics — it asserts the relationship rather than these three figures, which are
@@ -694,7 +671,7 @@ enum ResumeOfferPresentation {
         "Don't ask again about \u{201C}\(truncatedCommand(command))\u{201D}"
     }
 
-    /// The panel is a fixed 472pt wide and a command is whatever the user typed, so this squeezes
+    /// The panel is a fixed 520pt wide and a command is whatever the user typed, so this squeezes
     /// and then trims.
     ///
     /// **Newlines first, and the truncation alone would not cover it**: a short first line followed

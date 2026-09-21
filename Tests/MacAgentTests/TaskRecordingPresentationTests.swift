@@ -13,8 +13,6 @@ struct TaskRecordingPresentationTests {
     func noUserFacingStringSaysIncognito() {
         for text in [
             TaskRecordingPresentation.controlLabel,
-            TaskRecordingPresentation.activeChipText,
-            TaskRecordingPresentation.clearAccessibilityLabel,
             TaskRecordingPresentation.controlAccessibilityValue(isOn: true),
             TaskRecordingPresentation.controlAccessibilityValue(isOn: false)
         ] {
@@ -28,9 +26,6 @@ struct TaskRecordingPresentationTests {
     @Test
     func theLabelSaysExactlyWhatTheFeatureDoes() {
         #expect(TaskRecordingPresentation.controlLabel == "Don't save this task")
-        #expect(TaskRecordingPresentation.activeChipText == "Won't be saved")
-        // The on state has its own word, so the chip is not just the label repeated.
-        #expect(TaskRecordingPresentation.activeChipText != TaskRecordingPresentation.controlLabel)
         #expect(TaskRecordingPresentation.controlAccessibilityValue(isOn: true) == "On")
         #expect(TaskRecordingPresentation.controlAccessibilityValue(isOn: false) == "Off")
     }
@@ -41,9 +36,7 @@ struct TaskRecordingPresentationTests {
     @Test
     func noCopyExplainsHowItWorksOrOverPromisesWhatItHides() {
         let all = [
-            TaskRecordingPresentation.controlLabel,
-            TaskRecordingPresentation.activeChipText,
-            TaskRecordingPresentation.clearAccessibilityLabel
+            TaskRecordingPresentation.controlLabel
         ].joined(separator: " ").lowercased()
 
         for forbidden in [
@@ -54,6 +47,5 @@ struct TaskRecordingPresentationTests {
         }
         // Short enough to be a label rather than a sentence.
         #expect(!TaskRecordingPresentation.controlLabel.contains("."))
-        #expect(!TaskRecordingPresentation.activeChipText.contains("."))
     }
 }

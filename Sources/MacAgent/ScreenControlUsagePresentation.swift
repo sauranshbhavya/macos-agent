@@ -14,7 +14,7 @@ import MacAgentCore
 enum ScreenControlUsagePresentation {
     /// What the widget shows while a screen-control task is in flight — "12 runs left".
     ///
-    /// No denominator here, unlike the Account line: the widget is 472pt of glass over the
+    /// No denominator here, unlike the Account line: the widget is a compact glass surface over the
     /// user's work while Sonny is about to move their cursor, and the only figure that matters at
     /// that moment is how many they have got left.
     static func inTaskLine(runsLeft: Int) -> String {

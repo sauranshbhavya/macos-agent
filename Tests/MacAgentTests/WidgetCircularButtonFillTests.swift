@@ -9,9 +9,9 @@ import Testing
 /// it out."
 ///
 /// **The property these guard is opacity, and it is here because the first fix got it backwards.**
-/// The composer row is `HStack { composerPill; dontSaveButton; micButton }` and only `composerPill`
-/// carries `.widgetGlassPill()`; the enclosing stack has no background and the widget's panel is
-/// fully transparent. So both circular buttons composite onto whatever window is behind the widget,
+/// The mic sits outside `composerPill`, which alone carries `.widgetGlassPill()`; the enclosing
+/// stack has no background and the widget's panel is fully transparent. So the circular button
+/// composites onto whatever window is behind the widget,
 /// never onto the widget's dark glass — unlike every untinted-variant button in the app, all of
 /// which live inside a `Widget*Panel`. **A fill with opacity below 1 out here takes its contrast
 /// from the user's desktop.** The original bug was a 95%-opaque near-white disc; the first fix
@@ -21,8 +21,8 @@ import Testing
 /// **These are still regression guards, and they still cannot tell you whether the control reads
 /// correctly.** What they can now say is stronger than before: the fills do not depend on the
 /// backdrop at all, which is a real property of the tokens and is checkable. Whether an opaque tint
-/// renders as itself is a property of `WidgetTintedButtonBackground`'s blend, argued in
-/// `dontSaveButton`'s doc comment and not tested here. Only the founder's eye closes this ticket.
+/// renders as itself is a property of `WidgetTintedButtonBackground`'s blend. Only the founder's
+/// eye closes this ticket.
 @Suite
 struct WidgetCircularButtonFillTests {
     /// The invariant F1 exposed: nothing in the composer row may take its contrast from the user's
@@ -30,9 +30,7 @@ struct WidgetCircularButtonFillTests {
     @Test
     func everyFillTheComposerRowCanRenderIsFullyOpaque() throws {
         let rowFills: [(String, Color)] = [
-            ("the mic", WidgetTheme.secondaryCircular),
-            ("\"Don't save this task\", on", WidgetTheme.primaryAction),
-            ("\"Don't save this task\", off", WidgetTheme.panelBase)
+            ("the mic", WidgetTheme.secondaryCircular)
         ]
 
         for (name, fill) in rowFills {
@@ -57,7 +55,7 @@ struct WidgetCircularButtonFillTests {
             resolved.alphaComponent < 1.0,
             """
             `neutralButtonFill` is §3.1's `rgba(153,153,153,.17)`. If it is ever made opaque, the \
-            reasoning in `dontSaveButton` and in this suite needs rereading rather than \
+            reasoning in this suite needs rereading rather than \
             reinterpreting — measured alpha: \(resolved.alphaComponent).
             """
         )
@@ -110,7 +108,6 @@ struct WidgetCircularButtonFillTests {
         // there down renders inside `styledPanel`, which carries `.widgetGlassPanel()`.
         let panelBoundary = try #require(source.range(of: "\nprivate struct Widget"))
         let chrome = String(source[source.startIndex..<panelBoundary.lowerBound])
-        #expect(chrome.contains("private var dontSaveButton"), "the boundary missed the chrome")
         #expect(chrome.contains("private var micButton"), "the boundary missed the chrome")
 
         var offenders: [String] = []
@@ -133,31 +130,23 @@ struct WidgetCircularButtonFillTests {
         )
     }
 
-    /// The two tokens this control actually uses, which is all a test can honestly say about the
-    /// on/off distinction the control's whole meaning rests on: two different opaque fills. Whether
-    /// the difference is *obvious* is not something this can measure.
+    /// The private-mode affordance is now the composer logo and dotted outline, not a satellite
+    /// button or chip. The active icon branch remains explicit so the future asset replacement has
+    /// one exact site.
     @Test
-    func theDontSaveButtonUsesTheTwoOpaqueFillsThisTicketChose() throws {
+    func theLogoOwnsPrivateModeAndTheOldButtonAndChipAreGone() throws {
         let source = try String(
             contentsOf: Self.appSourceFile(named: "FloatingWidgetView.swift"),
             encoding: .utf8
         )
 
-        #expect(
-            source.contains(
-                ".widgetCircularBackground(tint: isOn ? WidgetTheme.primaryAction : WidgetTheme.panelBase)"
-            ),
-            """
-            The "Don't save this task" button takes `primaryAction` when on and `panelBase` when \
-            off — both opaque, so neither depends on the backdrop. If the treatment moved \
-            deliberately, the founder re-checks both states by eye over a light window and a dark \
-            one; that check is the verification and this test is only its reminder.
-            """
-        )
-
-        let on = try #require(NSColor(WidgetTheme.primaryAction).usingColorSpace(.sRGB))
-        let off = try #require(NSColor(WidgetTheme.panelBase).usingColorSpace(.sRGB))
-        #expect(on != off, "on and off must not resolve to the same fill")
+        #expect(!source.contains("private var dontSaveButton"))
+        #expect(!source.contains("private var dontSaveChip"))
+        #expect(source.contains("toggleTaskRecordingPolicy()"))
+        #expect(source.contains(".accessibilityLabel(TaskRecordingPresentation.controlLabel)"))
+        #expect(source.contains("WidgetTheme.privateModeOutline"))
+        #expect(source.contains("dash: [3, 4]"))
+        #expect(source.contains("TODO: Replace this with the dedicated private-mode mark"))
     }
 
     private static let backgroundModifiers = ["widgetCircularBackground(", "widgetCapsuleBackground("]

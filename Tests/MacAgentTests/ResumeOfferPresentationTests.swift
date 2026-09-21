@@ -419,24 +419,11 @@ struct ResumeOfferPresentationTests {
         )
     }
 
-    /// **A third line arrives two different ways, and the cap has to cover both** (PR #107 review,
-    /// F5 and its re-check).
-    ///
-    /// `messageLineLimit`'s doc first named a character count, then named a width — "wider than two
-    /// 436pt lines hold" — and that second wording was disproved by its own examples: two lines hold
-    /// 872pt and none of the three crossings reaches it. So this holds the mechanisms rather than an
-    /// outcome, which is what stops the claim drifting back to a number a third time:
-    ///
-    /// - a Latin command with no space in it makes the quoted phrase one unbreakable run, and it
-    ///   crosses when that run exceeds a **single** line;
-    /// - CJK breaks between characters, so nothing is unbreakable and it crosses on **packing**,
-    ///   at a message width still under what two lines nominally hold.
-    ///
-    /// Each Latin script gets its crossing *and* the character below it, so the assertions read a
-    /// boundary rather than a constant — and the two boundaries land at different counts, which is
-    /// the whole reason a count cannot express this.
+    /// A Latin command with no space makes the quoted phrase one unbreakable run, and it crosses
+    /// when that run exceeds a single line. Each glyph gets its crossing and the character below it,
+    /// so the assertions read a boundary rather than a guessed count.
     @Test
-    func aThirdLineArrivesTwoWaysAndTheCapCoversBoth() {
+    func anUnbreakableRunCanStillReachAThirdLineAndTheCapCoversIt() {
         let font = NSFont.systemFont(ofSize: 13, weight: .regular)
         let width = ResumeOfferPresentation.panelContentWidth
 
@@ -456,10 +443,9 @@ struct ResumeOfferPresentationTests {
             "\u{201C}\(command)\u{201D}."
         }
 
-        // Mechanism one: the unbreakable run crossing a *single* line.
         let latin: [(script: String, character: String, fits: Int, crosses: Int)] = [
-            (script: "uppercase W", character: "W", fits: 33, crosses: 34),
-            (script: "lowercase w", character: "w", fits: 42, crosses: 43)
+            (script: "uppercase W", character: "W", fits: 37, crosses: 38),
+            (script: "lowercase w", character: "w", fits: 47, crosses: 48)
         ]
         for run in latin {
             let below = String(repeating: run.character, count: run.fits)
@@ -481,21 +467,9 @@ struct ResumeOfferPresentationTests {
         // One threshold, two counts — the reason the property is a width and never a count.
         #expect(Set(latin.map { $0.crosses }).count == latin.count)
 
-        // Mechanism two: nothing unbreakable, so it crosses on packing instead — and it does so at a
-        // message width *under* what two lines nominally hold, which is what disproves the wording
-        // this test replaced.
-        let packed = String(repeating: "\u{6F22}", count: 54)
-        let twoLinesNominally = width * CGFloat(ResumeOfferPresentation.messageLineLimit)
-        let packedMessage = ResumeOfferPresentation.message(command: packed)
-        #expect(rendered(packedMessage) < twoLinesNominally, "under 872pt, and still three lines")
-        #expect(naturalHeight(packed) > ResumeOfferPresentation.reservedMessageHeight)
         #expect(
-            rendered(quotedRun(packed)) > width,
-            "wider than a line, yet it is not the unbreakable-run mechanism — every character breaks"
-        )
-        #expect(
-            naturalHeight(String(repeating: "\u{6F22}", count: 53)) <= ResumeOfferPresentation.reservedMessageHeight,
-            "53 still packs into two lines — 54 is the crossing"
+            naturalHeight(String(repeating: "\u{6F22}", count: 60)) <= ResumeOfferPresentation.reservedMessageHeight,
+            "the truncation budget keeps the former CJK packing case inside two lines at this width"
         )
     }
 
@@ -504,9 +478,9 @@ struct ResumeOfferPresentationTests {
     /// The addendum on SONNY-244 is that the overlap is intermittent — the same view at the same
     /// message length laid out both ways minutes apart — which is what a `Text` measured at one width
     /// and drawn at another looks like. This pins how little slack there is: every message the
-    /// truncation budget produces is *just* over one line at the panel's own 436pt, and *just* under
-    /// one line at 532pt, which is the width left inside this panel's 18pt padding if it were ever
-    /// measured against the widget's own outer content instead (472 pill + 12 + 36 + 12 + 36 = 568).
+    /// truncation budget produces is *just* over one line at the panel's own 484pt, and *just* under
+    /// one line at 536pt, which is the width left inside this panel's 18pt padding if it were ever
+    /// measured against the widget's own outer content instead (520 pill + 12 + 40 = 572).
     ///
     /// A failure here is not a regression; it is the hazard changing shape. Whoever sees it should
     /// re-read `ResumeOfferPresentation.reservedMessageHeight` and decide whether the reservation is
@@ -514,7 +488,7 @@ struct ResumeOfferPresentationTests {
     @Test
     func everyTruncatedMessageSitsWithinAWhiskerOfTheOneLineBoundary() {
         let font = NSFont.systemFont(ofSize: 13, weight: .regular)
-        let widgetOuterContentWidth: CGFloat = 472 + 12 + 36 + 12 + 36
+        let widgetOuterContentWidth = WidgetTheme.panelWidth + 12 + WidgetTheme.satelliteControlSize
         let mismeasuredWidth = widgetOuterContentWidth - 36
 
         for command in [

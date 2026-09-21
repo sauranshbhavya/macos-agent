@@ -4337,7 +4337,7 @@ final class AgentViewModel: ObservableObject {
     /// - `TaskRecordingPolicy` is a *per-task composer* control. A scheduled run passes through no
     ///   composer, so there is nothing for it to answer — and it is not merely absent, it is
     ///   actively wrong to read. **The reachable window is the ordinary one, before any dispatch**
-    ///   (corrected by PR #98's round-4 pass, F2): `dontSaveButton` renders only when
+    ///   (corrected by PR #98's round-4 pass, F2): the logo control is enabled only when
     ///   `!isTaskInFlight` (`FloatingWidgetView.swift`), so "Don't save this task" is a *pre*-dispatch
     ///   toggle — the user flips it on while composing and has not pressed Send. `isRunning` is
     ///   false, `approvalRequest` is nil and `clarificationQuestion` is nil, so all three of
@@ -8253,7 +8253,7 @@ final class AgentViewModel: ObservableObject {
     /// **Only one of the two terms can change mid-run, and the other is kept anyway.** The Memory
     /// switches are standing preferences the user can turn off from Command Center while a run is in
     /// flight, so that term is live. `taskRecordingPolicy` is not: "Don't save this task" is a
-    /// pre-dispatch toggle (`dontSaveButton` renders only when `!isTaskInFlight`), and a suppressed
+    /// pre-dispatch toggle (the logo control is disabled while `isTaskInFlight`), and a suppressed
     /// run has no checkpoint for this function to append to in the first place — the guard's own
     /// first term returns.
     ///
@@ -9056,7 +9056,7 @@ final class AgentViewModel: ObservableObject {
             // pause has been closed at this door since PR #80's F1 added `clarificationQuestion ==
             // nil` as `checkScheduledRoutines`' third guard term. The live window is the ordinary
             // one, before any dispatch: "Don't save this task" is a pre-dispatch toggle
-            // (`dontSaveButton` renders only when `!isTaskInFlight`), so a user who flips it on
+            // (the logo control is disabled while `isTaskInFlight`), so a user who flips it on
             // while composing and has not pressed Send passes all three guards. Corrected rather
             // than deleted, because the fix it justifies is still right and a reader who checks a
             // dead mechanism concludes the fix is dead too. Full reasoning at

@@ -265,6 +265,7 @@ struct CommandCenterView: View {
         .frame(width: isSidebarCollapsed ? SonnyMetrics.sidebarWidthCollapsed : SonnyMetrics.sidebarWidth)
         .frame(maxHeight: .infinity, alignment: .topLeading)
         .background(SonnyTheme.sidebar)
+        .tint(SonnyTheme.sidebarAccent)
         .sonnyAnimation(SonnyMotion.standard, value: isSidebarCollapsed)
     }
 
@@ -306,11 +307,11 @@ struct CommandCenterView: View {
     private var sidebarMark: some View {
         ZStack {
             RoundedRectangle(cornerRadius: SonnyRadius.control)
-                .fill(SonnyTheme.accentSubtle)
-            SonnyBrandMark(size: 14)
-                .foregroundStyle(SonnyTheme.accent)
+                .fill(SonnyTheme.sidebarBrandGoldSubtle)
+            SonnyBrandMark(size: 22)
+                .foregroundStyle(SonnyTheme.sidebarBrandGold)
         }
-        .frame(width: 22, height: 22)
+        .frame(width: SonnyMetrics.controlLarge, height: SonnyMetrics.controlLarge)
     }
 
     /// The one primary action in the window. It raises the same presentation request the menu-bar
@@ -327,7 +328,7 @@ struct CommandCenterView: View {
                     .font(SonnyType.icon(SonnyMetrics.iconButton, weight: .semibold))
                     .foregroundStyle(SonnyTheme.textOnAccent)
             }
-            .buttonStyle(SonnyButtonStyle(tone: .primary, width: SonnyMetrics.controlRegular))
+            .buttonStyle(SonnyButtonStyle(tone: .sidebarPrimary, width: SonnyMetrics.controlRegular))
             .keyboardShortcut("n", modifiers: .command)
             .accessibilityLabel("Ask Sonny")
             .help("Ask Sonny (⌘N)")
@@ -356,7 +357,7 @@ struct CommandCenterView: View {
                 }
                 .frame(maxWidth: .infinity)
             }
-            .buttonStyle(SonnyButtonStyle(tone: .primary))
+            .buttonStyle(SonnyButtonStyle(tone: .sidebarPrimary))
             .keyboardShortcut("n", modifiers: .command)
             .accessibilityLabel("Ask Sonny")
         }
@@ -443,10 +444,10 @@ struct CommandCenterView: View {
     private var profileAvatar: some View {
         ZStack {
             RoundedRectangle(cornerRadius: SonnyRadius.control)
-                .fill(SonnyTheme.accentSubtle)
+                .fill(SonnyTheme.sidebarAccentSubtle)
             Text(WorkspaceAvatarInitial.from(name: profileName))
                 .font(SonnyType.microEmphasis)
-                .foregroundStyle(SonnyTheme.accent)
+                .foregroundStyle(SonnyTheme.sidebarAccent)
         }
         .frame(width: 22, height: 22)
     }
@@ -575,7 +576,15 @@ struct CommandCenterView: View {
                         // The wireframe's "22" count is a Linear inbox placeholder; what is shown is
                         // the one number Sonny has, the active-task count, and only while it is
                         // non-zero.
-                        SonnyBadge(text: "\(viewModel.activeTaskCount)", tone: .accent)
+                        Text("\(viewModel.activeTaskCount)")
+                            .font(SonnyType.microEmphasis.monospacedDigit())
+                            .foregroundStyle(SonnyTheme.sidebarAccent)
+                            .padding(.horizontal, SonnySpacing.sm - 2)
+                            .frame(minWidth: 18, minHeight: 18)
+                            .background(
+                                SonnyTheme.sidebarAccentSubtle,
+                                in: RoundedRectangle(cornerRadius: SonnyRadius.control)
+                            )
                             .accessibilityLabel("One active task")
                     }
                 }

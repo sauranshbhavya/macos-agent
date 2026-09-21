@@ -64,7 +64,7 @@ struct HoverTeardownAuditTests {
     /// `lastPathComponent` to `read` would flatten a nested file onto a top-level namesake or throw
     /// (PR #84 review, F4). Keys are paths relative to `Sources/MacAgent/`, which cannot collide.
     @Test
-    func theHoverTrackingCodeSitesAreSixAcrossTheWholeAppTarget() throws {
+    func theHoverTrackingCodeSitesAreEnumeratedAcrossTheWholeAppTarget() throws {
         var onHoverSites: [String: Int] = [:]
         var trackerSites: [String: Int] = [:]
 
@@ -81,7 +81,7 @@ struct HoverTeardownAuditTests {
 
         let total = onHoverSites.values.reduce(0, +) + trackerSites.values.reduce(0, +)
         #expect(
-            total == 4,
+            total == 3,
             """
             The hover-tracking site count changed. Judge the new site against SONNY-178's rule \
             before updating this number, and judge both halves: is the flag declared on a view that \
@@ -99,7 +99,7 @@ struct HoverTeardownAuditTests {
         // destination and this phase removed them rather than restyling permanently disabled rows.
         // Only the weekly chart's `.onHover` remains in this file.
         #expect(onHoverSites == ["CommandCenterView.swift": 1, "ContentView.swift": 2])
-        #expect(trackerSites == ["FloatingWidgetView.swift": 1])
+        #expect(trackerSites.isEmpty, "the mic no longer opens a custom hover surface")
     }
 
     /// **The `SonnyPointerCursorModifier` question, answered: refuted.**

@@ -279,15 +279,24 @@ struct WidgetComposerStateTests {
     ///
     /// One scan, both halves, because they are one decision: the composer's prompt is read off
     /// `composerState` rather than written as a literal, and the field is disabled off the same
-    /// state. A literal placeholder is what shipped, and it is what made a disabled composer
-    /// indistinguishable from a hung one.
+    /// state. The logo control uses that gate too, so neither composer control can change state
+    /// after dispatch. A literal placeholder is what shipped, and it is what made a disabled
+    /// composer indistinguishable from a hung one.
     @Test
     func theComposerReadsItsPlaceholderAndItsGateOffTheSameState() throws {
         let widget = try MacAgentSource.read("FloatingWidgetView.swift")
         let row = try MacAgentSource.braceBlock(of: widget, openedBy: "private var composerFieldRow: some View {")
 
         #expect(MacAgentSource.count(of: "ComposerPresentation.prompt(for: composerState)", inText: row) == 1)
-        #expect(MacAgentSource.count(of: ".disabled(isTaskInFlight)", inText: row) == 1)
+        #expect(MacAgentSource.count(of: ".disabled(isTaskInFlight)", inText: row) == 2)
+        #expect(
+            try MacAgentSource.region(of: row, from: "Button {", to: "TextField(")
+                .contains(".disabled(isTaskInFlight)")
+        )
+        #expect(
+            try MacAgentSource.region(of: row, from: "TextField(", to: "if !isTaskInFlight {")
+                .contains(".disabled(isTaskInFlight)")
+        )
         // The literal is gone from the view and lives in `ComposerPresentation`, where a test can
         // read it. Counted across the whole file, not just this row, so it cannot reappear beside
         // the function that replaced it.

@@ -48,7 +48,7 @@ struct FinderSelectionSentenceFitsTheWidgetTests {
 
     /// The panel's numbers, read from the source so the measurement below is against the panel
     /// that ships: the result panel caps its summary at three lines of `WidgetType.caption`, and
-    /// the styled panel around it pads 18 pt inside `WidgetTheme.panelWidth`, 472 pt.
+    /// the styled panel around it pads 18 pt inside `WidgetTheme.panelWidth`, 520 pt.
     @Test
     @MainActor
     func theMeasurementReadsThePanelThatShips() throws {
@@ -61,7 +61,7 @@ struct FinderSelectionSentenceFitsTheWidgetTests {
         #expect(styled.contains(".frame(width: WidgetTheme.panelWidth"))
         let theme = try MacAgentSource.read("SonnyWidgetTheme.swift")
         #expect(theme.contains("static let caption = Font.system(size: \(Int(Self.pointSize)), weight: .regular, design: .default)"))
-        #expect(WidgetTheme.panelWidth == 472)
+        #expect(WidgetTheme.panelWidth == 520)
     }
 
     /// Two, five, seven and fifty items in each of the name shapes the reviewer measured, and an

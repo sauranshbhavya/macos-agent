@@ -152,10 +152,9 @@ struct FloatingWidgetView: View {
     @StateObject private var micHint = MicHoverHintModel()
 
     var body: some View {
-        // .leading, not .trailing: the panel and pill are both a fixed 472pt (matching the
+        // .leading, not .trailing: the panel and pill share one fixed width (matching the
         // wireframe, where the mic button is a separate satellite floating outside that column,
-        // not part of its width) — the pill+mic HStack is wider than the panel alone (~520pt vs
-        // 472pt), so .trailing right-aligned them, leaving the panel's *left* edge visibly
+        // not part of its width), so .trailing right-aligned them, leaving the panel's *left* edge visibly
         // indented relative to the pill below it. That was the "error banner misplaced" bug.
         VStack(alignment: .leading, spacing: 12) {
             // One positioning mode, always — the widget never composites into Command Center's
@@ -165,8 +164,6 @@ struct FloatingWidgetView: View {
             } else {
                 if showsPanel {
                     styledPanel
-                } else if let hint = micHint.visibleHint {
-                    micHoverHintRow(hint)
                 }
 
                 // What the scheduler did while nobody was watching (SONNY-113). Until now this
@@ -215,27 +212,18 @@ struct FloatingWidgetView: View {
                 // says so through `errorMessage` below. `AgentViewModel`'s own note where the
                 // published property used to be enumerates all four states and where each went.
 
-                // **Bottom-aligned since the pill can carry a chip row** (SONNY-150). With
-                // `.center` the two circular buttons would float against the middle of a 66pt pill
-                // while the text field sat at its foot. Their own 40pt box makes their centres land
-                // exactly on the field row's, and in the no-chip case the whole thing is
-                // pixel-identical to what it was: a 40pt pill beside a 40pt box.
-                //
-                // `micButton` always renders, so the box is never empty and its spacing never opens
-                // a gap where a hidden `dontSaveButton` used to be.
+                // Bottom-aligned since the pill can carry a chip row. The mic keeps its own box
+                // aligned with the field row while the pill grows upward around any chips.
                 HStack(alignment: .bottom, spacing: 12) {
                     composerPill
-                    HStack(spacing: 12) {
-                        dontSaveButton
-                        voiceRecordingCountdownLabel
-                        micButton
-                    }
-                    .frame(height: 40)
+                    voiceControl
+                        .transaction { transaction in
+                            transaction.animation = nil
+                        }
                 }
             }
         }
         .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: widgetStateKey)
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: isCompact)
         // Real headroom for the (now much smaller, border-led) shadow plus a little breathing
         // room around the glass edge — not shadow-bleed-driven the way the old, larger padding
         // was, since there's no more large drop shadow needing room to fade out.
@@ -545,11 +533,11 @@ struct FloatingWidgetView: View {
     /// `WidgetControlNamingTests.everyTooltipInTheWidgetSitsBesideAVoiceOverName` reads.
     private var compactCapsule: some View {
         Button(action: expandFromCompact) {
-            SonnyBrandMark(size: 18)
+            SonnyBrandMark(size: WidgetTheme.composerMarkSize)
                 .foregroundStyle(WidgetTheme.textStrong)
         }
-        .buttonStyle(.plain)
-        .frame(width: 40, height: 40)
+        .buttonStyle(CompactWidgetButtonStyle())
+        .frame(width: WidgetTheme.compactSize, height: WidgetTheme.compactSize)
         .widgetGlassPill()
         .accessibilityLabel(CompactCapsulePresentation.expandLabel)
         .help(CompactCapsulePresentation.expandLabel)
@@ -654,7 +642,7 @@ struct FloatingWidgetView: View {
     }
 
     /// Unchanged in value, derived rather than restated. Every existing reader — the field's
-    /// `.disabled`, the three chips' clear affordances, `dontSaveButton`, the Start button, the
+    /// `.disabled`, the two chips' clear affordances, the logo control, the Start button, the
     /// pill's trailing inset — keeps exactly the behaviour it had.
     private var isTaskInFlight: Bool {
         !ComposerPresentation.acceptsInput(composerState)
@@ -700,45 +688,6 @@ struct FloatingWidgetView: View {
                     .accessibilityLabel(
                         AgentActivityPresentation.clearWorkspaceBindingLabel(workspaceName: name)
                     )
-                }
-            }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(WidgetTheme.neutralButtonFill)
-            .clipShape(Capsule())
-        }
-    }
-
-    /// The "Don't be saved" state, made unmissable in the composer itself (SONNY-120).
-    ///
-    /// The button alone is not enough. The two mistakes are not symmetrical: leaving the switch on
-    /// costs a history row nobody minds losing, while forgetting it is off records something the
-    /// user wanted private — and that one cannot be undone afterwards. So the on state gets a chip
-    /// in the pill, where the user is already looking as they type.
-    ///
-    /// Same chip shape, dismiss affordance and System B tokens as `workspaceBindingChip`, and the
-    /// same only-before-dispatch rule. No explanatory sentence beside it: the label is the message.
-    @ViewBuilder
-    private var dontSaveChip: some View {
-        if viewModel.taskRecordingPolicy.suppressesTraces {
-            HStack(spacing: 4) {
-                Text(TaskRecordingPresentation.activeChipText)
-                    .font(WidgetType.captionSmall)
-                    .foregroundStyle(WidgetTheme.textFull)
-                    .lineLimit(1)
-
-                if !isTaskInFlight {
-                    Button {
-                        viewModel.taskRecordingPolicy = .record
-                    } label: {
-                        Image(systemName: "xmark")
-                            .font(WidgetType.headlineChip)
-                            .foregroundStyle(WidgetTheme.textMuted)
-                    }
-                    .buttonStyle(.plain)
-                    .frame(width: Self.composerChipRowHeight, height: Self.composerChipRowHeight)
-                    .contentShape(Rectangle())
-                    .accessibilityLabel(TaskRecordingPresentation.clearAccessibilityLabel)
                 }
             }
             .padding(.horizontal, 8)
@@ -794,19 +743,19 @@ struct FloatingWidgetView: View {
 
     /// Whether any chip is on, and therefore whether the pill carries a chip row at all.
     ///
-    /// Read off the same three conditions the chips themselves render on. Two sources for one
+    /// Read off the same two conditions the chips themselves render on. Two sources for one
     /// question would let the pill reserve a row for a chip that is not there, or fail to reserve
     /// one for a chip that is.
     private var hasComposerChips: Bool {
         viewModel.boundWorkspaceName != nil
-            || viewModel.taskRecordingPolicy.suppressesTraces
             || viewModel.priorTaskContext?.isArmed == true
     }
 
-    /// The pill's height. 40 with no chip — exactly what it has always been — and taller by one
-    /// chip row plus its spacing when there is one.
+    /// The pill's base height, taller by one chip row plus its spacing when there is one.
     private var composerPillHeight: CGFloat {
-        hasComposerChips ? 40 + Self.composerChipRowHeight + Self.composerChipRowSpacing : 40
+        hasComposerChips
+            ? WidgetTheme.composerHeight + Self.composerChipRowHeight + Self.composerChipRowSpacing
+            : WidgetTheme.composerHeight
     }
 
     private static let composerChipRowHeight: CGFloat = 18
@@ -819,14 +768,10 @@ struct FloatingWidgetView: View {
             // wide, at the exact moment the user is typing a correction into it; a chip that names
             // no task fits but reintroduces the invisible state the chip exists to prevent.
             //
-            // **Order: the two that were here first, then the new one.** The ticket's rule is compose
-            // with them, do not displace them — so the workspace binding and "Won't be saved" keep
-            // the reading position they have always had and the follow-up joins after them, rather
-            // than the newest arrival taking the front.
+            // Workspace binding stays first and an armed follow-up joins after it.
             if hasComposerChips {
                 HStack(spacing: 8) {
                     workspaceBindingChip
-                    dontSaveChip
                     followUpChip
                     Spacer(minLength: 0)
                 }
@@ -836,33 +781,70 @@ struct FloatingWidgetView: View {
             composerFieldRow
         }
         .padding(.leading, 14)
-        .padding(.trailing, isTaskInFlight ? 14 : 8)
+        .padding(.trailing, isTaskInFlight ? 14 : WidgetTheme.composerEdgeInset)
         .frame(width: WidgetTheme.panelWidth, height: composerPillHeight)
         .widgetGlassPill()
+        .overlay {
+            if viewModel.taskRecordingPolicy.suppressesTraces {
+                Capsule()
+                    .stroke(
+                        WidgetTheme.privateModeOutline,
+                        style: StrokeStyle(lineWidth: 1.5, lineCap: .round, dash: [3, 4])
+                    )
+                    .padding(2)
+                    .allowsHitTesting(false)
+            }
+        }
     }
 
     private var composerFieldRow: some View {
-        HStack(spacing: 10) {
+        let prompt = ComposerPresentation.prompt(for: composerState)
+
+        return HStack(spacing: 10) {
             // Dimmed while the field takes nothing (SONNY-247). This glyph is the composer's "type
             // here" affordance, so turning it down is the composer withdrawing the invitation — the
             // placeholder beside it carries the actual sentence, and stays at full `textMuted` so
             // that the one thing able to explain a dead click is the one thing not dimmed.
-            SonnyBrandMark(size: 14)
-                .foregroundStyle(isTaskInFlight ? WidgetTheme.textFaint : WidgetTheme.textMuted)
-
-            TextField(
-                "",
-                text: $viewModel.command,
-                prompt: Text(ComposerPresentation.prompt(for: composerState))
-                    .foregroundStyle(WidgetTheme.textMuted)
-            )
-            .textFieldStyle(.plain)
-            .font(WidgetType.pillQuery)
-            .foregroundStyle(WidgetTheme.textFull)
+            Button {
+                toggleTaskRecordingPolicy()
+            } label: {
+                composerPrivacyMark
+                    .foregroundStyle(isTaskInFlight ? WidgetTheme.textFaint : WidgetTheme.textFull)
+                    .frame(width: WidgetTheme.controlSize, height: WidgetTheme.controlSize)
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
             .disabled(isTaskInFlight)
-            .focused($focusedField, equals: .composer)
-            .submitLabel(.go)
-            .onSubmit(submit)
+            .accessibilityLabel(TaskRecordingPresentation.controlLabel)
+            .accessibilityValue(
+                TaskRecordingPresentation.controlAccessibilityValue(
+                    isOn: viewModel.taskRecordingPolicy.suppressesTraces
+                )
+            )
+            .accessibilityAddTraits(
+                viewModel.taskRecordingPolicy.suppressesTraces ? [.isButton, .isSelected] : .isButton
+            )
+
+            ZStack(alignment: .leading) {
+                if viewModel.command.isEmpty {
+                    Text(prompt)
+                        .font(WidgetType.pillQuery)
+                        .foregroundStyle(WidgetTheme.helperText)
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
+                }
+
+                TextField("", text: $viewModel.command)
+                    .textFieldStyle(.plain)
+                    .font(WidgetType.pillQuery)
+                    .foregroundStyle(WidgetTheme.textFull)
+                    .disabled(isTaskInFlight)
+                    .focused($focusedField, equals: .composer)
+                    .submitLabel(.go)
+                    .onSubmit(submit)
+                    .accessibilityLabel(prompt)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
 
             if !isTaskInFlight {
                 let isCommandEmpty = viewModel.command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -877,117 +859,53 @@ struct FloatingWidgetView: View {
                 .foregroundStyle(WidgetTheme.textStrong)
                 .font(WidgetType.headlineChip)
                 .padding(.horizontal, 12)
-                .frame(height: 24)
+                .frame(height: WidgetTheme.startButtonHeight)
                 .widgetCapsuleBackground(tint: WidgetTheme.primaryAction)
                 .disabled(isCommandEmpty)
                 .opacity(isCommandEmpty ? 0.5 : 1)
             }
         }
-        // The field row is always 40 tall, whether or not a chip row sits above it. That is what
-        // keeps the two circular buttons beside the pill level with the field: the composer row
-        // aligns them to the pill's bottom edge and gives them a 40-tall box of their own.
+        // The field row has one fixed height whether or not a chip row sits above it. That keeps the
+        // mic beside the pill level with the field.
         //
-        // The trailing inset: 8pt matches the Start button's own vertical inset (24pt tall in a
-        // 40pt row leaves 8pt above and below); a uniform 14pt left it visibly farther from the
-        // trailing edge than from the top and bottom. Applied on the pill rather than here, and
-        // conditional because the button is not rendered while a task is in flight — that state
-        // keeps its shipped 14pt rather than pulling the disabled field 6pt closer to the capsule's
-        // curve to fix a complaint about a different state.
-        .frame(height: 40)
+        // The Start button is inset by `composerEdgeInset` on its top, bottom and trailing edges.
+        // Applied on the pill rather than here, and conditional because the button is not rendered
+        // while a task is in flight — that state keeps its shipped 14pt trailing inset.
+        .frame(height: WidgetTheme.composerHeight)
     }
 
-    /// "Don't save this task" (SONNY-120).
-    ///
-    /// **Only before dispatch.** Hidden outright while a task is in flight rather than disabled —
-    /// the same reasoning already written beside the workspace-binding chip's clear affordance, and
-    /// it holds harder here: flipping this mid-run would promise to un-write records already on
-    /// disk, which it cannot do. A disabled-but-visible control invites the user to try.
-    ///
-    /// A third circular button in the composer row, matching `micButton`'s 36×36 and reusing
-    /// `widgetCircularBackground`, so it introduces no new System B token. **The honest cost, stated
-    /// rather than discovered:** this widens the composer row by 48pt, and the widget is a permanent
-    /// on-screen overlay, so that is a real change to its footprint. The alternative — putting it
-    /// inside the pill — squeezes the text field, which is worse. Proposed on session judgment with
-    /// no wireframe to defer to; SONNY-109 settles it.
-    ///
-    /// **This button has no backdrop of its own, and that is the fact everything else here follows
-    /// from (SONNY-174).** The composer row is `HStack { composerPill; dontSaveButton; micButton }`
-    /// and only `composerPill` carries `.widgetGlassPill()`; the enclosing stack has no background
-    /// and `FloatingWidgetWindowController` makes the panel fully transparent. So these two
-    /// circular buttons composite onto **whatever window the user happens to have behind the
-    /// widget** — never onto the widget's dark glass. Every other untinted-variant button in the
-    /// app lives inside a `Widget*Panel`, which does sit on glass. **A fill whose opacity is less
-    /// than 1 therefore buys its contrast from the user's desktop**, and out here there is no
-    /// desktop to buy it from.
-    ///
-    /// That is what makes both of the first two treatments wrong, for the same reason twice over:
-    /// - **Shipped originally:** `neutralButtonFill` passed as a *tint*. A non-nil tint takes
-    ///   `WidgetTintedButtonBackground`'s other branch — a `Color.white.opacity(0.94)` underlay
-    ///   with the tint composited `.plusDarker` over it — so `rgba(153,153,153,.17)` came out as
-    ///   **#EDEDED at 95% alpha**, a near-opaque pale disc carrying a white glyph at
-    ///   **1.16–1.31:1**. The founder's report, "too light for anyone to figure it out."
-    /// - **The first attempt at fixing it,** `tint: nil`, took the fill from 95% opaque down to
-    ///   **17%** — the opposite of presence. It read as darker only because the thing showing
-    ///   through happened to be dark. Over a white window the two branches are not merely close,
-    ///   they are **identical**: with a white destination `plusDarker` reduces to the source, so
-    ///   both collapse to `0.932000` and a **1.16:1** glyph. On a white window that change was a
-    ///   no-op on screen. (PR #73 review, F1.)
-    ///
-    /// **So the fill is opaque, which is the ticket's own first lever — give the fill real
-    /// presence — done where it actually had to be done.** An opaque tint resolves through that
-    /// branch to exactly itself at alpha 1 (`αs = 1` ⇒ the composite is the source), which is why
-    /// `micButton` beside it and this button's own on state are already backdrop-proof.
-    ///
-    /// **Which token, enumerated over the whole set rather than picked.** System B has ten colour
-    /// tokens. Two are translucent (`neutralButtonFill`, `textMuted`) and the finding above
-    /// disqualifies both. Of the eight opaque ones, five are accents that already mean something —
-    /// `primaryAction` is this button's *own* on state, `secondaryCircular` is the mic 12pt away,
-    /// and `allowAction`/`errorGlyph`/`taskFailureRetry` carry Allow, error and retry. The last two
-    /// are opaque and are not accents, but another layer of *this same button* already uses them:
-    /// `hairline` draws its rim and `textFull` its glyph, so either one as the fill erases the very
-    /// thing it would have to contrast against (each measures 1.00:1 against its own layer).
-    /// `panelBase` is the one that remains, and it is also the best of them on the numbers. No new
-    /// token is warranted either: the one candidate worth adding, §3.1's neutral fill
-    /// pre-composited over `panelBase` (#303030), measures *worse* on every axis — glyph 13.20:1
-    /// against this one's 17.40:1, rim 2.94:1 against 3.41:1, and less separation from the on state.
-    ///
-    /// **Measured over the backdrop swept 0.0 to 1.0, the screen and not a panel**, all three
-    /// constant because the fill is opaque: white glyph **17.40:1**, hairline rim **3.41:1**
-    /// against its own fill, and **5.38:1** between off and the untouched on state — the widest
-    /// separation any candidate gave. The glyph beats the mic's own 2.23:1 by a wide margin. The
-    /// fill matches *some* backdrop at every opacity (worst case 1.01:1 here, 1.00:1 for both the
-    /// mic and the on state), which is why the rim, the top highlight and the shadow draw the
-    /// silhouette rather than the fill — and all three are backdrop-independent too.
-    ///
-    /// **The shadow rides along with the branch, and that is right here rather than merely
-    /// tolerable.** A non-nil tint carries the heavier `black 0.45 / r12 / y6`; §3.1 pairs its
-    /// lighter `0.04 / r8 / y4` with the neutral variant, which is a button *on a panel* that
-    /// already provides separation. This one has nothing under it, so the heavier shadow is what
-    /// separates it from a bright desktop — and it now matches the mic beside it and its own on
-    /// state, so the row carries one shadow instead of two.
-    ///
-    /// On and off are now solid `#0091FF` against solid `#1A1A1A`, plus `eye.slash.fill` against
-    /// `eye.slash`. **Every figure above is composited arithmetic, not eyesight** — Porter-Duff
-    /// source-over with `kCGBlendModePlusDarker`, WCAG luminance from linearised sRGB. Whether
-    /// either state actually reads right is the founder's manual pass, and nothing here replaces it.
+    /// The logo is the per-run "Don't save this task" control. It stays visible while a run is in
+    /// flight but is disabled then, because changing the policy after dispatch would promise to
+    /// un-write records that may already exist. The dotted capsule is the active visual state.
     @ViewBuilder
-    private var dontSaveButton: some View {
-        if !isTaskInFlight {
-            let isOn = viewModel.taskRecordingPolicy.suppressesTraces
-            Button {
-                viewModel.taskRecordingPolicy = isOn ? .record : .suppressTraces
-            } label: {
-                Image(systemName: isOn ? "eye.slash.fill" : "eye.slash")
-                    .font(WidgetType.captionMedium)
-                    .foregroundStyle(.white)
-            }
-            .buttonStyle(.plain)
-            .frame(width: 36, height: 36)
-            .widgetCircularBackground(tint: isOn ? WidgetTheme.primaryAction : WidgetTheme.panelBase)
-            .accessibilityLabel(TaskRecordingPresentation.controlLabel)
-            .accessibilityValue(TaskRecordingPresentation.controlAccessibilityValue(isOn: isOn))
-            .accessibilityAddTraits(isOn ? [.isButton, .isSelected] : .isButton)
+    private var composerPrivacyMark: some View {
+        if viewModel.taskRecordingPolicy.suppressesTraces {
+            // TODO: Replace this with the dedicated private-mode mark when that asset is available.
+            SonnyBrandMark(size: WidgetTheme.composerMarkSize)
+        } else {
+            SonnyBrandMark(size: WidgetTheme.composerMarkSize)
         }
+    }
+
+    private func toggleTaskRecordingPolicy() {
+        viewModel.taskRecordingPolicy = viewModel.taskRecordingPolicy.suppressesTraces
+            ? .record
+            : .suppressTraces
+    }
+
+    private var voiceControl: some View {
+        HStack(spacing: 8) {
+            if viewModel.isRecordingVoice, viewModel.voiceRecordingStartedAt != nil {
+                voiceRecordingCountdownLabel
+            }
+
+            micButton
+        }
+        .padding(.leading, viewModel.isRecordingVoice ? 10 : 2)
+        .padding(.trailing, 2)
+        .frame(height: WidgetTheme.composerHeight)
+        .widgetGlassPill()
+        .animation(nil, value: viewModel.isRecordingVoice)
     }
 
     /// How long Sonny will keep listening — the founders' ask on 2026-09-09: "so user knows how
@@ -1015,7 +933,7 @@ struct FloatingWidgetView: View {
                     .foregroundStyle(
                         VoiceRecordingCountdown.isWarning(remaining: remaining)
                             ? WidgetTheme.attention
-                            : WidgetTheme.textFaint
+                            : WidgetTheme.textMuted
                     )
                     // "9:59" is the widest this ever renders; reserved so the field beside it never
                     // shifts width as the digits themselves change width.
@@ -1059,11 +977,11 @@ struct FloatingWidgetView: View {
         } label: {
             Image(systemName: viewModel.voiceButtonIcon)
                 .font(WidgetType.captionMedium)
-                .foregroundStyle(.white)
+                .foregroundStyle(WidgetTheme.textStrong)
         }
         .buttonStyle(.plain)
-        .frame(width: 36, height: 36)
-        .widgetCircularBackground(tint: WidgetTheme.secondaryCircular)
+        .frame(width: WidgetTheme.satelliteControlSize, height: WidgetTheme.satelliteControlSize)
+        .widgetGlassCircle()
         .accessibilityLabel("Voice input")
         // **Transient reasons only** — the rule and its whole predicate live on
         // `AgentViewModel.isVoiceControlDisabled`. A disabled SwiftUI button never runs its action,
@@ -1074,20 +992,6 @@ struct FloatingWidgetView: View {
         // `startVoiceRecording`, which explains it; a control may only be disabled for something
         // that clears on its own.
         .disabled(viewModel.isVoiceControlDisabled)
-        // Diagnosed via a debug print: hover worked exactly once, right after a fresh launch, and
-        // never again — including after the panel had since lost key status (e.g. the user clicked
-        // into another app). SwiftUI's `.onHover` is backed by an `NSTrackingArea` that defaults to
-        // `.activeInKeyWindow` — it only tracks mouse enter/exit while this panel is *actually* the
-        // system's key window, which stops being true the instant focus moves anywhere else. This
-        // widget needs hover to work regardless of key status (it's visible and interactive even
-        // when some other app is active), so it needs a real `.activeAlways` tracking area instead
-        // of SwiftUI's default — not achievable through `.onHover` itself.
-        .overlay(
-            AlwaysActiveHoverTracker(
-                onEnter: { micHintPointerEnteredMic() },
-                onExit: { micHint.dismiss() }
-            )
-        )
     }
 
     /// The pointer arrived on the mic. Shown as a real layout row (see `micHoverHintRow`) rather
@@ -1124,13 +1028,13 @@ struct FloatingWidgetView: View {
     /// drop shadow did; this participates in `fixedSize()`'s measurement like everything else, so
     /// the window just grows to fit it correctly. Deliberately matches `composerPill`'s own shape
     /// (`Capsule` via `widgetGlassPill()`, not `widgetGlassPanel()`'s `RoundedRectangle`) and exact
-    /// 472×40 frame, not just a text-sized bubble — an unconstrained width/height and a different
+    /// panel-width frame, not just a text-sized bubble — an unconstrained width/height and a different
     /// corner shape than the pill directly beneath it read as a stray, misaligned fragment rather
     /// than a hint that visibly belongs to the row it's describing.
     ///
     /// **The frame is unchanged by SONNY-179, and that was measured rather than assumed.** Both
     /// sentences this row can carry were laid out at the row's real font (SF Pro Medium 10, via
-    /// `WidgetType.captionSmall`) against the 444pt the 472pt frame leaves after its 14pt padding:
+    /// `WidgetType.captionSmall`) against the width left after the pill's horizontal padding:
     /// both the shortcut reminder and the configuration message fit with room, so each stays a
     /// single line with room to spare and nothing about the window controller's fitted-size
     /// positioning has to be revisited. (SONNY-177 measured the same two at 285.4pt and 254.1pt;
@@ -1140,9 +1044,20 @@ struct FloatingWidgetView: View {
             .font(WidgetType.captionSmall)
             .foregroundStyle(WidgetTheme.textFull)
             .padding(.horizontal, 14)
-            .frame(width: WidgetTheme.panelWidth, height: 40, alignment: .leading)
+            .frame(width: WidgetTheme.panelWidth, height: WidgetTheme.composerHeight, alignment: .leading)
             .widgetGlassPill()
             .transition(.opacity)
+    }
+}
+
+private struct CompactWidgetButtonStyle: ButtonStyle {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.94 : 1)
+            .opacity(configuration.isPressed ? 0.82 : 1)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: configuration.isPressed)
     }
 }
 
@@ -1459,7 +1374,7 @@ private struct WidgetPermissionPanel: View {
             // **Inside a session this row replaces the step rows rather than joining them**
             // (SONNY-255). The plan a screen-control run carries is the outer one, whose step is
             // "control this app" — so the identity line says what those rows say and adds the step
-            // count and the way out. Two rows saying the same thing on a 472pt panel is how a panel
+            // count and the way out. Two rows saying the same thing on this panel is how a panel
             // stops being read.
             //
             // **What is deliberately not carried across from the HUD is its action line.** At the
