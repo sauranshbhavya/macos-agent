@@ -1,0 +1,1594 @@
+> Archived delivery workflow. It records the former Plane, branch-record, mutation-plan, and review procedure; it is not current guidance. See [WORKFLOW.md](../../WORKFLOW.md).
+
+# Delivery Workflow (v2)
+
+The repeatable workflow for all Sonny product and engineering changes, effective 2026-08-02.
+It replaces the v1 two-agent (Codex/Claude) checkpoint rotation recorded in
+`docs/sonny-v1-implementation-changelog.md`; that document remains the durable record of
+architectural decisions and pitfalls, and every rule in it that isn't about agent rotation
+(wireframe fidelity, fix-in-branch, stop-and-report, store conventions) still applies.
+
+```text
+discussion -> agreed plan -> Plane tickets -> claim ticket -> worktree -> implement
+-> verify -> commit -> close ticket -> PR -> fresh-session review -> manual test -> merge
+```
+
+The repository is
+[sauranshbhavya/macos-agent](https://github.com/sauranshbhavya/macos-agent)
+(`gh api repos/{owner}/{repo} --jq .full_name` → `sauranshbhavya/macos-agent`, and
+`git remote get-url origin` → `https://github.com/sauranshbhavya/macos-agent.git`, both read
+2026-09-13). That is its third namespace. It began under a personal account, `sauranshbhardwaj`, and
+moved to the founders' organisation `exploringthroughbuilding` on 2026-08-26, after PR #123. It
+moved again, to `sauranshbhavya`, some time between PR #190's merge at 2026-09-02 19:14:21 and PR
+#191's at 2026-09-03 14:03:57 (−04:00). #190's merge subject is the last to read
+`from exploringthroughbuilding/`, and #191's is the first to read `from sauranshbhavya/`:
+
+```
+git log --first-parent --merges --format='%h %cI %s' 65a50865 | grep -m1 'from exploringthroughbuilding/'
+  → 15c7bd9f 2026-09-02T19:14:21-04:00 Merge pull request #190 from exploringthroughbuilding/…
+git log --first-parent --merges --format='%h %cI %s' 65a50865 | grep 'from sauranshbhavya/' | tail -1
+  → f1005896 2026-09-03T14:03:57-04:00 Merge pull request #191 from sauranshbhavya/…
+```
+
+GitHub's own `mergedAt` for the two PRs gives the same two instants in UTC. **How the second move
+happened, and when inside that window, is not established**. `gh api users/exploringthroughbuilding`
+answers 404 (read 2026-09-13). The repository's events API holds only the latest 300 events: read at
+2026-09-13T23:04:40Z, `gh api --paginate 'repos/{owner}/{repo}/events?per_page=100'` reached back to
+2026-09-07T20:23:40Z, and read by PR #243's review at 2026-09-14T00:36:04Z it reached back only to
+2026-09-08T21:24:05Z (each time is the modification time of the file that reading was saved to).
+That window moves forward as events arrive, so a later reading starts later still and can never
+reach 2026-09-02 or 2026-09-03. Nothing reachable from here says whether the repository was
+transferred or its organisation renamed. A merge subject records the namespace that was current when
+the PR merged, not the one current now, so all 116 on `main` today still read
+`from sauranshbhardwaj/...`
+(`git log --first-parent --merges --format='%s' main | grep -c 'from sauranshbhardwaj/'` → 116 at
+`66c0f84`) — §8's log excerpt among them. At `65a50865` the three namespaces split the 235 merge
+subjects 116, 67 and 52
+(`git log --first-parent --merges --format=%s 65a50865 | cut -d' ' -f6 | cut -d/ -f1 | sort | uniq -c`
+→ `67 exploringthroughbuilding`, `116 sauranshbhardwaj`, `52 sauranshbhavya`). None of those is
+stale, and none is anyone's to rewrite.
+
+The Plane project is [Sonny](https://app.plane.so/sonny/projects/c61e4035-d3a0-4089-a25a-1fb4f0aa813e/issues/).
+API behavior is documented in the [Plane API reference](https://developers.plane.so/api-reference/introduction).
+All Plane access goes through `scripts/plane` (run `scripts/plane help` for commands).
+
+One-time setup, both required before this workflow's first use:
+
+1. `scripts/plane auth` — stores the API key in macOS Keychain. Keys never live in the
+   repo, in Plane content, or in ticket text.
+2. In the Plane project UI, add a custom **Blocked** state — Plane's defaults
+   (Backlog/Todo/In Progress/Done/Cancelled) don't include one, and step 6's
+   `scripts/plane state SONNY-12 blocked` fails until it exists. Confirm with
+   `scripts/plane states`.
+
+## Who does what
+
+Two humans (the founders) and one kind of agent (Claude Code CLI sessions). There is no
+implementer/reviewer agent rotation anymore. Instead:
+
+- **Implementing session** — one CLI session owns one ticket start to finish.
+- **Reviewing session** — a *fresh* session, with no implementer context, reviews the
+  branch diff against the tickets before merge (see "Review" below).
+- **Coordinating session** (*the coordinator*, in steps 4 and 5) — adjudicates a review's
+  findings, writes the kickoff and fix prompts that launch other sessions, and records the
+  decisions those carry; it never implements or reviews a branch itself.
+- **The user** — whichever founder is running the work; the two are interchangeable in
+  every rule below, and no rule here distinguishes them. Approves plans, approves ticket
+  content (batched per branch at planning time; sessions create their own discovery
+  tickets per step 5, subject to user triage), assigns every ticket, does all manual and
+  visual verification in the real app (no agent ever self-verifies GUI behavior — this
+  rule survives from v1 verbatim), and performs every merge — either founder, depending on
+  who is working, with no rule against merging a branch you ran yourself. Agents never
+  merge.
+
+## 1. Discussion and plan
+
+Start with the problem, the user outcome, constraints, and tradeoffs. Read the relevant
+changelog entries and `docs/sonny-founder-design-decisions.md` before proposing anything in
+an area you haven't touched this session. Do not begin implementation while important
+product behavior is unresolved. The user approves the plan before tickets are created.
+
+## 2. Plane tickets
+
+One ticket = one independently verifiable outcome. The ticket is the implementation
+contract and the context handoff to a session that has never seen this conversation —
+write it so that session needs nothing else. Every ticket carries:
+
+- **Branch** — the first line of the description: the exact git branch this ticket's work
+  lands on. Five prefixes are in use — `feature/`, `fix/`, `docs/`, `chore/` and `refactor/`.
+  **A sixth exists on the mainline and is deliberately not one of the five: `hermes/`**, which is
+  PR #2 of 2026-07-03, the oldest merge there is, used once and not again in the 161 merges since.
+  It is history, not a convention, and it is named here so that five-against-161 does not read as a
+  count that lost one. This named `feature/...` alone until SONNY-290 counted the merged population
+  on 2026-08-26, and said four until SONNY-362 recounted it on 2026-08-30 (the counts, the
+  exclusion and the commands that produced them are in the changelog's second line). Sequential
+  tickets
+  may share a branch; tickets running in parallel each get their own (git forbids one branch
+  checked out in two worktrees).
+- **Context and goal** — who experiences what, and the user-visible outcome.
+- **Scoped requirements** — concrete enough to implement without re-deriving decisions.
+- **Expected touched areas** — files/modules this work is expected to change.
+- **Never-touch list** — files/areas explicitly out of bounds for this ticket. Negative
+  scope beats positive scope: sessions drift into adjacent files unless told not to.
+- **Non-goals** — what this ticket deliberately does not do.
+- **Acceptance criteria** — checkable, not vibes.
+- **Required verification** — the exact commands (see step 5) plus any ticket-specific tests.
+- **Manual-test items** — what the user must check in the real app. Before the ticket
+  closes, these are added to the branch's own file, `docs/manual-tests/<branch-name>.md`, as
+  unchecked rows naming the ticket; a PR note or ticket comment may summarize them, but that
+  directory and the archive behind it are the only places the founders test from, and an item
+  recorded anywhere else is an item they never see. The founders read both in one command,
+  `scripts/changelog-order manual-tests | less`. **A branch that owes no rows writes the file
+  anyway**, with one line saying so and why each ticket owes none: a missing file and a
+  deliberate "none" are the same silence otherwise. This bullet named
+  `docs/sonny-manual-test-checklist.md` until 2026-09-16 (SONNY-500), which is now the archive
+  and takes no new rows; before that it ended "these aggregate into the PR's manual checklist",
+  and SONNY-281's session followed that sentence exactly — its thirteen items sat on PR #118,
+  seven in the body and six more in its review rounds' dated notes, until SONNY-292
+  recovered them (2026-08-26).
+- **Decisions carried from discussion** — anything that would otherwise live only in chat.
+
+Tickets are created with `scripts/plane create "<title>" <html-file> [priority]` after the
+user approves their content — approval is batched: one round trip approving a branch's
+whole ticket set during planning, not one ask per ticket. (Discovery tickets, step 5, are
+the deliberate exception: created without prior approval, triaged by the user after.)
+Created tickets are then attached to their deliverable group's **module** with
+`scripts/plane module-add "<module>" SONNY-<n>` (one module per roadmap row / deliverable
+group, named after the row — e.g. "A — manual-pass follow-ups"; `module-create` once per
+group). The module is the board-level grouping; the ticket's Branch: line names the actual
+git branch. No credentials, secret values, or personal data in Plane — ticket content is
+context for future sessions, not a secrets store.
+
+**A ticket's number is never predicted — read it back from the `sequence_id` the create
+call returns.** Plane assigns numbers at creation and reserves nothing in advance, so a
+`module-add`, a cross-reference, or a `state` call written against a guessed identifier
+silently targets whichever ticket really holds that number, and the API accepts every one
+of them. (Trigger: a hardcoded `SONNY-50` in a `module-add` issued before its create had
+returned, and a state change on a guessed number that demoted an already-Done ticket.)
+
+**Future branches get one planning ticket each, never pre-written implementation
+tickets.** A branch whose planning phase hasn't run cannot have an honest implementation
+contract yet, and a stub contract invites a session to implement from vibes. The planning
+ticket's deliverable is real today: run steps 1–2 for that branch, record the decisions,
+spawn the implementation tickets, attach them to the module.
+
+## 3. Claiming and parallelism
+
+Moving a ticket to **In Progress** (`scripts/plane state SONNY-12 started`) is the claim.
+One ticket, one session, one owner — check the state before starting work, and never pick
+up a ticket another session has claimed. **The user assigns each session its specific
+ticket ID at launch; sessions never self-select "the next ready ticket" from the board** —
+the state PATCH has no compare-and-swap, so self-selection is a claim race waiting to
+happen. The user may pre-assign a *sequence* at launch ("SONNY-14, then SONNY-15"): a
+session continuing to the next ticket in its own assigned sequence is still assignment,
+not self-selection. If a claimed ticket's session is dead (crashed, closed, out of
+context) without reaching step 6, the user moves the ticket back to Todo before anyone
+re-claims it. **Only the user ever determines a session is dead** — a session never infers
+another's death from elapsed time or a quiet branch, and never resets or urges a reset on
+that basis; a stuck In Progress ticket with no living owner is the user's to reset, no one
+else's.
+
+Parallel sessions are allowed under these rules, each of which exists because breaking it
+has documented consequences:
+
+- **Only disjoint tickets run in parallel.** Two tickets may run concurrently only if
+  their expected-touched-areas don't overlap AND neither depends on the other's outcome —
+  including shared *assumptions* (a store contract, a shared type), not just shared files.
+  Decided at ticket-creation time, recorded on the tickets, never improvised mid-run.
+  **No recorded disjointness note means serial** — absence of the note is never permission
+  to parallelize; to parallelize an unmarked pair, the analysis gets done and recorded on
+  both tickets first.
+- **Each parallel session gets its own git worktree** (`claude --worktree <name>`, or
+  `git worktree add`) — one per *session*, not one per ticket: a session pre-assigned a
+  sequence keeps the same worktree across every ticket in it, switching branches inside it
+  as each ticket's branch begins. Never two sessions in one checkout. A worktree is a fresh
+  checkout: budget a cold `swift build`, and don't share `.build/` between worktrees.
+- **Cap: about five concurrent heavy threads, reviewers counted.** The constraint this
+  expresses is the machine's, not a human's. A heavy thread is anything holding a build — an
+  implementing lane, and equally a reviewing session running the full suite or
+  `scripts/warnings`, and a founder's `scripts/mutate-all` while it runs. Reviewers are not free, and a wave that counts
+  only implementers is already over the cap. Past roughly five, every lane slows every other
+  one: during the 2026-08-27/28 wave the flagged suite went from about 40s to about 200s and
+  `scripts/warnings` from about 120s to about 460s. **Those four figures are that wave's own
+  observations, carried here from the coordinator's record of it and not re-measured for this
+  line** — they set the cap's order of magnitude, they are not benchmarks, and a session that
+  needs one as evidence measures it again (`CLAUDE.md`, Claims and evidence). **This read
+  "Cap: 2–3 concurrent sessions", justified by review bandwidth being the bottleneck rather
+  than execution, and that premise moved on 2026-08-22**: the founders stopped reading every
+  diff and fresh review sessions took that over (step 7), so the human ceiling the old number
+  expressed stopped being the binding one. The old reasoning is superseded rather than wrong
+  — more parallel output than a *reviewer* can genuinely absorb still produces rubber-stamped
+  merges, and what holds that now is step 7's review-depth rules rather than a lower session
+  count. (Corrected 2026-08-29, SONNY-340.)
+- **Only one session's build runs as the live app at a time.** Worktrees isolate code,
+  not the machine: every `Sonny.app` instance shares the same Keychain entries, local
+  encrypted stores, notification identity, and menu bar. Manual testing is serialized
+  through the user anyway; never launch the packaged app — or a bare `swift run MacAgent`,
+  which hits the same shared local stores despite lacking bundle identity — from a second
+  worktree while any instance is running.
+- **Merge one branch at a time, and rebase once — at merge time, never after each merge.**
+  **Every branch is cut from `origin/main` and merges as its own review closes** — there is no
+  wave-wide order to wait for — and `## Pull requests in flight`, after step 7, is that rule in
+  full, including the one exception, a short stack of at most three for a real code dependency.
+  What follows is how a branch waits and lands. (This bullet said *"when more than one PR is in
+  flight ... they are one stack"* from 2026-09-11 until 2026-09-16, when SONNY-500 removed the
+  one thing that coupled parallel branches: their two shared record files.)
+  Never batch-merge parallel branches: they land one at a time, in an order the user sets,
+  because two branches merged together is how a conflict resolution nobody read reaches
+  `main`. **What a lane does while it waits is finish on its base, push, and hold.** It does
+  not hop onto each new `main` as the wave merges around it. When it is genuinely next —
+  which the user says, either by naming it or because every branch ahead of it has landed —
+  it does exactly one hop, re-verifies once on the merged base under step 5's rules, and
+  merges. **Zero hops is better than one** and is the right answer when the merge is clean
+  and step 5's tree-identity proof covers every path the branch's figures depend on; the hop
+  is for when a conflict, or a dependency the merged range moved, makes the branch's
+  verification untrue of the tree it is about to land on. **This bullet said the opposite
+  until 2026-08-29** — "After each merge, other in-flight worktrees rebase onto the new
+  `main` before continuing" — and one lane followed it for five hops, paying a full
+  re-verification at each, which is hours of work nobody read. Each hop also re-stamps every
+  figure the changelog entry carries, so the cost compounds rather than adding up. **The cost of
+  holding instead, stated rather than left to
+  be found:** a branch that sits through a long wave meets a bigger conflict at its one hop
+  than it would have met at any single earlier one. That is one conflict resolved once
+  against N resolved N times, and it is the trade the instruction makes. (Founder
+  instruction 2026-08-28; written here 2026-08-29 by SONNY-351.) The hop rewrites the ticket
+  branch, so the follow-up `git push --force-with-lease` **on the session's own ticket
+  branch** is covered by the same standing authorization as regular pushes — always
+  `--force-with-lease`, never bare `--force`, and force-pushing any other branch (or
+  anything on `main`) is never authorized.
+- **Worktree lifecycle differs by role.** An implementing session's worktree lives for its
+  whole assigned ticket sequence and is removed once the last of those branches merges
+  (`git worktree remove`); audit occasionally with `git worktree list`. A reviewing
+  session's worktree is created *detached* at the SHA under review
+  (`git worktree add --detach <path> <sha>`), so the review reads a tree that cannot move
+  under it, and the user removes it after that terminal closes —
+  **a reviewer never removes its own worktree.** (Trigger: the SONNY-44 round-1 reviewer
+  removed the directory it was running in, and the session's stop hook then fired from a
+  path that no longer existed.)
+
+**A long lane is a coordination failure before it is a session's.** The five levers that keep
+lanes short are all the coordinator's, and they sit in three different steps because that is
+where each one bites: the concurrency cap and the rebase-timing rule above, step 5's mutation
+batteries moving off the branch entirely (2026-09-10 — see the Weekly battery section below), and
+step 7's right-sizing and its limit on what one round
+carries. Step 5's ninety-minute stop is the one a session owns, and it is a backstop for when
+the five were got wrong rather than a substitute for them. (Founder
+instruction 2026-08-28, at the tail of the 2026-08-27/28 wave, after three lanes ran one to
+five hours each: *"terminals running for unnecessarily long times is a clear dead route for
+the speedy execution and hence we cannot afford to do such mistakes."* Three of the five were
+written into this file by SONNY-340 on 2026-08-29 and the remaining two by SONNY-351 the same
+day. This paragraph is the frame both of those were missing: without it the five read as
+unrelated economies rather than as one instruction, and a session reading only the
+ninety-minute stop concludes that lane length is its own discipline problem, which is the
+opposite of what was said.)
+
+## 4. Pull the ticket
+
+Before changing code: `scripts/plane pull SONNY-12`, read the description *and all
+comments* — a previously blocked ticket's findings live there. Reconcile any difference
+between the ticket and later conversation before implementing. Do not silently expand
+scope; if the ticket is wrong or stale, say so and get it corrected first.
+
+**The prompt that launched the session is context; the description is the contract.** Where
+a kickoff or fix prompt conflicts with the pulled description, the description wins — a
+prompt is written quickly, from a coordinator's memory of the plan, and it is not the
+artifact the user approved. Say which way the conflict was resolved rather than resolving
+it silently. The one case that is not a judgment call is a contract conflicting with
+*itself*: a description whose requirements cannot all hold is a stop-and-report (step 5),
+not an invitation to pick the likelier reading. (Trigger: SONNY-37's kickoff framed the
+ticket as relaxing prompting when its description contracted the opposite, escalation-only
+behavior; the session built the description's version and was right to.)
+
+## 5. Implement and verify
+
+Implement against the pulled ticket and repository conventions (`CLAUDE.md`, the
+changelog's per-branch decisions, `.claude/rules/`). The v1 rigor bar is unchanged:
+
+- Build: `swift build`. Tests: the exact flagged command in `CLAUDE.md` — plain
+  `swift test` fails at compile with "no such module 'Testing'", and neither half of the
+  flag set is optional. CLAUDE.md's Commands section says which flag fixes which failure.
+- Warnings: `scripts/warnings`, and never a count read off `swift build` or `swift test`.
+  Those build incrementally against the shared `.build/`, an unchanged file is not
+  recompiled, and a file that is not recompiled emits no warnings — so their output is
+  silent about everything the ticket did not touch, and "zero compiler warnings" taken
+  from it is a claim about nothing that reads exactly like a true one. It was written as
+  evidence repeatedly on 2026-08-17 while `main` carried five. The closing comment carries
+  the script's count and the SHA it stamped, the same way it carries the test count.
+- **Which half you verify is the half you touched.** The three commands above are the app
+  half (`Sources/`, `Tests/`). A change under `server/` is verified by the server's own
+  commands — `npm run build`, `npm test`, `npm run typecheck` (CLAUDE.md's Commands section,
+  "The server half"; `npm run check:secrets` is listed there too, and is owed by every branch —
+  the bullet after next) — and `swift build` / `scripts/warnings`
+  say nothing about it: `scripts/warnings` measures a Swift compile a `server/` diff cannot
+  alter, so it would report zero over a server change while never compiling what changed. A
+  change touching both halves runs both halves' commands; neither substitutes for the other,
+  and green on the wrong half is not evidence (SONNY-193).
+- **Attributions: `scripts/no-attribution`, on the three surfaces no hook can watch.** The two
+  hooks are the refusal and this is the audit: they stop a new attribution arriving, and neither
+  can see what is already in the history, already in a tracked file, or already in a pull request
+  body on GitHub — the last being the surface nothing in the repository can reach at all.
+  `history` and `tree` are local and cost a second or two, `prs` needs `gh`, and `all` runs the
+  three. Exit 0 is a clean surface, 2 is a finding, and **1 means a surface could not be measured
+  and is never reported as clean**. The closing comment carries the exit the same way it carries
+  the suite's count. **Naming it here is the half that keeps it alive** — a hook fires inside one
+  session's checkout and leaves nothing a reviewer or a zero-context reader can quote, so a
+  session whose hook never ran looks exactly like a session whose hook passed, which is the same
+  reason step 7 keeps naming `scripts/warnings`, and this file's own record of SONNY-64 is what a
+  check nobody is told to run turns into. (PR #195's F9: the tool shipped with SONNY-406 and this
+  file named it nowhere. Measured at `d14eba65`, before this bullet existed:
+  `grep -c 'scripts/no-attribution' WORKFLOW.md` → **0**, against **11** for the same command over
+  `scripts/warnings` — that 11 is file-wide, of which **6** fall inside this step, and which of the
+  two a figure is has to be said before it is compared — and the 11 is also the control saying the
+  search can find a tool this file does name. Both are readings at a commit rather than claims
+  about the file: this bullet names both tools twice each, so the same two commands answer **2**
+  and **13** here. Routed into SONNY-372's branch 2026-09-05; recorded on SONNY-410.)
+- **Credentials: `server/scripts/check-secrets.sh` — `npm run check:secrets` from `server/` — owed by
+  every branch, whichever half it touches.** Its reach is the whole repository and not only
+  `server/`, because it scans every tracked file for a credential's shape (`git ls-files` from the
+  repository root), so a string written in `scripts/`, `docs/`, `Sources/` or `Tests/` is its finding
+  exactly as one under `server/` is. It is a shell script: seconds, no database, no `npm install`.
+  Exit 0 is clean; 1 is a finding or a stale baseline entry; 2 is a usage error or a missing
+  baseline file. The closing comment carries the exit the same way it carries `scripts/no-attribution`'s.
+  **It sat only in the server list above until SONNY-477, and that placement is how `main` went red
+  unseen**: PR #239 touched nothing under `server/`, so its lane, its fresh review, both scoped
+  passes and the coordinator's verification all correctly skipped the server half — and with it the
+  one server command that reads `scripts/`, where that branch's selftest had written three database
+  URLs carrying a user and a password. The next server lane found it (founders' decision 2026-09-13,
+  option A, recorded on SONNY-477).
+- **Evidence, not assertion.** A ticket is done when its acceptance criteria are
+  demonstrated by test output and exit codes, not when the work "looks done."
+  `CLAUDE.md`'s claims-and-evidence conventions bind every claim made under this workflow —
+  a reviewer's and a coordinator's as much as an implementer's.
+
+**Verification economy: keep every check, cut the repeated work around it.** Nothing below
+removes a check — the flagged suite, `scripts/warnings`, the mutation battery and the
+fresh-session review all stay: **plans stay, runs move to the founders' weekly battery**
+(`## Weekly battery`, below — decided 2026-09-10), and the battery is named in particular
+because it is where most of the 2026-08-27/28 wave's real findings came from. What these rules
+remove is work a
+session has already proved unnecessary. (Founder instruction 2026-08-28, widened later the
+same day and again on 2026-08-29. Written here by SONNY-340 on 2026-08-29; until then it
+lived only in the coordinator's kickoff prompts, which is a place no session can look
+something up.)
+
+- **Carry what provably did not move; re-measure everything else.** A figure may be carried
+  across a rebase or a docs-only commit only with a tree-identity proof beside it covering
+  **every path the figure depends on** — a diff restricted to those paths printing nothing,
+  or the equivalent hash check on each of them. **The scope of the proof is the rule; a
+  particular command is only an instance of it**, and the instance is the part that goes
+  wrong. `git rev-parse <old>:Sources <new>:Sources` printing one hash twice proves
+  `Sources/` and nothing else, so it is sufficient only for a figure measured over
+  `Sources/` alone. Name the paths before writing the command:
+  - a **flagged-suite test count** depends on `Tests/` and `Package.swift` as well as
+    `Sources/` — a test the merged range added changes the count without touching a source
+    file, and a target the manifest gained changes what runs at all;
+  - a **`scripts/warnings` count** depends on `Sources/` **and** `Tests/`, because the
+    script builds with `--build-tests` (`git grep -n 'swift build --build-tests' 2f36250 --
+    scripts/warnings` → the invocation at `:545` and the line its own report prints at
+    `:604`) and the debug build covers the test targets — which is the reason `--help` gives
+    for the tool being debug-only;
+  - a **mutation verdict** depends on more than a path list, which is the next bullet.
+
+  A session that proves `Sources/` unchanged and carries a suite count across a rebase has
+  done exactly what this rule forbids while believing it complied: the proof was real, and it
+  was about the wrong tree. With a proof of the right scope, carry the figure rather than
+  re-running; without one, re-measure exactly as before. This is not an exception to
+  `CLAUDE.md`'s rule that a number taken before a rebase is re-measured and never
+  re-stamped: that rule's own distinguishing question is "whether the tree moved, not
+  whether the SHA did", and the proof is what answers it. So a carried figure carries the
+  proof, not merely the new SHA. (Several sessions in the 2026-08-27/28 wave held the proof
+  and re-ran anyway. That re-run is the waste this removes — the rule is untouched.)
+- **Write the plan; do not run it.** Every branch that adds or changes behaviour writes its
+  mutant plan into `mutation/plans/<branch-name>.txt` (`scripts/mutate --help` has the format;
+  a slash in the branch name is a folder, so `fix/some-name`'s plan is
+  `mutation/plans/fix/some-name.txt`, and `scripts/mutate-all` reads the folder recursively),
+  commits it, and names that path in its changelog entry's `Mutation plan:` line. A plan's
+  mutants sit in one half — all under `server/`, or none — because `scripts/mutate-all` runs each
+  plan against one suite and refuses a plan mixing the two (`## Weekly battery`, below); a branch
+  whose mutants sit in both writes one plan file per half beside each other and names both.
+  `scripts/mutate
+  --help` still says to keep a plan outside the working tree; that describes the retired
+  per-branch run, where a plan was a scratch file, and does not apply here — a branch's plan is
+  committed, which is exactly what keeps the tree clean for the run. Nothing runs at PR time,
+  after a rebase, or after a fix round — the founders run every plan in the repository together,
+  about weekly (`## Weekly battery`, below). **Mutate the property, not the diff**, still governs
+  what goes into the plan: it covers the behaviour the ticket claims to protect and every test
+  whose name claims a guarantee, not one mutant per changed file. A reviewer who wants a shape
+  measured adds it to the branch's plan file and says so in the review, rather than running it.
+- **Reading an old battery result: a verdict still describes the tree only when four things
+  hold.** Nothing here triggers a re-run any more — no branch runs a battery (`## Weekly
+  battery`, below) — but this is still the test for whether a mutation verdict already sitting in
+  the changelog, or from a plan's last real run, still says anything about the tree in front of
+  you. The range is whatever moved since that verdict was measured — the merged commits after a
+  rebase, a fix round's own edits. Its target file did not move in that range; its killing test's
+  file did not move; the killer does not scan a population the range changed; and the killer does
+  not drive a helper or fixture the range changed. If all four cannot be established cheaply, the
+  old verdict says nothing about the tree in front of you, and the mutant waits for the next
+  weekly battery to be re-measured.
+  **The fail-safe wording is the rule rather than decoration.** This was first written as file
+  identity alone, and SONNY-137's lane computed both versions against a real merged range the
+  same day: the sole killer of three mutants drove `HermeticBackendClient.swift`, which had
+  changed, and awaited `restore()` through `SonnyBackendClient.swift`, which had also changed,
+  while a fourth killer scanned a `Sources/MacAgentCore/` population that had grown from 130
+  to 137 files. The file-level intersection said carry all seventeen; four verdicts in fact
+  depended on moved code. A killing test can read changed code without its own file changing,
+  which is the whole reason the last two conditions exist. The saving is real on docs-only
+  merges and genuinely disjoint areas and evaporates on a merge touching shared fixtures —
+  that is the rule working, not failing. (Trigger: three tail-end lanes of the 2026-08-27/28
+  wave each re-ran a whole 17-to-19-mutant battery, 45 to 90 minutes under load, because
+  *some* file in the merged range had changed.)
+  **The check is per mutant against these four, never per round against the diff — and they
+  govern any movement under a battery's evidence, a fix round as much as a rebase.** "What this
+  round changed" is the substitute a session reaches for, because it is visible from inside the
+  round and these four conditions are not: a round that edits a file *other* mutants target
+  leaves every one of those carrying a verdict measured before that file moved, and nothing in
+  the round's own diff says so. It happened twice on one branch, one round apart, the second
+  time inside the round that recorded the first, and that second one was a fix round rather
+  than a rebase. `CLAUDE.md`'s mutation section carries the measurement that settles it,
+  including the part that makes this hard to catch by instinct: the stale verdict
+  *understated* coverage, so mis-scoping does not fail in the reassuring direction reliably —
+  it produces an unmeasured number, wrong in whichever direction the tree moved. A carry you
+  have argued is worth less than a number you have measured. (SONNY-391.)
+- **Long runs go to a file in the background and are read once**, when the result is next
+  needed — the suite and any other long verification command a branch still runs. (This used to
+  cover mutation batteries too; a branch runs none now, so that half of it moved to `## Weekly
+  battery`, below.) No chains of sleep-and-poll waiters: they cost wall-clock, produce stale
+  notifications, and twice in the 2026-08-27/28 wave reported results that had already been
+  collected.
+- **Run the whole flagged suite once, before you push, and iterate under `--filter`.** The
+  full run is what the closing comment's count and SHA come from; the filtered runs are how
+  you get there.
+- **Start a Postgres container only if the diff touches `server/`.** A Swift-only lane starts
+  none. **A server lane's container name and port are derived, not typed**, and the documented
+  setup now does that for you (SONNY-355 — `CLAUDE.md`'s server half, `server/README.md`, the
+  manual-test checklist, and the banner `server/test/global-setup.ts` prints all carry the same
+  block): `$LANE` is the worktree's own directory name, so the container name cannot
+  collide, and `-p 0:5432` asks Docker for any free host port which `docker port` then reads
+  back into `DATABASE_URL`. Nothing in it is a placeholder, deliberately — a name or a port a
+  reader is expected to fill in is one fixed pair again the first time it is pasted unedited,
+  which is what the setup here used to be (`--name sonny-gw-db`, `-p 55433:5432`, in every
+  place it was written down). **Wait for the database before you run anything against it**:
+  the documented setup does that with `pg_isready` because `docker run -d` returns long
+  before Postgres accepts a connection — 11 to 38 seconds of `initdb` on one Mac, measured
+  twice on 2026-08-29. **The symptom names nothing on its own, which is the reason it is still written
+  down here, and TWO different things produce it**: a suite-wide connection failure — `Test
+  Files 11 failed | 20 passed` with `Connection terminated unexpectedly`, and a fresh
+  `initdb` in a container log inside that run's window. Neither is a defect in the branch
+  under test. If the `initdb` is in *your own* container at the start of your run, the
+  database was still starting and you skipped the readiness wait; if it is in a container you
+  did not start, or appears in yours part-way through a run that had been working, it is
+  another lane's. Observed between two lanes on 2026-08-29, and that run was discarded. The test
+  side is one knob as well (`server/test/support/database.ts`, **SONNY-352**), and
+  `npm run test:db` still falls back to `localhost:55433` when `DATABASE_URL` is unset — right
+  for a lone session, and the collision itself the moment a second lane runs.
+- **Past about ninety minutes, stop at the next point where the tree is green and the work is
+  coherent, and hand the rest back from there** — what is done, what is left, and what the
+  remainder needs. **A lane cannot stop and report with a red tree**, so ninety minutes starts
+  the search for a stopping point rather than ending the work where it stands: a session that
+  downs tools mid-refactor leaves an uncompilable tree and a handover nobody can act on. Two
+  lanes hit that on 2026-08-29, one of them with the tree uncompilable when the ninety minutes
+  passed. A long lane holds a merge slot and slows every other lane on the machine (step 3's
+  cap), so splitting the remainder onto a follow-up ticket is the right answer rather than
+  pushing through. This is a third stop-and-report trigger beside the two below, and unlike
+  those two it is not a failure — a lane can be going perfectly well and still be the wrong
+  shape.
+
+- **Fix-in-branch rule:** any bug found during a branch's own testing is fixed in that
+  branch before merge. Deferring one requires the user's explicit decision and a named
+  landing spot, recorded on a ticket — never a silent backlog.
+- **Stop-and-report triggers:** the same failure across 3 consecutive fix attempts, or a
+  fix that needs files/scope the ticket didn't name — and the elapsed-time trigger in the
+  verification-economy block above. Write findings to the ticket (step 6) instead of
+  guessing onward.
+- **Discovered work: file it, don't do it, don't drop it.** Work discovered outside the
+  ticket's own scope — an adjacent bug, missing coverage, a wart worth fixing — must
+  become a ticket (`scripts/plane create`), not a scope breach and not a chat remark that
+  dies with the session. A discovery ticket carries: what was found, evidence (file:line),
+  why it's outside the current ticket's scope, a suggested landing branch/module (attach
+  it, or leave unattached when unclear), and the originating ticket's identifier. It lands
+  in **Backlog, untriaged** — creation is memory, assignment is authority: the user
+  triages and assigns; a session never implements a ticket it created for itself. A
+  blocker inside the ticket's *own* acceptance criteria is not a discovery ticket — that's
+  the stop-and-report path above. **The boundary is intent, not enumeration**: anything a
+  reasonable reading of the ticket's stated outcome requires is in scope even if the
+  acceptance criteria don't itemize it — an unhandled edge case in the feature being built
+  is your work, not a discovery. When genuinely unsure which side of the line something
+  sits on, ask in the ticket's comments and wait; never file-and-move-on to dodge in-scope
+  work. The closing comment lists every ticket the work spawned.
+- **A never-touch exception is an intent-over-letter question, and the user's to answer.**
+  When the ticket's own stated outcome appears to require a file its never-touch list
+  forbids, stop before editing it: name the file and the exact change, and get explicit
+  user ratification recorded on the ticket, with discharge conditions narrow enough to be
+  checkable ("this file, copy only", "this file, one signature"). Everything else on the
+  list stands. Without that ratification the letter of the list wins — the item goes to the
+  ticket as a stop-and-report if the ticket's outcome genuinely depends on it, or becomes a
+  discovery ticket if it does not. (Precedent: SONNY-37's one-line signature propagation
+  into `UnattendedTrustAdvisory.swift`, and SONNY-31's copy-only amendment to the same file
+  — both asked for, both bounded to one file, both recorded on the ticket.)
+- Commits reference the ticket in the title (for example `fix(core): SONNY-12 ...`), follow
+  the repo's commit format, and land on the ticket's branch. Standing authorization:
+  implementing sessions commit and push to ticket branches without per-commit approval;
+  opening a PR is fine; **merging is a founder's, always** — either of them, depending on
+  who is working, and never a session. (Reviewing sessions are outside this authorization
+  entirely — step 7.)
+- The standing authorization is repo policy; the Claude Code permission system still
+  prompts per session. The user approves git prompts with "always allow" at session start
+  so the authorization is real in practice. A session whose git call is denied by the
+  harness surfaces that and hands the user a paste-ready block — it does not work around
+  the denial.
+
+## 6. Close the ticket
+
+Every ticket gets a closing comment (`scripts/plane comment SONNY-12 <html-file>`) before
+its state changes. This is the context the next session inherits — write it for a reader
+with zero conversation history.
+
+**Completed** (`scripts/plane state SONNY-12 completed`) — the comment records: what was
+done and how it differs from the description (if at all), files actually touched,
+decisions made while implementing, verification evidence (test count, suites, the command
+run), and the manual-test items the user still owes.
+
+**Blocked / left open** — the comment records: why it's open, what was tried and why each
+attempt failed, gotchas discovered (the things that would burn the next session), and what
+the ticket actually needs (a decision, a prerequisite ticket, missing information). Move
+it to the Blocked state so it's visually distinct from untouched work. An unexplained
+open ticket is a workflow violation — the next session should never have to re-derive
+your dead ends.
+
+Comments are append-only history; never rewrite `description_html` to add findings. If
+`scripts/plane comment` reports a 400, verify with `scripts/plane comments SONNY-12` before
+retrying — Plane sometimes returns 400 after creating the comment, and blind retries
+produce duplicates.
+
+## 7. PR, review, merge
+
+When a branch's tickets are done: open a PR. The description is written once, at open
+time, summarizing all tickets (linked by identifier); it is not updated per-ticket. One
+exception: when a post-open fix commit changes user-visible behavior the description
+names, append a short dated note (never rewrite) before the user's merge read. The
+changelog entry for the branch is written before the PR opens, by the session that closes
+the branch's last ticket, **in the branch's own file, `docs/changelog/<branch-name>.md`** — a
+slash in the branch name is a folder, as `mutation/plans/` already does it. Tickets hold
+per-task history, the entry holds the durable architectural decisions and pitfalls; both, not
+either. `docs/changelog/README.md` is the template and the rule about what a branch owes.
+**The one way to read the whole branch-by-branch history in order is
+`scripts/changelog-order read | less`**, which prints every branch's file newest-first, by merge
+commit, and then `docs/sonny-v1-implementation-changelog.md` from its `## Entries` line down —
+that file is the archive now, keeps every word it had, and takes no new entries (2026-09-16,
+SONNY-500). The same shape holds for the manual-test rows: the branch's own
+`docs/manual-tests/<branch-name>.md`, read with `scripts/changelog-order manual-tests | less`. **Its figures are measured at the
+head that merges.** The entry is written before the head stops moving, so when a fix round
+or a rebase moves it, every figure the entry cites is re-measured at the new head or
+dropped — never carried forward on the strength of the old head alone — and once merged,
+`git merge-base --is-ancestor <sha> origin/main` exits 0 for every SHA the entry cites
+(`CLAUDE.md`, Claims and evidence; the mechanism is in §8). The one thing that lets a figure
+cross a moved head is step 5's tree-identity proof: `git rev-parse <old>:<path> <new>:<path>`
+printing one hash twice makes the figure a measurement *of* the new head rather than a stale
+one re-stamped at it, and the entry carries the proof beside the figure. No proof, no carry.
+
+**A diff that touches a branch record runs `scripts/changelog-order`, and its exit code goes in
+the closing comment beside the suite's.** It is a second or two, it needs no build, and it is
+owed by exactly the diffs that can break it — every branch writing an entry or a manual-test
+file, and nothing else. What it checks:
+
+- **Every entry names a branch that merged**, and at most one may not — the branch under review,
+  whose entry this step has written before its PR opens. A second unmerged entry is a finding.
+  The allowance is a count and not a reading of `HEAD`, so a reviewer's detached worktree and a
+  lane get the same answer.
+- **A name that matches no merge and no ref at all** — a typo, or a branch renamed after its file
+  was written — is a finding at any count, in either directory.
+- **A branch that merged and wrote no file** is a finding, per directory. This is the arm the
+  one-file-per-branch move made necessary and possible: a missing record used to be invisible,
+  and PR #124's missing entry was found only by a coordinator sweeping both branches by hand
+  (step 7's own record of it, below). A branch that owes nothing writes one line saying so; a
+  missing file and a deliberate "none" are otherwise the same silence. Only branches merged in
+  the one-file-per-branch era are checked — the roughly thirty that merged before it and wrote
+  nothing are the archive's. **And only the branches whose work the checkout contains**
+  (SONNY-516), read on the head each branch merged from rather than on its merge commit — so a
+  short stack's upper branch after the branch beneath merges, and a lane's own worktree after its
+  own merge, are still asked, though neither holds the merge commit (PR #269's review, F1). The
+  merge list is the mainline's and the files are the working tree's, so on a branch whose base
+  predates a merge, that merge's files are rightly absent. The tool without SONNY-516's change
+  reports each one missing, in words that read as the merged branch having broken this rule, and
+  three sessions took that as fact inside one hour — one of them into a changelog entry that would
+  have merged. With it, the skipped branches are named on every run instead, and a finding that
+  does fire says whether the merge commit itself lacked the file or this checkout removed it. The
+  mirror — a checkout holding pull-request merges the mainline it read lacks, a stale
+  `origin/main` beneath a newer branch — is refused with exit 1 and `git fetch origin` as the
+  remedy, never measured.
+- **An entry's heading and its filename are the same branch**, which is the shape a copied entry
+  takes and the one thing nothing else could see.
+- **Exactly one `Status:` line per entry, and one `### Branch:` heading per file.** That arm is
+  not about ordering at all and is the reason the tool exists rather than a rule in prose: at
+  `711c92f` the archive held a heading with no entry beneath it and a second heading glued to the
+  end of the previous entry's last line by a lost newline, so no line-anchored search could see
+  it — and the entry's own self-verifying `awk` command, pointed at that invisible heading, had
+  been answering a number nobody read for two merges (SONNY-329).
+- **The archive's own two-era ordering**, unchanged. That file takes no new entries, so this can
+  no longer go red on honest work; what it still catches is a session appending an entry to it
+  out of habit. **A misplaced entry raises no rebase conflict, because nobody else is editing
+  that spot, so a clean merge is the tell** — five have been recorded that way.
+
+`scripts/changelog-order selftest` re-proves every one of those arms, and prints on every run
+which mainline it read and where it resolved the one-file-per-branch era to begin — a boundary
+that stopped resolving would switch the completeness arm off without any output changing.
+
+**It also runs unasked, from the `.claude/` stop hook** (SONNY-361). Whenever the branch has
+touched any record that tool checks — `docs/sonny-v1-implementation-changelog.md`,
+`docs/changelog/`, `docs/manual-tests/`, uncommitted or committed since the merge-base with
+`main` — the hook runs it before it considers the Swift suite, and a finding blocks the turn. The
+committed half of that reading is the half that matters: step 7 has the entry written *and
+committed* before the PR opens, so on the last turn of the branch whose entry is at issue the tree
+is clean, and a dirty-file-only trigger would fire never. The hook does not fire on a branch that
+legitimately wrote its own entry — the check allows one entry to name an unmerged branch — it skips
+during a live mutation battery and says so, and when it cannot run at all (the script missing, or
+the tool refusing to measure) it says that too rather than passing quietly.
+`.claude/hooks/verify-tests-before-stop-selftest.sh` re-proves every one of those arms.
+
+**Naming it here is still the load-bearing half, and the hook does not retire it.** `CLAUDE.md`'s
+Non-obvious gotchas record what happened to SONNY-64's guard: a check people learn to skip has
+stopped existing. What keeps `scripts/warnings` and `scripts/mutate` alive is that step 5 names
+them as owed verification, not that they are good tools. A hook fires inside one session's
+checkout and leaves nothing behind that a reviewer or a zero-context reader can check — it cannot
+be quoted, and a session whose hook never fired looks exactly like a session whose hook passed. So
+this is owed by a named population too, and a session that writes an entry and does not report its
+exit code has not finished step 7.
+
+**Every branch writes the file; what the branch recorded decides what is in it.** An entry is
+owed whenever a branch records anything of the kind the sentence above names — a durable
+architectural decision, a pitfall discovered, or a correction to the record; the first two are
+that sentence's own words, the third is what #122's and #123's entries are — and a bookkeeping
+branch that records none of that writes a file saying so, in one line, rather than writing
+nothing. **That last half changed on 2026-09-16** (SONNY-500): a branch used to write no entry at
+all, and the difference between "recorded nothing" and "forgot" was then invisible to everything
+except a coordinator reading two branches side by side, which is exactly how #124's gap was found.
+The prefix does not decide it: `docs/` is no exemption, and eleven `docs/` branches have entries
+(`grep -n '^### Branch: docs/' docs/sonny-v1-implementation-changelog.md`, at `310f893`). Nor
+does the template's `Architectural decisions / pitfalls discovered` field: its "write none if
+true" governs a field inside an entry already owed, and does not make one owed.
+
+The five `docs/` branches that merged on 2026-08-26 are the data points, and that same command
+shows which three the changelog does not hold. **#122** and **#123** corrected the record across
+the tracked files and wrote entries, rightly. **#125** — step 2's manual-test-items bullet, plus
+the checklist rows SONNY-281's items had been stranded off — and **#126** — ticks and dated notes
+on checklist rows — recorded nothing of that kind and rightly wrote none. **#124** is where the
+line actually runs, and it is the reason this paragraph names branches rather than prefixes: it
+was mostly process wording, this file's "Who does what" rewritten for two founders, but it also
+added `CLAUDE.md`'s gotcha about `git grep`'s ERE engine not honouring `\b`, a pitfall its own
+work turned up (`git diff 30a6193^1 30a6193 -- CLAUDE.md` prints all three edits) — so it owed an
+entry and wrote none. **No back-entry is written for #124, #125 or #126** (founder decision
+2026-08-26, SONNY-298). #124's gap is recorded here rather than papered over, and the gotcha
+itself was never lost: it is in `CLAUDE.md`, which is where a session reads it.
+
+**Fresh-session review:** the user launches a new CLI session, giving it only the branch
+name and its ticket identifiers — no implementer context. It hunts for problems rather
+than validating:
+
+- **Step 0, before any finding: state the head SHA under review.** `git fetch`, then
+  `git rev-parse origin/<branch>`, print it, and review that tree. If the remote head moves
+  before the findings are filed, stop and re-anchor at the new SHA rather than filing —
+  findings written against a tree that has moved are part already-fixed and part aimed at
+  code that no longer exists, and separating the two costs more than re-reading. (Trigger:
+  PR #26, where the reviewer's read and the implementer's push landed 14 seconds apart.)
+  While anchored there, run `git merge-base --is-ancestor <sha> <head>` on every SHA the
+  branch's changelog entry cites: one that exits 1 was stamped at a head a rebase has since
+  replaced, and its figure is re-measured or dropped before merge (§8).
+- Reads the full diff, and pulls every ticket's complete history *including closing
+  comments* — verifying each comment's claims (files touched, decisions, evidence)
+  against the real diff. A confident closing comment is a claim to check, not a fact.
+- Maps every acceptance criterion on every ticket to the specific test(s) exercising it,
+  and checks those tests assert concrete values and state — not merely no-throw, not-nil,
+  or happy-path-only. Test quality is explicitly the reviewer's job, not a courtesy.
+- Reruns the full suite itself, and `scripts/warnings` with it, and hand-traces
+  non-trivial logic (date math, state machines) rather than trusting green tests. One
+  exception covers both reruns: a diff provably confined to docs/comments may skip them —
+  anything touching `Sources/` or `Tests/` never skips, and no session invents its own
+  threshold beyond that line. A reviewer that reruns only the suite cannot see a warning
+  the implementer introduced, which is how one merged on 2026-08-17. **A server-only diff is
+  the symmetric case, and it is not the docs/comments exemption:** it touches neither
+  `Sources/` nor `Tests/`, so the Swift suite and `scripts/warnings` provably cannot see it
+  (Package.swift declares five targets, every one of them with a `path:`, and all five name
+  `Sources/…` or `Tests/…` —
+  `grep -cE '\.(target|testTarget|executableTarget)\(' Package.swift` → 5 and
+  `grep -cE 'path: "(Sources|Tests)/' Package.swift` → 5, both at `ecfe3ae` — so
+  nothing under `server/` reaches a Swift target. **This said *four* until 2026-08-27, and it
+  was true when it was written**: the commit that wrote it, `2c76a2f`, has four
+  (`git show 2c76a2f:Package.swift | grep -cE '\.(target|testTarget|executableTarget)\('` → 4),
+  and the fifth arrived two and a half minutes later in a parallel lane — SONNY-172's
+  `MacAgentTestSupport`, `11bfaf6`, which `git merge-base --is-ancestor 11bfaf6 2c76a2f`
+  rejects with exit 1 because neither session could see the other. A count taken about a file
+  another lane is editing is stale before the branch merges, and nothing re-reads it;
+  SONNY-308), and rerunning them proves nothing about it — rerun the
+  server's own commands (`npm run build`, `npm test`, `npm run typecheck`) instead, and the
+  Swift reruns are owed only when the diff actually touches the app half. A diff touching
+  both halves reruns both. PR #85's reviewer reran the full Swift suite for a server-only
+  diff for want of this branch (SONNY-193).
+- Reruns `server/scripts/check-secrets.sh` on every diff, whichever half it touches and even when
+  it is provably docs or comments only, since a credential pasted into prose is still one. The scan
+  reads every tracked file, so a branch outside `server/` can break it and nothing tied to
+  `server/` would notice — step 5's credentials bullet has the case that turned `main` red (SONNY-477).
+- Posts findings to the affected tickets (or the PR) carrying the same evidentiary bar as
+  implementers: the literal command run and the tail of its output (exit code, test
+  counts). Its "all green" is a spot-checkable record, not an assertion to trust.
+
+Findings go back to a session that owns the ticket — as ticket comments, as fix commits on
+the branch, or both — before merge.
+
+**Reviewers never implement, commit, or push.** A review produces findings; the fix belongs
+to a session that owns the ticket. So a fix prompt names the session it is meant for, and
+every post-close round — a re-check, a late finding, a manual-test failure — is routed by
+the user to exactly one session. (Trigger: two mis-pasted prompts landed fix instructions
+in reviewer terminals, which then implemented and pushed duplicate rounds of the same work.)
+
+**A test a reviewer writes is a finding, not a fix, and it travels with its own run line.**
+Handing a probe to an implementing lane is a move this process began making routinely in the
+2026-08-29 wave; it fits the bullet above rather than breaking it, because the reviewer supplies
+the scenario and the evidence and the session that owns the ticket writes the version that lands.
+The evidence includes the runner's own pass/skip count for that probe. A skipped test reads
+exactly like a passing one: PR #164's cycle-2 test was offered as proven with a log reading
+`1 passed | 1 skipped`, so its assertions had never executed, and they asserted the wrong value
+besides — the right one was in the same session's own trace output. The implementer re-proves the
+probe in the branch instead of transcribing it, and a probe that will not reproduce is a finding to
+hand back rather than a test to make pass. (`CLAUDE.md`'s Claims and evidence section carries the
+general rule.)
+
+**An implementing lane may tell a reviewing session that its anchor moved, and what the delta is,
+and nothing else.** Everything else — findings, fix-round routing, and anything at all that could
+shape what the reviewer looks at or concludes — goes through the coordinator, and the lane tells
+the coordinator it has sent the fact. What was already written is only half of this and reads as
+the opposite: "Step 0" above instructs the *reviewer* to stop and re-anchor when the remote head
+moves before its findings are filed, and says nothing about who may tell it that the head moved,
+while the bullet above routes every post-close round through the user without carving out a fact
+that is not a round. A session reading only those two concludes it must stay silent and let the
+reviewer discover the move for itself, which is the outcome nobody wants. **Why interrupting beats
+waiting, which is the part that makes this more than etiquette:** on the instance that produced the
+rule, the two lines that had moved were precisely the two a reviewer at the old tree would have
+raised — a changelog entry reporting a PR body as unfixed, and an open question the founder had
+since answered — and both were already closed. Separating an already-fixed finding from a live one
+costs more than re-reading a two-line diff, which is the same reasoning Step 0 gives for
+re-anchoring in the first place. (Founder-confirmed 2026-09-03, on
+`chore/no-attribution-in-the-history` while PR #195 was open: a review worktree sat detached at
+`1b3006a`, the lane's push moved the branch to `538466c`, the lane sent the bare fact and told the
+coordinator, and the coordinator confirmed that was the right call and stated the rule it follows.
+Both SHAs are branch heads and SONNY-407's rewrite has since taken them non-ancestral, which is
+§8's convention working. Recorded on SONNY-410 and written here 2026-09-05.)
+
+**Before pushing to a branch with an open PR, check whether a review is anchored to it.**
+`git worktree list` shows a detached worktree at that branch's head while a review is live, and
+that is the whole check. Before this rule was written, this file mentioned that command exactly
+once: `grep -c -i 'worktree list' WORKFLOW.md` → **1** at `d14eba65`, and that one hit is step
+3's worktree-lifecycle bullet, which is about auditing worktrees rather than about pushing. The
+same command answers **3** here, because this paragraph names the command once in its own prose
+and again in that citation — the difference is this rule arriving, not the file drifting, and it
+is the reason the 1 is written as a reading at a commit rather than as a claim about the file. A
+review pinned at a head that then moves is not wrong; it is reviewing a tree one step behind, and
+the cost is the reviewer's time separating a stale finding from a live one. When the check says a
+review is live the push is still the lane's to make — step 5's standing authorization is
+untouched, and holding work back to keep a review still is not what this asks for — and what the
+lane then owes is the one sentence the rule above allows. (SONNY-410, same instance.)
+
+**Review cycles are capped at three: the initial review, one fix round, one re-check.** The
+re-check is the last word **on finding things**; what may continue past it is verification of
+a named fix, under the scoped-round rule below. Anything still outstanding below the bar of
+user-visible impact or correctness — wording, test-name precision, a claim that is imprecise
+rather than wrong — is recorded on the ticket and left there, and is never a reason for another
+round. The cap bounds rounds of *review*, not the fix-in-branch rule: a defect found at any
+point is still fixed in the branch before merge. What the cap ends is the search for more.
+(Set by the user 2026-08-05, after SONNY-44's review ran five rounds whose tail kept finding
+smaller things.)
+The cap is a ceiling, not a quota: three cycles are the most a review may run, never a
+number it must reach — a cycle runs only when the one before it leaves that cycle something
+to do.
+
+- A clean cycle 1 — no findings above the recorded-residual bar — ends the review. No fix
+  round, no re-check.
+- A fix round confined to records, docs, or mechanical edits is verified directly by the
+  coordinator — against the real diff, with the usual evidence bar — and the lane closes;
+  no third-cycle reviewer session.
+- The full cycle-3 re-check stays reserved for fix rounds that could themselves introduce
+  defects: production-code changes, test-integrity rebuilds (vacuous-test rewrites),
+  rebases carrying conflict resolutions. In a stack, the rebase pass decides this per branch, and
+  a branch that needs it gets the scoped delta pass `## Pull requests in flight` describes for a
+  short stack; a conflict confined to record files and resolved by keeping each entry whole does
+  not by itself count as a conflict resolution for this bullet — a conflict of that shape is now
+  itself rare, since one file per branch is what removed it.
+
+The ceiling itself does not move, and the fix-in-branch rule is untouched either way — nor
+does the scoped verification round below move it, because what that bounds is verification
+rather than the search. This composes with the depth scaling below: depth scales to the diff, cycle count to what the
+cycles actually find. (Decided by the user 2026-08-06, after full third-cycle reviewer
+sessions ran over mechanical fix rounds on PRs #30 and #31.)
+
+**Cap what a round carries.** A fix round routes what blocks the merge plus what is genuinely
+cheap; everything else is proposed for its own ticket. Eight or nine findings in one round is
+a long round by construction — the fix session works them one at a time, each one is verified,
+and the branch holds a merge slot for the whole of it (step 3's cap, and the lane-length frame
+beside it). The cap above bounds how many rounds a review may run; this bounds how much any
+one of them is asked to carry, and a round can be entirely above the recorded-residual bar and
+still be too big, which is why that bar alone was never enough.
+
+**It creates no power to defer a defect, and reading it as one inverts the oldest rule in this
+repository.** Three filters run in order and only the middle one is this rule's:
+
+- Below the recorded-residual bar — wording, test-name precision, a claim imprecise rather
+  than wrong — recorded on the ticket and left, exactly as the cap's paragraph above already
+  says.
+- Above the bar and blocking, or above the bar and cheap enough that filing a ticket costs
+  more than the fix — this round takes it. That is the whole of the lever.
+- Above the bar, not blocking, not cheap — the only case where anything moves, and what moves
+  it is not this rule but the fix-in-branch rule's own deferral clause: the user's explicit
+  decision plus a named landing spot recorded on a ticket (step 5). The coordinator *proposes*
+  that split when it routes the round; the user's decision is what discharges fix-in-branch.
+  Without that decision the finding stays in the round.
+
+**The cap is on what the round carries, never on what the review reports.** A reviewer files
+everything it found, at step 7's evidence bar; a reviewer that trims its own findings to keep a
+round small has stopped being adversarial, which is the one thing a review is for. **That covers
+a reviewer's probe explicitly**, since the paragraph above makes one a finding rather than a fix:
+a probe is routed by the three filters like any other finding, and a probe demonstrating a defect
+above the bar is that defect's evidence, so it travels with the fix rather than being the cheap
+half left out of the round. Nothing here licenses reporting one fewer probe because the round is
+already full. (Founder instruction 2026-08-28, the fifth of the lane-length levers in step 3;
+written here 2026-08-29 by SONNY-351.)
+
+**A round past the cap is available to verify a named fix, and to do nothing else — the scoped
+verification round.** It exists because the cap was exempted on **every branch reviewed under the
+2026-08-17 ruling**, three for three, always for the same reason. What follows is the record of
+those three, then the rule they produced; the record is first because a rule derived from
+incidents reads differently from one derived from taste, and this one was exempted into existence.
+
+- **PR #65** (`fix/docx-conversion-defects`, SONNY-76 and SONNY-79). The cycle-3 re-check found
+  **F5**: the same-source skip introduced by the **F1** fix was keyed on the source alone, so a
+  later unit wanting the same document in a *different output folder* was silently suppressed and
+  the user told a PDF already existed where none did. Granted, fixed at `590568d` (code
+  `d05f1fd`) by keying on the document-and-folder pair, and the granted re-check at that head
+  returned fixed with the folder-key reasoning surviving attack, searching for nothing outside F5.
+- **PR #67** (`feature/task-history-controls`). The cycle-3 re-check found **two defects inside
+  F4's own fix**: clicking the finished-task notification opened nothing unless Command Center
+  already sat on the Tasks page, and it left the request stranded so navigating there afterwards
+  did not open it either. Granted, fixed, and the narrow re-check at `6596a42` — a pre-rebase head
+  the ancestry check now rejects; the branch merged as `9ea09d5` — found three things wrong in the
+  record or the test rather than in the code, all fixed before merge.
+- **PR #70** (`chore/sonny-75-mutation-harness`, SONNY-75). The cycle-3 re-check found **G1**: the
+  selftest's fault-injection seam sat before any mutant was applied, so the only death it could
+  inject arrived while nothing was mutated and the mid-mutant restore property could never fail —
+  in the branch whose entire thesis is that an unwatched guard is not a guard. Granted, scoped to
+  G1 and G2, fixed at `aa01aa0`, and the cycle-4 re-check verified it by running both orderings on
+  copies: shipped, exit 0 with 58 passes; reversed, exit 1 with 5 failures, three in the
+  internal-error group and two in the byte-for-byte group.
+
+**"Three in one day" is the ruling's day rather than the rounds', and the difference is worth
+having straight** since the incidents are the evidence. The ruling was given once, on 2026-08-17,
+in response to the third instance, and all three grants are dated 2026-08-17 by the coordinator
+comments that record them. The rounds themselves span **2026-08-17 22:41 to 2026-08-18 18:18**
+(−04:00, from those comments' own timestamps): PR #65's ran and merged on the 17th, PR #67's and
+PR #70's ran on the 18th under a ruling given the day before.
+
+**The trigger was identical all three times, and it is structural rather than drift.** Two rules
+meet at the cap and disagree about what happens next. This section bounds review rounds at three.
+`CLAUDE.md`'s fix-in-branch rule requires any bug found during a branch's own testing to be fixed
+in that branch before merge, with no exception for when it was found. So a defect found in cycle 3
+*must* be fixed — and the fix is then production code, a test-integrity rebuild, or a rebase
+carrying a conflict resolution that nothing has read, which is exactly the list the third bullet above
+reserves the full re-check for. The rule described a case it had no cycles left to serve, so it had
+to be exempted every time that case arrived.
+
+**The founder's ruling, 2026-08-17, stated generally because he stated it generally:** *"in such
+cases if the three cycle review is done, we can make it 4/5 review cycle because it was an
+exception."* Reaffirmed on SONNY-170 on 2026-08-21: if the cap is genuinely exceeded because a real
+defect is still being found, do one more cycle — the cap is a target, not a wall, and a defect above
+the bar is fixed before merge regardless of which cycle finds it.
+
+**What that authorizes, in terms a session can apply to its own behaviour:**
+
+- **The trigger is narrow and checkable**: a fix round at or past the cap *left or introduced* a
+  defect above the user-visible-impact-or-correctness bar, in production code, in a test's
+  integrity, or in a rebase's resolution. A wording nit, a test-name imprecision, or a claim that is
+  imprecise rather than wrong is not a trigger — it is recorded on the ticket and left, exactly as
+  before. A session cannot self-certify its way into another round for one of those.
+- **Authorization is standing for the first such round**, so it needs no founder round-trip: that is
+  what the 2026-08-17 ruling settled, and it is what the three grants above were each doing by hand,
+  three times in under twenty hours. **A second consecutive scoped round is the founder's to grant**,
+  and that is what ends the sequence — the chain cannot extend itself twice without a human deciding
+  the trigger is real. (Nothing has needed a second yet: each of the three above ran once, and PR
+  #70's cycle-4 round, the only one that could have asked, explicitly escalated nothing.)
+- **The round verifies named changes and searches for nothing.** It names what it is verifying before
+  it starts. Anything it notices outside that scope is recorded and left, **whatever its severity**;
+  a belief that something outside the scope blocks the merge is a **stop-and-report to the founder**,
+  not an extension of the round. That property is the whole reason the cap survives being extended,
+  and all three rounds above had it.
+- **The wrong outcome is a cap of five, and this is not one.** Three was set on 2026-08-05 after
+  SONNY-44's review ran five rounds whose tail kept finding progressively smaller things, and a
+  numeric raise restores exactly that. Reviews may not run four or five cycles hunting; what
+  continues past three is verification of what the previous round changed, never the search the cap
+  ended.
+
+**So the ceiling on the search does not move, and only the ceiling on verification does.** The
+fix-in-branch rule is untouched in every direction, and so is the depth scaling below. (Recorded by
+SONNY-170 on 2026-08-28, from the three branches' own ticket comments and pull requests rather than
+from the rule — which is what the ticket asked for, since the rule is what had already been written
+three times and exempted three times.)
+
+**Interim reviews are scaled to what the ticket touched.** A ticket may be reviewed as it
+closes rather than only at PR time, by a fresh session under the same rules. A
+behavior-touching ticket gets the full treatment above; a ticket whose diff is confined to
+documentation or user-facing strings gets a light pass — read the whole diff, check the
+closing comment's claims against it, and stop there, with no criterion-to-test mapping and
+no hand-tracing. Which one a ticket is comes off its diff, not off the implementing
+session's word for it. That is a depth setting, not a second rerun exemption: a strings-only
+diff still touches `Sources/`, and tests that assert copy really do break on it. The
+branch's own pre-merge review happens either way. (Same origin as the cap: SONNY-44's tail
+rounds ran the full treatment over changes that were entirely copy.)
+
+**Trivial fast path:** the user may tag a ticket trivial at creation — single file, small
+diff, no logic-branch changes (docs, copy, constants). A trivial ticket keeps the full
+contract, the evidence requirement, and the user-merge gate, but the user reviews the
+diff directly instead of launching a fresh-session reviewer. Only the user classifies a
+ticket trivial; sessions never do.
+
+**Right-size the review to the ticket.** Small tickets — records, docs, copy, mechanical
+edits, a one-line fix — do not get the full three-cycle adversarial review. They are verified
+directly by the coordinator against the real diff, at the usual evidence bar, and the lane
+closes; no fresh-session reviewer is launched. Repeating a full review over a small change is
+the waste this removes. (Founder directive 2026-08-21, given by both founders and recorded on
+SONNY-170. Written here 2026-08-29 by SONNY-340; for the eight days between, its only written
+homes were that one ticket comment and a single changelog `Reviewed by:` line, which is to say
+a session could not find it.
+`git grep -n -i 'right-size' 2f36250 -- WORKFLOW.md CLAUDE.md` exits 1 with nothing on
+stdout and nothing on stderr, and the positive control proving that pattern and those paths
+can find anything at all is `git grep -c -i 'review' 2f36250 -- WORKFLOW.md` →
+`2f36250:WORKFLOW.md:45`.)
+
+- **What earns the deep multi-cycle treatment is substantive or safety-critical work.** The
+  founder's own three examples on 2026-08-21 were the approval/risk engine, the account and
+  session concurrency system, and anything touching security or user data; the 2026-08-28
+  restatement of the same directive drew that boundary as security, money, data loss and
+  boundary code. Read them together: a diff that can lose a user's data, spend their money,
+  weaken a permission or an approval, or move a trust boundary gets the adversarial pass. A
+  docs, records or copy branch does not — and does not get two review cycles either.
+- **This is the coordinator's judgment at review time; the trivial fast path above is the
+  user's classification at ticket creation.** Two different doors to a similar outcome, and a
+  session should know which one it is standing at. The fast path is decided before any code
+  exists, by the only person allowed to decide it, and it hands the diff to the *user*
+  instead of a reviewer; sessions never classify a ticket trivial. Right-sizing is decided
+  after the diff exists, by the coordinator, off what the diff turned out to be, and it hands
+  the diff to the *coordinator* instead of a reviewer. A ticket the user never tagged trivial
+  can still be right-sized, and a ticket the user did tag trivial needs no right-sizing.
+- **It composes with the depth scaling above rather than replacing it.** The interim-review
+  scaling sets how deep a review reads; this sets whether a fresh-session review is launched
+  at all; the cap above sets how many cycles it may run once it is. All three read the diff,
+  never the implementing session's word for what the diff is.
+- **What is removed is the fresh-session round, not a check.** A right-sized lane still fixes
+  in branch every defect it finds, still carries the evidence bar of step 5, still owes its
+  manual-test rows, and is still merged by a founder and never by a session. The coordinator
+  reads the real diff in full; a right-sized review is a shorter route to the same reading,
+  not a lighter one.
+- **The other half of the same 2026-08-21 comment is already written above.** If the cap is
+  genuinely exceeded because a real defect is still being found, one more cycle is allowed —
+  that is the scoped verification round, written by SONNY-170 on 2026-08-28. The depth half
+  sat unwritten a week longer than the cycle-count half, which is the reason both halves now
+  carry the date and the decision that produced them: a founder decision recorded only in a
+  ticket comment is one forgotten grep away from being lost, and this comment lost its second
+  half exactly that way.
+
+**When something fails after a ticket closed** — the flow above closes tickets before the
+PR opens, so late failures need an explicit path, not improvisation:
+
+- A reviewer finding *within* a ticket's scope: the session that owns the ticket — its
+  implementing session, or the successor the user routes the round to — makes the fix
+  commits on the branch, plus a comment on that ticket recording the finding and the fix.
+  The ticket stays Completed.
+- A reviewer finding *outside* every ticket's scope (including anything that would breach
+  a ticket's never-touch list): file a follow-up ticket referencing the original; fix it
+  on this branch only if the user agrees it blocks the merge, otherwise it waits for its
+  own ticket. Never silently breach a never-touch list to absorb a finding.
+- A user manual-test failure: reopen the ticket (`scripts/plane state SONNY-12 started`)
+  with a comment recording the exact failure, fix on the same branch per the fix-in-branch
+  rule, close it again with a fresh closing comment. The original implementing session
+  need not exist anymore — the ticket's comments are the handoff.
+
+Then: the user runs the aggregated manual items — the unchecked rows that
+`scripts/changelog-order manual-tests | less` prints, which is every branch's own
+`docs/manual-tests/` file followed by the archived checklist — in the real packaged app, and
+merges — at GitHub's control with "Create a merge commit", never a squash or a rebase merge,
+whatever the page offers (§8).
+Delete the branch, remove the worktree if its session's sequence ends here (step 3's
+lifecycle rule — a session with tickets still ahead of it keeps the same one), confirm the
+tickets' final states. **Each branch is cut from `main` and merges on its own**, and what a
+branch does while it waits, the one update from `main` it takes before merging, and the one
+exception — a short stack of at most three for a real code dependency — are
+`## Pull requests in flight`, directly below.
+
+## Pull requests in flight
+
+**Every branch is cut from `origin/main`, and merges as its own review closes.** Founder
+decision, 2026-09-16 (SONNY-500, recorded against SONNY-459 and SONNY-463), replacing the
+2026-09-11 rule that every wave's pull requests form one stack. **The measurement that produced
+the change is wave 9's own**: across every carry proof the coordinator ran on that thirteen-branch
+stack, no code conflicted anywhere — **0 of 44 differing paths on PR #244, 0 of 34 on PR #250, 0
+of 3 on PR #248** (those three figures are that wave's record, carried here and not re-measured)
+— and every conflict in the whole wave was in `docs/sonny-v1-implementation-changelog.md` or
+`docs/sonny-manual-test-checklist.md`, because every branch inserted at the same place in both.
+Two branches editing one line of one file was the whole coupling, and SONNY-500 removed it: a
+branch now writes `docs/changelog/<branch-name>.md` and `docs/manual-tests/<branch-name>.md`, so
+no two branches touch a file the other touches.
+
+**The shape.**
+
+1. **Cut from `origin/main`.** `git worktree add -b <branch> <path> origin/main`, and every PR's
+   base on GitHub is `main`. No branch is cut above another, so nothing above waits on a fix
+   round below, and no rebase pass upward is owed at the end of a wave.
+2. **One update from `main` before merge, and only one.** A branch finishes on its base, pushes
+   and holds; when it is next to merge and `main` has moved under it, it takes exactly one hop
+   onto the new `main` — step 3's merge-one-branch-at-a-time bullet, unchanged, and the
+   `--force-with-lease` it needs is that bullet's standing authorization. **Zero hops is better
+   than one** and is the right answer when `main` has not moved under anything the branch's
+   figures depend on.
+3. **After that hop, re-run only what the range touched.** The range is
+   `git diff --name-only <the branch's merge-base before the hop> origin/main` — the whole range,
+   never the conflict list, which is not the population that can break a branch
+   (`CLAUDE.md`'s rebase gotcha: a type changed beneath and a new user of it added above conflict
+   nowhere and stop agreeing anyway). Step 5's tree-identity proof then decides each figure: one
+   whose paths are byte-identical across the hop is carried **with the proof beside it**, in the
+   braced `${old}:Sources` form and never with a loop variable named `path` (`CLAUDE.md`, Claims
+   and evidence, has both traps); everything else is re-measured at the new head. A pre-hop SHA
+   may stay only as labelled history. Nothing under `Sources/`, `Tests/` or `Package.swift` in
+   the range means no Swift suite and no `scripts/warnings`; nothing under `server/` means none
+   of the server's commands; `scripts/no-attribution tree` and `npm run check:secrets` are owed
+   either way.
+4. **Whether the review already posted still stands is decided by what moved, not by the PR's
+   diff** (founders' decision on PR #239's review, F1, 2026-09-13, which the hop inherits from the
+   rebase it replaces). The session doing the hop states what moved — the range above — and
+   whether the branch uses any of it, by enumerating the branch's uses across the tree rather than
+   by reading its own diff. The review stands only when nothing the branch uses changed in that
+   range and the hop resolved no conflict except one confined to record files and resolved by
+   keeping each entry whole; its reviewer then re-runs the ancestry check and nothing more. **A
+   conflict anywhere else, or a change in that range to anything the branch uses — a type, a
+   signature, a fixture, a helper — gets a scoped delta pass on that branch**, in its review
+   worktree re-pointed at the new head, reading the resolution and the moved code the branch uses
+   and searching for nothing else. That is the re-check step 7 reserves for a rebase carrying a
+   conflict resolution: a reviewing session's pass, not the coordinator's direct verification,
+   and scoped to the range the hop crossed.
+5. **Merging stays one branch at a time, and stays the founder's.** Merge with a merge commit
+   (§8), delete the branch by hand — the repository does not delete a head branch on merge
+   (`gh api repos/{owner}/{repo} --jq .delete_branch_on_merge` → `false`, read 2026-09-13) — pull
+   `main`, and the next branch whose review has closed follows. Never two together: a conflict
+   resolution nobody read is what that prevents.
+6. **`scripts/changelog-order` reports nothing for this shape.** A branch cut from `main` carries
+   exactly one entry naming an unmerged branch — its own — which the check allows, so a branch
+   that has written its entry exits 0. The n − 1 findings a stacked branch used to produce, and
+   the clause that existed to explain them, are not paid any more.
+7. **Step 3's disjointness rule holds between every pair of lanes, in full**: no overlapping files
+   *and* no shared assumptions — a store contract, a shared type — not files alone (founders'
+   decision on PR #239's review, F3, 2026-09-13), because two lanes can build on one assumption
+   and break each other without touching a common file. The record files are no longer an
+   exception to it, which is the change: they used to be the one overlap every lane had by design.
+
+**The exception: a short stack, for a real code dependency and nothing else.** When branch B
+genuinely cannot compile or cannot be tested without branch A's code — not adjacency, not a
+shared subject area, and never a shared record file, which is no longer possible — B is cut from
+A and the two are a stack. **At most three branches**, and the coordinator fixes the order at
+kickoff. Inside a short stack:
+
+- **A branch is cut only from a head that is final for its round.** Never cut above a branch whose
+  review or fix round is open. Wave 7 ran reviews in side worktrees and landed fix rounds after
+  the next branch had been cut; seven of eleven heads then failed `git merge-base --is-ancestor`
+  against their base, nineteen commits were missing from the top, and no tree holding all of them
+  had been tested. (Those three figures are that wave's own record on SONNY-438, carried here and
+  not re-measured.) Lanes the coordinator starts together are the one case cut above work that is
+  not final because it does not exist yet, and that is allowed only because the rebase pass below
+  is owed before anything merges.
+- **A fix round low in the stack is followed by one rebase pass upward, before anything merges.**
+  The coordinator records every cut point first — `git merge-base <branch> <old head of the branch
+  beneath>`, posted on the run log — because the old head is what the rebase has to name and the
+  fix round is what moves it. **Each branch is rebased by its own session, or by the session the
+  founder routes to that ticket, one branch at a time from the bottom up** (founders' decision on
+  PR #239's review, F4, 2026-09-13), with
+  `git rebase --onto <new head of the branch beneath> <its recorded cut point> <branch>`, which
+  replays that branch's own commits and nothing else. That session pushes with
+  `--force-with-lease` — step 3's standing authorization, which covers a session's own ticket
+  branch and nothing else, never bare `--force` — and only then does the next branch up start. No
+  one session rebases the whole stack, because no authorization lets a session force-push a branch
+  it does not own. Clauses 3 and 4 above decide what is re-measured and whether the review stands,
+  reading the rebase's range exactly as they read a hop's.
+- **The union is measured once, at the top branch's head**: the flagged suite, `scripts/warnings`,
+  the server's suites where `server/` moved, `scripts/changelog-order`, `scripts/no-attribution
+  tree` and `npm run check:secrets`.
+- **A reviewer pins the base SHA it diffs against** — the head of the branch beneath at cut time —
+  and posts the review in full on the PR. A fix round gets a scoped delta pass in the same review
+  worktree, re-pointed at the new head.
+- **Merging is bottom-up.** Merge the lowest first, delete it at once so GitHub retargets the next
+  PR to `main`, pull, repeat. **Never merge a PR whose predecessor is unmerged.** Before the first
+  merge, `git merge-base --is-ancestor origin/<branch beneath> origin/<branch>` exits 0 for every
+  adjacent pair; a pair that exits 1 is a rebase pass not yet made.
+- **`scripts/changelog-order` reports one finding on a stacked branch above the bottom**, naming
+  every entry that has not merged, because only one may. On a stack of two that is one finding
+  reading *2 entries name a branch that has not merged, and only one may*, and on a stack of three
+  one finding naming all three — measured at `279d4dd1` by running `scripts/changelog-order` in a
+  throwaway clone with two and then three entry files present for branches that have refs and no
+  merge: **exit 2 with 1 finding each time**, the finding naming every unmerged branch and its
+  file, against exit 0 with the branch's own entry alone. That count is the
+  stack's expected cost. State it on the run log and answer the hook's block with it; **never
+  delete or rename an entry file to satisfy it.** It clears one merge at a time. (This clause read
+  "one finding per unmerged entry beneath the newest — on the n-th branch from the bottom that is
+  n − 1 findings" while entries shared one file and position decided which was exempt; with one
+  file per branch there is no position, the allowance is a count, and the tool names all of them
+  in one finding instead.)
+- **One session, many PRs, is sequential by construction.** The session finishes a branch's review
+  and fix round before it cuts the next, and never reviews branch n while building branch n + 1.
+
+**How this composes with step 3's merge-one-branch-at-a-time rule.** That rule holds a lane on its
+base and allows it one hop onto `main` at merge time, and says zero hops is better. A branch cut
+from `main` takes that hop only when `main` moved under it while it waited. A short stack is the
+zero-hop case by construction: every branch already contains everything beneath it, so when the
+branch beneath merges with a merge commit and GitHub retargets, the PR's diff against `main` is
+its own commits and nothing needs replaying. The rebase inside a stack is not a hop onto `main`;
+it is the one repair a moved branch beneath forces on the branches above it, and it happens before
+any merge, not between them.
+
+## Weekly battery
+
+Mutation batteries are founder-triggered (decided 2026-09-10), not a branch's own step — step 5
+above has what changed and why, and `CLAUDE.md`'s mutation-battery paragraph is the tool's own
+record, unchanged. This section is the procedure for the founder side of that split.
+
+About once a week, on a clean `main` checkout — `git status --porcelain` empty, and no other
+battery already holding the checkout — run the battery from the repository root in these four
+steps. `scripts/mutate-all` walks every plan under `mutation/plans/` through `scripts/mutate` in
+turn, one after another, and prints one summary at the end (`scripts/mutate-all --help` has the
+format and the exit codes in full). The worktree is frozen for the whole run exactly as for a
+single battery — `scripts/mutate` re-checks the tree after every mutant it applies — and
+`scripts/warnings` refuses to run beside it, the same mutual refusal that already existed.
+
+```
+# 1. The server half's dependencies. `npm ci`, not `npm install`: it installs exactly what the
+#    lockfile says and never rewrites it, and a rewritten lockfile is a dirty tree every plan refuses.
+(cd server && npm ci)
+
+# 2. A test database, named and ported for this checkout — CLAUDE.md's server-half recipe.
+LANE="$(basename "$(git rev-parse --show-toplevel)")"
+docker run -d --name "sonny-gw-db-$LANE" -e POSTGRES_PASSWORD=postgres -p 0:5432 postgres:17
+PORT="$(docker port "sonny-gw-db-$LANE" 5432 | head -1 | sed 's/.*://')"
+: "${PORT:?no host port — did the docker run above fail?}"
+until docker exec "sonny-gw-db-$LANE" pg_isready -q -U postgres; do sleep 1; done
+export DATABASE_URL="postgres://postgres:postgres@localhost:$PORT/postgres"
+
+# 3. The battery, its exit read with nothing in between.
+scripts/mutate-all; echo "MUTATE_ALL_EXIT=$?"
+
+# 4. The database goes once the run is over.
+docker rm -f "sonny-gw-db-$LANE"
+```
+
+Step 1 is owed because the server default is `npx vitest run`, and a checkout without
+`server/node_modules` cannot pass that suite's baseline, which stops the run with exit 1 (PR #239's
+review, F6). The two lines in the middle of step 2 are the ones `CLAUDE.md` explains: the readiness
+wait, because `docker run -d` returns before Postgres accepts a connection, and the `PORT` guard,
+because an empty port quietly means 5432.
+
+**Each plan runs against its own half's suite, chosen from the plan's own `>>> file` paths**
+(SONNY-455, founders' decision 2026-09-12), each read as the name git gives the file, so
+`./server/x.ts`, `server//x.ts`, `scripts/../server/x.ts` and an absolute path are all `server/x.ts`
+(PR #239's review, F2). A plan whose every path is under `server/` runs `cd server && npx vitest
+run`; every other plan runs the flagged Swift suite; a plan with paths on both sides is refused by
+name, because either suite would report the other half's mutants SURVIVED with no test having seen
+them — the phantom survivor that one command over every plan used to produce, in both directions.
+**Which half a report line came from is on the line**: each plan's block carries a `suite :` line
+naming `swift` or `server` and the command, and every row in the summary's Reports, both SKIPPED
+lists, SURVIVORS, UNATTRIBUTED and REFUSED carries `swift`, `server` or `mixed` beside the plan
+file. Two things follow for the person running it:
+
+- **A server plan runs only with `DATABASE_URL` set, which is why step 2 starts a database**
+  (founders' decision on SONNY-455, 2026-09-13). Without it the plan is checked and then skipped
+  by name, under its own summary heading `SKIPPED (no database)` — never under `SKIPPED (stale)` —
+  and the run cannot exit 0. The server's database suites skip themselves without the variable, so
+  running the plan anyway would report a mutant only a database test kills as SURVIVED, and at
+  `ae74415c` one of the two server plans is that shape (`git grep -l '^>>> file \(\./\)*server/'
+  ae74415c -- mutation/plans | wc -l` → 2, of `git ls-tree -r --name-only ae74415c --
+  mutation/plans | grep -c '\.txt$'` → 14): `mutation/plans/fix/a-settle-never-moves-a-row-off-granted.txt`'s
+  header names its killers in `test/topup.db.test.ts`. The other server plan needs no database and
+  is skipped as well; that is the cost the founders accepted. The variable's value is never
+  printed. A `DATABASE_URL` that is set but reaches no database fails the database suites, so that
+  plan's baseline is red and the run stops with exit 1, like any red baseline.
+- **Do not export `MUTATE_TEST_CMD`**: the run refuses it, exit 1, since it would put one command
+  back over every plan. `MUTATE_ALL_SWIFT_TEST_CMD` and `MUTATE_ALL_SERVER_TEST_CMD` replace one
+  half's command each.
+
+Read the exit code with nothing between the command and `$?`:
+
+- **0** — every plan ran and every mutant was killed. Nothing to file.
+- **2** — at least one mutant SURVIVED or came back UNATTRIBUTED. File one ticket per such mutant
+  (`scripts/plane create`), naming the mutant id, the plan file it came from, and the target file
+  it mutates, with the run's SHA. **The same run can also have left plans unrun**: 2 outranks 3, so
+  the exit code says nothing about them, and the exit line then adds how many. Treat every plan the
+  summary lists under `SKIPPED (stale)`, `SKIPPED (no database)` or `REFUSED (mixed halves)` exactly
+  as the bullet for 3 says, in the same sitting (PR #239's review, F5).
+- **3** — nothing survived or came back unattributed, but at least one plan was not run. The
+  summary lists each under its own heading, and each heading has its own answer:
+  - `SKIPPED (stale)` — its `from` block no longer matches the tree. A ticket for the branch that
+    owns the plan, to re-anchor it against the current tree.
+  - `REFUSED (mixed halves)` — its mutants sit in both halves. A ticket for the branch that owns the
+    plan, to split it into one plan per half.
+  - `SKIPPED (no database)` — a server plan in a run with `DATABASE_URL` unset. **Not filed**: it
+    says nothing about the plan, only that step 2 did not happen. Start the database and run again.
+
+  The two tickets are not survivors, and are filed the same way, naming the plan file and the run's
+  SHA.
+- **1** — the run did not start, or had to stop partway through. Not filed as tickets;
+  `scripts/mutate-all --help` has what to do (a dirty tree, another battery's lock, and a red
+  baseline are the ordinary causes).
+
+Record the run's SHA, its summary line and the summary log's path on SONNY-106, the living
+definition-of-done — every time the command runs, a clean run as much as one that found
+something, so the record shows when the repository's plans were last actually measured rather
+than only when one of them found something.
+
+This is founder-triggered, never a session's to start. A session that wants a shape measured adds
+it to the relevant branch's `mutation/plans/<branch-name>.txt` (one folder down for a slashed
+branch name) and says so in its changelog entry or its review (step 5, step 7) — it does not run
+`scripts/mutate-all` itself.
+
+## 8. Merge strategy, and the history rewrite of 2026-08-24
+
+**Pull requests are merged with a merge commit, never a squash.** Decided by Sauransh on
+2026-08-23, after noticing the strategy had drifted without anyone writing it down: `main`
+carried merge commits through PR #94 and then **sixteen consecutive squashes**, after which #110
+and #112 were merged with merge commits again. (The squashes themselves are no longer readable —
+the pre-rewrite head they sat on went with the archive namespace, below — but their order is,
+because the rewrite kept it: `git log --first-parent --merges --format='%h %s' 7770a48..47454aa`
+prints the eighteen replacements in the order the originals merged.) Neither this file nor `CLAUDE.md`
+stated a strategy, so no session could have known which was intended — which is why it is
+stated here rather than left to be inferred from `git log`, the way it was found.
+
+**At GitHub's merge control that means "Create a merge commit" — never "Squash and merge", never
+"Rebase and merge".** **Today the repository itself refuses the two wrong ones**:
+`gh api repos/{owner}/{repo} --jq '{allow_merge_commit,allow_squash_merge,allow_rebase_merge}'`
+→ `allow_merge_commit: true`, `allow_squash_merge: false`, `allow_rebase_merge: false`, read
+2026-09-13. **That is a setting, not the rule, and it has not always been set.** The same command
+read 2026-08-26 answered `true` for all three, so nothing greyed the wrong ones out, and the control
+did not come up on the right one by itself: on 2026-08-25 it came up on Squash and merge and was
+pressed, which is how PR #118 landed as a squash and had to be reverted and re-merged — the last
+subsection of this section is that record. When the setting changed between those two readings is
+not recorded anywhere this file can cite. It lives in GitHub's repository options, not in this
+repository, and one toggle puts it back the way it was on 2026-08-25. So the rule is still the
+reason to press Create a merge commit, and the setting is what refuses a wrong press while it
+stays as read. Rebase and merge is the other wrong answer, and the worse one: it
+keeps the commits but gives every one a new SHA as it lands, so every stamp the branch's entry
+carries goes non-ancestral at once, with nothing to revert.
+
+**The run is #96 through #109 and #111 — and also #87, which is easy to miss and is why the
+count is sixteen rather than fifteen.** #87 opened long before the others and merged late, so it
+sits between #102 and #103 on the mainline despite the lower number. Ordering a set of PRs by
+number and reading off a range silently drops it. Merge order is the only ordering that answers
+this correctly, here and in the changelog's entry order.
+
+**Why merge commits.** Two reasons, and the second is specific to how this repository works.
+
+- **They give both views; a squash gives only the coarse one.** `git bisect --first-parent`
+  walks the mainline one step per ticket, which is exactly what a squash offers, while a plain
+  `git bisect` descends into a branch's own commits when a finer answer is wanted, and
+  `git blame` lands on the commit that actually introduced a line instead of on a
+  thousand-line squash.
+- **A squash orphans every SHA this repository cites.** `CLAUDE.md`'s *Claims and evidence*
+  rule requires every measurement to carry the commit it was taken at, and the changelog alone
+  carries **500** distinct SHA-shaped strings at `50c91f6`
+  (`git show 50c91f6:docs/sonny-v1-implementation-changelog.md | grep -o -E '\b[0-9a-f]{7,40}\b' | sort -u | wc -l`
+  → 500, and the same answer from perl and from python's `re`; that pattern also catches the odd tree
+  hash, so read it as an upper bound). **This said 501 until 2026-08-26 (SONNY-290), and the extra one
+  is worth keeping rather than quietly dropping**, because it is this section's own subject matter in
+  miniature. The figure was measured on a working tree, not on the commit it was stamped with: the same
+  command over the file as `a1520d0` committed it — the commit that *wrote this bullet*, six minutes
+  after `50c91f6` and directly on top of it — answers 501, and the one token separating the two sets is
+  the string `50c91f6` itself, which `a1520d0` added to the changelog's verification paragraph
+  (`comm -13` over the two sorted sets prints that token and nothing else). So both numbers were honest
+  readings of a real file, and the stamp named the tree that had one fewer.
+  A squash makes each one non-ancestral the moment it merges — and `git show` still prints a
+  commit for it, so it reads as checkable while proving nothing about `main`. A reader who
+  checks it sees a real tree, stops, and has verified nothing. Merge commits keep those stamps
+  genuinely checkable, which is the whole point of stamping them.
+
+**The cost, stated rather than left to be found:** a few intermediate commits inside a rebased
+branch do not compile — PR #111 reported four — so a `git bisect` that descends past the
+mainline can land on a commit that does not build. `git bisect skip` handles it. That cost was
+judged smaller than losing the granularity.
+
+### The 2026-08-24 rewrite
+
+`main` was rewritten so the previously-squashed pull requests appear as merge commits with
+their own commits intact, matching the PR merges that already did — **89** of them
+(`git rev-list --first-parent --merges --count 7770a48`). **Two counts of that are both right
+and differ by one**: 89 is PR merges on the mainline, and `git rev-list --merges --count 7770a48`
+answers **90**, because one reachable merge is not a PR merge at all — `1e05415`, a
+`Merge remote-tracking branch 'origin/main' into feature/ui-ux-wireframe-fidelity` made inside a
+branch. Say which of the two a figure is before comparing it with another. **No code changed** — the
+file tree was verified identical at all eighteen steps and again at the end. Eighteen commits of
+`main` were replaced: the sixteen squashes — #87, #96 through #109, and #111 — plus #110 and
+#112, which were already merge commits and changed SHA only because the ancestry beneath them
+did.
+
+None of the replaced SHAs is an ancestor of `main`, so anything citing one needed repointing
+(SONNY-271 did that pass); since the archive namespace was deleted they resolve from no published
+ref either, and this table is the record of them. Old commit on the left, the merge commit that
+replaced it on the right:
+
+```
+#96   c4d9680 -> e421242      #105  961b9c2 -> 94afca1
+#97   b278209 -> dac12b9      #106  30dfc44 -> e09db2d
+#98   9bf36d1 -> f01d21a      #107  cf3fa76 -> a03bbe1
+#99   8917a76 -> 8f25e78      #108  31c2aed -> 86b7ccb
+#100  2b14312 -> 43bfc06      #109  896035d -> 725be8d
+#101  187e46f -> 85dff75      #110  ee84994 -> a6f9974
+#102  3036b34 -> 8fa6b4c      #111  2f22076 -> b0c78ea
+#103  744eccf -> 505471c      #112  dc21d89 -> 47454aa
+#104  fb8420c -> 205500d      #87   2c5804a -> 45fb7f6
+```
+
+**Each pair holds the same tree**, so repointing a citation renames the tree rather than
+restating the measurement — `git rev-parse <old>^{tree} <new>^{tree}` printed one SHA twice for
+all eighteen pairs, checked on 2026-08-24 while the old commits were still published. It cannot
+be re-run from a fresh clone now, which is why the result is written here rather than left as a
+command. That distinction is load-bearing and is the opposite of what a *rebase*
+does: a rebase replays a branch onto a moved base, so its new commit holds different content
+and a figure measured at the old one has to be **re-measured, never translated**. Renaming
+across the rewrite is safe for exactly the reason renaming across a rebase is not.
+
+### The 2026-09-03 rewrite: removing Claude attributions
+
+`main` was rewritten a second time, to remove every Claude attribution from its commit messages
+(SONNY-407; the mechanical refusal that stops new ones is SONNY-406, merged as PR #195 before this
+ran). **Ten commits carried one** — eight from PR #192, each with both a co-author trailer and a
+session line holding a `claude.ai` session URL, and two from 2026-07-12 with a co-author trailer
+alone. The session URLs are why this could not wait: they put a session address into the permanent
+public record.
+
+**Scope was a founder decision made against measured cost**, 2026-09-03. The cheap option — rewriting
+only the eight recent commits — was 9 commits and 6 orphaned citations. The option taken reaches the
+two from 2026-07-12 as well, and at the head it ran against that is **1567 commits rewritten**
+(`git rev-list f595efe~1..d9c2398 --count`). The alternative of doing the cheap half now and the rest
+later was offered and refused, because range B contains range A entirely and doing both would have
+produced two maps where one is correct.
+
+**No code changed, and unlike 2026-08-24 that is true by construction rather than by verification.**
+The rewriter walks the range oldest-first and rebuilds each commit with `git commit-tree`, reusing
+the **original tree object**; a commit points at a tree, and rewriting a message changes the commit's
+hash and never the tree's. It was verified anyway, because a property true by construction is one
+nobody has checked. `scripts/verify-attribution-rewrite` is that check and it is committed rather
+than described — 15 assertions, exit 0, about a second, two of them controls that fire.
+
+**`git filter-repo` is the obvious tool and it is the wrong one here.** It strips the signature from
+every commit it writes, including commits whose message it does not change, and this repository signs
+by default (`commit.gpgsign=true`, `gpg.format=ssh`; 995 of `main`'s commits carried a signature at
+`f3d444a`). Run against this history it removed the signature on `c6104c8` — 2026-06-25, **below** the
+authorised range — which changed that commit and cascaded to every descendant, widening the rewrite
+from the authorised count to 85 more commits than anyone had approved. Nothing in its output says so.
+
+**Signatures were preserved per commit, not blanket-applied.** Signing was switched on partway through
+this repository's life, so a blanket `-S` would have put the founder's key on hundreds of attestations
+nobody ever made. The rewriter signs where the original was signed and passes `--no-gpg-sign` where it
+was not; the verifier asserts both directions.
+
+**What was proved, at `d9c2398` -> `2d03b0d`:** the map covers exactly the authorised range, 1567
+against 1567; no commit maps to itself; all **75** commits below the range survive untouched with no
+signature lost; **every one of the 1567 pairs holds the same tree**, with a control showing the same
+check fails on a deliberately mismatched pair; the new head's tree equals the old head's; no
+attribution line survives, with a control finding 18 of them before the rewrite; no commit gained a
+signature it never had and none lost one; a message with no attribution is byte-for-byte unchanged;
+every edited message lost exactly its attribution lines; **exactly ten** messages were edited; and
+author and committer identity and both dates are unchanged across all 1567.
+
+**Each pair holds the same tree, so repointing a citation renames the tree rather than restating the
+measurement** — the same rule as 2026-08-24, and the opposite of a rebase, which replays onto a moved
+base so its figures must be re-measured rather than translated. **3046 citation tokens on 1379 lines
+across 79 files** were repointed at the abbreviation length they were written with
+(`scripts/repoint-citations`, and afterwards zero tokens resolve to a rewritten old commit while 3046
+resolve to a new one, which is the control). Every figure beside a repointed citation still describes
+the tree it names.
+
+**The full old-to-new map is `docs/sonny-attribution-rewrite-map-2026-09-03.tsv`**, 1567 pairs, one
+`<old>\t<new>` per line. It is a file rather than a table because 1567 rows is not prose, and it is
+committed because the left column resolves nowhere once the objects are gone — the same reason the
+2026-08-24 table above is kept. The ten commits the rewrite exists for:
+
+```
+f595efe -> 9f14eca   2026-07-12      fad0c82 -> 371f7af   2026-09-03
+9fafa74 -> 1f0e306   2026-07-12      60d1e5d -> dc4248d   2026-09-03
+848870c -> 8ff58f7   2026-09-03      d9d7a12 -> 3b8c2b9   2026-09-03
+138ffa4 -> e34ba3f   2026-09-03      5344f83 -> 77accae   2026-09-03
+1366dfd -> ca7379e   2026-09-03      main:  d9c2398 -> 2d03b0d
+3f3f872 -> fd346b1   2026-09-03
+```
+
+**What the repointing changed under `Sources/`, `Tests/` and `server/`, and what nearly went unchecked.**
+Of the 79 files, 55 sit under those three trees, and the first account of this branch said all 79 changed
+only inside comments and prose. That was wrong by five lines, and both misses are the same shape: a filter
+for comment lines is the wrong instrument for "did this change any code".
+
+- **Four repointed tokens sat inside Swift string literals** — fixture-table labels in
+  `UntrustedContentBoundaryScalarMatchingTests.swift`. A string literal in `Tests/` is not a comment, so
+  the flagged suite was owed and was **re-run at the candidate rather than argued**: exit 0, 2842 tests in
+  193 suites, zero failed-after lines. (They are message-argument copy, but that reading is what made the
+  wrong claim feel safe.)
+- **Two are SQL migrations, changed only inside `--` comments, and this repository hashes migration
+  content.** The hash is unaffected **by construction**: `migrationContentHash` digests
+  `executableSql(up)` and `executableSql(down)`, and `executableSql` strips `--` comments — pinned by the
+  pure test at `executableSql("-- why this exists\nSELECT 1;")` being `"SELECT 1;"`. **The edge that
+  would have inverted it was checked rather than assumed**: `executableSql` deliberately *preserves*
+  comments inside dollar-quoted bodies, so a repointed comment inside a `$$ … $$` block would have moved
+  the hash. Counted rather than eyeballed — `0014`'s repointed line is 180 with zero `$$` before it (the
+  file's six all come later) and `0017` contains no `$$` at all.
+
+**"`npm test` was green" was the weaker half of that check and is corrected here rather than left to
+read as more than it was.** The 391 skipped in `780 passed / 391 skipped` are the `.db.test.ts` files
+without a database, and the migration-hash db test is among them — so that green is silent about the db
+half, and what actually exercised the stripping is the pure test. The load-bearing figure is a comparison
+rather than an absolute: 780 is **byte-identical** to the neighbouring lane's post-rebase figure, which is
+what says the repointing changed no server behaviour.
+
+**Sequencing was a constraint, not a preference.** The push waited until nothing was live: every open
+pull request merged, every review worktree torn down, no mutation battery running, and the branch
+carrying SONNY-406's guard merged **first**, on the pre-rewrite `main`, because that branch was rooted
+at a commit this rewrite destroys — a record of a rewrite, left unmerged on a branch the rewrite
+orphans, is exactly the failure this section exists to stop other people meeting.
+
+**One thing is different from 2026-08-24 and worth stating.** That rewrite replaced squashes with
+merge commits and changed no message; this one changes ten messages, so the *content* of ten commits
+genuinely differs. Everything else about the two is the same: same trees, repointed citations, a map
+kept because the old SHAs resolve nowhere afterwards.
+
+### What the archive held, and why it is gone
+
+Until 2026-08-24 the commits the rewrite replaced, and the original copies of the branch commits
+it re-parented — **190** of them, meaning non-merge commits inside today's eighteen-entry range
+(`git rev-list --no-merges --count 7770a48..47454aa`) — were published under a non-default
+namespace, `refs/archive/*`: `pre-rewrite-main`, the old head of `main` at `dc21d89`, and
+seventeen `pr-<N>` refs holding the original head of each squashed branch — #87, and #95 through
+#109 and #111 (#95 closed *unmerged* by founder decision and was kept for its analysis; #110 and
+#112 needed none, being real merges reachable from the old head). Eighteen refs, outside the
+refspec a clone configures, so no clone ever fetched them without asking. **SONNY-270's figure of
+144 is a different measurement, not a superseded one**: it counted the commits made unreachable
+across the fourteen PRs archived on 2026-08-23, before #110 and #112 existed and over a smaller
+set of refs. Neither number is wrong; they answer different questions, and a figure of this kind
+is worth naming rather than quoting.
+
+**The namespace was deleted entirely, by founder decision on 2026-08-24 (SONNY-274), rather than
+made clone-reachable.** The question had been whether to publish tags so a fresh clone could
+resolve pre-rewrite SHAs; measuring what actually needed them changed the answer. Of every
+hex-shaped token in the tracked files at `efa2a4d`, 529 name a commit, and **161 of those name a
+commit that no published ref reaches — 153 of them in the changelog** — and not one of the 161 is
+a pre-rewrite `main` commit. They are branch-only commits that were never on `main`: measurement
+heads that a later rebase on the same branch replaced. A fresh clone never resolved them, before
+the rewrite or after it, and no archive could have helped. (Measured in a clone that still held
+the archive, since the split needs it: `git ls-files -z | xargs -0 grep -I -ohE
+'\b[0-9a-f]{7,40}\b' | sort -u` → 975 tokens; the 529 are those `git rev-parse --verify
+<token>^{commit}` accepts; each is then looked up in `git rev-list` over `refs/remotes/origin/*`
+and, separately, over `refs/archive/*` — **300** reachable from an `origin` branch, **68** from the
+archive alone, **161** from neither; the changelog's share is `git grep -l -w <token> --
+docs/sonny-v1-implementation-changelog.md` over the 161. With the archive gone, the same
+commands answer 229 from nothing published, the 68 having joined the 161; that is the expected
+answer now, not a regression.)
+
+Nothing the archive uniquely held is lost, and that was verified by patch identity rather than
+reasoned about. Of the 161, **124** have patch-identical content on `main` (`git show --format=
+<sha> | git patch-id --stable`, matched against the same over `git rev-list --no-merges
+origin/main`, at `efa2a4d`); the other **37** are two kinds, neither of them lost work —
+superseded intermediate versions (a branch writes an entry, a later commit on the same branch
+moves or restamps it, so the intermediate patch never lands while the final one does) and
+deliberately unmerged work (the SONNY-69/80 CUA experiment, and PR #95's chip-row branch), all
+reachable from GitHub's own `refs/pull/<N>/head`, which GitHub keeps and this project does not
+manage. The one thing reachable from nothing else was the rollback anchor, `pre-rewrite-main`,
+and its one remaining use was a single command proving the rewrite faithful. That proof was run
+before the ref went, and is the record that survives it:
+
+```
+pre-rewrite (dc21d89) tree: dc3f3ed0ffbe63abce5a76393c13adbb988e2801
+rewritten   (47454aa) tree: dc3f3ed0ffbe63abce5a76393c13adbb988e2801
+git diff --stat dc21d89 47454aa  ->  empty, exit 0
+commits: 734 -> 893
+```
+
+Identical trees, an empty diff, at the rewritten head before PRs #113 and #114 added real
+content on top. Keeping the ref beyond that would have preserved only the ability to roll back
+to squashed history, which is what the rewrite was performed to remove. The mapping table above
+stays: it is a record of the rewrite, not a set of pointers to follow, and it is useful after the
+objects are gone. Its left column resolves nowhere now, which is what the convention below says
+to expect.
+
+### The convention, and the rule that stops the count growing
+
+**A branch SHA in this repository records *when* a measurement was taken, not a tree a reader is
+expected to fetch.** It resolves in the clone that made it and is not expected to resolve
+anywhere else. That has always been true; it was never written down, which is why its
+consequences read as a defect — 161 unresolvable citations looked like something the archive
+should have fixed, when the archive never held them. On a founder's Mac every worktree shares
+one object store, so a rebased-away head keeps resolving there for as long as that store lives;
+a fresh clone never sees it; neither is wrong. What a reader can rely on is the *ancestry* check
+in `CLAUDE.md`'s Claims and evidence: a SHA that `git merge-base --is-ancestor <sha> origin/main`
+accepts is on `main` for as long as `main` exists, and one it rejects — or one that does not
+resolve at all — is a timestamp on a branch, and the figure beside it is read as "true of that
+branch at that moment" and nothing more. The pre-rebase heads several entries stamp — `c85572d`,
+`10b8df0`, `b705b99`, `ec4393c`, `5b4731c` among them — were never published, never on `main`,
+and were never going to be. That is the convention working, not a gap in the archive.
+
+**The figures an entry ships with are measured at the head that merges.** `CLAUDE.md` states
+this in full, beside the SHA-stamping rule it completes; it is repeated here because the
+mechanism is a property of merge commits, which is what this section is about. A branch head
+that merges is preserved on `main` forever as the merge commit's second parent — #113's
+`341a787` and #114's `e7ac803` both pass the ancestry check today — and so is every commit
+beneath it. A head a later rebase replaced is preserved nowhere: #113's `064f387`, #112's
+`714606f` and #110's `9fe7ace` are each orphaned exactly that way, and they are how the 161
+accumulated. So when a branch's head moves after its entry is written — a fix round, a rebase
+onto a merged neighbour — an earlier figure is restated at the new head or dropped, never carried
+forward and never re-stamped. The check, once the entry has merged: `git merge-base --is-ancestor
+<sha> origin/main` exits 0 for every SHA the entry cites, read with nothing between the command
+and `$?`. Before the merge, the reviewer runs the same check against the branch head under
+review (step 7, "Step 0"), and a rebase after that review re-runs it.
+
+### The squash of 2026-08-25: PR #118, PR #120, PR #121
+
+`main` between #116's merge (`dd4ebae`) and #119's (`5ea62ed`) does not read as one merge per
+pull request, and the reason is recorded here because the three GitHub pages it would otherwise
+be reconstructed from each hold a third of it:
+
+```
+git log --first-parent --format='%h  tree %t  %s' dd4ebae..fd00ad8      (at 5ea62ed)
+
+fd00ad8  tree c503515  Merge pull request #121 from sauranshbhardwaj/fix/clarified-command-reaches-the-planner-whole
+ab38c83  tree 9686035  Revert "SONNY-281 — a clarified command reaches the resolver that asked, and …" (#120)
+ca1666e  tree c503515  SONNY-281 — a clarified command reaches the resolver that asked, and a sum may end with = (#118)
+```
+
+**What happened, in the order it happened** (times are the commits' own, −04:00; GitHub's
+`mergedAt` shows the same instants in UTC, dated 2026-08-26). PR #118 — SONNY-281, head
+`50c03df`, ten commits above `dd4ebae` (`git rev-list --count dd4ebae..50c03df` → 10) — was
+merged at 23:05:33 with **Squash and merge**. That produced `ca1666e`: one commit with one
+parent, and the ten commits reachable from nothing on `main`. **GitHub records #118 as Merged
+with `ca1666e` as its merge commit, and will keep saying so** — the squash is what that pull
+request merged, and a revert does not reopen one. The squash was reverted 47 seconds later
+through **PR #120**, GitHub's own revert button; its one commit, `7ff2024`, was merged as
+`ab38c83` by the same squash control (one parent, and the squash title's `(#120)` suffix), which
+for a single-commit revert changes nothing. The branch was then opened again as **PR #121** — the
+same head `50c03df`, no new work, no rebase — and merged at 23:13:04 with a merge commit,
+`fd00ad8`, whose second parent is `50c03df`. The ten commits are on `main` intact, and every SHA
+SONNY-281's entry stamps passes the ancestry check.
+
+**What was verified before #121 was opened, re-run for this record at `5ea62ed`.** The revert
+was complete: `git rev-parse ab38c83^{tree} dd4ebae^{tree}` prints
+`9686035726068d35736bae300ed8cd97a3f7998f` twice, and `git diff --stat ab38c83 dd4ebae` prints
+nothing. The re-merge was proved clean before it ran: `git merge-tree --write-tree ab38c83
+50c03df` exits 0 with no conflict section and prints `c5035151a546b85b8a8f42992b77b6783cc515da`,
+which is `git rev-parse 50c03df^{tree}` — the merge could produce exactly the branch's content,
+and did: `git rev-parse fd00ad8^{tree}` is the same hash. (#121's description writes the command
+as `git merge-tree --write-tree origin/main 50c03df`; `origin/main` was `ab38c83` when it ran.)
+One fact the checks imply is worth stating: `git rev-parse ca1666e^{tree}` is also `c503515…`.
+The squash lost no content. What it lost was the ten commits, and with them every SHA the entry
+had stamped — the second reason above, arriving exactly as written.
+
+**What it cost, and what was left alone.** Two commits on the mainline that are not merges —
+`git rev-list --first-parent --no-merges --count 47454aa..5ea62ed` → 2, and they are `ca1666e`
+and `ab38c83`, the only such commits since the rewrite. `git log --first-parent --merges` skips
+both, so a PR-merge count stays one per ticket, and `git bisect --first-parent` steps through
+them as a pair that together change nothing. `main` was not rewritten to remove them: a rewrite
+is what this section records doing once, for sixteen squashes whose replacements needed a
+repointing pass of their own (SONNY-271), and two commits that orphan nothing are not that case.
+Nothing needed repointing, because no figure is stamped at `ca1666e` —
+`git grep -n 'ca1666e' -- docs CLAUDE.md WORKFLOW.md` finds PR #119's entry, SONNY-281's Status
+line and this record, each naming it as history. And the three commits GitHub's control made —
+`ca1666e`, `ab38c83`, `fd00ad8` — carry the author email
+`66620598+sauranshbhardwaj@users.noreply.github.com` rather than `sbhardwaj1418@gmail.com`; the
+founder decided on 2026-08-26 to leave them as they are. That address is not a mark of the
+squash, and those three are not the population: it is what GitHub's web control stamps on every
+commit it makes — 96 on `main` at `5ea62ed` (`git log --format='%ae' 5ea62ed | grep -c
+'users.noreply.github.com'` → 96, every one with `GitHub <noreply@github.com>` as committer,
+#119's own `5ea62ed` among them) — while every commit made from the terminal carries the
+founder's address, the rewrite's eighteen merges included.
+
+**The rule for the person at the control**, since the decision at the top of this section says
+"merge commit" and the page offered three buttons when this was written: **Create a merge commit**,
+every time. The page did not hold the rule then, and on 2026-08-25 it came up on the squash. Read
+2026-09-13, the repository has switched the other two off (this section's second paragraph), so a
+wrong press is refused while that setting stays. A setting is one toggle from how it stood on
+2026-08-25, and the rule does not depend on it. A
+squash is undone the way this record shows, with a revert and a re-merge, at the cost of two
+harmless commits; a rebase-and-merge cannot be undone that way at all, because there is nothing
+to revert — the commits land, each under a new SHA, and every stamp beneath the branch's entry
+goes non-ancestral in one step.

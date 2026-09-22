@@ -1,5 +1,7 @@
 # Sonny Founder Design Decisions
 
+> Historical decision log. Entries describe decisions made at their dates and may have been superseded. In particular, workspace behavior describes the current v1 application, while the [V2 plan](../sonny_v2_architecture_implementation_plan.md) proposes retiring workspace UI and execution binding. Use [AGENTS.md](../AGENTS.md) for current contributor instructions and inspect current code before changing shipped behavior.
+
 Source: meeting transcript, Sauransh Bhardwaj + Bhavya Singh (design), 2026-07-05. This captures product/design decisions made verbally that are not fully reflected in `docs/sonny-major-release-spec.md`, `docs/sonny-design-system-reference.md`, or the wireframe exports. Treat this as authoritative over a naive reading of the wireframe SVGs where they conflict — the wireframes are a static snapshot of a design conversation, this transcript carries reasoning the static files don't.
 
 ## Notifications
