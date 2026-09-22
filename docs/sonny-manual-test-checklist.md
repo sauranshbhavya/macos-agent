@@ -1,5 +1,7 @@
 # Sonny Manual Test Checklist — `feature/ui-ux-wireframe-fidelity`
 
+> Historical manual-test record. New work uses relevant checks in its PR or substantial Plane issue; see [WORKFLOW.md](../WORKFLOW.md). Existing checked rows below remain historical observations, not standing evidence that the current app passes them.
+
 Written 2026-07-21, after the UI/UX wireframe-fidelity pass (Command Center rebuild + floating
 widget + notifications) landed. Purpose: a single, exhaustive, repeatable manual-QA pass — this is
 the primary check before any further backend work builds on top of the shared-state architecture,
