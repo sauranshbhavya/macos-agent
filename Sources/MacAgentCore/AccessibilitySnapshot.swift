@@ -84,10 +84,18 @@ public struct AccessibilityElement: Equatable, Sendable {
 
     public var canPress: Bool { actions.contains(AccessibilityVocabulary.pressAction) }
 
-    /// A field the user types into. Decided by role, so a settable slider or checkbox is not one.
+    /// A field the user types into. Decided by role, so a settable slider or checkbox is not one,
+    /// and never a password field: nothing on this path may type into one.
     public var isTextInput: Bool {
-        AccessibilityVocabulary.textInputRoles.contains(role)
+        guard subrole != AccessibilityVocabulary.secureFieldSubrole else { return false }
+        return AccessibilityVocabulary.textInputRoles.contains(role)
             || subrole == AccessibilityVocabulary.searchFieldSubrole
+    }
+
+    /// What the person has typed here, with an app's placeholder shown as a value treated as empty.
+    public var typedText: String? {
+        guard let value, !value.isEmpty, value != placeholder else { return nil }
+        return value
     }
 }
 
@@ -241,6 +249,7 @@ public protocol AccessibilityProviding: Sendable {
 public enum AccessibilityVocabulary {
     public static let pressAction = "AXPress"
     public static let searchFieldSubrole = "AXSearchField"
+    public static let secureFieldSubrole = "AXSecureTextField"
     public static let textInputRoles: Set<String> = ["AXTextField", "AXTextArea", "AXComboBox"]
     /// Rows and similar selection targets: pressing or selecting one navigates, it does not commit.
     public static let selectionRoles: Set<String> = [

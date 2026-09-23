@@ -290,6 +290,50 @@ struct AppInteractionPolicyTests {
     }
 
     @Test
+    func theMessageNeverReplacesWhatThePersonAlreadyTyped() async throws {
+        var state = FakeChatAppState(chats: ["Mom"], openChat: "Mom")
+        state.drafts["Mom"] = "my own half-written words"
+        let shot = try await snapshot(state)
+        let box = try element(shot) { $0.role == "AXTextArea" }
+        #expect(AppInteractionPolicy.decide(.enterText, on: box.id, in: shot, goal: try goal()) == .refuse(.wouldReplaceTypedText))
+
+        // The same text already there is not the person's words being replaced.
+        state.drafts["Mom"] = "Running late, home by 8"
+        let same = try await snapshot(state)
+        let sameBox = try element(same) { $0.role == "AXTextArea" }
+        #expect(AppInteractionPolicy.decide(.enterText, on: sameBox.id, in: same, goal: try goal()) == .allow(.setValue("Running late, home by 8")))
+    }
+
+    @Test
+    func aPlaceholderShownAsTheValueCountsAsEmptyAndAPasswordFieldIsNoField() throws {
+        let id = { AccessibilityElementID(generation: 1, index: $0) }
+        let shot = AccessibilitySnapshot(
+            generation: 1,
+            app: AccessibilityObservedApp(bundleIdentifier: nil, processIdentifier: 1, name: nil),
+            windowTitle: nil,
+            elements: [
+                AccessibilityElement(id: id(0), parentIndex: nil, depth: 0, role: "AXWindow"),
+                AccessibilityElement(
+                    id: id(1), parentIndex: 0, depth: 1, role: "AXTextArea",
+                    placeholder: "Type a message", value: "Type a message", canSetValue: true
+                ),
+                AccessibilityElement(
+                    id: id(2), parentIndex: 0, depth: 1, role: "AXTextField", subrole: "AXSecureTextField",
+                    canSetValue: true, canFocus: true
+                ),
+            ],
+            truncation: nil,
+            takenAt: Date(timeIntervalSince1970: 0)
+        )
+        let g = try goal()
+        #expect(AppInteractionPolicy.decide(.enterText, on: id(1), in: shot, goal: g) == .allow(.setValue("Running late, home by 8")))
+        #expect(!shot.elements[2].isTextInput)
+        #expect(AppInteractionPolicy.decide(.enterTarget, on: id(2), in: shot, goal: g) == .refuse(.notATextField))
+        let built = AppInteractionScreenBuilder(redact: { $0 }).build(from: shot, goal: g)
+        #expect(built.screen.candidates.map(\.ref) == ["e1"])
+    }
+
+    @Test
     func anIdFromAnEarlierObservationIsGone() async throws {
         let app = FakeChatAppAccessibility(state: FakeChatAppState(chats: ["Mom"]))
         let first = try await app.observe(processIdentifier: 1, limits: AccessibilityLimits())
@@ -398,6 +442,17 @@ struct AppInteractionRuntimeTests {
         let outcome = await runtime(app, chooser: chooser).run(try goal())
         #expect(outcome == .failed(.stepNotAllowed("Chat", "Send")))
         #expect(await app.state.sentMessages.isEmpty)
+        #expect(await app.performed.isEmpty)
+    }
+
+    @Test
+    func aChatWithTheirOwnDraftInItIsLeftAloneAndTheRunSaysWhy() async throws {
+        var state = FakeChatAppState(chats: ["Mom"], openChat: "Mom")
+        state.drafts["Mom"] = "my own half-written words"
+        let app = FakeChatAppAccessibility(state: state)
+        let outcome = await runtime(app, chooser: ScriptedChooser()).run(try goal())
+        #expect(outcome == .failed(.typedTextKept("Chat")))
+        #expect(await app.state.drafts == ["Mom": "my own half-written words"])
         #expect(await app.performed.isEmpty)
     }
 

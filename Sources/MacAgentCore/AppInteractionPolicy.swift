@@ -12,7 +12,8 @@ import Foundation
 ///   and only when its label is present and names nothing on `committingWords`. Every other
 ///   button, menu item, checkbox or pop-up is refused.
 /// - Typing is limited to text fields, and only the goal's own `target` or `text`. The message text
-///   never goes into a search field.
+///   never goes into a search field, and never over text the person already typed there: setting a
+///   field's value replaces it, and a half-written draft is theirs.
 ///
 /// Labels are untrusted and a heuristic cannot prove an arbitrary button harmless (plan §7). The
 /// role rule carries the weight; the word list only narrows the one place buttons are allowed.
@@ -45,6 +46,9 @@ public enum AppInteractionPolicy {
             guard element.isTextInput, element.canSetValue else { return .refuse(.notATextField) }
             guard element.subrole != AccessibilityVocabulary.searchFieldSubrole else {
                 return .refuse(.searchFieldForMessage)
+            }
+            if let existing = element.typedText, existing != text {
+                return .refuse(.wouldReplaceTypedText)
             }
             return .allow(.setValue(text))
         }
@@ -96,4 +100,6 @@ public enum AppInteractionRefusal: Equatable, Sendable {
     case notATextField
     case searchFieldForMessage
     case nothingToType
+    /// The field already holds text the person typed, which setting its value would erase.
+    case wouldReplaceTypedText
 }

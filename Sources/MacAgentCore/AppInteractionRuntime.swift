@@ -146,6 +146,10 @@ public struct AppInteractionRuntime: Sendable {
                     // Not something to route around: the plan's rule is that a refusal is never a
                     // reason to try another way (§3).
                     return .failed(.stepNotAllowed(name, label))
+                case .refuse(.wouldReplaceTypedText):
+                    // The person's own words are in that box. Another box would be the wrong chat,
+                    // so this ends the run rather than letting the model look elsewhere.
+                    return .failed(.typedTextKept(name))
                 case .refuse(let refusal):
                     history.append(AppInteractionHistoryEntry(did: did, result: "refused: \(refusal)"))
                 case .allow(let action):
@@ -258,6 +262,7 @@ public enum AppInteractionFailure: Equatable, Sendable {
     case appQuit(String)
     case unreadable(String)
     case stepNotAllowed(String, String)
+    case typedTextKept(String)
     case gaveUp(String, String)
     case ranOutOfSteps(String, Int)
     /// The step route failed. Carries the backend's own user-facing sentence when there is one.
@@ -283,6 +288,8 @@ public enum AppInteractionFailure: Equatable, Sendable {
             return "I couldn't read \(app)'s window."
         case .stepNotAllowed(let app, let label):
             return "I stopped before pressing \"\(label)\" in \(app). I can only open chats and type drafts for now, never send or change anything."
+        case .typedTextKept(let app):
+            return "The message box in \(app) already has something you typed, so I left it alone. Send or clear it, then ask again."
         case .gaveUp(let app, let reason):
             return "I couldn't do that in \(app): \(reason)"
         case .ranOutOfSteps(let app, let steps):

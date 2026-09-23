@@ -143,6 +143,14 @@ public actor LiveAccessibilityProvider: AccessibilityProviding {
         return []
     }
 
+    /// Every attribute a snapshot element carries, fetched in one IPC round trip rather than one per
+    /// attribute: a chat window has hundreds of elements, and one call each keeps the reading inside
+    /// its deadline where a dozen each would cut it off before the message box.
+    private static let batchedAttributes = [
+        "AXRole", "AXSubrole", "AXIdentifier", "AXTitle", "AXDescription", "AXPlaceholderValue",
+        "AXValue", "AXEnabled", "AXFocused", "AXSelected", "AXPosition", "AXSize",
+    ]
+
     private static func read(
         _ element: AXUIElement,
         id: AccessibilityElementID,
@@ -150,42 +158,69 @@ public actor LiveAccessibilityProvider: AccessibilityProviding {
         depth: Int,
         limits: AccessibilityLimits
     ) -> AccessibilityElement {
+        var raw: CFArray?
+        var values: [String: AnyObject] = [:]
+        let result = AXUIElementCopyMultipleAttributeValues(
+            element,
+            batchedAttributes as CFArray,
+            AXCopyMultipleAttributeOptions(rawValue: 0),
+            &raw
+        )
+        if result == .success, let list = raw as? [AnyObject] {
+            // A missing attribute comes back as an AXValue holding an AXError, not as a gap.
+            for (name, value) in zip(batchedAttributes, list) where !isErrorValue(value) {
+                values[name] = value
+            }
+        }
         let limit = limits.maxTextLength
+        func text(_ name: String) -> String? { (values[name] as? String).flatMap { clipped($0, limit: limit) } }
+        func flag(_ name: String) -> Bool? { (values[name] as? NSNumber)?.boolValue }
+
+        let role = text("AXRole") ?? "AXUnknown"
+        let subrole = text("AXSubrole")
+        // Settability is a separate IPC per attribute, so it is asked only where a step could use
+        // it: typing into fields, and selecting rows.
+        let typable = subrole != AccessibilityVocabulary.secureFieldSubrole
+            && (AccessibilityVocabulary.textInputRoles.contains(role) || subrole == AccessibilityVocabulary.searchFieldSubrole)
+        let selectable = AccessibilityVocabulary.selectionRoles.contains(role) || role == "AXButton"
         return AccessibilityElement(
             id: id,
             parentIndex: parent,
             depth: depth,
-            role: string(element, "AXRole", limit: limit) ?? "AXUnknown",
-            subrole: string(element, "AXSubrole", limit: limit),
-            identifier: string(element, "AXIdentifier", limit: limit),
-            title: string(element, "AXTitle", limit: limit),
-            label: string(element, "AXDescription", limit: limit),
-            placeholder: string(element, "AXPlaceholderValue", limit: limit),
-            value: string(element, "AXValue", limit: limit),
-            isEnabled: bool(element, "AXEnabled") ?? true,
-            isFocused: bool(element, "AXFocused") ?? false,
-            isSelected: bool(element, "AXSelected") ?? false,
+            role: role,
+            subrole: subrole,
+            identifier: text("AXIdentifier"),
+            title: text("AXTitle"),
+            label: text("AXDescription"),
+            placeholder: text("AXPlaceholderValue"),
+            value: text("AXValue"),
+            isEnabled: flag("AXEnabled") ?? true,
+            isFocused: flag("AXFocused") ?? false,
+            isSelected: flag("AXSelected") ?? false,
             actions: actions(of: element),
-            canSetValue: settable(element, "AXValue"),
-            canFocus: settable(element, "AXFocused"),
-            canSelect: settable(element, "AXSelected"),
-            frame: frame(of: element)
+            canSetValue: typable && settable(element, "AXValue"),
+            canFocus: typable && settable(element, "AXFocused"),
+            canSelect: selectable && settable(element, "AXSelected"),
+            frame: frame(position: values["AXPosition"], size: values["AXSize"])
         )
+    }
+
+    private static func isErrorValue(_ value: AnyObject) -> Bool {
+        guard CFGetTypeID(value) == AXValueGetTypeID() else { return false }
+        return AXValueGetType(unsafeDowncast(value, to: AXValue.self)) == .axError
+    }
+
+    private static func clipped(_ text: String, limit: Int) -> String? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        return trimmed.count > limit ? String(trimmed.prefix(limit)) : trimmed
     }
 
     private static func string(_ element: AXUIElement, _ attribute: String, limit: Int) -> String? {
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success,
               let text = value as? String else { return nil }
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
-        return trimmed.count > limit ? String(trimmed.prefix(limit)) : trimmed
-    }
-
-    private static func bool(_ element: AXUIElement, _ attribute: String) -> Bool? {
-        var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success else { return nil }
-        return (value as? NSNumber)?.boolValue
+        return clipped(text, limit: limit)
     }
 
     private static func settable(_ element: AXUIElement, _ attribute: String) -> Bool {
@@ -202,19 +237,15 @@ public actor LiveAccessibilityProvider: AccessibilityProviding {
         return list
     }
 
-    private static func frame(of element: AXUIElement) -> CGRect? {
-        var positionValue: CFTypeRef?
-        var sizeValue: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element, "AXPosition" as CFString, &positionValue) == .success,
-              AXUIElementCopyAttributeValue(element, "AXSize" as CFString, &sizeValue) == .success,
-              let positionValue, let sizeValue,
-              CFGetTypeID(positionValue) == AXValueGetTypeID(),
-              CFGetTypeID(sizeValue) == AXValueGetTypeID() else { return nil }
+    private static func frame(position: AnyObject?, size: AnyObject?) -> CGRect? {
+        guard let position, let size,
+              CFGetTypeID(position) == AXValueGetTypeID(),
+              CFGetTypeID(size) == AXValueGetTypeID() else { return nil }
         var point = CGPoint.zero
-        var size = CGSize.zero
-        guard AXValueGetValue(unsafeDowncast(positionValue, to: AXValue.self), .cgPoint, &point),
-              AXValueGetValue(unsafeDowncast(sizeValue, to: AXValue.self), .cgSize, &size) else { return nil }
-        return CGRect(origin: point, size: size)
+        var extent = CGSize.zero
+        guard AXValueGetValue(unsafeDowncast(position, to: AXValue.self), .cgPoint, &point),
+              AXValueGetValue(unsafeDowncast(size, to: AXValue.self), .cgSize, &extent) else { return nil }
+        return CGRect(origin: point, size: extent)
     }
 
     private static func error(for result: AXError, staleOnInvalid: Bool) -> AccessibilityError {
