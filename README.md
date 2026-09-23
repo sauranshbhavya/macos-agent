@@ -2,7 +2,7 @@
 
 Sonny is an AI-native macOS agent platform for power users. It turns typed or spoken natural-language requests into validated local actions: it plans with a hosted model (OpenAI by default), assesses risk, previews side effects, executes only registered local capabilities, and streams logs plus a final summary. Sonny has two Mac-native surfaces sharing one state layer — a floating command widget, opened from the menu-bar icon or the push-to-talk hotkey, and a full Command Center window for history, insights, routines, workspaces, settings and privacy.
 
-See `docs/sonny-major-release-spec.md` for the full product spec, and `scripts/changelog-order read | less` for the branch-by-branch implementation history — every branch's entry newest-first, then `docs/sonny-v1-implementation-changelog.md`, which is the archive of everything written before 2026-09-16. Both are the source of truth for product direction; this file just orients a new contributor to the running app.
+This README describes the application as it exists today. [AGENTS.md](AGENTS.md) and [WORKFLOW.md](WORKFLOW.md) are the current contributor guidance; the [V2 direction](sonny_v2_architecture_implementation_plan.md) describes planned changes. The [v1 spec](docs/sonny-major-release-spec.md) and the per-branch records under `docs/changelog/` remain historical references, not current instructions.
 
 ## Cool Prototype Demo (Old)
 
@@ -139,11 +139,7 @@ Mock mode writes clearly marked `.mock.pdf` placeholders, not real PDFs.
 **These commands cover the app half only.** The server has its own suite — `cd server && npm test`,
 and `npm run test:db` for the tests that need a Postgres. See `server/README.md`.
 
-```bash
-swift test
-```
-
-On this local Command Line Tools install, plain `swift test` fails at compile with `error: no such module 'Testing'` — use the full invocation below (this is the only valid way to run tests in this repo). Both halves earn their place: `-Xswiftc -F` is what finds the module, and the two `-rpath` pairs are what let the built test bundle load at run time.
+On the documented local Command Line Tools install, plain `swift test` fails at compile with `error: no such module 'Testing'`. Use the invocation below and add `--filter` while iterating. [WORKFLOW.md](WORKFLOW.md) explains when broader suites and real-app checks are needed.
 
 ```bash
 env CLANG_MODULE_CACHE_PATH="$PWD/.build/clang-module-cache" swift test --disable-sandbox \
@@ -187,7 +183,7 @@ Coverage spans strict plan decoding, the full capability-adapter registry, risk-
 **The repository has two halves.** `Sources/` and `Tests/` are the macOS app, below. `server/` is
 the backend gateway — TypeScript on Node 22, its own build, its own tests, its own deploy, and its
 own `server/README.md`. It holds provider credentials and forwards to model providers; Sonny's agent
-loop stays on the Mac. `swift build` says nothing about it, and `CLAUDE.md`'s Commands section has
+loop stays on the Mac. `swift build` says nothing about it, and [WORKFLOW.md](WORKFLOW.md) has
 both halves' commands.
 
 ### The app half

@@ -17,14 +17,6 @@ import Foundation
 /// One copy, in the core target, because both suites that use it live there. The permission stub and
 /// the privilege trait were twinned once and are not any more — they live in `MacAgentTestSupport`,
 /// which both test targets depend on (SONNY-172).
-///
-/// **This repository has two test trees, and until SONNY-334 this type could only see one.** The
-/// Swift targets below are one; `server/test/` is the other, and nothing about a SwiftPM target list
-/// can reach it. Only `UntrustedFailureDeclarationTests` needs the second one — the declarations in
-/// `scripts/mutate-untrusted-failures` are matched against the text a failure recorded, and the
-/// harness has read both frameworks' logs since SONNY-323, so a signature may be written for a
-/// vitest failure and its `source` then lives under `server/test/`. The other scan suites are about
-/// Swift constructs and stay on ``targets``.
 enum TestSourceTree {
     /// **Every directory SwiftPM compiles a test file from, which is what makes the scans complete.**
     ///
@@ -36,16 +28,8 @@ enum TestSourceTree {
     /// `Package.swift` and not added here is exactly that.
     ///
     /// `LivePermissionCheckerScanTests` pins this list against `Package.swift`'s own test targets, so
-    /// nothing that is not a SwiftPM test target may be added to it — the server tree below is a
-    /// separate member for that reason and not for taste.
+    /// nothing that is not a SwiftPM test target may be added to it.
     static let targets = ["MacAgentCoreTests", "MacAgentTests", "MacAgentTestSupport"]
-
-    /// The gateway's test tree, repository-root-relative (SONNY-334).
-    ///
-    /// Not a SwiftPM target and never one: `Package.swift` declares five targets and every one of
-    /// them names a path under `Sources/` or `Tests/`, so nothing here reaches a Swift compiler. It
-    /// is a tree a *scan* reads, which is a different thing from a tree the compiler builds.
-    static let serverTestDirectory = "server/test"
 
     /// `Tests/`, from this file's own location.
     static var root: URL {
@@ -61,8 +45,6 @@ enum TestSourceTree {
 
     struct SourceFile {
         /// Target-qualified and slash-separated, e.g. `MacAgentCoreTests/DeterministicPermissions.swift`.
-        /// A server file carries ``serverTestDirectory`` in the same position, e.g.
-        /// `server/test/support/backstop.ts`.
         let relativePath: String
         let url: URL
     }
@@ -90,19 +72,6 @@ enum TestSourceTree {
         )
     }
 
-    /// Every `.ts` file under ``serverTestDirectory``, at any depth, in a stable order.
-    ///
-    /// `.ts` only: vitest's `include` in `server/vitest.config.ts` is `test/**/*.test.ts`, and the
-    /// helpers those files import — `test/support/` — are `.ts` as well. A `.json` fixture carries no
-    /// code and is deliberately not read.
-    static func serverTestFiles() throws -> [SourceFile] {
-        try files(
-            in: repositoryRoot.appendingPathComponent(serverTestDirectory),
-            withExtension: "ts",
-            labelledBy: serverTestDirectory
-        )
-    }
-
     private static func files(
         in directory: URL,
         withExtension pathExtension: String,
@@ -127,31 +96,12 @@ enum TestSourceTree {
     /// How a comment opens in a Swift source line. `///` and `//!` both start with `//`.
     static let swiftCommentPrefixes = ["//"]
 
-    /// How a comment opens in a TypeScript source line (SONNY-334).
-    ///
-    /// `//` is the same token Swift uses, and the reason there are three rather than one is that
-    /// TypeScript's doc comments are `/** … */` blocks whose continuation lines open on `*` — none of
-    /// which a `//` filter drops. A scan a comment can satisfy holds nothing, and `server/test/` is
-    /// written in JSDoc throughout, so a `//`-only filter over that tree would be satisfied by prose
-    /// about a wording rather than by the wording.
-    ///
-    /// **Line-prefixed rather than a block-span reader, and that is a decision rather than an
-    /// omission.** `MacAgentSource.strippingBlockComments` tracks `/*` … `*/` depth across lines, and
-    /// `CLAUDE.md` records what that costs: a block-comment opener inside a *line* comment opens a
-    /// span nothing closes, and every line after it disappears from the scanned text — a scan
-    /// reporting zero occurrences of a line plainly present in the file. That is SONNY-409, and
-    /// `LineCommentMayNotOpenABlockTests` refuses it across every Swift tree now. Dropping the three
-    /// prefixes instead cannot do that. What it does instead is over-drop: a real code line opening
-    /// on `*` is dropped too, and a signature's site count then reads one low and the suite says so.
-    /// Over-dropping fails loudly and under-dropping fails silently, so this takes the loud one.
-    static let typeScriptCommentPrefixes = ["//", "/*", "*"]
-
     /// Lines that are not comment-prefixed, keeping their original 1-based numbers.
     ///
     /// Comment-*prefixed* rather than every line *containing* `//`: the narrower `grep -v "//"` this
     /// repo was bitten by during row C drops a real construction that carries a trailing note. The
     /// same limit applies in the other direction and always has: a comment that *trails* code on the
-    /// same line is not dropped, in either tree.
+    /// same line is not dropped.
     static func codeLines(
         of source: String,
         droppingLinesStartingWith prefixes: [String] = TestSourceTree.swiftCommentPrefixes

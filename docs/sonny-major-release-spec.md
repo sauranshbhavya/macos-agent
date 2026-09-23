@@ -1,7 +1,9 @@
 # Sonny Major Release Engineering Blueprint
 
+> Historical v1 planning record. It describes decisions and implementation context from its period, including workspaces and a former delivery process. For current contributor instructions use [AGENTS.md](../AGENTS.md) and [WORKFLOW.md](../WORKFLOW.md); for planned product direction use the [V2 plan](../sonny_v2_architecture_implementation_plan.md). Check current code for shipped behavior.
+
 Version: 1.2
-Status: Planning source of truth for Sonny v1 major release
+Status: Historical v1 planning record
 Audience: Engineering, product, security, and future implementation chats
 Last updated: 2026-07-03
 
