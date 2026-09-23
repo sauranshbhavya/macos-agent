@@ -25,6 +25,15 @@ public struct FakeChatAppState: Sendable, Equatable {
     /// Pressable things inside the open conversation, the kind a model should never be shown or
     /// allowed to press: a link in a message, and a "Join" on an ongoing group call.
     public var conversationControls = false
+    /// Messages drawn as pressable cells in the open conversation, each holding its whole text.
+    public var conversationCells: [String] = []
+    /// Rows carrying one combined label, "Mom, last message in Mom, 10:32", the way UIKit and
+    /// Catalyst cells usually do.
+    public var combinedRowLabels = false
+    /// Each row's first text is an unread count, before the contact's name.
+    public var unreadCountFirst = false
+    /// The message box wrapped in a scroll area, as an AppKit text view always is.
+    public var messageBoxInScrollArea = false
 
     public init(chats: [String], openChat: String? = nil) {
         self.chats = chats
@@ -87,8 +96,12 @@ public actor FakeChatAppAccessibility: AccessibilityProviding {
         for chat in visible {
             let row = builder.add(
                 "row:\(chat)", role: state.rowRole, parent: list,
+                label: state.combinedRowLabels ? "\(chat), last message in \(chat), 10:32" : nil,
                 isSelected: chat == state.openChat, actions: ["AXPress"], canSelect: state.rowRole == "AXRow"
             )
+            if state.unreadCountFirst {
+                builder.add("unread:\(chat)", role: "AXStaticText", parent: row, value: "3")
+            }
             builder.add("rowtext:\(chat)", role: "AXStaticText", parent: row, value: chat)
             builder.add("preview:\(chat)", role: "AXStaticText", parent: row, value: "last message in \(chat)")
         }
@@ -100,13 +113,20 @@ public actor FakeChatAppAccessibility: AccessibilityProviding {
             builder.add("call", role: "AXButton", parent: main, label: "Voice call", actions: ["AXPress"])
             let messages = builder.add("messages", role: "AXScrollArea", parent: main)
             builder.add("bubble", role: "AXStaticText", parent: messages, value: "an earlier private message")
+            for (index, text) in state.conversationCells.enumerated() {
+                let cell = builder.add("cell:\(index)", role: "AXCell", parent: messages, actions: ["AXPress"])
+                builder.add("celltext:\(index)", role: "AXStaticText", parent: cell, value: text)
+            }
             if state.conversationControls {
                 let link = builder.add("link", role: "AXLink", parent: messages, actions: ["AXPress"])
                 builder.add("linktext", role: "AXStaticText", parent: link, value: "https://example.com/private-invite")
                 builder.add("join", role: "AXButton", parent: messages, label: "Join", actions: ["AXPress"])
             }
+            let boxParent = state.messageBoxInScrollArea
+                ? builder.add("boxscroll", role: "AXScrollArea", parent: main)
+                : main
             builder.add(
-                "messagebox", role: "AXTextArea", parent: main, placeholder: "Type a message",
+                "messagebox", role: "AXTextArea", parent: boxParent, placeholder: "Type a message",
                 value: state.drafts[open], canSetValue: state.messageBoxIsSettable, canFocus: true
             )
             builder.add("send", role: "AXButton", parent: main, label: "Send", actions: ["AXPress"])

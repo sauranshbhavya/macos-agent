@@ -187,6 +187,26 @@ public struct AccessibilitySnapshot: Equatable, Sendable {
         return firstText(inside: element) ?? ""
     }
 
+    /// The part of an element's name before any ", ": what a row is called when an app joins its
+    /// name, last message and time into one label ("Mom, see you soon, 10:32"). A person's name
+    /// rarely has a comma; a preview after one is not the row's name (PR #289 delta review, F3/F4).
+    public func primaryName(of element: AccessibilityElement) -> String {
+        Self.firstSegment(displayName(of: element))
+    }
+
+    /// Every short name an element could go by: its own title, description and value, each cut at
+    /// the first ", ", and the first few texts inside it. A row whose unread count or "Pinned" badge
+    /// comes before the contact's name is still found by that name.
+    public func names(of element: AccessibilityElement) -> [String] {
+        let own = [element.title, element.label, element.isTextInput ? nil : element.value].compactMap { $0 }
+        let inner = descendants(of: element).lazy.compactMap { $0.title ?? $0.value ?? $0.label }.prefix(6)
+        return (own + inner).map(Self.firstSegment).filter { !$0.isEmpty }
+    }
+
+    static func firstSegment(_ text: String) -> String {
+        (text.components(separatedBy: ", ").first ?? text).trimmingCharacters(in: .whitespaces)
+    }
+
     /// The first text inside an element, depth first.
     public func firstText(inside element: AccessibilityElement) -> String? {
         descendants(of: element).lazy.compactMap { $0.title ?? $0.value ?? $0.label }.first

@@ -63,6 +63,11 @@ public struct AppInteractionRuntime: Sendable {
         /// person's (PR #289 review, F8).
         var written: Set<String> = []
         var typed: Bool { !written.isEmpty }
+
+        /// Whether Sonny typed the goal's message itself, as opposed to only the name into search.
+        func typedMessage(of goal: AppInteractionGoal) -> Bool {
+            goal.text.map { written.contains($0) } ?? false
+        }
     }
 
     public func run(
@@ -74,12 +79,12 @@ public struct AppInteractionRuntime: Sendable {
         do {
             outcome = try await attempt(goal, progress: &progress, log: log)
         } catch is CancellationError {
-            return .cancelled(typedSomething: progress.typed, app: progress.appName ?? goal.app)
+            return .cancelled(typedSomething: progress.typed, messageTyped: progress.typedMessage(of: goal), app: progress.appName ?? goal.app)
         } catch let error as AppInteractionStop {
             outcome = error.outcome
         } catch {
             if SonnyBackendError.isCancellation(error) {
-                return .cancelled(typedSomething: progress.typed, app: progress.appName ?? goal.app)
+                return .cancelled(typedSomething: progress.typed, messageTyped: progress.typedMessage(of: goal), app: progress.appName ?? goal.app)
             }
             if let backend = (error as? SonnyBackendError) ?? (error as? any CarriesBackendError)?.backendError {
                 outcome = .failed(.service(SonnyBackendCopy.sentence(for: backend)))
@@ -88,7 +93,7 @@ public struct AppInteractionRuntime: Sendable {
             }
         }
         if case .failed(let failure) = outcome, progress.typed {
-            return .failedAfterTyping(failure, app: progress.appName ?? goal.app)
+            return .failedAfterTyping(failure, app: progress.appName ?? goal.app, messageTyped: progress.typedMessage(of: goal))
         }
         return outcome
     }
@@ -137,7 +142,7 @@ public struct AppInteractionRuntime: Sendable {
             // Checked before asking the model, so a goal already met costs no model call — but only
             // a confirmed one. An unconfirmed placement waits for the model to say it is finished,
             // so a draft in the wrong chat gets a turn to be moved (PR #289 review, F3).
-            if progress.typed, AppInteractionVerifier.check(snapshot, goal: goal) == .satisfied {
+            if progress.typedMessage(of: goal), AppInteractionVerifier.check(snapshot, goal: goal) == .satisfied {
                 return .done(AppInteractionReport(appName: name, goal: goal, targetConfirmed: true))
             }
 
@@ -159,7 +164,7 @@ public struct AppInteractionRuntime: Sendable {
             case .finished:
                 try await sleep(budget.settle)
                 let fresh = try await observe(processIdentifier, goal: goal, appName: name)
-                if let outcome = finishedOutcome(fresh, goal: goal, appName: name, typed: progress.typed) {
+                if let outcome = finishedOutcome(fresh, goal: goal, appName: name, typedMessage: progress.typedMessage(of: goal)) {
                     return outcome
                 }
                 history.append(AppInteractionHistoryEntry(did: "said finished", result: notFinishedReason(fresh, goal: goal)))
@@ -202,15 +207,16 @@ public struct AppInteractionRuntime: Sendable {
         return .failed(.ranOutOfSteps(name, budget.maxSteps))
     }
 
-    /// The model says it is finished. Sonny agrees only for text it typed itself (PR #289 review,
-    /// F7), in a chat that is not visibly someone else's.
+    /// The model says it is finished. Sonny agrees only for the message it typed itself — not for
+    /// having typed the name into search (PR #289 review, F7, and its delta) — in a chat that is not
+    /// visibly someone else's.
     private func finishedOutcome(
         _ snapshot: AccessibilitySnapshot,
         goal: AppInteractionGoal,
         appName: String,
-        typed: Bool
+        typedMessage: Bool
     ) -> AppInteractionOutcome? {
-        if goal.text != nil, !typed { return nil }
+        if goal.text != nil, !typedMessage { return nil }
         switch AppInteractionVerifier.check(snapshot, goal: goal) {
         case .satisfied: return .done(AppInteractionReport(appName: appName, goal: goal, targetConfirmed: true))
         case .targetUnconfirmed: return .done(AppInteractionReport(appName: appName, goal: goal, targetConfirmed: false))
@@ -288,8 +294,8 @@ public enum AppInteractionOutcome: Equatable, Sendable {
     case needsUserInput(String)
     case failed(AppInteractionFailure)
     /// A failure reached after Sonny had typed into the app: what it typed is still there, unsent.
-    case failedAfterTyping(AppInteractionFailure, app: String)
-    case cancelled(typedSomething: Bool, app: String)
+    case failedAfterTyping(AppInteractionFailure, app: String, messageTyped: Bool)
+    case cancelled(typedSomething: Bool, messageTyped: Bool, app: String)
 }
 
 public enum AppInteractionFailure: Equatable, Sendable {
@@ -388,7 +394,14 @@ public struct LiveAppInteractionAppOpener: AppInteractionAppOpening {
 public enum AppInteractionRunError: Error, LocalizedError, Equatable {
     case needsUserInput(String)
     case failed(AppInteractionFailure)
-    case failedAfterTyping(AppInteractionFailure, app: String)
+    case failedAfterTyping(AppInteractionFailure, app: String, messageTyped: Bool)
+
+    /// What typing left in the app, said plainly: the unsent message, or only the searched name.
+    static func leftBehind(app: String, messageTyped: Bool) -> String {
+        messageTyped
+            ? "The message I typed is still in \(app), unsent."
+            : "I left the name I searched for in \(app)'s search field."
+    }
 
     public var errorDescription: String? {
         switch self {
@@ -398,8 +411,8 @@ public enum AppInteractionRunError: Error, LocalizedError, Equatable {
             return "\(question) Ask again with the exact name and I'll try once more."
         case .failed(let failure):
             return failure.userMessage
-        case .failedAfterTyping(let failure, let app):
-            return "\(failure.userMessage) Anything I typed is still in \(app), unsent."
+        case .failedAfterTyping(let failure, let app, let messageTyped):
+            return "\(failure.userMessage) \(Self.leftBehind(app: app, messageTyped: messageTyped))"
         }
     }
 }
@@ -408,12 +421,16 @@ public enum AppInteractionRunError: Error, LocalizedError, Equatable {
 /// its sentence replaces the plain "Canceled." because the text is still there (PR #289 review, F8).
 public struct AppInteractionStoppedAfterTyping: Error, LocalizedError, Equatable {
     public let app: String
+    public let messageTyped: Bool
 
-    public init(app: String) {
+    public init(app: String, messageTyped: Bool) {
         self.app = app
+        self.messageTyped = messageTyped
     }
 
-    public var summary: String { "Stopped. Anything I typed is still in \(app), unsent." }
+    public var summary: String {
+        "Stopped. \(AppInteractionRunError.leftBehind(app: app, messageTyped: messageTyped))"
+    }
     public var errorDescription: String? { summary }
 }
 
@@ -426,11 +443,11 @@ extension AppInteractionOutcome {
             throw AppInteractionRunError.needsUserInput(question)
         case .failed(let failure):
             throw AppInteractionRunError.failed(failure)
-        case .failedAfterTyping(let failure, let app):
-            throw AppInteractionRunError.failedAfterTyping(failure, app: app)
-        case .cancelled(typedSomething: true, let app):
-            throw AppInteractionStoppedAfterTyping(app: app)
-        case .cancelled(typedSomething: false, _):
+        case .failedAfterTyping(let failure, let app, let messageTyped):
+            throw AppInteractionRunError.failedAfterTyping(failure, app: app, messageTyped: messageTyped)
+        case .cancelled(typedSomething: true, let messageTyped, let app):
+            throw AppInteractionStoppedAfterTyping(app: app, messageTyped: messageTyped)
+        case .cancelled(typedSomething: false, _, _):
             throw CancellationError()
         }
     }

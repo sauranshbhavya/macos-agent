@@ -59,7 +59,7 @@ struct AppInteractionDispatchTests {
         fixture.viewModel.cancelCurrentRun()
         try await waitForIdle(fixture.viewModel)
 
-        #expect(fixture.viewModel.finalSummary == "Stopped. Anything I typed is still in Chat, unsent.")
+        #expect(fixture.viewModel.finalSummary == "Stopped. I left the name I searched for in Chat's search field.")
         #expect(fixture.viewModel.errorMessage == nil)
     }
 

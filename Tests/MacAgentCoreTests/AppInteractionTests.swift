@@ -223,8 +223,8 @@ struct AppInteractionScreenTests {
     /// PR #289 review, F4: no preview, no draft, no conversation, no other chat's name.
     @Test
     func theModelSeesOnlyTheTargetsRowsByNameAndNothingOfAnyConversation() async throws {
-        var state = FakeChatAppState(chats: ["Mom sk-SECRET", "Dad", "Maddie"], openChat: "Dad")
-        state.drafts["Dad"] = "my unsent words to Dad"
+        var state = FakeChatAppState(chats: ["Mom", "Dad sk-SECRET", "Maddie"], openChat: "Dad sk-SECRET")
+        state.drafts["Dad sk-SECRET"] = "my unsent words to Dad"
         state.conversationControls = true
         let shot = try await snapshot(state)
         let built = AppInteractionScreenBuilder(redact: { $0.replacingOccurrences(of: "sk-SECRET", with: "[redacted]") })
@@ -234,8 +234,9 @@ struct AppInteractionScreenTests {
         for kept in ["an earlier private message", "last message in", "my unsent words", "private-invite", "Join", "Maddie", "sk-SECRET"] {
             #expect(!everything.contains(kept), "\(kept) reached the model")
         }
-        #expect(built.screen.candidates.filter { $0.kind == "row" }.map(\.label) == ["Mom [redacted]"])
-        #expect(built.screen.context == ["Dad"])
+        #expect(built.screen.candidates.filter { $0.kind == "row" }.map(\.label) == ["Mom"])
+        // The open chat's name goes as context, through redaction.
+        #expect(built.screen.context == ["Dad [redacted]"])
         let box = try #require(built.screen.candidates.first { $0.kind == "text area" })
         #expect(box.state.contains("holds other text"))
         #expect(box.can == ["enter_text"])
@@ -246,11 +247,47 @@ struct AppInteractionScreenTests {
         }
     }
 
+    /// Delta review, F4: a message that merely contains the target's letters, or a combined label's
+    /// preview, never reaches the model.
+    @Test
+    func onlyANameThatIsTheTargetGoesAndOnlyThatName() async throws {
+        var state = FakeChatAppState(chats: ["Mom", "Dad"], openChat: "Dad")
+        state.combinedRowLabels = true
+        state.conversationCells = ["Give me a moment, my PIN is 4471", "I really need the account number", "Mom"]
+        let shot = try await snapshot(state)
+        let builder = AppInteractionScreenBuilder(redact: { $0 })
+
+        let forMom = builder.build(from: shot, goal: try goal())
+        let momJSON = try String(data: JSONEncoder().encode(forMom.screen), encoding: .utf8) ?? ""
+        for kept in ["moment", "4471", "account", "last message in", "10:32"] {
+            #expect(!momJSON.contains(kept), "\(kept) reached the model")
+        }
+        // Mom's row by its name alone, and the one message that is exactly the word "Mom".
+        #expect(forMom.screen.candidates.filter { $0.kind == "row" }.map(\.label) == ["Mom"])
+
+        let forAl = builder.build(from: shot, goal: try goal(target: "Al"))
+        let alJSON = try String(data: JSONEncoder().encode(forAl.screen), encoding: .utf8) ?? ""
+        #expect(!alJSON.contains("account"))
+    }
+
+    /// Delta review, N1: a message box inside a scroll area, as an AppKit text view always is, is
+    /// still shown, as a state and never its text.
+    @Test
+    func aMessageBoxInsideAScrollAreaIsStillShown() async throws {
+        var state = FakeChatAppState(chats: ["Mom"], openChat: "Mom")
+        state.messageBoxInScrollArea = true
+        state.drafts["Mom"] = "private words"
+        let built = AppInteractionScreenBuilder(redact: { $0 }).build(from: try await snapshot(state), goal: try goal())
+        let box = try #require(built.screen.candidates.first { $0.kind == "text area" })
+        #expect(box.state.contains("holds other text"))
+        #expect(!(try String(data: JSONEncoder().encode(built.screen), encoding: .utf8) ?? "").contains("private words"))
+    }
+
     @Test
     func labelsAreCutToTheBudget() async throws {
-        let long = "Mom " + String(repeating: "x", count: 300)
+        let long = "Mom " + String(repeating: "x", count: AppInteractionGoal.maxTargetLength - 4)
         let shot = try await snapshot(FakeChatAppState(chats: [long]))
-        let built = AppInteractionScreenBuilder(redact: { $0 }).build(from: shot, goal: try goal())
+        let built = AppInteractionScreenBuilder(redact: { $0 }).build(from: shot, goal: try goal(target: long))
         let row = try #require(built.screen.candidates.first { $0.kind == "row" })
         #expect(row.label.count == 81)
         #expect(row.label.hasSuffix("…"))
@@ -284,6 +321,25 @@ struct AppInteractionPolicyTests {
         let buttonShot = try await snapshot(buttons)
         let buttonRow = try element(buttonShot) { $0.role == "AXButton" }
         #expect(AppInteractionPolicy.decide(.press, on: buttonRow.id, in: buttonShot, goal: try goal()) == .allow(.press))
+    }
+
+    /// Delta review, N2: a row drawn as a button inside a list is a person's name, not a command,
+    /// and a combined label's preview is someone's message, not the row.
+    @Test
+    func rowsDrawnAsButtonsOpenWhateverThePersonIsCalled() async throws {
+        var state = FakeChatAppState(chats: ["Maddie", "Callum", "Book club meetup"])
+        state.rowRole = "AXButton"
+        let shot = try await snapshot(state)
+        for name in ["Maddie", "Callum", "Book club meetup"] {
+            let row = try element(shot) { $0.role == "AXButton" && shot.primaryName(of: $0) == name }
+            #expect(AppInteractionPolicy.decide(.press, on: row.id, in: shot, goal: try goal(target: name)) == .allow(.press), "\(name)")
+        }
+
+        var combined = FakeChatAppState(chats: ["Mom"])
+        combined.combinedRowLabels = true
+        let labelled = try await snapshot(combined)
+        let row = try element(labelled) { $0.role == "AXRow" }
+        #expect(AppInteractionPolicy.decide(.press, on: row.id, in: labelled, goal: try goal()) == .allow(.press))
     }
 
     /// The reviewer's probes, each of which was allowed before (PR #289 review, F1).
@@ -430,6 +486,23 @@ struct AppInteractionVerifierTests {
         #expect(try await check(hidden, try goal()) == .otherTargetOpen)
     }
 
+    /// Delta review, F3: a selected row whose combined label or first text is not simply the name
+    /// is still the target's, not someone else's.
+    @Test
+    func aCombinedLabelOrAnUnreadCountDoesNotMakeTheRightChatLookWrong() async throws {
+        var combined = FakeChatAppState(chats: ["Mom", "Dad"], openChat: "Mom")
+        combined.combinedRowLabels = true
+        combined.exposesHeader = false
+        let labelled = try await snapshot(combined)
+        #expect(AppInteractionVerifier.targetState("Mom", in: labelled) == .unknown)
+        #expect(AppInteractionVerifier.targetState("Dad", in: labelled) == .contradicted)
+
+        var counted = FakeChatAppState(chats: ["Mom", "Dad"], openChat: "Mom")
+        counted.unreadCountFirst = true
+        counted.exposesHeader = false
+        #expect(AppInteractionVerifier.targetState("Mom", in: try await snapshot(counted)) == .unknown)
+    }
+
     @Test
     func theTextInTheSearchFieldOrNowhereIsNotYet() async throws {
         var state = FakeChatAppState(chats: ["Mom"], openChat: "Mom")
@@ -490,6 +563,44 @@ struct AppInteractionRuntimeTests {
         #expect(state.drafts == ["Mom": "Running late, home by 8"])
         #expect(state.sentMessages.isEmpty)
         #expect(state.callsPlaced == 0)
+    }
+
+    /// Delta review, N1 and F3 together: the box in a scroll area, rows with combined labels and no
+    /// header, the shape a real Mac app is likely to have, still ends with the draft placed.
+    @Test
+    func aDraftLandsInAnAppKitShapedWindow() async throws {
+        var state = FakeChatAppState(chats: ["Dad", "Mom"])
+        state.messageBoxInScrollArea = true
+        state.combinedRowLabels = true
+        state.exposesHeader = false
+        let app = FakeChatAppAccessibility(state: state)
+        let outcome = await runtime(app, chooser: ScriptedChooser()).run(try goal())
+        guard case .done(let report) = outcome else {
+            Issue.record("expected done, got \(outcome)")
+            return
+        }
+        #expect(!report.targetConfirmed)
+        #expect(await app.state.drafts == ["Mom": "Running late, home by 8"])
+    }
+
+    /// Delta review, F7: having typed only the name into search is not having typed the message.
+    @Test
+    func finishedIsNotBelievedUntilSonnyTypedTheMessageItself() async throws {
+        var state = FakeChatAppState(chats: ["Mom"], openChat: "Mom")
+        state.drafts["Mom"] = "Running late, home by 8"
+        let app = FakeChatAppAccessibility(state: state)
+        let chooser = ScriptedChooser(overrides: [
+            { screen in screen.candidates.first { $0.kind == "search field" }.map { .step(.enterTarget, ref: $0.ref) } },
+            { _ in .finished },
+            { screen in screen.candidates.first { $0.kind == "text area" }.map { .step(.enterText, ref: $0.ref) } },
+        ])
+        let outcome = await runtime(app, chooser: chooser).run(try goal())
+        guard case .done(let report) = outcome else {
+            Issue.record("expected done, got \(outcome)")
+            return
+        }
+        #expect(report.targetConfirmed)
+        #expect(chooser.histories[2].last?.did == "said finished")
     }
 
     /// PR #289 review, F6.
@@ -619,9 +730,12 @@ struct AppInteractionRuntimeTests {
             { _ in .giveUp("no chat called Mom") },
         ])
         let outcome = await runtime(app, chooser: chooser).run(try goal())
-        #expect(outcome == .failedAfterTyping(.gaveUp("Chat", "no chat called Mom"), app: "Chat"))
-        let error = AppInteractionRunError.failedAfterTyping(.gaveUp("Chat", "no chat called Mom"), app: "Chat")
-        #expect(error.errorDescription?.hasSuffix("Anything I typed is still in Chat, unsent.") == true)
+        #expect(outcome == .failedAfterTyping(.gaveUp("Chat", "no chat called Mom"), app: "Chat", messageTyped: false))
+        // Only the name went into search, and the sentence says exactly that (delta review, F8).
+        let searched = AppInteractionRunError.failedAfterTyping(.gaveUp("Chat", "no chat called Mom"), app: "Chat", messageTyped: false)
+        #expect(searched.errorDescription?.hasSuffix("I left the name I searched for in Chat's search field.") == true)
+        let messaged = AppInteractionRunError.failedAfterTyping(.gaveUp("Chat", "x"), app: "Chat", messageTyped: true)
+        #expect(messaged.errorDescription?.hasSuffix("The message I typed is still in Chat, unsent.") == true)
     }
 
     /// PR #289 review, F7: "finished" before anything was typed is not believed.
@@ -707,7 +821,7 @@ struct AppInteractionRuntimeTests {
         let task = Task { await running.run(g) }
         await gate.waitUntilHanging()
         task.cancel()
-        #expect(await task.value == .cancelled(typedSomething: true, app: "Chat"))
+        #expect(await task.value == .cancelled(typedSomething: true, messageTyped: false, app: "Chat"))
         #expect(await app.state.search == "Mom")
     }
 }

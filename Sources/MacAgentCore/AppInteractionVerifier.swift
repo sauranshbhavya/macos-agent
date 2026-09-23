@@ -31,29 +31,42 @@ public enum AppInteractionVerifier {
         return target == .shown ? .satisfied : .targetUnconfirmed
     }
 
-    /// The text sits in a field Sonny could have written: writable, not a search field, and not
-    /// inside a list or scroll area, where a read-only text view can hold a sent message word for
-    /// word (PR #289 review, F7).
+    /// The text sits in a field Sonny could have written: writable, not a search field, and not a
+    /// cell inside a list (PR #289 review, F7). A scroll area is allowed, because a Mac text view
+    /// always sits inside one (delta review, N1); a sent message shown as a text view there is
+    /// read-only, which `canSetValue` already refuses.
     static func textIsPlaced(_ text: String, in snapshot: AccessibilitySnapshot) -> Bool {
         snapshot.elements.contains {
             $0.isTextInput && !$0.isSearchField && $0.canSetValue
                 && $0.value == text
-                && !snapshot.isInsideListOrScrollArea($0)
+                && !snapshot.isInsideList($0)
         }
+    }
+
+    /// The one of `names` that is the target, compared whole after dropping case and symbols, so
+    /// "Mom ❤️" and "Mom, see you soon" are Mom and "Mom & Dad" and "Give me a moment" are not.
+    /// The same test decides what the model may see, what counts as another chat being open, and
+    /// what confirms the right one.
+    public static func name(matching target: String, in names: [String]) -> String? {
+        let wanted = normalized(target)
+        guard !wanted.isEmpty else { return nil }
+        return names.first { normalized($0) == wanted }
     }
 
     public static func targetState(_ target: String, in snapshot: AccessibilitySnapshot) -> TargetState {
         let wanted = normalized(target)
         guard !wanted.isEmpty else { return .unknown }
         if targetIsShown(wanted, in: snapshot) { return .shown }
-        // A selected row is the one thing an app shows as open inside a list. If it names someone
-        // else, typing now would put the message in their chat (PR #289 review, F3).
+        // A selected row is the one thing an app shows as open inside a list. If none of its names
+        // is the target, typing now would put the message in someone else's chat (PR #289 review,
+        // F3). Its names, not its whole label: a row labelled "Mom, see you soon, 10:32", or one
+        // whose first text is an unread count, is still Mom's (delta review).
         let selectedElsewhere = snapshot.elements.contains { element in
-            element.isSelected
-                && AccessibilityVocabulary.selectionRoles.contains(element.role)
-                && snapshot.isInsideList(element)
-                && !normalized(snapshot.displayName(of: element)).isEmpty
-                && normalized(snapshot.displayName(of: element)) != wanted
+            guard element.isSelected,
+                  AccessibilityVocabulary.selectionRoles.contains(element.role) || element.role == "AXButton",
+                  snapshot.isInsideList(element) else { return false }
+            let names = snapshot.names(of: element)
+            return !names.isEmpty && name(matching: target, in: names) == nil
         }
         return selectedElsewhere ? .contradicted : .unknown
     }

@@ -46,7 +46,7 @@ The sections after this one are the detailed design. This section is what holds 
 - A question from the model (two chats with the same name) ends the run with that question. There is no pause to answer into yet.
 - An app the person has not allowed for control in the current mode (Safe mode, for one) is refused with a sentence saying how to allow it. There is no prompt yet.
 - Every button, link and pressable text is refused except a row drawn as a button inside a list (a scroll area does not count) whose shown name commits nothing. Sending, calling, joining and deleting wait for exact approval (§9).
-- The model sees list rows only when their name contains the target's, by that one name, and never the conversation. Other egress rules wait for a per-app review.
+- The model sees a list row only when one of its short names is the target, compared whole, and only by that name; never a preview, never the conversation, never a text field's contents. Other egress rules wait for a per-app review.
 - Confirming the open chat relies on its name being exposed outside any list. When it is not, Sonny reports the draft as placed but the chat as unconfirmed.
 
 ## 1. Outcome and confirmed decisions
