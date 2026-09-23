@@ -10,10 +10,6 @@ import Testing
 /// zero and a ceiling nothing can approach, and decided by how many canary round trips completed —
 /// except the two tests that are *about* a wall clock, which assert only a lower bound, the one
 /// direction load can only reinforce.
-///
-/// **Nothing here quotes a wording `scripts/mutate-untrusted-failures` declares**, for the reason
-/// `HangBackstopTests` gives: a guard whose own failure text carries a declared signature is a guard
-/// the declaration file switches off. The declared signatures are read from that file instead.
 @Suite
 struct CanaryBackstopTests {
     private static let unreachableWallClock: TimeInterval = 3600
@@ -314,30 +310,6 @@ struct CanaryBackstopTests {
         #expect(reachedTheLineAfter)
     }
 
-    /// **The give-up wording is declared exactly once, and the two evidence wordings nowhere.** Read
-    /// from the declaration file rather than quoted, so this test's own text carries no signature.
-    ///
-    /// The first half is what makes a starved wait UNATTRIBUTED rather than a manufactured kill; the
-    /// second is what makes a stuck or broken one count. A reword that let either evidence sentence
-    /// match a declaration would switch that off without anything else going red.
-    @Test
-    func theGiveUpWordingIsDeclaredAndTheEvidenceWordingsAreNot() throws {
-        let signatures = try Self.declaredSignatures()
-        #expect(!signatures.isEmpty, "read no signatures at all, so the checks below would pass on nothing")
-
-        let gaveUp = CanaryBackstop.gaveUpMessage("x", tally: CanaryBackstop.Tally(elapsed: 10, completed: 0, failed: 0))
-        #expect(signatures.filter { gaveUp.contains($0) }.count == 1)
-
-        let stuck = CanaryBackstop.stuckMessage("x", canaryRoundTrips: 125)
-        #expect(signatures.filter { stuck.contains($0) }.isEmpty)
-
-        let broken = CanaryBackstop.brokenMessage("x", failedRoundTrips: 100)
-        #expect(signatures.filter { broken.contains($0) }.isEmpty)
-
-        let abandoned = HangBackstop.abandonedMessage("x")
-        #expect(signatures.filter { abandoned.contains($0) }.count == 1)
-    }
-
     /// The wordings carry the numbers that justify them and can be told apart. The give-up wording
     /// states the counts and the floor separately, so a count past the floor never reads as
     /// "125 of 100".
@@ -409,16 +381,5 @@ struct CanaryBackstopTests {
             return true
         }
         return (seen.recorded, reachedTheLineAfter)
-    }
-
-    private static func declaredSignatures() throws -> [String] {
-        let file = TestSourceTree.repositoryRoot.appendingPathComponent("scripts/mutate-untrusted-failures")
-        return try String(contentsOf: file, encoding: .utf8)
-            .components(separatedBy: "\n")
-            .compactMap { line in
-                guard line.hasPrefix(">>> signature ") else { return nil }
-                let signature = line.dropFirst(">>> signature ".count).trimmingCharacters(in: .whitespaces)
-                return signature.isEmpty ? nil : signature
-            }
     }
 }

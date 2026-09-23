@@ -1,8 +1,42 @@
 # Sonny v2 Architecture and Implementation Plan
 
-Reviewed against repository HEAD `336959ca` on 2026-09-22; updated after the workflow simplification. This is the detailed working plan for a cleaner execution core, not a frozen architecture or a requirement to implement every section before the first useful delivery. Existing internals are replaceable. Source links below are relative to this repository. Proposed types, interfaces, phase names and examples are design sketches, not existing APIs or mandatory class/file layouts. Revisit them after each real workflow exposes what works.
+Reviewed against repository HEAD `336959ca` on 2026-09-22; updated after the workflow simplification, and again on 2026-09-23 with the founders' decisions in the next section. This is the detailed working plan for a cleaner execution core, not a frozen architecture or a requirement to implement every section before the first useful delivery. Existing internals are replaceable. Source links below are relative to this repository. Proposed types, interfaces, phase names and examples are design sketches, not existing APIs or mandatory class/file layouts. Revisit them after each real workflow exposes what works.
 
 See [the comparison](docs/archive/sonny_v2_architecture_comparison.md) and [original draft](docs/archive/sonny_v2_architecture_implementation_plan_1.md) for earlier tradeoffs. The [recovered intermediate plan](docs/archive/sonny_v2_architecture_implementation_plan_2026-09-22.md) preserves the version before this update. The inventory below describes reusable evidence, not architecture that must be preserved.
+
+## Current phase, decisions and rules (2026-09-23)
+
+The sections after this one are the detailed design. This section is what holds right now.
+
+**Phase.** New features are frozen until Milestone A lands. No features, capabilities or improvements go onto the current execution path; the only exception is a fix for a defect that loses data, breaks security or blocks everyday use, approved by a founder each time.
+
+**Milestone A's workflow.** A third-party app both founders use daily, with a draft-only goal where nothing is sent. Notes stays available as the controlled fixture if that app's Accessibility tree turns out to be poor. The app itself is still to be named (open question 1).
+
+**On hold.**
+
+- Skill-pack work (the site catalogue and pack features) resumes only after the core rewrite, that is after Milestone C's core cutover.
+- The Jev local decision model. The original draft's Laya/Jev section stays in the [archive](docs/archive/sonny_v2_architecture_implementation_plan_1.md) for when it comes back.
+- Two small UX fixes found in the 2026-09-23 review wait for the freeze to lift: `AgentViewModel.copySummary()` exists but no control calls it, and the floating widget's result text is not selectable although Command Center's and the receipt's are.
+
+**Verification.** There is no CI for now. How each change is built, tested and reviewed is in [WORKFLOW.md](WORKFLOW.md); this plan does not restate it.
+
+**Rules that always hold.** Every milestone keeps these; the section in brackets has the detail.
+
+1. Each task has one owner of execution authority. UI focus never selects what runs or which approval is answered (§4).
+2. Model output, web content, Accessibility text and screenshots are untrusted. They can propose an action but never approve it, name a trusted app, or mark a result verified (§5, §7).
+3. A consequential effect gets a fresh approval of the exact effect immediately before it commits, and any material change voids that approval (§9).
+4. An action executes once. A non-idempotent action whose outcome is unknown is never replayed, and a possible earlier commit is reconciled before switching backends (§3, §10).
+5. A denied permission, refusal or scope violation is never a reason to try another backend (§3, §12).
+6. Scripts come only from reviewed, typed osascript templates, and template arguments are data, never script source (§6).
+7. All visual egress goes through local redaction, and Accessibility text sent off the machine needs its own minimization (§8).
+8. Private mode, memory settings, retention and deletion cover every new store, trace and context path (§13).
+9. Saved user data stays readable, nothing is wiped, and a stored approval never carries forward as authority (§5, §15).
+10. New model calls go through the existing gateway, and the Swift and server schemas change together (§14).
+
+**Open questions.**
+
+1. Which third-party app does Milestone A use?
+2. Does Milestone A use the hosted planner? If it does, deployment is on its critical path: `SonnyBackendHost.productionBaseURL` is nil and the staging and production deploys are stubs (§14).
 
 ## 1. Outcome and confirmed decisions
 
@@ -329,11 +363,11 @@ Developer ID distribution remains provisional for this plan, while the repositor
 
 ## 15. Delivery sequence and deletion points
 
-These are milestones, not a fixed dependency graph. Pick the next slice from user value and what the previous slice taught us. Do not complete an abstract framework before a real workflow, preserve old internals merely to keep textual tests green, or leave two execution authorities permanently active. The lighter contributor workflow in [WORKFLOW.md](WORKFLOW.md) is already current; this implementation does not need to reintroduce its retired artifacts.
+These are milestones, not a fixed dependency graph. Pick the next slice from user value and what the previous slice taught us. Do not complete an abstract framework before a real workflow, preserve old internals merely to keep textual tests green, or leave two execution authorities permanently active.
 
 ### Milestone A — Choose and prove one useful workflow
 
-Choose an unfamiliar non-refused app and a user goal with an observable result. Prefer an action without external send or destructive effects for the first proof. A controlled AppKit fixture can establish AX behavior; a disposable real-app case shows whether the discovery is useful outside a fixture. Inspect the AX tree and existing native or vision support before deciding which backend to implement.
+Choose an unfamiliar non-refused app and a user goal with an observable result. Prefer an action without external send or destructive effects for the first proof. The founders' pick is recorded at the top of this plan: a third-party app they use daily, with a draft-only goal. A controlled AppKit fixture can establish AX behavior; a disposable real-app case shows whether the discovery is useful outside a fixture. Inspect the AX tree and existing native or vision support before deciding which backend to implement.
 
 Record only the current behavior and data contracts that this slice touches. Establish a small number of acceptance cases and a baseline for the user's perceived wait. The full retained-feature ledger belongs to migration planning, not a requirement to start the first slice.
 
@@ -359,6 +393,8 @@ Retire workspace UI and execution binding in a separate data-compatible slice. I
 
 Evidence: each migrated feature has a user-outcome check; old data still loads or offers a clear repair/export path; no retained entry point depends on UI focus for execution; duplicate authority and temporary bridges are removed at final cutover.
 
+Skill-pack work resumes after this milestone's core cutover.
+
 ### Milestone D — Add independent concurrent tasks when valuable
 
 After the single-task lifecycle is stable, enable more than one user task. Each keeps its own context, cancellation, approval and result. Add the smallest admission and resource-ownership mechanism that handles observed conflicts. Shared foreground actions, app state and document/draft writes need serialization or revalidation; independent network/planning work may overlap.
@@ -367,7 +403,7 @@ Evidence: two tasks progress independently, a selected UI row cannot redirect an
 
 ### Milestone E — Release and cleanup
 
-At the release boundary, run the full relevant suites and affected packaged/signed-app smoke checks. Confirm hosted deployment and distribution assumptions before treating them as release guarantees. Remove obsolete source-layout tests whose underlying behavior now has a better check; keep specialized mutation and warning tools only where they answer a specific question. Consider observer caches, warm capture, ghost cursor, local models or training datasets only after measurement shows a need.
+At the release boundary, run the full relevant suites and affected packaged/signed-app smoke checks. Confirm hosted deployment and distribution assumptions before treating them as release guarantees. Remove obsolete source-layout tests whose underlying behavior now has a better check. Consider observer caches, warm capture, ghost cursor, local models or training datasets only after measurement shows a need.
 
 The milestones can be rearranged when a concrete dependency requires it. A smaller internal or limited delivery can finish after A or B. Final replacement of the old execution core requires C; concurrency requires D only when that product capability is being delivered.
 
@@ -393,16 +429,7 @@ Preserve useful behavioral coverage, rewriting tests against the new boundaries 
 
 Replay records contain sanitized semantic snapshots, candidate sets, expected action/effect, and observed outcomes. Keep held-out evaluations separate from any training corpus.
 
-For implementation changes, use the repository's supported Swift test invocation:
-
-```sh
-env CLANG_MODULE_CACHE_PATH="$PWD/.build/clang-module-cache" swift test --disable-sandbox \
-  -Xswiftc -F -Xswiftc /Library/Developer/CommandLineTools/Library/Developer/Frameworks \
-  -Xlinker -rpath -Xlinker /Library/Developer/CommandLineTools/Library/Developer/Frameworks \
-  -Xlinker -rpath -Xlinker /Library/Developer/CommandLineTools/Library/Developer/usr/lib
-```
-
-Run targeted behavioral tests during development and the full relevant suites at cutover or when a shared safety/execution change affects many features. Stop optional checks when the changed behavior is adequately covered. Replace implementation-coupled assertions when their code disappears; do not preserve obsolete internals solely to satisfy a source scan. If server contracts change, run the relevant server build/typecheck/tests and applicable DB-backed tests with an isolated test database. A skipped DB test is not evidence of a passing DB contract. The current [WORKFLOW.md](WORKFLOW.md) is already the lighter contributor process. Do not reintroduce retired mutation plans, branch records, repeated full-suite runs or manual checklists as requirements of this rewrite.
+Build and test commands are in [WORKFLOW.md](WORKFLOW.md). At each cutover run the full relevant Swift and server suites. Replace implementation-coupled assertions when their code disappears; do not preserve obsolete internals solely to satisfy a source scan. A skipped DB test is not evidence of a passing DB contract.
 
 ## 17. Performance criteria
 
@@ -412,7 +439,7 @@ Once enough real tasks exist to make the data meaningful, report p50/p95 by back
 
 Initial aspirations: feedback within roughly 50 ms, cached metadata/rules in a few milliseconds, and local/native first action within roughly 100–150 ms when the app is already ready. These are hypotheses to validate, not release guarantees. A universal sub-second cloud-planned task or one-call completion target is not justified by this repository. Reduce calls only while preserving verified outcomes.
 
-## 18. Code organization and process simplification
+## 18. Code organization
 
 Keep the existing Swift package unless a real dependency boundary requires another module. File movement alone is not a simplification. Organize code around a few owners:
 
@@ -423,16 +450,6 @@ Keep the existing Swift package unless a real dependency boundary requires anoth
 - Tests: fast contracts around the runtime and backend seams, plus explicit OS and gateway integration suites.
 
 These are logical groupings, not a requirement for a file, protocol and actor per noun. A new backend should implement the narrow automation contract; it should not require editing a giant initializer shared by every unrelated feature.
-
-### Testing and workflow policy for the rewrite
-
-Mutation testing is an optional test-quality tool. Remove mandatory per-change mutation plans; keep a campaign only when it can answer a specific question, such as whether approval tests catch a bypass. Existing mutation batteries already run outside the normal branch loop. Do not rewrite them merely because they are large; remove stale tooling if its remaining benefit does not justify maintenance.
-
-Prefer behavioral tests over source spelling/line-shape assertions. Keep narrow structural checks only for a stated property that cannot reasonably be tested at a better seam. A test count or killed-mutant count is not a product outcome.
-
-The daily loop is build + focused tests + inspect behavior. Before cutover run the full relevant suite and affected OS smoke tests. Cold warning builds, packaging checks and optional mutation campaigns belong in maintenance/release workflows. Do not start a database or run the server battery for an unrelated Swift-only change.
-
-The primary contributor workflow has already been shortened in [AGENTS.md](AGENTS.md) and [WORKFLOW.md](WORKFLOW.md); historical decisions and operator procedures are outside the daily path. Retire further obsolete tooling when its actual maintenance cost exceeds its value, updating associated hooks and references in the same change.
 
 ### Workspace retirement
 

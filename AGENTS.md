@@ -2,6 +2,12 @@
 
 This is the current guidance for agents and contributors. Start with the user's requested outcome and the code that implements it. Historical plans and branch records are context, not standing instructions.
 
+## Current phase (founders, 2026-09-23)
+
+- **Feature freeze until Milestone A of the [V2 plan](sonny_v2_architecture_implementation_plan.md) lands.** Do not add features, capabilities or improvements to the current execution path. The only exception is a fix for a defect that loses data, breaks security or blocks everyday use, and a founder approves each one.
+- Skill-pack work waits until the core rewrite is done (Milestone C, core cutover). The Jev local decision model is on hold.
+- If a request conflicts with this phase, say so and ask before starting.
+
 ## Make changes
 
 - Use the smallest coherent change that solves the requested problem. Fix nearby code when the outcome depends on it; explain material scope changes.
@@ -17,11 +23,11 @@ This is the current guidance for agents and contributors. Start with the user's 
 - Swift and server checks cover different halves; use the commands in [WORKFLOW.md](WORKFLOW.md). Do not report a command as passing unless it was run and its result inspected.
 - Keep a security check for credentials in tracked files. Review security, money, data-loss, approval, and trust-boundary changes more deeply than copy or local refactors.
 - Prefer outcome-based tests. Keep a source scan only when it protects a stated property that cannot reasonably be tested at a better seam.
-- Mutation campaigns, cold warning audits, full manual checklists, and repeated independent test runs are not default steps. Use them only for a specific risk or release need.
+- Full manual checklists and repeated independent test runs are not default steps. Use them only for a specific risk or release need.
 
 ## Coordinate work
 
-- Use Plane for substantial or coordinated work, not as a prerequisite for every small change. A concise issue should describe the outcome, important constraints, and how it will be checked.
+- One session owns one change, and a founder works with it directly. Use Plane for substantial or coordinated work, not as a prerequisite for every small change. A concise issue should describe the outcome, important constraints, and how it will be checked.
 - Use separate branches or worktrees when concurrent work would otherwise collide. A PR and its diff are sufficient for ordinary change history; record a lasting design decision only when one was actually made.
 - The founders own merges. Do not merge without their authorization.
 

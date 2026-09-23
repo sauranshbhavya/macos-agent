@@ -8,10 +8,8 @@
 # reads or writes this clone's core.hooksPath, which three of the arms below set inside a fixture.
 #
 # WHY THIS EXISTS (SONNY-406). The guard it drives has the property this repository has been
-# burned by more than any other: working, it is silent; broken, it is also silent. `scripts/warnings
-# selftest`, `scripts/mutate selftest` and `verify-tests-before-stop-selftest.sh` exist for that
-# reason and this is the fourth. The ticket that asked for the guard said the selftest matters more
-# than the guard, and it is right — a rule that reached `main` ten times while stated in plain
+# burned by more than any other: working, it is silent; broken, it is also silent. The ticket that
+# asked for the guard said the selftest matters more than the guard, and it is right — a rule that reached `main` ten times while stated in plain
 # language in CLAUDE.md is not going to be rescued by a second thing nobody has proved fires.
 #
 # WHAT IT DRIVES is the real `.githooks/commit-msg`, the real
