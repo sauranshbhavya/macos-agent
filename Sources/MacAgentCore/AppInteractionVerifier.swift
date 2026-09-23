@@ -43,14 +43,14 @@ public enum AppInteractionVerifier {
         }
     }
 
-    /// Whether a row's one name is the target, compared whole after dropping case and symbols, so
-    /// "Mom ❤️" is Mom and "Mom & Dad", "Family" and "Give me a moment" are not. The same test
-    /// decides what the model may see, what counts as another chat being open, and what confirms
-    /// the right one.
-    public static func isTarget(_ name: String?, _ target: String) -> Bool {
+    /// Which of a row's names (`rowNames`) is the target, compared whole after dropping case and
+    /// symbols, so "Mom ❤️" is Mom and "Mom & Dad", "Family" and "Give me a moment" are not. The
+    /// same test decides what the model may see, what counts as another chat being open, and what
+    /// confirms the right one.
+    public static func targetName(in names: [String], _ target: String) -> String? {
         let wanted = normalized(target)
-        guard let name, !wanted.isEmpty else { return false }
-        return normalized(name) == wanted
+        guard !wanted.isEmpty else { return nil }
+        return names.first { normalized($0) == wanted }
     }
 
     public static func targetState(_ target: String, in snapshot: AccessibilitySnapshot) -> TargetState {
@@ -64,9 +64,9 @@ public enum AppInteractionVerifier {
         let selectedElsewhere = snapshot.elements.contains { element in
             guard element.isSelected,
                   AccessibilityVocabulary.selectionRoles.contains(element.role) || element.role == "AXButton",
-                  snapshot.isInsideList(element),
-                  let name = snapshot.rowName(of: element) else { return false }
-            return !isTarget(name, target)
+                  snapshot.isInsideList(element) else { return false }
+            let names = snapshot.rowNames(of: element)
+            return !names.isEmpty && targetName(in: names, target) == nil
         }
         return selectedElsewhere ? .contradicted : .unknown
     }

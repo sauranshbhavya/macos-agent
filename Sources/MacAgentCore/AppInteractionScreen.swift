@@ -14,8 +14,9 @@ import Foundation
 ///   by a title or description a bubble could carry its message in (final check, F4), and never
 ///   their contents: only whether one is empty, holds the target, holds the message, or holds
 ///   something else.
-/// - From **inside** lists and scroll areas, only row-like elements whose one name (`rowName`) *is*
-///   the target, compared whole (`AppInteractionVerifier.isTarget`), shown by that name alone. A
+/// - From **inside** lists and scroll areas, only row-like elements one of whose own names
+///   (`rowNames`: its `rowName`, or its own title or description whole) *is* the target, compared
+///   whole (`AppInteractionVerifier.targetName`), shown by that name alone. A
 ///   combined label's preview, a row's other texts and the conversation's messages never match and
 ///   never go. What can still go is a message whose first text is exactly the target's name — the
 ///   word "Mom" on its own.
@@ -116,10 +117,8 @@ public struct AppInteractionScreenBuilder: Sendable {
         }
         guard snapshot.isInsideListOrScrollArea(element) else { return snapshot.displayName(of: element) }
         guard AccessibilityVocabulary.selectionRoles.contains(element.role) || element.role == "AXButton",
-              let target = goal.target,
-              let name = snapshot.rowName(of: element),
-              AppInteractionVerifier.isTarget(name, target) else { return nil }
-        return name
+              let target = goal.target else { return nil }
+        return AppInteractionVerifier.targetName(in: snapshot.rowNames(of: element), target)
     }
 
     static func capabilities(of element: AccessibilityElement) -> [AppInteractionStepKind] {
@@ -143,7 +142,8 @@ public struct AppInteractionScreenBuilder: Sendable {
     ) -> [AccessibilityElement] {
         func rank(_ element: AccessibilityElement) -> Int {
             if element.isTextInput { return 0 }
-            if let target = goal.target, AppInteractionVerifier.isTarget(snapshot.rowName(of: element), target) { return 1 }
+            if let target = goal.target,
+               AppInteractionVerifier.targetName(in: snapshot.rowNames(of: element), target) != nil { return 1 }
             return 2
         }
         return elements.enumerated()

@@ -73,31 +73,48 @@ public enum AppInteractionPolicy {
     }
 
     /// A button outside a list is matched by substring over every name it has, so "Resend" and
-    /// "Huddle now" are caught and a false match only refuses. A row, a tab or a row drawn as a
-    /// button inside a list only navigates, and its name is usually a person's, so it is matched
-    /// word by word with the common inflections — "Callum", "Maddie" and "Book club meetup" open;
-    /// "Join call" and "Resend" do not (PR #289 review F1 and its delta, N2). **Over everything the
-    /// element carries, whole**: its own title, description, identifier and value, and the name it
-    /// is shown by. A call-log entry "Mom, Outgoing voice call" or titled "Mom" with the description
-    /// "Missed video call" is refused though it is shown as "Mom" (final check, F1); a chat whose
-    /// preview says "call me later" is refused too, which is the safe direction.
+    /// "Huddle now" are caught and a false match only refuses.
+    ///
+    /// A row, a tab or a row drawn as a button inside a list only navigates, and its name is usually
+    /// a person's, so it is matched word by word with the common inflections, in two tiers:
+    ///
+    /// - **Its name** — `rowName` and the part before the first comma of each of its own fields —
+    ///   against every committing word. "Callum", "Maddie" and "Book club meetup" open; "Join call",
+    ///   "Resend" and a row whose own description is "Missed video call" do not (PR #289 review F1,
+    ///   its delta N2 and the final check).
+    /// - **Everything it carries**, its own fields whole and its inner texts, against call wording
+    ///   only. That is what a call-log entry shown as "Mom" gives itself away by, whether its
+    ///   "Outgoing voice call" sits in its label or in a child. A chat's preview goes through this
+    ///   tier and no other, so "did you send it?" does not stop Sonny opening the chat, while "call
+    ///   me later" does, which is the safe direction.
     static func namesACommit(_ element: AccessibilityElement, in snapshot: AccessibilitySnapshot) -> Bool {
         if element.role == "AXButton", !snapshot.isInsideList(element) {
             let names = [snapshot.displayName(of: element), element.title, element.label, element.identifier, element.value]
                 .compactMap { $0?.lowercased() }
             return names.contains { name in committingWords.contains { name.contains($0) } }
         }
-        let names = [snapshot.rowName(of: element), element.title, element.label, element.identifier, element.value]
-            .compactMap { $0?.lowercased() }
-        return names.contains { name in
-            let words = Set(name.split(whereSeparator: { !$0.isLetter }).map(String.init))
-            return committingWords.contains { word in
-                word.contains(" ")
-                    ? name.contains(word)
-                    : !words.isDisjoint(with: [word, word + "s", word + "ing", word + "ed", "re" + word, "un" + word])
-            }
+        let ownNames = [element.title, element.label, element.identifier, element.value]
+            .map { $0.map(AccessibilitySnapshot.firstSegment) }
+        let nameParts = ([snapshot.rowName(of: element)] + ownNames).compactMap { $0?.lowercased() }
+        if nameParts.contains(where: { matchesAWord($0, of: committingWords) }) { return true }
+        return snapshot.allTexts(of: element).contains { matchesAWord($0.lowercased(), of: callWords) }
+    }
+
+    /// Whether `text` holds one of `list` as a whole word or a common inflection of one, or a
+    /// multi-word entry anywhere.
+    static func matchesAWord(_ text: String, of list: [String]) -> Bool {
+        let words = Set(text.split(whereSeparator: { !$0.isLetter }).map(String.init))
+        return list.contains { word in
+            word.contains(" ")
+                ? text.contains(word)
+                : !words.isDisjoint(with: [word, word + "s", word + "ing", word + "ed", "re" + word, "un" + word])
         }
     }
+
+    /// The words that mark a row as a call rather than a chat, read from everything a row carries.
+    static let callWords: [String] = [
+        "call", "voice", "video", "dial", "missed", "outgoing", "incoming", "facetime", "huddle",
+    ]
 
     /// Two strings the app may have tidied: compared without case and with whitespace collapsed.
     static func sameText(_ a: String, _ b: String) -> Bool {

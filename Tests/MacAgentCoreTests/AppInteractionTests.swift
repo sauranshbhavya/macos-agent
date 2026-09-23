@@ -341,6 +341,24 @@ struct AppInteractionScreenTests {
         #expect(built.screen.candidates.map(\.label) == ["Type a message"])
     }
 
+    /// Final check's note: a time before the name is a badge, not the row's name, and a contact
+    /// saved with a comma in its name is still found by all of it.
+    @Test
+    func aTimeIsNotANameAndACommaNameIsFoundWhole() throws {
+        let shot = snapshot(of: [
+            node(0, "AXWindow", parent: nil, depth: 0),
+            node(1, "AXTable", parent: 0, depth: 1),
+            node(2, "AXRow", parent: 1, depth: 2, actions: ["AXPress"]),
+            node(3, "AXStaticText", parent: 2, depth: 3, value: "10:32"),
+            node(4, "AXStaticText", parent: 2, depth: 3, value: "Mom"),
+            node(5, "AXRow", parent: 1, depth: 2, label: "Smith, John", actions: ["AXPress"]),
+        ])
+        #expect(shot.rowName(of: shot.elements[2]) == "Mom")
+        let builder = AppInteractionScreenBuilder(redact: { $0 })
+        #expect(builder.build(from: shot, goal: try goal()).screen.candidates.map(\.label) == ["Mom"])
+        #expect(builder.build(from: shot, goal: try goal(target: "Smith, John")).screen.candidates.map(\.label) == ["Smith, John"])
+    }
+
     @Test
     func labelsAreCutToTheBudget() async throws {
         let long = "Mom " + String(repeating: "x", count: AppInteractionGoal.maxTargetLength - 4)
@@ -415,6 +433,31 @@ struct AppInteractionPolicyTests {
             #expect(shot.rowName(of: shot.elements[index]) == "Mom")
             #expect(AppInteractionPolicy.decide(.press, on: shot.elements[index].id, in: shot, goal: g) == .refuse(.mightCommit), "element \(index)")
         }
+    }
+
+    /// Final check's note: a call-log entry whose texts are all children is still a call, while a
+    /// chat whose preview merely uses a committing word is still a chat.
+    @Test
+    func aCallIsKnownByAnyTextItCarriesAndAChatPreviewDoesNotStopTheChat() throws {
+        let shot = snapshot(of: [
+            node(0, "AXWindow", parent: nil, depth: 0),
+            node(1, "AXTable", parent: 0, depth: 1),
+            node(2, "AXRow", parent: 1, depth: 2, actions: ["AXPress"]),            // call log, all children
+            node(3, "AXStaticText", parent: 2, depth: 3, value: "Mom"),
+            node(4, "AXStaticText", parent: 2, depth: 3, value: "Outgoing voice call"),
+            node(5, "AXRow", parent: 1, depth: 2, actions: ["AXPress"]),            // chat, preview in a child
+            node(6, "AXStaticText", parent: 5, depth: 3, value: "Mom"),
+            node(7, "AXStaticText", parent: 5, depth: 3, value: "Did you send it? I'd like to add you"),
+            node(8, "AXRow", parent: 1, depth: 2, label: "Mom, did you send it?, 10:32", actions: ["AXPress"]),
+            node(9, "AXRow", parent: 1, depth: 2, label: "Mom, call me later, 10:32", actions: ["AXPress"]),
+        ])
+        let g = try goal()
+        let decide = { (index: Int) in AppInteractionPolicy.decide(.press, on: shot.elements[index].id, in: shot, goal: g) }
+        #expect(decide(2) == .refuse(.mightCommit))
+        #expect(decide(5) == .allow(.press))
+        #expect(decide(8) == .allow(.press))
+        // The safe direction: a preview that talks about calling refuses the chat.
+        #expect(decide(9) == .refuse(.mightCommit))
     }
 
     /// The reviewer's probes, each of which was allowed before (PR #289 review, F1).

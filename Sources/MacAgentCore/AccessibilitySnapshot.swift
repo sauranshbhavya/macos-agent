@@ -206,12 +206,34 @@ public struct AccessibilitySnapshot: Equatable, Sendable {
         return nil
     }
 
+    /// The names a row answers to: its one `rowName`, and its own title or description whole, so a
+    /// contact saved as "Smith, John" is not cut to "Smith" and lost. Its own fields only, never its
+    /// inner texts, which belong to other people (PR #289 final check).
+    public func rowNames(of element: AccessibilityElement) -> [String] {
+        let whole = [element.title, element.label].compactMap { $0 }
+        return ([rowName(of: element)].compactMap { $0 } + whole).filter { !$0.isEmpty }
+    }
+
+    /// Every text a row carries, its own fields whole and its inner texts, for the one check that
+    /// reads a row's preview: whether it is a call rather than a chat.
+    public func allTexts(of element: AccessibilityElement) -> [String] {
+        let own = [element.title, element.label, element.identifier, element.value].compactMap { $0 }
+        let inner = descendants(of: element).lazy.compactMap { $0.title ?? $0.value ?? $0.label }.prefix(8)
+        return own + Array(inner)
+    }
+
     static func firstSegment(_ text: String) -> String {
         (text.components(separatedBy: ", ").first ?? text).trimmingCharacters(in: .whitespaces)
     }
 
+    /// Text that decorates a row rather than naming it: an unread count, a time or date such as
+    /// "10:32" or "22/09", and the usual status words.
     static func isBadge(_ text: String) -> Bool {
-        text.allSatisfy(\.isNumber) || ["pinned", "muted", "unread", "archived", "new"].contains(text.lowercased())
+        if text.allSatisfy({ $0.isNumber || ":./- ".contains($0) }) { return true }
+        return [
+            "pinned", "muted", "unread", "archived", "new", "today", "yesterday",
+            "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
+        ].contains(text.lowercased())
     }
 
     /// The first text inside an element, depth first.
