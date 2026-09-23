@@ -309,7 +309,7 @@ public extension AgentOperation {
              .startWatching,
              // SONNY-453. Neither reads a `PlanItemField`: a read takes a day and a reminder takes a
              // title and a time, none of which is an item.
-             .readCalendarEvents, .createReminder,
+             .readCalendarEvents, .createReminder, .interactWithApp,
              .unsupported:
             return []
         }
@@ -380,6 +380,10 @@ public extension AgentOperation {
             // single answer that turns it into something Sonny can do: the user asks for the
             // reminders they want.
             return .refused("Sonny will not add a reminder for each item — that would fill Reminders with copies of one reminder. Ask for the reminder on its own.")
+        case .interactWithApp:
+            // One draft per item would type the same text into one app again and again, and the
+            // runtime only runs a plan of this step alone anyway (SONNY-544).
+            return .refused("Sonny will not draft in an app for each item. Ask for each draft on its own.")
         case .scanSelectLargestFiles, .createZip, .scanDocx, .convertDocxToPDF, .revealInFinder,
              .openGeneratedArtifact, .invokeShortcut, .openHackerNews, .fetchHNHeadlines,
              .writeMarkdown, .webToMarkdown, .openApp, .openAppSearchURL, .openURL, .playMedia,

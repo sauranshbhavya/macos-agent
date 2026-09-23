@@ -440,7 +440,9 @@ struct ResumeRepeatSafetyTests {
         // names, and a name that would now be wrong about *why* as well as how many.
         // `.createReminder` (SONNY-453) meets the bar the first three do: a second copy lands in a
         // Reminders list other people may see, which is the same fact that makes the capability ask.
-        #expect(unsafe == [.invokeShortcut, .runRoutine, .visionSession, .startWatching, .createReminder, .unsupported])
+        // `.interactWithApp` (SONNY-544) for vision's reason: a repeat retypes into whatever the app
+        // shows by then.
+        #expect(unsafe == [.invokeShortcut, .runRoutine, .visionSession, .startWatching, .createReminder, .interactWithApp, .unsupported])
 
         let safe = Set(AgentOperation.allCases.filter { $0.resumeRepeatSafety == .safeToRepeat })
         #expect(safe == [

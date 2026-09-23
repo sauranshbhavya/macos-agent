@@ -63,6 +63,10 @@ extension AgentOperation {
             // list for exactly that (`affectsOthersLabelWords`). What a repeated session clicks is
             // not knowable in advance, which is the same reason as the two above.
             return .mustNotRepeatSilently
+        case .interactWithApp:
+            // It types into another app, choosing where one observation at a time; a silent repeat
+            // would retype into whatever that app shows by then (SONNY-544).
+            return .mustNotRepeatSilently
         case .startWatching:
             // **The one `.mustNotRepeatSilently` here that is not about reaching someone else, and
             // it is deliberate** (SONNY-382). Repeating it reads a public page and writes a local

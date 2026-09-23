@@ -762,7 +762,7 @@ struct WorkspaceScopeTests {
         // names, and SONNY-382 is the operation that made it bite). It was
         // `…CoversAllThirtyTwoCases`, which the changelog's PR #94 entry cites by that name — that
         // citation is a dated record of what the test was called then and stays verbatim.
-        #expect(AgentOperation.allCases.count == 36)
+        #expect(AgentOperation.allCases.count == 37)
 
         let input = ScopedResource.fileLocation("~/Documents/Input")
         let output = ScopedResource.fileLocation("~/Documents/Output/out.md")
@@ -829,6 +829,8 @@ struct WorkspaceScopeTests {
             // URL, so a workspace boundary has nothing it could list for either.
             .readCalendarEvents: [],
             .createReminder: [],
+            // SONNY-544: the app is named, like `vision_session`'s.
+            .interactWithApp: [.app("GitHub")],
             .clarify: [],
             .unsupported: []
         ]
@@ -850,7 +852,9 @@ struct WorkspaceScopeTests {
             // the run can enumerate what the session will touch, so it must never roll a plan up to
             // `.inScope`.
             #expect(
-                classification.isOpaque == [.invokeShortcut, .getFinderSelection, .visionSession].contains(operation),
+                // `interact_with_app` (SONNY-544) is opaque for the same reason: the model picks
+                // each element after the run starts.
+                classification.isOpaque == [.invokeShortcut, .getFinderSelection, .visionSession, .interactWithApp].contains(operation),
                 "\(operation.rawValue)"
             )
         }

@@ -78,6 +78,8 @@ enum AgentActivityPresentation {
             return "Read calendar"
         case .createReminder:
             return "Add reminder"
+        case .interactWithApp:
+            return "Draft in \(step.appName ?? "app")"
         case .saveRoutine:
             return "Save routine"
         case .runRoutine:

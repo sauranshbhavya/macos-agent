@@ -83,7 +83,10 @@ struct AgentPlanSchemaFixtureTests {
         //
         // **70 since SONNY-453**, which added four nullable step properties (`calendarDay`,
         // `reminderTitle`, `reminderMinutesFromNow`, `reminderTime`), each two for that reason.
+        //
+        // **76 since SONNY-544**, which added three (`interactionGoal`, `interactionTarget`,
+        // `interactionText`), each two for that reason.
         let unions = text.components(separatedBy: "\"type\" : [").count - 1
-        #expect(unions == 70, "expected 70 serialized type-union nodes, found \(unions)")
+        #expect(unions == 76, "expected 76 serialized type-union nodes, found \(unions)")
     }
 }

@@ -141,6 +141,8 @@ public struct StoredRoutine: Codable, Equatable, Sendable, Identifiable {
         // the Mac to answer, leaving the run waiting on a prompt.
         .readCalendarEvents,
         .createReminder,
+        // SONNY-544: it drives another app's window, and a routine can run with nobody at the Mac.
+        .interactWithApp,
         .clarify,
         .unsupported
     ]
@@ -388,6 +390,8 @@ public enum AutomationStoreError: Error, LocalizedError, Equatable {
             return "A routine can't read your calendar."
         case .createReminder:
             return "A routine can't add a reminder."
+        case .interactWithApp:
+            return "A routine can't draft in another app."
         case .clarify:
             return "A routine can't stop to ask you a question."
         case .unsupported:

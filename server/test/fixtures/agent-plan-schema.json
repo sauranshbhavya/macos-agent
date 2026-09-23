@@ -142,6 +142,27 @@
               "null"
             ]
           },
+          "interactionGoal" : {
+            "description" : "For interact_with_app: what should be true in the app when Sonny is done, in one sentence, in the user's words. Null for every other operation.",
+            "type" : [
+              "string",
+              "null"
+            ]
+          },
+          "interactionTarget" : {
+            "description" : "For interact_with_app: the name of the chat, contact or item to open, exactly as the user said it. Null when there is none, and for every other operation.",
+            "type" : [
+              "string",
+              "null"
+            ]
+          },
+          "interactionText" : {
+            "description" : "For interact_with_app: the exact text to leave in the app, unsent, as the user dictated it. Null when there is none, and for every other operation.",
+            "type" : [
+              "string",
+              "null"
+            ]
+          },
           "mediaArtist" : {
             "description" : "Artist name for media-opening actions when provided by the user, or null.",
             "type" : [
@@ -207,6 +228,7 @@
               "rename",
               "read_calendar_events",
               "create_reminder",
+              "interact_with_app",
               "clarify",
               "unsupported"
             ],
@@ -325,6 +347,27 @@
                     "null"
                   ]
                 },
+                "interactionGoal" : {
+                  "description" : "For interact_with_app: what should be true in the app when Sonny is done, in one sentence, in the user's words. Null for every other operation.",
+                  "type" : [
+                    "string",
+                    "null"
+                  ]
+                },
+                "interactionTarget" : {
+                  "description" : "For interact_with_app: the name of the chat, contact or item to open, exactly as the user said it. Null when there is none, and for every other operation.",
+                  "type" : [
+                    "string",
+                    "null"
+                  ]
+                },
+                "interactionText" : {
+                  "description" : "For interact_with_app: the exact text to leave in the app, unsent, as the user dictated it. Null when there is none, and for every other operation.",
+                  "type" : [
+                    "string",
+                    "null"
+                  ]
+                },
                 "mediaArtist" : {
                   "description" : "Artist name for media-opening actions when provided by the user, or null.",
                   "type" : [
@@ -390,6 +433,7 @@
                     "rename",
                     "read_calendar_events",
                     "create_reminder",
+                    "interact_with_app",
                     "clarify",
                     "unsupported"
                   ],
@@ -597,7 +641,10 @@
                 "calendarDay",
                 "reminderTitle",
                 "reminderMinutesFromNow",
-                "reminderTime"
+                "reminderTime",
+                "interactionGoal",
+                "interactionTarget",
+                "interactionText"
               ],
               "type" : "object"
             },
@@ -762,7 +809,10 @@
           "calendarDay",
           "reminderTitle",
           "reminderMinutesFromNow",
-          "reminderTime"
+          "reminderTime",
+          "interactionGoal",
+          "interactionTarget",
+          "interactionText"
         ],
         "type" : "object"
       },

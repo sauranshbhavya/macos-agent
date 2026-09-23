@@ -39,6 +39,7 @@ public enum DefaultCapabilityAdapters {
             StandingWatcherCapabilityAdapter(),
             ReadCalendarEventsCapabilityAdapter(),
             CreateReminderCapabilityAdapter(),
+            AppInteractionCapabilityAdapter(),
             MetadataOnlyCapabilityAdapter(metadata: clarify)
         ]
     }

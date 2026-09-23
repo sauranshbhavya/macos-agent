@@ -173,6 +173,18 @@ public struct AgentStep: Codable, Equatable, Identifiable, Sendable {
     /// screen can be wrapped as untrusted and told apart from it.
     public var visionGoal: String?
 
+    /// For `interact_with_app`: the outcome in the user's words, e.g. "open the chat with Mom and
+    /// leave the message unsent". Trusted, like `visionGoal`: it comes from the user's command.
+    public var interactionGoal: String?
+
+    /// For `interact_with_app`: the name Sonny may type to find what the goal is about, such as a
+    /// chat or contact. One of the two strings the runtime ever types.
+    public var interactionTarget: String?
+
+    /// For `interact_with_app`: the exact text to leave in a field, never sent. The other string the
+    /// runtime ever types.
+    public var interactionText: String?
+
     /// The browser the user named for a URL-opening step, verbatim, or `nil` when they named none.
     ///
     /// **Planner-visible, like `visionGoal` and unlike the two resolver pins above it.** The model is
@@ -314,6 +326,9 @@ public struct AgentStep: Codable, Equatable, Identifiable, Sendable {
         resolvedFromFinderSelection: Bool? = nil,
         itemIndex: Int? = nil,
         visionGoal: String? = nil,
+        interactionGoal: String? = nil,
+        interactionTarget: String? = nil,
+        interactionText: String? = nil,
         watchSubject: String? = nil,
         newName: String? = nil,
         calendarDay: String? = nil,
@@ -356,6 +371,9 @@ public struct AgentStep: Codable, Equatable, Identifiable, Sendable {
         self.resolvedFromFinderSelection = resolvedFromFinderSelection
         self.itemIndex = itemIndex
         self.visionGoal = visionGoal
+        self.interactionGoal = interactionGoal
+        self.interactionTarget = interactionTarget
+        self.interactionText = interactionText
         self.watchSubject = watchSubject
         self.newName = newName
         self.calendarDay = calendarDay
@@ -458,6 +476,19 @@ public enum AgentOperation: String, Codable, CaseIterable, Sendable {
     /// routine runs under a standing tier-2 grant, which a tier-2 reminder would pass without anyone
     /// being asked, once per occurrence.
     case createReminder = "create_reminder"
+    /// Sonny opens a named item in another app and leaves text in a field there, unsent, working
+    /// through the app's Accessibility tree with the model choosing each step (SONNY-544, V2 plan
+    /// Milestone A; the first proof is a WhatsApp draft).
+    ///
+    /// **Not run by `AgentRunner.execute`.** A plan whose only step is this one is handed to
+    /// `AppInteractionRuntime`, the new path's own owner; its adapter exists for planning, preview and
+    /// risk, and refuses to execute so a plan mixing it with other steps fails plainly instead of
+    /// running half on each path.
+    ///
+    /// **Tier 2, and it asks nothing**: nothing is sent, deleted or changed outside the draft, and the
+    /// person sends it themselves (founders' decision 2026-09-23). **Refused inside a routine**: a
+    /// routine can run with nobody at the Mac, and this drives another app's window.
+    case interactWithApp = "interact_with_app"
     case clarify
     case unsupported
 
@@ -617,7 +648,11 @@ public enum AgentPlanDecoder {
         "calendarDay",
         "reminderTitle",
         "reminderMinutesFromNow",
-        "reminderTime"
+        "reminderTime",
+        // SONNY-544. The user's own goal, name and text, typed by the runtime and nothing else.
+        "interactionGoal",
+        "interactionTarget",
+        "interactionText"
     ]
 
     public static func decodeStrict(from data: Data) throws -> AgentPlan {
@@ -738,7 +773,10 @@ public enum AgentPlanSchema {
         "calendarDay",
         "reminderTitle",
         "reminderMinutesFromNow",
-        "reminderTime"
+        "reminderTime",
+        "interactionGoal",
+        "interactionTarget",
+        "interactionText"
     ]
 
     /// The schema's own name, as `docs/sonny-backend-api-contract.md` §4.2's
@@ -1009,6 +1047,18 @@ public enum AgentPlanSchema {
             "reminderTime": [
                 "type": ["string", "null"],
                 "description": "For create_reminder when the user named a clock time: HH:mm on a 24-hour clock — \"at 5:30pm\" is 17:30. Null when they said how long from now instead, and for every other operation."
+            ],
+            "interactionGoal": [
+                "type": ["string", "null"],
+                "description": "For interact_with_app: what should be true in the app when Sonny is done, in one sentence, in the user's words. Null for every other operation."
+            ],
+            "interactionTarget": [
+                "type": ["string", "null"],
+                "description": "For interact_with_app: the name of the chat, contact or item to open, exactly as the user said it. Null when there is none, and for every other operation."
+            ],
+            "interactionText": [
+                "type": ["string", "null"],
+                "description": "For interact_with_app: the exact text to leave in the app, unsent, as the user dictated it. Null when there is none, and for every other operation."
             ]
         ]
     }

@@ -297,6 +297,12 @@ public enum PlanScopedResources {
             }
             return StepScopedResources(resources: apps(step.appName), isOpaque: true)
 
+        case .interactWithApp:
+            // The app is named and reported, so a workspace that excludes it still escalates. Opaque
+            // for vision's reason: which elements the model chooses inside the app is decided one
+            // observation at a time, after the run starts (SONNY-544).
+            return StepScopedResources(resources: apps(step.appName), isOpaque: true)
+
         case .openWorkspace:
             // Its real resources are the *stored* workspace record's apps and URLs, not the step's
             // fields — and this classifier is pure, with no store to read. Resolving them belongs to

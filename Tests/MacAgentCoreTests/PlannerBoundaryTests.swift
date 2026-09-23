@@ -52,7 +52,7 @@ struct PlannerBoundaryTests {
         - For Finder context phrases such as "selected folder", "selected files", "this Finder selection", or "the folder selected in Finder", set contextSource to finder_selection and leave inputPath null.
         - For "reveal the result/zip/markdown/PDFs in Finder" after a writing step, add reveal_in_finder with outputPath null so the executor can reveal the previous produced artifact.
         - For permission/readiness requests, produce one show_permission_readiness step.
-        - For teaching a routine, produce one save_routine step with routineName and routineSteps containing only registered non-routine steps. Do not put save_routine, run_routine, create_workspace, edit_workspace, switch_running_app, vision_session, start_watching, read_calendar_events, create_reminder, clarify, or unsupported inside routineSteps.
+        - For teaching a routine, produce one save_routine step with routineName and routineSteps containing only registered non-routine steps. Do not put save_routine, run_routine, create_workspace, edit_workspace, switch_running_app, vision_session, start_watching, read_calendar_events, create_reminder, interact_with_app, clarify, or unsupported inside routineSteps.
         - For running a saved routine, produce one run_routine step with routineName.
         - For creating a workspace, produce one create_workspace step with workspaceName, workspaceApps, and workspaceURLs. Use only explicitly named apps/URLs. If none are provided, ask a clarification question.
         - For changing a workspace the user already saved, produce one edit_workspace step with workspaceName and only the fields the user asked to change: workspaceApps, workspaceURLs, workspaceFileLocations to add, and workspaceAppsToRemove, workspaceURLsToRemove, workspaceFileLocationsToRemove to remove. Never use create_workspace to change an existing workspace, and never put an item in both an add and a remove field.
@@ -61,6 +61,7 @@ struct PlannerBoundaryTests {
         - For "tell me when this page changes", "let me know if X updates", or any request to be told about a future change to one web page, produce one start_watching step with targetURL and watchSubject holding what the user asked to be told about, in their own words. Sonny only notifies: never combine start_watching with a step that acts on the change, and never promise one.
         - For "what's on my calendar", "what do I have on Friday", or any question about the events on the user's calendar for one day, produce one read_calendar_events step with calendarDay holding the day they asked about, or null for today.
         - For "remind me in 5 minutes to call the bank" or any request to be reminded of something, produce one create_reminder step with reminderTitle and exactly one of reminderMinutesFromNow or reminderTime, adding calendarDay when the user named a day. If the user named no time, return exactly one clarify step asking when.
+        - For "draft a WhatsApp to Mom saying I'll be late", "write 'see you at 6' to Alex but don't send it", or any request to leave a message unsent in a chat app, produce exactly one interact_with_app step and no other step, with appName, interactionGoal holding the outcome in one sentence, interactionTarget holding the chat or contact name exactly as the user said it, and interactionText holding the message word for word. It never sends: a request to send the message stays with vision_session.
         - When the user asks for the same work to be done to every item in one folder or in the Finder selection — "summarise each of these", "convert all of these folders" — set itemJob and write steps as the work done to ONE item, which Sonny then repeats for each item it finds. Leave itemJob null for every other command, including one that names two or three things explicitly: that is an ordinary multi-step plan. Never write the items themselves; Sonny reads them from the folder or the selection.
         - You may produce multi-step chained plans when the user asks for multiple supported actions. Keep steps in execution order.
         - For any unsupported request, return one unsupported step whose description says why in one short sentence. That sentence goes to Sonny's log only; the user never reads it, so name the missing capability plainly.
@@ -198,7 +199,10 @@ struct PlannerBoundaryTests {
             "calendarDay",
             "reminderTitle",
             "reminderMinutesFromNow",
-            "reminderTime"
+            "reminderTime",
+            "interactionGoal",
+            "interactionTarget",
+            "interactionText"
         ])
 
         let stepProperties = try #require(stepItems["properties"] as? [String: Any])
@@ -800,6 +804,12 @@ private let expectedDefaultPlannerDescription = """
   side effects: add reminder
   dry run: Show the reminder and when it is due, without adding it.
   examples: Remind me in 5 minutes to call the bank | Remind me tomorrow at 9am to send the invoice
+- interact_with_app: Draft in an app without sending
+  description: Open a chat, contact or item by name inside a Mac app and leave text there, unsent. Use this, and not vision_session, when the user asks to draft, write or prepare a message without sending it. It never sends: when the user asks to send, use vision_session as before. Use it as the plan's only step. Set appName to the app, interactionGoal to the outcome in one sentence, interactionTarget to the chat or contact name exactly as the user said it, and interactionText to the exact text to leave. Never target a terminal app.
+  required fields: appName, interactionGoal
+  side effects: Types into the named app as the user would, and leaves the text unsent, Sends the names and labels in that app's window to Sonny's model, which stores none of it
+  dry run: Describe the app, the chat and the text; touch nothing.
+  examples: draft a WhatsApp to Mom saying I'll be home by 8 | write 'see you at 6' to Alex in WhatsApp but don't send it
 - clarify: Ask clarification
   description: Ask a short question when a required folder, app, count, or output destination is missing or ambiguous.
   required fields: question

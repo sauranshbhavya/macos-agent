@@ -273,7 +273,10 @@ struct AutomationStoresTests {
             // by the resolve phase into a date, but a date is a value the model could have written
             // itself, so it is not a pin and is not stripped — and a routine cannot carry either
             // operation that reads these anyway.
-            "calendarDay", "reminderTitle", "reminderMinutesFromNow", "reminderTime"
+            "calendarDay", "reminderTitle", "reminderMinutesFromNow", "reminderTime",
+            // SONNY-544. The user's own goal, name and text for a draft in another app. Not pins,
+            // and a routine cannot carry the operation that reads them.
+            "interactionGoal", "interactionTarget", "interactionText"
         ]
         /// Resolver-only: written by the executor, never decodable from a planner response, and
         /// therefore stripped by the routine store's read door — each one held by a behavioural test
@@ -409,6 +412,8 @@ struct AutomationStoresTests {
                 // asking; a first calendar read raises macOS's prompt with nobody there to answer.
                 .readCalendarEvents,
                 .createReminder,
+                // SONNY-544. It drives another app's window, and a routine can run with nobody there.
+                .interactWithApp,
                 .clarify,
                 .unsupported
             ]
@@ -519,6 +524,7 @@ struct AutomationStoresTests {
             .startWatching: "A routine can't watch a page for changes.",
             .readCalendarEvents: "A routine can't read your calendar.",
             .createReminder: "A routine can't add a reminder.",
+            .interactWithApp: "A routine can't draft in another app.",
             .clarify: "A routine can't stop to ask you a question.",
             .unsupported: "A routine can't include something Sonny can't do yet."
         ]

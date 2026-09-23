@@ -1115,13 +1115,17 @@ struct ItemJobTests {
     @Test
     func theOperationsAJobMayNotRepeatAreNamedAndEverythingElseMay() {
         let refused = AgentOperation.allCases.filter { $0.jobTemplateRefusal != nil }
-        #expect(refused == [.startWatching, .rename, .createReminder])
+        #expect(refused == [.startWatching, .rename, .createReminder, .interactWithApp])
         #expect(
             AgentOperation.createReminder.jobTemplateRefusal
                 == .refused("Sonny will not add a reminder for each item — that would fill Reminders with copies of one reminder. Ask for the reminder on its own.")
         )
         // A read repeated per item is pointless and harmless, so it is not refused.
         #expect(AgentOperation.readCalendarEvents.jobTemplateRefusal == nil)
+        #expect(
+            AgentOperation.interactWithApp.jobTemplateRefusal
+                == .refused("Sonny will not draft in an app for each item. Ask for each draft on its own.")
+        )
         #expect(
             AgentOperation.startWatching.jobTemplateRefusal
                 == .refused("Sonny will not start a watcher for each item — that would spend everything it can watch on copies of one page. Ask for the watcher on its own.")

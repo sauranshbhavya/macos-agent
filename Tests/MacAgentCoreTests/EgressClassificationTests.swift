@@ -38,6 +38,10 @@ struct EgressClassificationTests {
         // capture, so there is no shape of this operation that egresses nothing.
         case .visionSession:
             return .alwaysLeavesDevice
+        // SONNY-544. Every step sends the on-screen element labels to the model, so every execution
+        // egresses.
+        case .interactWithApp:
+            return .alwaysLeavesDevice
         // SONNY-382. Executing it fetches the watched page once, to record the baseline, so every
         // execution egresses. The repeated checks afterwards egress as well and are outside this
         // classification, which is about what a *step* does.
@@ -78,9 +82,9 @@ struct EgressClassificationTests {
                 #expect(!inSet, "\(operation.rawValue) must not be in dataEgressOperations")
             }
         }
-        // 7 before row I; the eighth is `.visionSession` and the ninth `.startWatching`
-        // (SONNY-382). Re-measured, not incremented on faith.
-        #expect(AgentActionExecutor.dataEgressOperations.count == 9)
+        // 7 before row I; the eighth is `.visionSession`, the ninth `.startWatching` (SONNY-382) and
+        // the tenth `.interactWithApp` (SONNY-544). Re-measured, not incremented on faith.
+        #expect(AgentActionExecutor.dataEgressOperations.count == 10)
     }
 }
 

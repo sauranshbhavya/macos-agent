@@ -960,6 +960,8 @@ public final class AgentActionExecutor {
             return try previewCapability(for: .readCalendarEvents, plan: plan, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan)
         case .reminderCreate:
             return try previewCapability(for: .createReminder, plan: plan, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan)
+        case .appInteraction:
+            return try previewCapability(for: .interactWithApp, plan: plan, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan)
         case .chain:
             // Discarded deliberately — see `previewChain`'s parameter note for why every caller but
             // `prepare` has nothing to do with a job's unavailable items.
@@ -1114,6 +1116,10 @@ public final class AgentActionExecutor {
             return try await executeCapability(for: .readCalendarEvents, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, focusHandoff: focusHandoff, log: log)
         case .reminderCreate:
             return try await executeCapability(for: .createReminder, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, focusHandoff: focusHandoff, log: log)
+        // Reached only by a plan mixing the step with others: a plan of this step alone runs on
+        // `AppInteractionRuntime` instead, and the adapter refuses here with a plain message.
+        case .appInteraction:
+            return try await executeCapability(for: .interactWithApp, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, focusHandoff: focusHandoff, log: log)
         case .chain:
             return try await executeChain(resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, onUnitCompleted: onUnitCompleted, onItemFailed: onItemFailed, log: log)
         }
@@ -1151,6 +1157,7 @@ public final class AgentActionExecutor {
         case rename
         case calendarRead
         case reminderCreate
+        case appInteraction
         case chain
     }
 
@@ -1282,6 +1289,8 @@ public final class AgentActionExecutor {
             return .calendarRead
         case .createReminder:
             return .reminderCreate
+        case .interactWithApp:
+            return .appInteraction
         case .unsupported:
             throw AgentExecutionError.unsupported("Unsupported operation.")
         }
@@ -1897,6 +1906,9 @@ public final class AgentActionExecutor {
         // structural non-bypass), but pixels of the user's screen all the same — so Safe mode's
         // "Data leaves device: yes" line must read yes, and does.
         .visionSession,
+        // SONNY-544. Every step sends the labels of the app's on-screen elements to the model,
+        // redacted and cut short but read off another app all the same, so the line reads yes.
+        .interactWithApp,
         // Starting a watcher fetches the page once, right then, to record the baseline — so this is
         // `alwaysLeavesDevice` on the same footing as `web_to_markdown`, and there is no shape of
         // the step that fetches nothing. The *later* checks egress too, and are not this set's to
@@ -2033,6 +2045,11 @@ public final class AgentActionExecutor {
             // generates none.
             if plan.steps.contains(where: { $0.operation == .createReminder }) {
                 return "Delete the reminder in Reminders if needed."
+            }
+            // SONNY-544, the same kind of branch: a draft generates no files, and it is still sitting
+            // unsent in the app's message box.
+            if plan.steps.contains(where: { $0.operation == .interactWithApp }) {
+                return "Delete the unsent text from the app's message box if needed."
             }
             return "Delete generated local files manually if needed."
         case .tier3:
