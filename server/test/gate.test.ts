@@ -127,6 +127,8 @@ describe("which routes the gate challenges", () => {
       // a stranger a top-up. Its consent route sorts to the bottom, being the one `PUT` here.
       "POST /v1/account/credits/top-up",
       "POST /v1/auth/signout",
+      // SONNY-544's interaction step, challenged like every model route by not being public.
+      "POST /v1/interact/step",
       // SONNY-130's four. They appear here by *not* being listed in `PUBLIC_ROUTES`, which is the
       // whole of what deny-by-default means — no line in the four routes' own file mentions auth.
       "POST /v1/plan",

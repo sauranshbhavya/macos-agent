@@ -1275,8 +1275,9 @@ route" — which it does not retry and cannot explain — when the truth is a de
 
 ### The provider router and failover (SONNY-132)
 
-**A route resolves to an ordered chain of providers, not to one.** Four variables decide it —
-`MODEL_ROUTE_PLAN`, `MODEL_ROUTE_SYNTHESIZE`, `MODEL_ROUTE_TRANSCRIPTIONS`, `MODEL_ROUTE_SEARCH` —
+**A route resolves to an ordered chain of providers, not to one.** Five variables decide it —
+`MODEL_ROUTE_PLAN`, `MODEL_ROUTE_SYNTHESIZE`, `MODEL_ROUTE_TRANSCRIPTIONS`, `MODEL_ROUTE_SEARCH`,
+`MODEL_ROUTE_INTERACT` (SONNY-544's interaction step, defaulting like the text routes) —
 each a comma-separated list whose first entry serves and whose remainder are the failover
 candidates. Unset means the shipped default: `openai,anthropic` on the two text routes, `openai` on
 transcription (Anthropic serves no transcription API), `tavily` on search. Three providers have text

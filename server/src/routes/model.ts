@@ -310,7 +310,7 @@ export function registerModelRoutes(app: FastifyInstance, providers: ModelProvid
     // **The route's own adapter, not one shared entry** (SONNY-132). §4.2 gives the two text routes
     // one body shape so the server can hold one adapter per provider "while still routing, metering
     // and pricing them separately"; a shared entry would make `MODEL_ROUTE_SYNTHESIZE` mean nothing.
-    route: "plan" | "research.synthesize",
+    route: "plan" | "research.synthesize" | "interact.step",
     adapter: RoutedTextAdapter | undefined,
     deadlines: { readonly upstream: number; readonly total: number },
     bodyLimit: number,
@@ -353,6 +353,15 @@ export function registerModelRoutes(app: FastifyInstance, providers: ModelProvid
     providers.synthesize,
     DEADLINE_MS.synthesize,
     BODY_LIMIT_BYTES.synthesize,
+  );
+  // V2 Milestone A. Metered on its own route name and never charged: the screen-control figure reads
+  // `screen.analyze` rows only (`metering/query.ts`). The Mac sends every step with retention `none`.
+  textRoute(
+    "/v1/interact/step",
+    "interact.step",
+    providers.interact,
+    DEADLINE_MS.interact,
+    BODY_LIMIT_BYTES.interact,
   );
 
   app.post("/v1/search", { bodyLimit: BODY_LIMIT_BYTES.search }, async (request, reply) => {

@@ -1095,11 +1095,13 @@ describe("outcomeFor", () => {
 });
 
 describe("the route map", () => {
-  it("names exactly §11's five routes", () => {
+  it("names exactly §11's five routes and the interaction step route", () => {
     // Written out as literals rather than derived from the map, so changing the production list
     // fails here instead of agreeing with itself — the same shape `gate.test.ts` uses on
     // `PUBLIC_ROUTES`, and for the same reason.
     expect([...METERED_ROUTES.entries()].sort()).toEqual([
+      // V2 Milestone A (SONNY-544): metered on its own name and charged by nothing.
+      ["POST /v1/interact/step", "interact.step"],
       ["POST /v1/plan", "plan"],
       ["POST /v1/research/synthesize", "research.synthesize"],
       ["POST /v1/screen/analyze", "screen.analyze"],

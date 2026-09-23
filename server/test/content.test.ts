@@ -727,7 +727,7 @@ describe("a provider's error body lands in the store, on the content clock", () 
     );
     const app = build({
       credentials: [{ provider: "anthropic", keys: ["sk-ant-test"] }],
-      routeChains: { plan: ["anthropic"], synthesize: ["anthropic"], transcriptions: [], search: [] },
+      routeChains: { plan: ["anthropic"], synthesize: ["anthropic"], transcriptions: [], search: [], interact: [] },
     });
     await app.inject({
       method: "POST",

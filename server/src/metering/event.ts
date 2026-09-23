@@ -31,13 +31,14 @@ import type { Config } from "../config.js";
  *   rather than the enum's.
  */
 
-/** §11's `route` enum, exactly. */
+/** §11's `route` enum, exactly, plus `interact.step` (SONNY-544, migration 0024). */
 export const meteredRoutes = [
   "plan",
   "research.synthesize",
   "transcription",
   "search",
   "screen.analyze",
+  "interact.step",
 ] as const;
 export type MeteredRoute = (typeof meteredRoutes)[number];
 
@@ -61,8 +62,9 @@ export type MeteringOutcome = (typeof meteringOutcomes)[number];
  * `everyPostRouteIsEitherMeteredOrDeclaredUnmetered` walks the built app's real route table, so a
  * sixth content-bearing route fails that test until somebody classifies it either way.
  *
- * The five keys are §2.4's five model routes. `POST /v1/transcriptions` maps to `transcription`
- * because §11's enum is singular there.
+ * The keys are §2.4's five model routes and SONNY-544's interaction step, which is metered on its
+ * own name and charged by nothing. `POST /v1/transcriptions` maps to `transcription` because §11's
+ * enum is singular there.
  */
 export const METERED_ROUTES: ReadonlyMap<string, MeteredRoute> = new Map([
   ["POST /v1/plan", "plan" as const],
@@ -70,6 +72,7 @@ export const METERED_ROUTES: ReadonlyMap<string, MeteredRoute> = new Map([
   ["POST /v1/transcriptions", "transcription" as const],
   ["POST /v1/search", "search" as const],
   ["POST /v1/screen/analyze", "screen.analyze" as const],
+  ["POST /v1/interact/step", "interact.step" as const],
 ]);
 
 /**

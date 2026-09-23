@@ -159,7 +159,9 @@ describeDb("what draws on the credit pool", () => {
     // the one shape that could inflate a screen-control figure if the query trusted the column
     // instead of the route. `screenControlSessionCosts` guards the same way for the same reason.
     const unpaid = meteredRoutes.filter((route) => route !== "screen.analyze");
-    expect(unpaid).toHaveLength(4);
+    // Five since SONNY-544: the interaction step is metered and, by the founders' decision, charged
+    // by nothing, which this test is the proof of.
+    expect(unpaid).toHaveLength(5);
     await insert(
       ...unpaid.map((route, index) =>
         event({ route, sessionId: `bogus-session-${index}`, sessionIteration: 1 }),

@@ -208,8 +208,8 @@ SONNY-134's support lookup answerable without a database trawl.
 
 ### 2.4 Fields every content-bearing request carries
 
-The five model routes are `/v1/plan`, `/v1/research/synthesize`, `/v1/transcriptions`, `/v1/search`
-and `/v1/screen/analyze`.
+The model routes are `/v1/plan`, `/v1/research/synthesize`, `/v1/transcriptions`, `/v1/search`,
+`/v1/screen/analyze` and, since SONNY-544, `/v1/interact/step`.
 
 | Field | Required on | Type | Meaning |
 |---|---|---|---|
@@ -600,6 +600,7 @@ here only so nobody adds a second one.
 | `POST /v1/transcriptions` | yes | Voice transcription | SONNY-130 |
 | `POST /v1/search` | yes | Web search | SONNY-130 |
 | `POST /v1/screen/analyze` | yes | Screen control | SONNY-131 |
+| `POST /v1/interact/step` | yes | One step of an Accessibility interaction: which element to act on next | SONNY-544 |
 | `DELETE /v1/tasks/{task_id}` | yes | Delete this task's retained content | SONNY-134 |
 | `DELETE /v1/tasks` | yes | Delete several tasks' retained content in one call | SONNY-404 |
 | `DELETE /v1/tasks/{task_id}/screenshots` | yes | Delete this task's screenshots and nothing else | SONNY-404 |
@@ -655,6 +656,12 @@ headers nor renders a too-old state.
 `POST /v1/plan` and `POST /v1/research/synthesize` take the same body. Keeping them one shape across
 two paths is what lets the server hold one adapter per provider instead of one per route, while still
 routing, metering and pricing them separately.
+
+`POST /v1/interact/step` (SONNY-544, V2 plan Milestone A) is a third route on the same body. The Mac
+calls it once per step while it works inside another app through the Accessibility tree, and always
+sends it with `retention: "none"` and `reasoning_effort: "low"` (founders, 2026-09-23). It is metered
+as `interact.step` and charged by nothing: the screen-control figure reads `screen.analyze` rows only.
+Its provider chain is `MODEL_ROUTE_INTERACT`, defaulting to the text routes' `openai,anthropic`.
 
 ```json
 {
@@ -1695,7 +1702,7 @@ token is still what keeps that survivable rather than corrupting.
 | Request | Safe to retry | Why |
 |---|---|---|
 | any `GET` | yes, always | No side effect, nothing metered |
-| `POST /v1/plan`, `/research/synthesize`, `/search`, `/transcriptions`, `/screen/analyze` | yes, with the same key | Section 9.2 |
+| `POST /v1/plan`, `/research/synthesize`, `/search`, `/transcriptions`, `/screen/analyze`, `/interact/step` | yes, with the same key | Section 9.2 |
 | `POST /v1/auth/refresh` | yes, with the same key | Rotation plus the overlap window (3.3) means a lost response does not cost the session |
 | `POST /v1/auth/email/start` | yes, with the same key | Without the key, a retry sends a second code and races the first |
 | `POST /v1/auth/email/verify` | **no** | A code is single-use by design (SONNY-127). The idempotency record returns the original *result*, including the original failure; it does not un-consume a code. **Except for the retryable failures 9.2 carves out** — those release the key, so a retry genuinely re-runs against a code that may already be consumed, which is one more reason this row says no |
@@ -1897,7 +1904,7 @@ it was built; each says how, and section 14 carries the row.
 | `idempotency_key` | string, nullable | client header | One event per key, ever (9.2). **Nullable since 2026-08-28**: 9.2 serves a `POST` carrying no key, and such a request is metered anyway — dropping the event would make it free — with no at-most-once guarantee, because there is no key for one to be about |
 | `account_id` | string | server | From the authenticated session. **Named `user_id` until 2026-08-28**; the column is `account_id` because section 5 makes the account the billable identity and one person can hold two Supabase users on one account |
 | `occurred_at` | timestamp | server | |
-| `route` | enum | server | `plan`, `research.synthesize`, `transcription`, `search`, `screen.analyze` |
+| `route` | enum | server | `plan`, `research.synthesize`, `transcription`, `search`, `screen.analyze`, `interact.step` (migration 0024) |
 | `provider` | string, nullable | server | Which provider actually served it. Required for failover accounting (SONNY-132) and never returned to the client. **Nullable since 2026-08-28**: a request refused before any upstream call has no provider, and naming one would be an invention |
 | `failed_over` | string list | server | **Added 2026-08-28.** The providers tried before the one that served, from `ProviderAttribution.failedOver` (SONNY-132). A failover spends a second upstream call, and nothing else records that it happened |
 | `model` | string, nullable | server | Server-side only, for the same reason. Nullable on a refusal, and on `search`, which is a provider with no model |
@@ -2018,6 +2025,7 @@ own opaque transport timeout, which it cannot tell apart from a dead network.
 | `POST /v1/plan` | 60 s | 75 s | 90 s |
 | `POST /v1/transcriptions` | 60 s | 75 s | 90 s |
 | `POST /v1/search` | 20 s | 25 s | 30 s |
+| `POST /v1/interact/step` | 20 s | 25 s | 30 s |
 | `POST /v1/account/credits/top-up` | 24 s | 30 s | 40 s |
 | auth, account, meta, health, delete | 10 s | 15 s | 20 s |
 

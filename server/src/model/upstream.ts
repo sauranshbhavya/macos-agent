@@ -258,6 +258,8 @@ export interface ModelProviders {
     | ((request: TranscriptionRequest) => Promise<Routed<TranscriptionResult>>)
     | undefined;
   readonly search: ((request: SearchRequest) => Promise<Routed<SearchResult>>) | undefined;
+  /** `POST /v1/interact/step`: one Accessibility interaction step, a text call like `plan`. */
+  readonly interact: RoutedTextAdapter | undefined;
 }
 
 /**

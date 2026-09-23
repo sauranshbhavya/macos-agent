@@ -238,7 +238,7 @@ describe("POST /v1/plan and POST /v1/research/synthesize", () => {
     // Both routes are asserted here rather than only `/v1/plan`: they are separate registrations
     // over one adapter, and a test covering one of them would keep passing if the other stopped
     // sending the field. `toBe(false)` rather than a falsy check — `undefined` is the defect.
-    for (const url of ["/v1/plan", "/v1/research/synthesize"]) {
+    for (const url of ["/v1/plan", "/v1/research/synthesize", "/v1/interact/step"]) {
       const calls = stubUpstream(() => jsonResponse({ output_text: "{}" }));
       const app = build();
       await app.inject({
@@ -254,6 +254,25 @@ describe("POST /v1/plan and POST /v1/research/synthesize", () => {
       await app.close();
       vi.unstubAllGlobals();
     }
+  });
+
+  it("serves the interaction step on its own route and returns the provider's text", async () => {
+    // SONNY-544. The step route is a text route like the two above, registered on its own path so
+    // it is metered under its own name; this pins that it answers and forwards like them.
+    const calls = stubUpstream(() => jsonResponse({ output_text: '{"decision":"finished"}' }));
+    const app = build();
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/interact/step",
+      headers: { authorization: authorization() },
+      payload: planBody({ retention: "none" }),
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()["output_text"]).toBe('{"decision":"finished"}');
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.url).toBe("https://openai.invalid/v1/responses");
+    await app.close();
   });
 
   it("maps response_schema onto the provider's structured-output mechanism, strictly", async () => {
@@ -486,7 +505,7 @@ describe("the fields §2.4 requires on every content-bearing request", () => {
     const withoutTaskId = planBody();
     delete withoutTaskId["task_id"];
 
-    for (const url of ["/v1/plan", "/v1/research/synthesize"]) {
+    for (const url of ["/v1/plan", "/v1/research/synthesize", "/v1/interact/step"]) {
       const response = await app.inject({
         method: "POST",
         url,
@@ -1043,13 +1062,13 @@ describe("how an upstream failure reaches the client", () => {
   });
 });
 
-describe("the four routes are authenticated", () => {
+describe("the model routes are authenticated", () => {
   it("refuses every one of them with 401 when no token is presented", async () => {
     // The gate's own population test covers classification; this is the behaviour, per route,
-    // because these four carry the user's command, their voice and their research.
+    // because these carry the user's command, their voice, their research and what another app shows.
     const calls = stubUpstream(() => jsonResponse({ output_text: "{}" }));
     const app = build();
-    for (const url of ["/v1/plan", "/v1/research/synthesize", "/v1/search", "/v1/transcriptions"]) {
+    for (const url of ["/v1/plan", "/v1/research/synthesize", "/v1/search", "/v1/transcriptions", "/v1/interact/step"]) {
       const response = await app.inject({ method: "POST", url, payload: {} });
       expect(response.statusCode, url).toBe(401);
       expect(response.json()["error"]["code"], url).toBe("auth.unauthenticated");
@@ -1068,6 +1087,8 @@ describe("the numbers this ticket is held to", () => {
       synthesize: 4_194_304,
       transcriptions: 10_485_760,
       search: 1_048_576,
+      // SONNY-544's row: a trimmed element list and a short history, under `plan`'s limit.
+      interact: 1_048_576,
       // SONNY-131's row. The table is asserted whole, so a fifth route has to be written here as
       // well as beside its own route — which is the point of asserting it whole. Its derivation
       // from the client's image ceiling is `test/screen.test.ts`', because that is where the
@@ -1086,6 +1107,8 @@ describe("the numbers this ticket is held to", () => {
       synthesize: { upstream: 90_000, total: 105_000 },
       transcriptions: { upstream: 60_000, total: 75_000 },
       search: { upstream: 20_000, total: 25_000 },
+      // SONNY-544: one interaction step, made while the person waits, on `search`'s short budget.
+      interact: { upstream: 20_000, total: 25_000 },
       screenAnalyze: { upstream: 90_000, total: 105_000 },
       // §12's last row, which is five routes rather than one and which nothing enforced until
       // SONNY-425. It is asserted here for the reason the other five are — the table is asserted

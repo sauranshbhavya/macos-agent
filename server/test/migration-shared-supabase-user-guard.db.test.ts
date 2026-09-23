@@ -39,6 +39,8 @@ describeDb("migration 0023's guard", () => {
 
   itUnderHangBackstop("refuses to apply while any Supabase user backs two live accounts, and applies once it does not", async () => {
     // Rolled back to 0022, the broken state seeded — the only way to reach it now — and forward again.
+    // 0024 sits above and is rolled back only to get past it.
+    expect(await down(client)).toBe("0024_an_interaction_step_is_metered_on_its_own_route");
     expect(await down(client)).toBe("0023_the_gate_honours_only_sessions_the_gateway_started");
     try {
       const one = await resolve(client, {
@@ -54,7 +56,10 @@ describeDb("migration 0023's guard", () => {
 
       // Resolve the state — close one of the two accounts — and the same migration applies.
       await client.query("UPDATE sonny.account SET deleted_at = now() WHERE id = $1", [one.accountId]);
-      expect(await up(client)).toEqual(["0023_the_gate_honours_only_sessions_the_gateway_started"]);
+      expect(await up(client)).toEqual([
+        "0023_the_gate_honours_only_sessions_the_gateway_started",
+        "0024_an_interaction_step_is_metered_on_its_own_route",
+      ]);
     } finally {
       // Whatever happened above, leave the schema at its head for the tests after this one.
       await client.query("TRUNCATE sonny.identity, sonny.account CASCADE");

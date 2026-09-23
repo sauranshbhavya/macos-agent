@@ -70,6 +70,8 @@ export const BODY_LIMIT_BYTES = {
   synthesize: 4_194_304,
   transcriptions: 10_485_760,
   search: 1_048_576,
+  /** A trimmed element list and a short history: far below this, and `plan`'s limit is ample. */
+  interact: 1_048_576,
   /** 4,200,000 — and it is `screenAnalyzeBodyLimitFrom(MAXIMUM_IMAGE_BYTES)`, not a coincidence. */
   screenAnalyze: screenAnalyzeBodyLimitFrom(MAXIMUM_IMAGE_BYTES),
 } as const;
@@ -106,6 +108,11 @@ export const DEADLINE_MS = {
   synthesize: { upstream: 90_000, total: 105_000 },
   transcriptions: { upstream: 60_000, total: 75_000 },
   search: { upstream: 20_000, total: 25_000 },
+  /**
+   * One Accessibility interaction step (V2 Milestone A). A small text call made once per step while
+   * the person waits, so it takes `search`'s short budget and margin.
+   */
+  interact: { upstream: 20_000, total: 25_000 },
   /**
    * §12's longest budget, shared with `synthesize`, and it is the row SONNY-130 left for this
    * ticket. A vision call carries megabytes upstream and waits on a large model, and a session

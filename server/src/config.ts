@@ -365,6 +365,7 @@ const schema = z.object({
   MODEL_ROUTE_SYNTHESIZE: z.string().trim().default(""),
   MODEL_ROUTE_TRANSCRIPTIONS: z.string().trim().default(""),
   MODEL_ROUTE_SEARCH: z.string().trim().default(""),
+  MODEL_ROUTE_INTERACT: z.string().trim().default(""),
   /**
    * Where `POST /v1/screen/analyze` sends, and what it asks for (SONNY-131).
    *
@@ -862,6 +863,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       synthesize: parseRouteChain("synthesize", value.MODEL_ROUTE_SYNTHESIZE),
       transcriptions: parseRouteChain("transcriptions", value.MODEL_ROUTE_TRANSCRIPTIONS),
       search: parseRouteChain("search", value.MODEL_ROUTE_SEARCH),
+      interact: parseRouteChain("interact", value.MODEL_ROUTE_INTERACT),
     },
     dataPolicies: providerDataPolicies(env),
     supabaseAnonKey: value.SUPABASE_ANON_KEY,

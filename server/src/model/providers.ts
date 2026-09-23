@@ -117,6 +117,7 @@ export function modelProvidersFrom(config: Config): ModelProviders {
     synthesize: withFailover(candidatesFor(config, "synthesize", textAdapterFor)),
     transcription: withFailover(candidatesFor(config, "transcriptions", transcriptionAdapterFor)),
     search: withFailover(candidatesFor(config, "search", searchAdapterFor)),
+    interact: withFailover(candidatesFor(config, "interact", textAdapterFor)),
   };
 }
 

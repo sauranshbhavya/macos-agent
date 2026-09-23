@@ -19,7 +19,7 @@ import { ProviderUnavailable, type ProviderAttribution, type Routed } from "./up
  */
 
 /** The routes whose provider is configuration. §11's `route` enum, minus the one SONNY-131 owns. */
-export const modelRoutes = ["plan", "synthesize", "transcriptions", "search"] as const;
+export const modelRoutes = ["plan", "synthesize", "transcriptions", "search", "interact"] as const;
 export type ModelRoute = (typeof modelRoutes)[number];
 
 /** `MODEL_ROUTE_PLAN`, `MODEL_ROUTE_SYNTHESIZE`, … — one variable per route. */
@@ -53,6 +53,9 @@ export const DEFAULT_ROUTE_CHAINS: Readonly<Record<ModelRoute, readonly Provider
   synthesize: ["openai", "anthropic"],
   transcriptions: ["openai"],
   search: ["tavily"],
+  // One Accessibility interaction step (V2 Milestone A): the same text call shape as `plan`, so the
+  // same chain.
+  interact: ["openai", "anthropic"],
 };
 
 /**
@@ -67,6 +70,7 @@ export const PROVIDERS_BY_OPERATION: Readonly<Record<ModelRoute, readonly Provid
   synthesize: ["openai", "anthropic", "cerebras"],
   transcriptions: ["openai"],
   search: ["tavily"],
+  interact: ["openai", "anthropic", "cerebras"],
 };
 
 /**

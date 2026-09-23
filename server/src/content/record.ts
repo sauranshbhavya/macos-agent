@@ -105,6 +105,7 @@ export function requestContentOf(route: MeteredRoute, body: unknown): RequestCon
   switch (route) {
     case "plan":
     case "research.synthesize":
+    case "interact.step":
       return { ...EMPTY, requestText: Array.isArray(record["messages"]) ? record["messages"] : null };
     case "search":
       return { ...EMPTY, requestText: typeof record["query"] === "string" ? record["query"] : null };
