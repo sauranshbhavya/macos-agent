@@ -329,3 +329,38 @@ public struct LiveAppInteractionAppOpener: AppInteractionAppOpening {
         throw AppOpeningError.failedToOpen(bundleIdentifier)
     }
 }
+
+// MARK: - Into a run result
+
+/// How a finished interaction reaches the rest of the app: a done outcome is a result, and every
+/// other outcome is an error carrying the sentence the person sees.
+public enum AppInteractionRunError: Error, LocalizedError, Equatable {
+    case needsUserInput(String)
+    case failed(AppInteractionFailure)
+
+    public var errorDescription: String? {
+        switch self {
+        case .needsUserInput(let question):
+            // Milestone A has no pause mid-run to answer into, so the question ends the run and says
+            // how to go on.
+            return "\(question) Ask again with the exact name and I'll try once more."
+        case .failed(let failure):
+            return failure.userMessage
+        }
+    }
+}
+
+extension AppInteractionOutcome {
+    public func runResult(plan: AgentPlan, previews: [ActionPreview]) throws -> AgentRunResult {
+        switch self {
+        case .done(let report):
+            return AgentRunResult(plan: plan, previews: previews, summary: report.summary)
+        case .needsUserInput(let question):
+            throw AppInteractionRunError.needsUserInput(question)
+        case .failed(let failure):
+            throw AppInteractionRunError.failed(failure)
+        case .cancelled:
+            throw CancellationError()
+        }
+    }
+}

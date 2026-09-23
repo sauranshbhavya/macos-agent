@@ -33,7 +33,19 @@ The sections after this one are the detailed design. This section is what holds 
 9. Saved user data stays readable, nothing is wiped, and a stored approval never carries forward as authority (§5, §15).
 10. New model calls go through the existing gateway, and the Swift and server schemas change together (§14).
 
-**Open question.** Does Milestone A use the hosted planner? If it does, deployment is on its critical path: `SonnyBackendHost.productionBaseURL` is nil and the staging and production deploys are stubs (§14).
+**How Milestone A is built** (founders, 2026-09-23, before implementation started; SONNY-544):
+
+- The model picks each step from a short, redacted list of the app's on-screen elements, through a new gateway route, `POST /v1/interact/step`. Each call is metered on its own route name, charged by nothing, and sent with retention `none` whatever the task's setting.
+- A request reaches the new path through a new hosted-planner operation, `interact_with_app`, used as a plan's only step. Drafting requests use it; a request to send stays with the existing screen-control path.
+- Drafting asks no approval, because nothing is sent. No keys are ever synthesized. Sonny types only the goal's own chat name and message, never text the model wrote.
+- So Milestone A uses the hosted planner, which answers the question this section used to ask. Development runs against the local gateway (`server/scripts/deploy.sh local`). Shipping it to users needs the hosting in §14: `SonnyBackendHost.productionBaseURL` is nil and the staging and production deploys are stubs.
+
+**Left for Milestone B, by design of the first slice:**
+
+- A question from the model (two chats with the same name) ends the run with that question. There is no pause to answer into yet.
+- An app the person has not allowed for control in the current mode (Safe mode, for one) is refused with a sentence saying how to allow it. There is no prompt yet.
+- Every button is refused except a row drawn as a button inside a list whose own name is not a commit. Sending, calling and deleting wait for exact approval (§9).
+- Confirming the open chat relies on its name being exposed outside any list. When it is not, Sonny reports the draft as placed but the chat as unconfirmed.
 
 ## 1. Outcome and confirmed decisions
 

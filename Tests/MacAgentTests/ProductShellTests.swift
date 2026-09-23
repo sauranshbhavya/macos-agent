@@ -1227,6 +1227,9 @@ struct ProductShellTests {
             // client-side router (SONNY-132). `makePlanner` replaces them: a closure this view model
             // holds, no more local data than the stores above it are.
             "priorTaskContextStore", "taskUsageRecorder", "makePlanner",
+            // SONNY-544's test seam for the interaction runtime: a closure, nil in the shipping app,
+            // no more local data than `makePlanner` beside it.
+            "appInteractionRuntimeOverride",
             "userDefaults", "whitelist", "routineScheduleTimer", "wakeObserver",
             // The one HTTP client the process holds (SONNY-130). A collaborator like the stores
             // above, and emphatically not local data: the session it holds lives in the Keychain,

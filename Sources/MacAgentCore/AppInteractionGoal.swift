@@ -94,3 +94,7 @@ private extension String {
     var nilIfEmpty: String? { isEmpty ? nil : self }
     var containsLineBreak: Bool { contains(where: \.isNewline) }
 }
+
+extension AppInteractionGoalError: LocalizedError {
+    public var errorDescription: String? { userMessage }
+}

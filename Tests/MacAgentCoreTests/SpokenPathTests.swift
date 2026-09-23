@@ -222,6 +222,10 @@ struct SpokenPathTests {
         "reminderTitle": false,
         "reminderMinutesFromNow": false,
         "reminderTime": false,
+        // SONNY-544: a goal, a chat name and a message, none of them a path.
+        "interactionGoal": false,
+        "interactionTarget": false,
+        "interactionText": false,
         // PR #244, F2. An instant, not a phrase of any kind.
         "resolvedReminderDueDate": false
     ]
@@ -267,6 +271,9 @@ struct SpokenPathTests {
             resolvedFromFinderSelection: true,
             itemIndex: 7,
             visionGoal: phrase,
+            interactionGoal: phrase,
+            interactionTarget: phrase,
+            interactionText: phrase,
             watchSubject: phrase,
             newName: phrase,
             calendarDay: phrase,

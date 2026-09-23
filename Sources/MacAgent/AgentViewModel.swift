@@ -976,6 +976,11 @@ final class AgentViewModel: ObservableObject {
     private let priorTaskContextStore: PriorTaskContextStore
     private let taskUsageRecorder: TaskUsageRecorder
     private let backendClient: SonnyBackendClient
+    /// Builds the runtime for a V2 Milestone A interaction (SONNY-544). Nil in the shipping app,
+    /// which builds the live one; a test sets it. A settable seam rather than an initializer
+    /// parameter, because the plan's rule is that a new path does not add a dependency to every
+    /// fixture that constructs this type.
+    var appInteractionRuntimeOverride: ((AppInteractionGoal) -> AppInteractionRuntime)?
     /// How this view model builds the planner for a run (SONNY-132). The shipping app passes
     /// `OpenAIPlanner.throughSonnysBackend(client:skills:)`; tests pass a stub. One seam, because there is
     /// one planner — which provider actually serves a request is `MODEL_ROUTE_PLAN` on the server,
@@ -7611,6 +7616,25 @@ final class AgentViewModel: ObservableObject {
         confirmationMessage: String,
         logRiskAssessment: Bool
     ) async throws -> AgentRunResult {
+        // **V2 Milestone A's one door onto the old path** (SONNY-544). A plan whose only step is
+        // `interact_with_app` runs on `AppInteractionRuntime`, which owns it start to finish, and
+        // comes back here as a result or an error like any other run, so the publishing, history
+        // and failure handling around this call serve it unchanged. Every other plan, including one
+        // that mixes the step with others, continues to `runner.execute` below. The approval the
+        // caller already settled covers it: the step is tier 2 with nothing to escalate.
+        if let goal = try AppInteractionCapabilityAdapter.standaloneGoal(in: preparedRun.plan) {
+            markAllSteps(.running)
+            let runtime = appInteractionRuntimeOverride?(goal) ?? makeLiveAppInteractionRuntime()
+            let outcome = await runtime.run(goal) { [weak self] line in
+                Task { @MainActor in self?.logStore.append(.act, line) }
+            }
+            if case .cancelled(typedSomething: true) = outcome {
+                logStore.append(.summarize, "Stopped after typing into \(goal.app); the text may still be there")
+            }
+            let result = try outcome.runResult(plan: preparedRun.plan, previews: preparedRun.previews)
+            markAllSteps(.complete)
+            return result
+        }
         markAllSteps(.running)
         let result = try await runner.execute(
             preparedRun,
@@ -7652,6 +7676,36 @@ final class AgentViewModel: ObservableObject {
             recordLocalStorageWriteFailure(outputLocationFailure)
         }
         return result
+    }
+
+    /// The live runtime for one interaction: the real Accessibility provider, the gateway's step
+    /// route under this task's id and usage recorder, and the same app-control standing screen
+    /// control reads.
+    private func makeLiveAppInteractionRuntime() -> AppInteractionRuntime {
+        let redaction = LocalRedactionService()
+        return AppInteractionRuntime(
+            accessibility: LiveAccessibilityProvider(),
+            chooser: GatewayAppInteractionStepChooser(
+                client: backendClient,
+                taskID: currentTaskID,
+                usageRecorder: taskUsageRecorder
+            ),
+            apps: LiveAppInteractionAppOpener(),
+            appControl: { [weak self] bundleIdentifier in
+                await MainActor.run { self?.appInteractionStanding(for: bundleIdentifier) ?? .needsApproval }
+            },
+            redact: { redaction.redactText($0).maskedText ?? "" }
+        )
+    }
+
+    /// Screen control's answer for this app, collapsed to allowed or not: Milestone A has no prompt
+    /// for app control yet, so an app the person has not allowed in this mode is refused with a
+    /// sentence saying how to allow it. An unreadable approved-apps file refuses too.
+    func appInteractionStanding(for bundleIdentifier: String) -> AppControlStanding {
+        switch visionAppControlState(targetBundleIdentifier: bundleIdentifier) {
+        case .allowed: return .allowed
+        case .needsApproval, .unreadable: return .needsApproval
+        }
     }
 
     private func approvePendingRun() {
