@@ -121,6 +121,46 @@ private func element(_ snapshot: AccessibilitySnapshot, _ match: (AccessibilityE
     return try #require(found)
 }
 
+/// One element of a hand-written snapshot, with only the fields these tests vary.
+private func node(
+    _ index: Int,
+    _ role: String,
+    parent: Int?,
+    depth: Int,
+    title: String? = nil,
+    label: String? = nil,
+    placeholder: String? = nil,
+    value: String? = nil,
+    selected: Bool = false,
+    actions: [String] = [],
+    settable: Bool = false
+) -> AccessibilityElement {
+    AccessibilityElement(
+        id: AccessibilityElementID(generation: 1, index: index),
+        parentIndex: parent,
+        depth: depth,
+        role: role,
+        title: title,
+        label: label,
+        placeholder: placeholder,
+        value: value,
+        isSelected: selected,
+        actions: actions,
+        canSetValue: settable
+    )
+}
+
+private func snapshot(of elements: [AccessibilityElement]) -> AccessibilitySnapshot {
+    AccessibilitySnapshot(
+        generation: 1,
+        app: AccessibilityObservedApp(bundleIdentifier: nil, processIdentifier: 1, name: nil),
+        windowTitle: nil,
+        elements: elements,
+        truncation: nil,
+        takenAt: Date(timeIntervalSince1970: 0)
+    )
+}
+
 /// A snapshot written by hand, in depth-first order, each row naming its parent's index.
 private func handMade(_ rows: [(role: String, parent: Int?, label: String?, value: String?, actions: [String])]) -> AccessibilitySnapshot {
     var depths: [Int] = []
@@ -283,6 +323,24 @@ struct AppInteractionScreenTests {
         #expect(!(try String(data: JSONEncoder().encode(built.screen), encoding: .utf8) ?? "").contains("private words"))
     }
 
+    /// Final check, F4: a read-only message bubble exposed as a text area, its message in its
+    /// description, is not a field and never goes; a writable box goes by its placeholder alone.
+    @Test
+    func aReadOnlyBubbleIsNotAFieldAndAFieldGoesByItsPlaceholderAlone() throws {
+        let shot = snapshot(of: [
+            node(0, "AXWindow", parent: nil, depth: 0),
+            node(1, "AXScrollArea", parent: 0, depth: 1),
+            node(2, "AXTextArea", parent: 1, depth: 2, label: "Mom: the door code is 4471", value: "the door code is 4471"),
+            node(3, "AXScrollArea", parent: 0, depth: 1),
+            node(4, "AXTextArea", parent: 3, depth: 2, title: "Message to Mom: call me", placeholder: "Type a message", settable: true),
+        ])
+        let built = AppInteractionScreenBuilder(redact: { $0 }).build(from: shot, goal: try goal())
+        let everything = try String(data: JSONEncoder().encode(built.screen), encoding: .utf8) ?? ""
+        #expect(!everything.contains("4471"))
+        #expect(!everything.contains("call me"))
+        #expect(built.screen.candidates.map(\.label) == ["Type a message"])
+    }
+
     @Test
     func labelsAreCutToTheBudget() async throws {
         let long = "Mom " + String(repeating: "x", count: AppInteractionGoal.maxTargetLength - 4)
@@ -331,7 +389,7 @@ struct AppInteractionPolicyTests {
         state.rowRole = "AXButton"
         let shot = try await snapshot(state)
         for name in ["Maddie", "Callum", "Book club meetup"] {
-            let row = try element(shot) { $0.role == "AXButton" && shot.primaryName(of: $0) == name }
+            let row = try element(shot) { $0.role == "AXButton" && shot.rowName(of: $0) == name }
             #expect(AppInteractionPolicy.decide(.press, on: row.id, in: shot, goal: try goal(target: name)) == .allow(.press), "\(name)")
         }
 
@@ -340,6 +398,23 @@ struct AppInteractionPolicyTests {
         let labelled = try await snapshot(combined)
         let row = try element(labelled) { $0.role == "AXRow" }
         #expect(AppInteractionPolicy.decide(.press, on: row.id, in: labelled, goal: try goal()) == .allow(.press))
+    }
+
+    /// Final check, F1: a call-log entry shown as "Mom" is still judged by everything it carries.
+    @Test
+    func aCallLogEntryShownByTheTargetsNameIsNotPressable() throws {
+        let shot = snapshot(of: [
+            node(0, "AXWindow", parent: nil, depth: 0),
+            node(1, "AXTable", parent: 0, depth: 1),
+            node(2, "AXRow", parent: 1, depth: 2, label: "Mom, Outgoing voice call, yesterday", actions: ["AXPress"]),
+            node(3, "AXRow", parent: 1, depth: 2, title: "Mom", label: "Missed video call", actions: ["AXPress"]),
+            node(4, "AXButton", parent: 1, depth: 2, title: "Mom", label: "Voice call", actions: ["AXPress"]),
+        ])
+        let g = try goal()
+        for index in [2, 3, 4] {
+            #expect(shot.rowName(of: shot.elements[index]) == "Mom")
+            #expect(AppInteractionPolicy.decide(.press, on: shot.elements[index].id, in: shot, goal: g) == .refuse(.mightCommit), "element \(index)")
+        }
     }
 
     /// The reviewer's probes, each of which was allowed before (PR #289 review, F1).
@@ -501,6 +576,27 @@ struct AppInteractionVerifierTests {
         counted.unreadCountFirst = true
         counted.exposesHeader = false
         #expect(AppInteractionVerifier.targetState("Mom", in: try await snapshot(counted)) == .unknown)
+    }
+
+    /// Final check, F3: a group row whose last sender is the target is the group's, not the
+    /// target's. The row has one name, "Family", and "Mom:" is not it.
+    @Test
+    func aGroupWhoseLastSenderIsTheTargetIsNotTheTargetsChat() throws {
+        let shot = snapshot(of: [
+            node(0, "AXWindow", parent: nil, depth: 0),
+            node(1, "AXTable", parent: 0, depth: 1),
+            node(2, "AXRow", parent: 1, depth: 2, selected: true, actions: ["AXPress"]),
+            node(3, "AXStaticText", parent: 2, depth: 3, value: "Family"),
+            node(4, "AXStaticText", parent: 2, depth: 3, value: "Mom:"),
+            node(5, "AXStaticText", parent: 2, depth: 3, value: "see you soon"),
+            node(6, "AXStaticText", parent: 0, depth: 1, value: "Family"),
+            node(7, "AXTextArea", parent: 0, depth: 1, placeholder: "Type a message", settable: true),
+        ])
+        let g = try goal()
+        #expect(AppInteractionVerifier.targetState("Mom", in: shot) == .contradicted)
+        #expect(AppInteractionPolicy.decide(.enterText, on: shot.elements[7].id, in: shot, goal: g) == .refuse(.otherTargetOpen))
+        let built = AppInteractionScreenBuilder(redact: { $0 }).build(from: shot, goal: g)
+        #expect(!built.screen.candidates.contains { $0.kind == "row" })
     }
 
     @Test

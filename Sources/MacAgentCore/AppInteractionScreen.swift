@@ -8,15 +8,17 @@ import Foundation
 ///
 /// - Elements a step could act on that sit **outside** every list and scroll area — the search
 ///   field, a toolbar — each named by one string, `displayName(of:)`.
-/// - Text fields wherever they sit outside a list, the message box included, because a Mac text
-///   view always sits in a scroll area (PR #289 delta review, N1). Never their contents: only
-///   whether one is empty, holds the target, holds the message, or holds something else.
-/// - From **inside** lists and scroll areas, only row-like elements one of whose short names *is*
-///   the target, compared whole (`AppInteractionVerifier.name(matching:in:)`), and shown by that
-///   name alone. A combined label's preview after its first comma, a row's other texts and the
-///   conversation's messages never match and never go (PR #289 review, F4, and its delta: "Give
-///   me a moment" no longer passes for "Mom"). What can still go is a message whose entire short
-///   text is the target's name — the word "Mom" on its own.
+/// - Text fields outside a list, the message box included even inside a scroll area, because a
+///   Mac text view always sits in one (PR #289 delta review, N1) — but inside a scroll area only a
+///   writable one, so a read-only message bubble is not a field. Named by placeholder alone, never
+///   by a title or description a bubble could carry its message in (final check, F4), and never
+///   their contents: only whether one is empty, holds the target, holds the message, or holds
+///   something else.
+/// - From **inside** lists and scroll areas, only row-like elements whose one name (`rowName`) *is*
+///   the target, compared whole (`AppInteractionVerifier.isTarget`), shown by that name alone. A
+///   combined label's preview, a row's other texts and the conversation's messages never match and
+///   never go. What can still go is a message whose first text is exactly the target's name — the
+///   word "Mom" on its own.
 /// - Headings and similar text outside every list and scroll area, such as the name at the top of
 ///   an open chat.
 ///
@@ -108,12 +110,16 @@ public struct AppInteractionScreenBuilder: Sendable {
     /// Inside them, only a row-like element with a name that is the target, shown by that name.
     static func shownName(_ element: AccessibilityElement, in snapshot: AccessibilitySnapshot, goal: AppInteractionGoal) -> String? {
         if element.isTextInput {
-            return snapshot.isInsideList(element) ? nil : snapshot.displayName(of: element)
+            guard !snapshot.isInsideList(element) else { return nil }
+            if snapshot.isInsideListOrScrollArea(element), !element.canSetValue { return nil }
+            return element.placeholder ?? ""
         }
         guard snapshot.isInsideListOrScrollArea(element) else { return snapshot.displayName(of: element) }
         guard AccessibilityVocabulary.selectionRoles.contains(element.role) || element.role == "AXButton",
-              let target = goal.target else { return nil }
-        return AppInteractionVerifier.name(matching: target, in: snapshot.names(of: element))
+              let target = goal.target,
+              let name = snapshot.rowName(of: element),
+              AppInteractionVerifier.isTarget(name, target) else { return nil }
+        return name
     }
 
     static func capabilities(of element: AccessibilityElement) -> [AppInteractionStepKind] {
@@ -137,8 +143,7 @@ public struct AppInteractionScreenBuilder: Sendable {
     ) -> [AccessibilityElement] {
         func rank(_ element: AccessibilityElement) -> Int {
             if element.isTextInput { return 0 }
-            if let target = goal.target,
-               AppInteractionVerifier.name(matching: target, in: snapshot.names(of: element)) != nil { return 1 }
+            if let target = goal.target, AppInteractionVerifier.isTarget(snapshot.rowName(of: element), target) { return 1 }
             return 2
         }
         return elements.enumerated()

@@ -75,17 +75,19 @@ public enum AppInteractionPolicy {
     /// A button outside a list is matched by substring over every name it has, so "Resend" and
     /// "Huddle now" are caught and a false match only refuses. A row, a tab or a row drawn as a
     /// button inside a list only navigates, and its name is usually a person's, so it is matched
-    /// word by word with the common inflections, over its primary name — the part before a combined
-    /// label's first comma, since the preview after it is someone's message, not the row. "Callum",
-    /// "Maddie" and "Book club meetup" open; "Join call" and "Resend" do not (PR #289 review F1 and
-    /// its delta, N2).
+    /// word by word with the common inflections — "Callum", "Maddie" and "Book club meetup" open;
+    /// "Join call" and "Resend" do not (PR #289 review F1 and its delta, N2). **Over everything the
+    /// element carries, whole**: its own title, description, identifier and value, and the name it
+    /// is shown by. A call-log entry "Mom, Outgoing voice call" or titled "Mom" with the description
+    /// "Missed video call" is refused though it is shown as "Mom" (final check, F1); a chat whose
+    /// preview says "call me later" is refused too, which is the safe direction.
     static func namesACommit(_ element: AccessibilityElement, in snapshot: AccessibilitySnapshot) -> Bool {
         if element.role == "AXButton", !snapshot.isInsideList(element) {
             let names = [snapshot.displayName(of: element), element.title, element.label, element.identifier, element.value]
                 .compactMap { $0?.lowercased() }
             return names.contains { name in committingWords.contains { name.contains($0) } }
         }
-        let names = [snapshot.primaryName(of: element), element.identifier]
+        let names = [snapshot.rowName(of: element), element.title, element.label, element.identifier, element.value]
             .compactMap { $0?.lowercased() }
         return names.contains { name in
             let words = Set(name.split(whereSeparator: { !$0.isLetter }).map(String.init))

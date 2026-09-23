@@ -43,30 +43,30 @@ public enum AppInteractionVerifier {
         }
     }
 
-    /// The one of `names` that is the target, compared whole after dropping case and symbols, so
-    /// "Mom ❤️" and "Mom, see you soon" are Mom and "Mom & Dad" and "Give me a moment" are not.
-    /// The same test decides what the model may see, what counts as another chat being open, and
-    /// what confirms the right one.
-    public static func name(matching target: String, in names: [String]) -> String? {
+    /// Whether a row's one name is the target, compared whole after dropping case and symbols, so
+    /// "Mom ❤️" is Mom and "Mom & Dad", "Family" and "Give me a moment" are not. The same test
+    /// decides what the model may see, what counts as another chat being open, and what confirms
+    /// the right one.
+    public static func isTarget(_ name: String?, _ target: String) -> Bool {
         let wanted = normalized(target)
-        guard !wanted.isEmpty else { return nil }
-        return names.first { normalized($0) == wanted }
+        guard let name, !wanted.isEmpty else { return false }
+        return normalized(name) == wanted
     }
 
     public static func targetState(_ target: String, in snapshot: AccessibilitySnapshot) -> TargetState {
         let wanted = normalized(target)
         guard !wanted.isEmpty else { return .unknown }
         if targetIsShown(wanted, in: snapshot) { return .shown }
-        // A selected row is the one thing an app shows as open inside a list. If none of its names
-        // is the target, typing now would put the message in someone else's chat (PR #289 review,
-        // F3). Its names, not its whole label: a row labelled "Mom, see you soon, 10:32", or one
-        // whose first text is an unread count, is still Mom's (delta review).
+        // A selected row is the one thing an app shows as open inside a list. If its name is not
+        // the target, typing now would put the message in someone else's chat (PR #289 review, F3).
+        // Its one name (`rowName`): "Mom, see you soon, 10:32" and a row led by an unread count are
+        // Mom's; a "Family" group whose last sender was Mom is not.
         let selectedElsewhere = snapshot.elements.contains { element in
             guard element.isSelected,
                   AccessibilityVocabulary.selectionRoles.contains(element.role) || element.role == "AXButton",
-                  snapshot.isInsideList(element) else { return false }
-            let names = snapshot.names(of: element)
-            return !names.isEmpty && name(matching: target, in: names) == nil
+                  snapshot.isInsideList(element),
+                  let name = snapshot.rowName(of: element) else { return false }
+            return !isTarget(name, target)
         }
         return selectedElsewhere ? .contradicted : .unknown
     }

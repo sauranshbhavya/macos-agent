@@ -187,24 +187,31 @@ public struct AccessibilitySnapshot: Equatable, Sendable {
         return firstText(inside: element) ?? ""
     }
 
-    /// The part of an element's name before any ", ": what a row is called when an app joins its
-    /// name, last message and time into one label ("Mom, see you soon, 10:32"). A person's name
-    /// rarely has a comma; a preview after one is not the row's name (PR #289 delta review, F3/F4).
-    public func primaryName(of element: AccessibilityElement) -> String {
-        Self.firstSegment(displayName(of: element))
-    }
-
-    /// Every short name an element could go by: its own title, description and value, each cut at
-    /// the first ", ", and the first few texts inside it. A row whose unread count or "Pinned" badge
-    /// comes before the contact's name is still found by that name.
-    public func names(of element: AccessibilityElement) -> [String] {
-        let own = [element.title, element.label, element.isTextInput ? nil : element.value].compactMap { $0 }
-        let inner = descendants(of: element).lazy.compactMap { $0.title ?? $0.value ?? $0.label }.prefix(6)
-        return (own + inner).map(Self.firstSegment).filter { !$0.isEmpty }
+    /// What a row is called, as one name: its own title or description, or its own value, cut
+    /// before any ", " — an app that joins name, last message and time into one label ("Mom, see
+    /// you soon, 10:32") puts the name first — or else the first text inside it that is not a badge,
+    /// an unread count or "Pinned". **One name, never a search through several**: a group row's
+    /// later texts are its last sender and message, and accepting any of them let "Family" pass for
+    /// "Mom" because Mom sent the last message (PR #289 final check, F3).
+    public func rowName(of element: AccessibilityElement) -> String? {
+        if let own = element.title ?? element.label ?? (element.isTextInput ? nil : element.value) {
+            let cut = Self.firstSegment(own)
+            return cut.isEmpty ? nil : cut
+        }
+        for text in descendants(of: element).lazy.compactMap({ $0.title ?? $0.value ?? $0.label }) {
+            let cut = Self.firstSegment(text)
+            if cut.isEmpty || Self.isBadge(cut) { continue }
+            return cut
+        }
+        return nil
     }
 
     static func firstSegment(_ text: String) -> String {
         (text.components(separatedBy: ", ").first ?? text).trimmingCharacters(in: .whitespaces)
+    }
+
+    static func isBadge(_ text: String) -> Bool {
+        text.allSatisfy(\.isNumber) || ["pinned", "muted", "unread", "archived", "new"].contains(text.lowercased())
     }
 
     /// The first text inside an element, depth first.
