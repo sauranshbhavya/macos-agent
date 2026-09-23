@@ -12,6 +12,7 @@ import Foundation
 /// | screen/analyze, research/synthesize | 105 s | 120 s |
 /// | plan, transcriptions | 75 s | 90 s |
 /// | search | 25 s | 30 s |
+/// | interact step | 25 s | 30 s |
 /// | auth, account, meta, health, delete | 15 s | 20 s |
 ///
 /// SONNY-128 declared only the last row, because a constant for a route nobody sends is a number
@@ -30,6 +31,9 @@ public enum SonnyBackendTimeouts {
     public static let researchSynthesis: TimeInterval = 120
     public static let transcription: TimeInterval = 90
     public static let search: TimeInterval = 30
+    /// One Accessibility interaction step: a small text call made once per step while the person
+    /// waits, so it takes `search`'s short budget and margin (server total 25 s).
+    public static let interactStep: TimeInterval = 30
     /// §12's longest client budget, shared with `researchSynthesis` (SONNY-131).
     ///
     /// **What the margin buys is a retry, and nothing else the user can see** — which is worth

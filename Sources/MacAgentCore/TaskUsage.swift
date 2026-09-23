@@ -33,6 +33,7 @@ public enum AIUsageCallKind: String, Codable, Equatable, Sendable {
     /// the day something persists usage, which is that ticket's; until then this is a name chosen to
     /// age well rather than one already committed to.
     case screenControl = "screen_control"
+    case appInteraction = "app_interaction"
 
     public var displayName: String {
         switch self {
@@ -44,6 +45,8 @@ public enum AIUsageCallKind: String, Codable, Equatable, Sendable {
             return "Transcription"
         case .screenControl:
             return "Screen control"
+        case .appInteraction:
+            return "App control"
         }
     }
 }

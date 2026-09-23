@@ -42,9 +42,10 @@ public enum VisionSessionPromptBuilder {
     /// argument is supplied** — this paragraph used to say the opposite, backed by a `git grep` that
     /// exits 1 today and by nothing that would keep it exiting 1 (PR #158 review, F6.2). What holds
     /// it is `UntrustedContentBoundaryTagTests.noProductionSourceMintsABoundaryOfItsOwn`, which pins
-    /// the population of `forOnePrompt` in `Sources/` to its own declaration and the three default
-    /// arguments (this one, the web-research builder's and, since SONNY-343, the planner's
-    /// `messages`): a runner that hoisted a draw out of its per-iteration loop would be a fifth site.
+    /// the population of `forOnePrompt` in `Sources/` to its own declaration and the four default
+    /// arguments (this one, the web-research builder's, since SONNY-343 the planner's `messages`,
+    /// and since V2 Milestone A the Accessibility step prompt's): a runner that hoisted a draw out of
+    /// its per-iteration loop would be a sixth site.
     /// Note that `theTagIsFreshForEveryPromptAndNeverReused` would *not* catch that — it drives this
     /// builder, not the loop.
     public static func decisionPrompt(

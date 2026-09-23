@@ -292,11 +292,14 @@ struct UntrustedContentBoundaryTagTests {
                 "WebResearchSynthesizer.swift": 1,
                 // The planner's `messages` default argument (SONNY-343): drawn once per request,
                 // after the prior task's record exists — the same per-prompt shape as the two above.
-                "OpenAIPlanner.swift": 1
+                "OpenAIPlanner.swift": 1,
+                // The Accessibility step prompt's default argument (V2 Milestone A): drawn once per
+                // step, because each step is its own prompt.
+                "AppInteractionStepPrompt.swift": 1
             ],
             """
             forOnePrompt is minted in \(minting.sorted { $0.key < $1.key }.map { "\($0.key)×\($0.value)" }) \
-            — it may appear only as its own declaration and as the three prompt builders' default \
+            — it may appear only as its own declaration and as the four prompt builders' default \
             arguments. A further site is something other than a prompt builder deciding when a tag is \
             drawn, and a tag drawn anywhere but per-prompt can be pinned across a session.
             """

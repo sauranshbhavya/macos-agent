@@ -71,6 +71,9 @@ enum SonnyModelRoute {
     case search
     /// §4.5, the screen-control route (SONNY-131).
     case screenAnalyze
+    /// One step of an Accessibility interaction (V2 plan Milestone A). Metered on its own route
+    /// and not charged: only `screen.analyze` feeds the screen-control figure.
+    case interactStep
 
     var path: String {
         switch self {
@@ -79,6 +82,7 @@ enum SonnyModelRoute {
         case .transcription: return "/v1/transcriptions"
         case .search: return "/v1/search"
         case .screenAnalyze: return "/v1/screen/analyze"
+        case .interactStep: return "/v1/interact/step"
         }
     }
 
@@ -89,6 +93,7 @@ enum SonnyModelRoute {
         case .transcription: return SonnyBackendTimeouts.transcription
         case .search: return SonnyBackendTimeouts.search
         case .screenAnalyze: return SonnyBackendTimeouts.screenAnalyze
+        case .interactStep: return SonnyBackendTimeouts.interactStep
         }
     }
 
@@ -99,6 +104,7 @@ enum SonnyModelRoute {
         case .transcription: return "transcriptions"
         case .search: return "search"
         case .screenAnalyze: return "screen.analyze"
+        case .interactStep: return "interact.step"
         }
     }
 }
@@ -116,6 +122,9 @@ struct SonnyTextRouteBody {
     let messages: [(role: String, text: String)]
     let schemaName: String
     let schema: [String: Any]
+    /// "medium" everywhere except the interaction step route, which asks "low" because it is
+    /// called once per step while the person waits.
+    var reasoningEffort = "medium"
 
     func encoded() throws -> Data {
         var body = context.wireFields
@@ -124,7 +133,7 @@ struct SonnyTextRouteBody {
         body["response_schema"] = schema
         // Advisory hints, kept at the values the Mac has always sent so the move changes nothing a
         // model can see. §4.2: a provider with no equivalent ignores them.
-        body["reasoning_effort"] = "medium"
+        body["reasoning_effort"] = reasoningEffort
         body["verbosity"] = "low"
         return try JSONSerialization.data(withJSONObject: body)
     }

@@ -1,0 +1,229 @@
+import ApplicationServices
+import CoreGraphics
+import Foundation
+
+/// Reads and acts on other apps through `AXUIElement`.
+///
+/// An actor so the element handles, which are not `Sendable`, stay in one isolation domain and
+/// never reach a model, a snapshot or the UI. Only the latest generation's handles are kept; an id
+/// from an earlier observation is refused as stale rather than resolved against a tree that may
+/// have moved.
+public actor LiveAccessibilityProvider: AccessibilityProviding {
+    private var generation = 0
+    private var handles: [AXUIElement] = []
+    private let trust: @Sendable () -> Bool
+    private let clock: @Sendable () -> Date
+
+    public init(
+        trust: @escaping @Sendable () -> Bool = { AXIsProcessTrusted() },
+        clock: @escaping @Sendable () -> Date = { Date() }
+    ) {
+        self.trust = trust
+        self.clock = clock
+    }
+
+    public func isTrusted() -> Bool {
+        trust()
+    }
+
+    public func observe(processIdentifier: pid_t, limits: AccessibilityLimits) throws -> AccessibilitySnapshot {
+        guard trust() else { throw AccessibilityError.notTrusted }
+        let application = AXUIElementCreateApplication(processIdentifier)
+        AXUIElementSetMessagingTimeout(application, limits.messagingTimeout)
+
+        let window = try Self.targetWindow(of: application)
+        generation += 1
+        let thisGeneration = generation
+        let started = clock()
+
+        var collected: [AccessibilityElement] = []
+        var collectedHandles: [AXUIElement] = []
+        var truncation: AccessibilityTruncation?
+        // Depth-first with an explicit stack, children pushed in reverse so they are visited in
+        // order. `AccessibilitySnapshot.descendants(of:)` relies on this order.
+        var stack: [(element: AXUIElement, parent: Int?, depth: Int)] = [(window, nil, 0)]
+        while let next = stack.popLast() {
+            if collected.count >= limits.maxElements {
+                truncation = .nodeLimit
+                break
+            }
+            if clock().timeIntervalSince(started) > limits.deadline {
+                truncation = .deadline
+                break
+            }
+            let index = collected.count
+            let id = AccessibilityElementID(generation: thisGeneration, index: index)
+            collected.append(Self.read(next.element, id: id, parent: next.parent, depth: next.depth, limits: limits))
+            collectedHandles.append(next.element)
+
+            guard next.depth < limits.maxDepth else {
+                if !Self.children(of: next.element).isEmpty { truncation = truncation ?? .depthLimit }
+                continue
+            }
+            for child in Self.children(of: next.element).reversed() {
+                stack.append((child, index, next.depth + 1))
+            }
+        }
+
+        handles = collectedHandles
+        return AccessibilitySnapshot(
+            generation: thisGeneration,
+            app: AccessibilityObservedApp(
+                bundleIdentifier: nil,
+                processIdentifier: processIdentifier,
+                name: Self.string(application, "AXTitle", limit: limits.maxTextLength)
+            ),
+            windowTitle: Self.string(window, "AXTitle", limit: limits.maxTextLength),
+            elements: collected,
+            truncation: truncation,
+            takenAt: started
+        )
+    }
+
+    public func perform(_ action: AccessibilityAction, on element: AccessibilityElementID) throws {
+        guard trust() else { throw AccessibilityError.notTrusted }
+        guard element.generation == generation, handles.indices.contains(element.index) else {
+            throw AccessibilityError.staleElement
+        }
+        let handle = handles[element.index]
+        // Re-resolve immediately before acting: an element that no longer answers for its role has
+        // been torn down since the observation, whatever now occupies its place on screen.
+        var role: CFTypeRef?
+        let probe = AXUIElementCopyAttributeValue(handle, "AXRole" as CFString, &role)
+        guard probe == .success else { throw Self.error(for: probe, staleOnInvalid: true) }
+
+        let result: AXError
+        switch action {
+        case .press:
+            result = AXUIElementPerformAction(handle, AccessibilityVocabulary.pressAction as CFString)
+        case .select:
+            result = AXUIElementSetAttributeValue(handle, "AXSelected" as CFString, kCFBooleanTrue)
+        case .focus:
+            result = AXUIElementSetAttributeValue(handle, "AXFocused" as CFString, kCFBooleanTrue)
+        case .setValue(let text):
+            var settable = DarwinBoolean(false)
+            let check = AXUIElementIsAttributeSettable(handle, "AXValue" as CFString, &settable)
+            guard check == .success, settable.boolValue else { throw AccessibilityError.valueNotSettable }
+            result = AXUIElementSetAttributeValue(handle, "AXValue" as CFString, text as CFString)
+        }
+        guard result == .success else { throw Self.error(for: result, staleOnInvalid: true) }
+    }
+
+    // MARK: - Reading
+
+    private static func targetWindow(of application: AXUIElement) throws -> AXUIElement {
+        for attribute in ["AXFocusedWindow", "AXMainWindow"] {
+            var value: CFTypeRef?
+            let result = AXUIElementCopyAttributeValue(application, attribute as CFString, &value)
+            if result == .success, let value, CFGetTypeID(value) == AXUIElementGetTypeID() {
+                return unsafeDowncast(value, to: AXUIElement.self)
+            }
+            if result == .cannotComplete || result == .notImplemented { continue }
+            if result == .apiDisabled { throw AccessibilityError.notTrusted }
+            if result == .invalidUIElement { throw AccessibilityError.appNotRunning }
+        }
+        var windows: CFTypeRef?
+        if AXUIElementCopyAttributeValue(application, "AXWindows" as CFString, &windows) == .success,
+           let list = windows as? [AXUIElement], let first = list.first {
+            return first
+        }
+        throw AccessibilityError.noWindow
+    }
+
+    private static func children(of element: AXUIElement) -> [AXUIElement] {
+        // Lists and tables can hold thousands of rows; the visible ones are what a person could
+        // act on, so prefer them when the element offers the distinction.
+        for attribute in ["AXVisibleChildren", "AXChildren"] {
+            var value: CFTypeRef?
+            if AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success,
+               let list = value as? [AXUIElement] {
+                return list
+            }
+        }
+        return []
+    }
+
+    private static func read(
+        _ element: AXUIElement,
+        id: AccessibilityElementID,
+        parent: Int?,
+        depth: Int,
+        limits: AccessibilityLimits
+    ) -> AccessibilityElement {
+        let limit = limits.maxTextLength
+        return AccessibilityElement(
+            id: id,
+            parentIndex: parent,
+            depth: depth,
+            role: string(element, "AXRole", limit: limit) ?? "AXUnknown",
+            subrole: string(element, "AXSubrole", limit: limit),
+            identifier: string(element, "AXIdentifier", limit: limit),
+            title: string(element, "AXTitle", limit: limit),
+            label: string(element, "AXDescription", limit: limit),
+            placeholder: string(element, "AXPlaceholderValue", limit: limit),
+            value: string(element, "AXValue", limit: limit),
+            isEnabled: bool(element, "AXEnabled") ?? true,
+            isFocused: bool(element, "AXFocused") ?? false,
+            isSelected: bool(element, "AXSelected") ?? false,
+            actions: actions(of: element),
+            canSetValue: settable(element, "AXValue"),
+            canFocus: settable(element, "AXFocused"),
+            canSelect: settable(element, "AXSelected"),
+            frame: frame(of: element)
+        )
+    }
+
+    private static func string(_ element: AXUIElement, _ attribute: String, limit: Int) -> String? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success,
+              let text = value as? String else { return nil }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        return trimmed.count > limit ? String(trimmed.prefix(limit)) : trimmed
+    }
+
+    private static func bool(_ element: AXUIElement, _ attribute: String) -> Bool? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success else { return nil }
+        return (value as? NSNumber)?.boolValue
+    }
+
+    private static func settable(_ element: AXUIElement, _ attribute: String) -> Bool {
+        var settable = DarwinBoolean(false)
+        return AXUIElementIsAttributeSettable(element, attribute as CFString, &settable) == .success
+            && settable.boolValue
+    }
+
+    private static func actions(of element: AXUIElement) -> [String] {
+        var names: CFArray?
+        guard AXUIElementCopyActionNames(element, &names) == .success, let list = names as? [String] else {
+            return []
+        }
+        return list
+    }
+
+    private static func frame(of element: AXUIElement) -> CGRect? {
+        var positionValue: CFTypeRef?
+        var sizeValue: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, "AXPosition" as CFString, &positionValue) == .success,
+              AXUIElementCopyAttributeValue(element, "AXSize" as CFString, &sizeValue) == .success,
+              let positionValue, let sizeValue,
+              CFGetTypeID(positionValue) == AXValueGetTypeID(),
+              CFGetTypeID(sizeValue) == AXValueGetTypeID() else { return nil }
+        var point = CGPoint.zero
+        var size = CGSize.zero
+        guard AXValueGetValue(unsafeDowncast(positionValue, to: AXValue.self), .cgPoint, &point),
+              AXValueGetValue(unsafeDowncast(sizeValue, to: AXValue.self), .cgSize, &size) else { return nil }
+        return CGRect(origin: point, size: size)
+    }
+
+    private static func error(for result: AXError, staleOnInvalid: Bool) -> AccessibilityError {
+        switch result {
+        case .apiDisabled: return .notTrusted
+        case .invalidUIElement: return staleOnInvalid ? .staleElement : .appNotRunning
+        case .cannotComplete: return .timedOut
+        case .actionUnsupported, .attributeUnsupported, .notImplemented: return .actionUnsupported
+        default: return .failed(code: result.rawValue)
+        }
+    }
+}

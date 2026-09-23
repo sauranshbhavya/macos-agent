@@ -29,6 +29,7 @@ struct ModelRouteNumbersTests {
         (.transcription, 75, 90),
         (.search, 25, 30),
         (.screenAnalyze, 105, 120),
+        (.interactStep, 25, 30),
     ]
 
     @Test
@@ -38,6 +39,7 @@ struct ModelRouteNumbersTests {
         #expect(SonnyBackendTimeouts.transcription == 90)
         #expect(SonnyBackendTimeouts.search == 30)
         #expect(SonnyBackendTimeouts.screenAnalyze == 120)
+        #expect(SonnyBackendTimeouts.interactStep == 30)
         // The row SONNY-128 declared, unchanged by either branch and asserted so it cannot drift
         // while the five beside it are held.
         #expect(SonnyBackendTimeouts.auth == 20)
@@ -76,6 +78,7 @@ struct ModelRouteNumbersTests {
         #expect(SonnyBackendTimeouts.transcription - 75 == 15)
         #expect(SonnyBackendTimeouts.screenAnalyze - 105 == 15)
         #expect(SonnyBackendTimeouts.search - 25 == 5)
+        #expect(SonnyBackendTimeouts.interactStep - 25 == 5)
         #expect(SonnyBackendTimeouts.auth - 15 == 5)
     }
 
@@ -88,6 +91,7 @@ struct ModelRouteNumbersTests {
         #expect(SonnyModelRoute.transcription.path == "/v1/transcriptions")
         #expect(SonnyModelRoute.search.path == "/v1/search")
         #expect(SonnyModelRoute.screenAnalyze.path == "/v1/screen/analyze")
+        #expect(SonnyModelRoute.interactStep.path == "/v1/interact/step")
     }
 
     @Test
@@ -101,8 +105,9 @@ struct ModelRouteNumbersTests {
             SonnyModelRoute.transcription.usageModelName,
             SonnyModelRoute.search.usageModelName,
             SonnyModelRoute.screenAnalyze.usageModelName,
+            SonnyModelRoute.interactStep.usageModelName,
         ]
-        #expect(names == ["plan", "research.synthesize", "transcriptions", "search", "screen.analyze"])
+        #expect(names == ["plan", "research.synthesize", "transcriptions", "search", "screen.analyze", "interact.step"])
         #expect(Set(names).count == names.count)
     }
 }
