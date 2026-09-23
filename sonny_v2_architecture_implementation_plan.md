@@ -10,7 +10,7 @@ The sections after this one are the detailed design. This section is what holds 
 
 **Phase.** New features are frozen until Milestone A lands. No features, capabilities or improvements go onto the current execution path; the only exception is a fix for a defect that loses data, breaks security or blocks everyday use, approved by a founder each time.
 
-**Milestone A's workflow.** A third-party app both founders use daily, with a draft-only goal where nothing is sent. Notes stays available as the controlled fixture if that app's Accessibility tree turns out to be poor. The app itself is still to be named (open question 1).
+**Milestone A's workflow.** WhatsApp (the native Mac app, `net.whatsapp.WhatsApp`) with a draft-only goal: open the chat the user names and leave the message they asked for in its composer, never sent. Notes stays available as the controlled fixture if WhatsApp's Accessibility tree turns out to be poor. What that choice means for the first slice is under Milestone A in §15.
 
 **On hold.**
 
@@ -33,10 +33,7 @@ The sections after this one are the detailed design. This section is what holds 
 9. Saved user data stays readable, nothing is wiped, and a stored approval never carries forward as authority (§5, §15).
 10. New model calls go through the existing gateway, and the Swift and server schemas change together (§14).
 
-**Open questions.**
-
-1. Which third-party app does Milestone A use?
-2. Does Milestone A use the hosted planner? If it does, deployment is on its critical path: `SonnyBackendHost.productionBaseURL` is nil and the staging and production deploys are stubs (§14).
+**Open question.** Does Milestone A use the hosted planner? If it does, deployment is on its critical path: `SonnyBackendHost.productionBaseURL` is nil and the staging and production deploys are stubs (§14).
 
 ## 1. Outcome and confirmed decisions
 
@@ -367,7 +364,13 @@ These are milestones, not a fixed dependency graph. Pick the next slice from use
 
 ### Milestone A — Choose and prove one useful workflow
 
-Choose an unfamiliar non-refused app and a user goal with an observable result. Prefer an action without external send or destructive effects for the first proof. The founders' pick is recorded at the top of this plan: a third-party app they use daily, with a draft-only goal. A controlled AppKit fixture can establish AX behavior; a disposable real-app case shows whether the discovery is useful outside a fixture. Inspect the AX tree and existing native or vision support before deciding which backend to implement.
+Choose an unfamiliar non-refused app and a user goal with an observable result. Prefer an action without external send or destructive effects for the first proof. The founders' pick is WhatsApp with a draft-only goal (top of this plan). What that pick implies:
+
+- **The Accessibility tree is the only semantic route.** WhatsApp 26.36.74 declares no scripting dictionary (its `Info.plist` has neither `NSAppleScriptEnabled` nor `OSAScriptingDefinition`, where Notes has both), so there is no osascript template to write. The slice exercises exactly the missing capability of §7, and the vision fallback of §12 where the tree is poor.
+- **Return sends.** The draft is entered by setting the composer's value, not by typing keys, and text containing a newline is refused rather than typed. No step in this slice may press Return in that window. That is §12's no-batched-Return rule, with the stakes named.
+- **The postcondition is the draft.** Success means the named chat is open and its composer holds exactly the requested text. A missing or ambiguous chat name, or two chats with similar names, ends in a clarification, never a best guess.
+- **Chat names and messages are private and untrusted.** Send the model only what choosing the target needs, and treat a contact name or message text as observation data (rules 2 and 7 above).
+- WhatsApp is already on `AppControlStarterList` as `net.whatsapp.whatsapp`, so the existing app-control standing applies without new policy. A controlled AppKit fixture can establish AX behavior; a disposable real-app case shows whether the discovery is useful outside a fixture. Inspect the AX tree and existing native or vision support before deciding which backend to implement.
 
 Record only the current behavior and data contracts that this slice touches. Establish a small number of acceptance cases and a baseline for the user's perceived wait. The full retained-feature ledger belongs to migration planning, not a requirement to start the first slice.
 
@@ -415,7 +418,7 @@ The milestones can be rearranged when a concrete dependency requires it. A small
 | Word conversion | Existing fixed-script regression case | Output file verification |
 | Mail | Typed scripting, attachment, exact send barrier | Verified draft plus strongest available submission/delivery evidence |
 | Native AppKit fixture | Stable AX roles, text, menus, disabled controls | Deterministic fixture state |
-| Slack or comparable messaging app | AX discovery without a dedicated native adapter | Exact conversation/draft state, approval before send |
+| WhatsApp (Milestone A), Slack or comparable messaging app | AX discovery without a dedicated native adapter | Exact conversation/draft state, approval before send |
 | Safari and Chrome | Script support differences, web content, navigation | Bound tab/window and observed result |
 | Generic Electron app | Incomplete/lazy AX tree and repeated labels | Unique target resolution or explicit fallback |
 | Preview/file picker | Selected document, dialogs and app handoff | Pinned file/document and picker result |
