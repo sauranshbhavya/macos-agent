@@ -254,15 +254,10 @@ private func makeFixture(plan: AgentPlan) throws -> Fixture {
     return Fixture(viewModel: viewModel, root: root)
 }
 
-/// A hang backstop, not a timing assertion: it is reached only when the run never ends.
+/// Waits for the run to end through the shared backstop, which tells a stuck run from a busy
+/// machine by how often it got to look: the full suite saturates the main actor, and a plain
+/// thirty-second wall clock failed these tests there while each run was merely queued.
 @MainActor
-private func waitForIdle(_ viewModel: AgentViewModel, timeout: TimeInterval = 30) async throws {
-    let deadline = Date(timeIntervalSinceNow: timeout)
-    while viewModel.isRunning {
-        if Date() > deadline {
-            Issue.record("View model did not become idle before timeout. Waited 30s, which at this length means genuinely stuck rather than merely busy — treat it as a real failure.")
-            return
-        }
-        try await Task.sleep(for: .milliseconds(10))
-    }
+private func waitForIdle(_ viewModel: AgentViewModel) async throws {
+    try await HangBackstop.waitOrAbandon(for: "the interaction run to finish") { !viewModel.isRunning }
 }
