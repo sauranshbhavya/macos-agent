@@ -11,6 +11,9 @@ import Foundation
 public actor LiveAccessibilityProvider: AccessibilityProviding {
     private var generation = 0
     private var handles: [AXUIElement] = []
+    /// What each handle was when observed, compared again before acting on it.
+    private var identities: [AccessibilityIdentity] = []
+    private var lastLimits = AccessibilityLimits()
     private let trust: @Sendable () -> Bool
     private let clock: @Sendable () -> Date
 
@@ -65,8 +68,7 @@ public actor LiveAccessibilityProvider: AccessibilityProviding {
             }
         }
 
-        handles = collectedHandles
-        return AccessibilitySnapshot(
+        let snapshot = AccessibilitySnapshot(
             generation: thisGeneration,
             app: AccessibilityObservedApp(
                 bundleIdentifier: nil,
@@ -78,6 +80,10 @@ public actor LiveAccessibilityProvider: AccessibilityProviding {
             truncation: truncation,
             takenAt: started
         )
+        handles = collectedHandles
+        identities = snapshot.elements.map { snapshot.identity(of: $0) }
+        lastLimits = limits
+        return snapshot
     }
 
     public func perform(_ action: AccessibilityAction, on element: AccessibilityElementID) throws {
@@ -86,11 +92,16 @@ public actor LiveAccessibilityProvider: AccessibilityProviding {
             throw AccessibilityError.staleElement
         }
         let handle = handles[element.index]
-        // Re-resolve immediately before acting: an element that no longer answers for its role has
-        // been torn down since the observation, whatever now occupies its place on screen.
+        // Re-resolve immediately before acting. An element that no longer answers has been torn
+        // down; one that answers as something else is a reused view — a table row that now shows a
+        // different chat after a new message reordered the list during the model call (PR #289
+        // review, F5). Either way it is not what the model was shown, so it is stale.
         var role: CFTypeRef?
         let probe = AXUIElementCopyAttributeValue(handle, "AXRole" as CFString, &role)
         guard probe == .success else { throw Self.error(for: probe, staleOnInvalid: true) }
+        guard Self.currentIdentity(of: handle, limits: lastLimits).matches(identities[element.index]) else {
+            throw AccessibilityError.staleElement
+        }
 
         let result: AXError
         switch action {
@@ -203,6 +214,36 @@ public actor LiveAccessibilityProvider: AccessibilityProviding {
             canSelect: selectable && settable(element, "AXSelected"),
             frame: frame(position: values["AXPosition"], size: values["AXSize"])
         )
+    }
+
+    private static func currentIdentity(of handle: AXUIElement, limits: AccessibilityLimits) -> AccessibilityIdentity {
+        let current = read(handle, id: AccessibilityElementID(generation: -1, index: 0), parent: nil, depth: 0, limits: limits)
+        return AccessibilityIdentity(
+            role: current.role,
+            subrole: current.subrole,
+            title: current.title,
+            label: current.label,
+            placeholder: current.placeholder,
+            value: current.isTextInput ? nil : current.value,
+            firstText: firstText(inside: handle, limit: limits.maxTextLength)
+        )
+    }
+
+    /// The first text inside an element, depth first over the same children the observation walks,
+    /// bounded so a large container cannot stall the check.
+    private static func firstText(inside element: AXUIElement, limit: Int) -> String? {
+        var stack = Array(children(of: element).reversed())
+        var visited = 0
+        while let next = stack.popLast(), visited < 24 {
+            visited += 1
+            if let text = string(next, "AXTitle", limit: limit)
+                ?? string(next, "AXValue", limit: limit)
+                ?? string(next, "AXDescription", limit: limit) {
+                return text
+            }
+            stack.append(contentsOf: children(of: next).reversed())
+        }
+        return nil
     }
 
     private static func isErrorValue(_ value: AnyObject) -> Bool {

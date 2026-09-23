@@ -3,26 +3,30 @@ import Foundation
 /// Decides whether one step the model proposed may run, against the element as it is in the
 /// latest observation.
 ///
-/// Milestone A has no approval for a commit yet, so anything that could send, delete, call or
+/// Milestone A has no approval for a commit yet, so anything that could send, delete, call, join or
 /// otherwise act outside the app is refused rather than asked about (V2 plan §15: a consequential
-/// action waits until exact approval exists). The rules lean on role first and label second:
+/// action waits until exact approval exists). The rules lean on role first and name second:
 ///
-/// - Pressing or selecting a row, cell, tab or link navigates, so it is allowed.
-/// - A button is allowed only inside a list, where it is almost always a row drawn as a button,
-///   and only when its label is present and names nothing on `committingWords`. Every other
-///   button, menu item, checkbox or pop-up is refused.
-/// - Typing is limited to text fields, and only the goal's own `target` or `text`. The message text
-///   never goes into a search field, and never over text the person already typed there: setting a
-///   field's value replaces it, and a half-written draft is theirs.
+/// - Pressing or selecting a row, cell or tab navigates, so it is allowed unless its name commits.
+/// - A button is allowed only inside a list (a scroll area does not count), where it is a row drawn
+///   as a button, and only when it has a name and the name commits nothing. Every other button,
+///   link, pressable text, menu item, checkbox or pop-up is refused.
+/// - The target name is typed only into a search field. The message is typed only into a writable
+///   field that is not a search field, never over text the person typed there, and never while a
+///   different chat is visibly open.
 ///
-/// Labels are untrusted and a heuristic cannot prove an arbitrary button harmless (plan §7). The
-/// role rule carries the weight; the word list only narrows the one place buttons are allowed.
+/// The name checked is `AccessibilitySnapshot.displayName(of:)`, the same string the model is
+/// shown, plus the element's own fields; matching is by substring, so "Resend" and "Reposting"
+/// fall to "send" and "post" (PR #289 review, F1). A false match only refuses. Labels are
+/// untrusted and a word list cannot prove a button harmless (plan §7), which is why the role rule
+/// carries the weight and the runtime only runs in WhatsApp for now.
 public enum AppInteractionPolicy {
     public static func decide(
         _ kind: AppInteractionStepKind,
         on id: AccessibilityElementID,
         in snapshot: AccessibilitySnapshot,
-        goal: AppInteractionGoal
+        goal: AppInteractionGoal,
+        sonnyWrote: Set<String> = []
     ) -> AppInteractionPolicyDecision {
         guard let element = snapshot.element(id) else { return .refuse(.elementGone) }
         guard element.isEnabled else { return .refuse(.disabled) }
@@ -39,16 +43,22 @@ public enum AppInteractionPolicy {
             return .allow(.focus)
         case .enterTarget:
             guard let target = goal.target else { return .refuse(.nothingToType) }
-            guard element.isTextInput, element.canSetValue else { return .refuse(.notATextField) }
+            // Search fields only: a name typed into a message box would replace the person's draft
+            // with a name (PR #289 review, F2).
+            guard element.isSearchField, element.canSetValue else { return .refuse(.notASearchField) }
             return .allow(.setValue(target))
         case .enterText:
             guard let text = goal.text else { return .refuse(.nothingToType) }
             guard element.isTextInput, element.canSetValue else { return .refuse(.notATextField) }
-            guard element.subrole != AccessibilityVocabulary.searchFieldSubrole else {
-                return .refuse(.searchFieldForMessage)
-            }
-            if let existing = element.typedText, existing != text {
+            guard !element.isSearchField else { return .refuse(.searchFieldForMessage) }
+            if let existing = element.typedText,
+               !sameText(existing, text),
+               !sonnyWrote.contains(where: { sameText($0, existing) }) {
                 return .refuse(.wouldReplaceTypedText)
+            }
+            if let target = goal.target,
+               AppInteractionVerifier.targetState(target, in: snapshot) == .contradicted {
+                return .refuse(.otherTargetOpen)
             }
             return .allow(.setValue(text))
         }
@@ -58,32 +68,45 @@ public enum AppInteractionPolicy {
         if AccessibilityVocabulary.selectionRoles.contains(element.role) {
             return !namesACommit(element, in: snapshot)
         }
-        guard element.role == "AXButton" else { return false }
-        // Scroll areas included: SwiftUI often draws a list as buttons in a scroll area. The
-        // verifier is stricter about the same containers, because there a wrong answer confirms a
-        // chat that is not open, while here it only lets Sonny move between rows.
-        let insideList = snapshot.ancestors(of: element).contains {
-            AccessibilityVocabulary.listRoles.contains($0.role)
-        }
-        let label = AppInteractionScreenBuilder.label(for: element, in: snapshot)
-        return insideList && !label.isEmpty && !namesACommit(element, in: snapshot)
+        guard element.role == "AXButton", snapshot.isInsideList(element) else { return false }
+        return !snapshot.displayName(of: element).isEmpty && !namesACommit(element, in: snapshot)
     }
 
+    /// A button is matched by substring, so "Resend" and "Huddle now" are caught and a false match
+    /// only refuses. A row or tab only navigates, and its name is usually a person's, so it is
+    /// matched word by word with the common inflections instead: "Callum" and "Maddie" still open,
+    /// "Join call" and "Resend" do not.
     static func namesACommit(_ element: AccessibilityElement, in snapshot: AccessibilitySnapshot) -> Bool {
-        let own = [element.title, element.label, element.identifier].compactMap { $0 }
-        let words = own.joined(separator: " ").lowercased()
-            .split(whereSeparator: { !$0.isLetter })
-            .map(String.init)
-        return words.contains(where: committingWords.contains)
+        let names = [snapshot.displayName(of: element), element.title, element.label, element.identifier, element.value]
+            .compactMap { $0?.lowercased() }
+        if element.role == "AXButton" {
+            return names.contains { name in committingWords.contains { name.contains($0) } }
+        }
+        return names.contains { name in
+            let words = Set(name.split(whereSeparator: { !$0.isLetter }).map(String.init))
+            return committingWords.contains { word in
+                word.contains(" ")
+                    ? name.contains(word)
+                    : !words.isDisjoint(with: [word, word + "s", word + "ing", word + "ed", "re" + word, "un" + word])
+            }
+        }
     }
 
-    /// Verbs that commit something outside the app or change it in a way the user did not ask
-    /// for. Matched as whole words in an element's own title, description and identifier.
-    static let committingWords: Set<String> = [
+    /// Two strings the app may have tidied: compared without case and with whitespace collapsed.
+    static func sameText(_ a: String, _ b: String) -> Bool {
+        func tidy(_ s: String) -> String { s.lowercased().split(whereSeparator: \.isWhitespace).joined(separator: " ") }
+        return tidy(a) == tidy(b)
+    }
+
+    /// Verbs and nouns that commit something outside the app or change it in a way the user did not
+    /// ask for, matched as substrings of an element's names.
+    static let committingWords: [String] = [
         "send", "delete", "remove", "pay", "buy", "purchase", "order", "submit", "post", "publish",
-        "confirm", "call", "video", "voice", "dial", "forward", "share", "react", "reaction", "like",
-        "block", "report", "archive", "leave", "exit", "clear", "erase", "unsend", "mute", "pin",
-        "star", "install", "upgrade", "subscribe", "logout", "signout",
+        "confirm", "call", "video", "voice", "dial", "ring", "forward", "share", "react", "like",
+        "block", "report", "archive", "leave", "exit", "clear", "erase", "mute", "pin", "star",
+        "install", "upgrade", "subscribe", "log out", "logout", "sign out", "signout", "join",
+        "retry", "accept", "answer", "decline", "reject", "follow", "invite", "huddle", "meet",
+        "record", "upload", "attach", "approve", "vote", "transfer", "download", "start", "add",
     ]
 }
 
@@ -98,8 +121,11 @@ public enum AppInteractionRefusal: Equatable, Sendable {
     case unsupported
     case mightCommit
     case notATextField
+    case notASearchField
     case searchFieldForMessage
     case nothingToType
     /// The field already holds text the person typed, which setting its value would erase.
     case wouldReplaceTypedText
+    /// A different chat is visibly open, so the message would land in the wrong place.
+    case otherTargetOpen
 }

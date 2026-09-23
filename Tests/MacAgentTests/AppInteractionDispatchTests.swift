@@ -44,6 +44,25 @@ struct AppInteractionDispatchTests {
         #expect(await app.state.sentMessages.isEmpty)
     }
 
+    /// PR #289 review, F8: a Stop after Sonny typed says the text is still there.
+    @Test
+    func stoppingAfterTypingSaysTheTextIsStillThere() async throws {
+        let app = FakeChatAppAccessibility(state: FakeChatAppState(chats: ["Dad"]))
+        let fixture = try makeFixture(plan: draftPlan())
+        defer { fixture.tearDown() }
+        let hangs = TypesThenHangs()
+        fixture.viewModel.appInteractionRuntimeOverride = { _ in runtime(app, chooser: hangs) }
+
+        fixture.viewModel.command = "draft a WhatsApp to Mom saying running late"
+        fixture.viewModel.start()
+        await hangs.waitUntilHanging()
+        fixture.viewModel.cancelCurrentRun()
+        try await waitForIdle(fixture.viewModel)
+
+        #expect(fixture.viewModel.finalSummary == "Stopped. Anything I typed is still in Chat, unsent.")
+        #expect(fixture.viewModel.errorMessage == nil)
+    }
+
     @Test
     func theStepMixedWithAnotherIsRefusedAndTheRuntimeIsNeverBuilt() async throws {
         let mixed = AgentPlan(
@@ -66,8 +85,10 @@ struct AppInteractionDispatchTests {
         fixture.viewModel.start()
         try await waitForIdle(fixture.viewModel)
 
+        // Asked before anything runs, so Notes never opens (PR #289 review, F9).
         #expect(!built)
-        #expect(fixture.viewModel.errorMessage == AppInteractionPlanError.notAlone.errorDescription)
+        #expect(fixture.viewModel.clarificationQuestion == AppInteractionCapabilityAdapter.aloneQuestion)
+        #expect(fixture.viewModel.errorMessage == nil)
     }
 }
 
@@ -81,7 +102,7 @@ private struct FindAndTypeChooser: AppInteractionStepChoosing {
         if screen.context.contains(target), let box = screen.candidates.first(where: { $0.kind == "text area" }) {
             return .step(.enterText, ref: box.ref)
         }
-        if let row = screen.candidates.first(where: { $0.kind == "row" && $0.label.hasPrefix(target + " ·") }) {
+        if let row = screen.candidates.first(where: { $0.kind == "row" && $0.label == target }) {
             return .step(.press, ref: row.ref)
         }
         return .giveUp("no row for \(target)")
@@ -92,6 +113,33 @@ private struct PressesSendChooser: AppInteractionStepChoosing {
     func chooseStep(goal: AppInteractionGoal, screen: AppInteractionScreen, history: [AppInteractionHistoryEntry]) async throws -> AppInteractionModelDecision {
         guard let send = screen.candidates.first(where: { $0.label == "Send" }) else { return .giveUp("no send") }
         return .step(.press, ref: send.ref)
+    }
+}
+
+/// Types the name into search, then waits until it is cancelled, signalling when it starts waiting.
+private final class TypesThenHangs: AppInteractionStepChoosing, @unchecked Sendable {
+    private let lock = NSLock()
+    private var calls = 0
+    private let signal: AsyncStream<Void>
+    private let continuation: AsyncStream<Void>.Continuation
+
+    init() {
+        (signal, continuation) = AsyncStream.makeStream(of: Void.self)
+    }
+
+    func waitUntilHanging() async {
+        for await _ in signal { return }
+    }
+
+    func chooseStep(goal: AppInteractionGoal, screen: AppInteractionScreen, history: [AppInteractionHistoryEntry]) async throws -> AppInteractionModelDecision {
+        let call = lock.withLock { () -> Int in calls += 1; return calls }
+        if call == 1, let search = screen.candidates.first(where: { $0.kind == "search field" }) {
+            return .step(.enterTarget, ref: search.ref)
+        }
+        continuation.yield()
+        // A hang backstop, not a bet on a window: only a failure to cancel ever reaches it.
+        try await Task.sleep(for: .seconds(3_600))
+        return .giveUp("unreachable")
     }
 }
 
@@ -110,6 +158,8 @@ private func runtime(_ app: FakeChatAppAccessibility, chooser: any AppInteractio
         apps: ChatAppOnly(),
         appControl: { _ in .allowed },
         redact: { $0 },
+        // The fake chat app stands in for WhatsApp.
+        supportedApps: ["com.example.chat"],
         sleep: { _ in }
     )
 }

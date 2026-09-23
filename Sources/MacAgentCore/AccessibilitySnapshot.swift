@@ -97,6 +97,16 @@ public struct AccessibilityElement: Equatable, Sendable {
         guard let value, !value.isEmpty, value != placeholder else { return nil }
         return value
     }
+
+    /// A field for finding things rather than writing them: the search subrole, or a plain text
+    /// field that names itself a search. The only kind of field the goal's target name may be typed
+    /// into, so a name can never land in a message box.
+    public var isSearchField: Bool {
+        guard isTextInput else { return false }
+        if subrole == AccessibilityVocabulary.searchFieldSubrole { return true }
+        guard role == "AXTextField" else { return false }
+        return [placeholder, title, label, identifier].compactMap { $0?.lowercased() }.contains { $0.contains("search") }
+    }
 }
 
 /// The app a snapshot was read from.
@@ -162,6 +172,49 @@ public struct AccessibilitySnapshot: Equatable, Sendable {
             next = elements[index].parentIndex
         }
         return result
+    }
+
+    /// The one name an element goes by: its own title or description, a text field's placeholder,
+    /// its own value, or failing those the first text inside it. **One text, never several**: a chat
+    /// row holds the name, then the last message, then the time, and only the name is the row's.
+    ///
+    /// The same string is what the model is shown and what the policy checks for words that commit,
+    /// so the two can never disagree about what a button is called (PR #289 review, F1).
+    public func displayName(of element: AccessibilityElement) -> String {
+        if let own = element.title ?? element.label { return own }
+        if element.isTextInput { return element.placeholder ?? "" }
+        if let value = element.value { return value }
+        return firstText(inside: element) ?? ""
+    }
+
+    /// The first text inside an element, depth first.
+    public func firstText(inside element: AccessibilityElement) -> String? {
+        descendants(of: element).lazy.compactMap { $0.title ?? $0.value ?? $0.label }.first
+    }
+
+    /// What identifies an element beyond its position: re-read immediately before acting and
+    /// compared, so a reused row that now shows a different chat is refused as stale (PR #289
+    /// review, F5). A field's value is left out because typing changes it.
+    public func identity(of element: AccessibilityElement) -> AccessibilityIdentity {
+        AccessibilityIdentity(
+            role: element.role,
+            subrole: element.subrole,
+            title: element.title,
+            label: element.label,
+            placeholder: element.placeholder,
+            value: element.isTextInput ? nil : element.value,
+            firstText: firstText(inside: element)
+        )
+    }
+
+    public func isInsideList(_ element: AccessibilityElement) -> Bool {
+        ancestors(of: element).contains { AccessibilityVocabulary.listRoles.contains($0.role) }
+    }
+
+    public func isInsideListOrScrollArea(_ element: AccessibilityElement) -> Bool {
+        ancestors(of: element).contains {
+            AccessibilityVocabulary.listRoles.contains($0.role) || $0.role == AccessibilityVocabulary.scrollAreaRole
+        }
     }
 
     /// The element's descendants in traversal order. Relies on depth-first order, which is what
@@ -249,11 +302,56 @@ public protocol AccessibilityProviding: Sendable {
 public enum AccessibilityVocabulary {
     public static let pressAction = "AXPress"
     public static let searchFieldSubrole = "AXSearchField"
-    public static let secureFieldSubrole = "AXSecureTextField"
     public static let textInputRoles: Set<String> = ["AXTextField", "AXTextArea", "AXComboBox"]
-    /// Rows and similar selection targets: pressing or selecting one navigates, it does not commit.
-    public static let selectionRoles: Set<String> = [
-        "AXRow", "AXCell", "AXOutlineRow", "AXRadioButton", "AXTab", "AXLink", "AXStaticText",
-    ]
-    public static let listRoles: Set<String> = ["AXList", "AXTable", "AXOutline", "AXCollection", "AXScrollArea"]
+    public static let secureFieldSubrole = "AXSecureTextField"
+    /// Rows and tabs: pressing or selecting one navigates, it does not commit. Links and plain text
+    /// are deliberately absent: a link opens whatever it points at, and pressable text is whatever
+    /// an app made it (PR #289 review, F1).
+    public static let selectionRoles: Set<String> = ["AXRow", "AXCell", "AXOutlineRow", "AXRadioButton", "AXTab"]
+    /// Containers of rows. A scroll area is not one: it holds anything, a web view's whole page
+    /// included, so it is named separately and each caller says whether it counts.
+    public static let listRoles: Set<String> = ["AXList", "AXTable", "AXOutline", "AXCollection"]
+    public static let scrollAreaRole = "AXScrollArea"
+}
+
+/// The fields that say which element this is, compared before an action (see
+/// `AccessibilitySnapshot.identity(of:)`).
+public struct AccessibilityIdentity: Equatable, Sendable {
+    public let role: String
+    public let subrole: String?
+    public let title: String?
+    public let label: String?
+    public let placeholder: String?
+    public let value: String?
+    public let firstText: String?
+
+    public init(
+        role: String,
+        subrole: String?,
+        title: String?,
+        label: String?,
+        placeholder: String?,
+        value: String?,
+        firstText: String?
+    ) {
+        self.role = role
+        self.subrole = subrole
+        self.title = title
+        self.label = label
+        self.placeholder = placeholder
+        self.value = value
+        self.firstText = firstText
+    }
+
+    /// The same element as `observed`. The first inner text is compared only when the observation
+    /// recorded one: a snapshot cut short by its deadline may not have reached inside the element,
+    /// and a missing reading is not a different one.
+    public func matches(_ observed: AccessibilityIdentity) -> Bool {
+        guard role == observed.role, subrole == observed.subrole, title == observed.title,
+              label == observed.label, placeholder == observed.placeholder, value == observed.value else {
+            return false
+        }
+        guard let expected = observed.firstText else { return true }
+        return firstText == expected
+    }
 }

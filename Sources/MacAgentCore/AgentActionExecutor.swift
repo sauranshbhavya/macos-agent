@@ -305,6 +305,13 @@ public final class AgentActionExecutor {
             // question with no answer.
             return Self.clarification(question: question)
         }
+        // SONNY-544 (PR #289 review, F9): a plan mixing the interaction step with other steps is
+        // asked about before anything runs, or the steps before it would run and only then meet the
+        // adapter's refusal. It lives here rather than in the adapter because each adapter is handed
+        // only its own segment of the plan; this is the one place the whole plan is in view.
+        if expandedPlan.steps.count > 1, expandedPlan.steps.contains(where: { $0.operation == .interactWithApp }) {
+            return Self.clarification(question: AppInteractionCapabilityAdapter.aloneQuestion)
+        }
         if let question = try clarificationQuestion(in: expandedPlan) {
             let preview = ActionPreview(
                 title: "Clarification needed",

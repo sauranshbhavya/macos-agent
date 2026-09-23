@@ -37,14 +37,16 @@ The sections after this one are the detailed design. This section is what holds 
 
 - The model picks each step from a short, redacted list of the app's on-screen elements, through a new gateway route, `POST /v1/interact/step`. Each call is metered on its own route name, charged by nothing, and sent with retention `none` whatever the task's setting.
 - A request reaches the new path through a new hosted-planner operation, `interact_with_app`, used as a plan's only step. Drafting requests use it; a request to send stays with the existing screen-control path.
-- Drafting asks no approval, because nothing is sent. No keys are ever synthesized. Sonny types only the goal's own chat name and message, never text the model wrote.
+- Drafting asks no approval, because nothing is sent. No keys are ever synthesized. Sonny types only the goal's own chat name, and only into a search field, and the message, never over text the person typed and never while another chat is visibly open. It never types text the model wrote.
+- The runtime runs in WhatsApp only (`AppInteractionRuntime.milestoneAApps`), and the planner routes only WhatsApp drafts to it. Its rules are shaped by one chat app, and web views and call-centred apps break them (PR #289 review).
 - So Milestone A uses the hosted planner, which answers the question this section used to ask. Development runs against the local gateway (`server/scripts/deploy.sh local`). Shipping it to users needs the hosting in §14: `SonnyBackendHost.productionBaseURL` is nil and the staging and production deploys are stubs.
 
 **Left for Milestone B, by design of the first slice:**
 
 - A question from the model (two chats with the same name) ends the run with that question. There is no pause to answer into yet.
 - An app the person has not allowed for control in the current mode (Safe mode, for one) is refused with a sentence saying how to allow it. There is no prompt yet.
-- Every button is refused except a row drawn as a button inside a list whose own name is not a commit. Sending, calling and deleting wait for exact approval (§9).
+- Every button, link and pressable text is refused except a row drawn as a button inside a list (a scroll area does not count) whose shown name commits nothing. Sending, calling, joining and deleting wait for exact approval (§9).
+- The model sees list rows only when their name contains the target's, by that one name, and never the conversation. Other egress rules wait for a per-app review.
 - Confirming the open chat relies on its name being exposed outside any list. When it is not, Sonny reports the draft as placed but the chat as unconfirmed.
 
 ## 1. Outcome and confirmed decisions

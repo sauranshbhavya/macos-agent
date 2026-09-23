@@ -6,8 +6,8 @@ import Foundation
 /// This is the single owner of the new path's execution: it resolves the app, applies the gates,
 /// runs the observe → choose → check → act loop, and verifies the result itself. The UI submits a
 /// goal and renders the outcome; nothing here reads which window or task has focus. Cancellation
-/// is the calling task's: every loop turn and every wait checks it, and a stop after text was
-/// typed says so rather than implying nothing happened.
+/// is the calling task's: every loop turn, every wait and every action checks it, and an outcome
+/// reached after Sonny typed something says so, because the text stays in the app.
 public struct AppInteractionRuntime: Sendable {
     public struct Budget: Equatable, Sendable {
         /// Steps, counting every model decision, including ones that were refused or failed.
@@ -21,10 +21,17 @@ public struct AppInteractionRuntime: Sendable {
         public init() {}
     }
 
+    /// The apps Milestone A runs in, lowercased: WhatsApp's native app and its older Electron build.
+    /// The policy's rules are shaped by one chat app, and a web view or a call-centred app breaks
+    /// their assumptions, so every other app is refused by name until a later milestone widens this
+    /// with evidence (PR #289 review, F6).
+    public static let milestoneAApps: Set<String> = ["net.whatsapp.whatsapp", "desktop.whatsapp"]
+
     private let accessibility: any AccessibilityProviding
     private let chooser: any AppInteractionStepChoosing
     private let apps: any AppInteractionAppOpening
     private let appControl: @Sendable (String) async -> AppControlStanding
+    private let supportedApps: Set<String>
     private let screenBuilder: AppInteractionScreenBuilder
     private let budget: Budget
     private let sleep: @Sendable (Duration) async throws -> Void
@@ -35,6 +42,7 @@ public struct AppInteractionRuntime: Sendable {
         apps: any AppInteractionAppOpening,
         appControl: @escaping @Sendable (String) async -> AppControlStanding,
         redact: @escaping @Sendable (String) -> String,
+        supportedApps: Set<String> = AppInteractionRuntime.milestoneAApps,
         budget: Budget = Budget(),
         sleep: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
     ) {
@@ -42,45 +50,65 @@ public struct AppInteractionRuntime: Sendable {
         self.chooser = chooser
         self.apps = apps
         self.appControl = appControl
+        self.supportedApps = Set(supportedApps.map { $0.lowercased() })
         self.screenBuilder = AppInteractionScreenBuilder(redact: redact)
         self.budget = budget
         self.sleep = sleep
+    }
+
+    /// What a run has done so far, kept outside the loop so a stop can report it.
+    private struct Progress {
+        var appName: String?
+        /// Everything Sonny set as a field's value, so the policy can tell its own text from the
+        /// person's (PR #289 review, F8).
+        var written: Set<String> = []
+        var typed: Bool { !written.isEmpty }
     }
 
     public func run(
         _ goal: AppInteractionGoal,
         log: @escaping @Sendable (String) -> Void = { _ in }
     ) async -> AppInteractionOutcome {
-        var typed = false
+        var progress = Progress()
+        let outcome: AppInteractionOutcome
         do {
-            return try await attempt(goal, typed: &typed, log: log)
+            outcome = try await attempt(goal, progress: &progress, log: log)
         } catch is CancellationError {
-            return .cancelled(typedSomething: typed)
+            return .cancelled(typedSomething: progress.typed, app: progress.appName ?? goal.app)
         } catch let error as AppInteractionStop {
-            return error.outcome
+            outcome = error.outcome
         } catch {
-            if SonnyBackendError.isCancellation(error) { return .cancelled(typedSomething: typed) }
-            if let backend = (error as? SonnyBackendError) ?? (error as? any CarriesBackendError)?.backendError {
-                return .failed(.service(SonnyBackendCopy.sentence(for: backend)))
+            if SonnyBackendError.isCancellation(error) {
+                return .cancelled(typedSomething: progress.typed, app: progress.appName ?? goal.app)
             }
-            return .failed(.service(nil))
+            if let backend = (error as? SonnyBackendError) ?? (error as? any CarriesBackendError)?.backendError {
+                outcome = .failed(.service(SonnyBackendCopy.sentence(for: backend)))
+            } else {
+                outcome = .failed(.service(nil))
+            }
         }
+        if case .failed(let failure) = outcome, progress.typed {
+            return .failedAfterTyping(failure, app: progress.appName ?? goal.app)
+        }
+        return outcome
     }
 
     // MARK: - The loop
 
     private func attempt(
         _ goal: AppInteractionGoal,
-        typed: inout Bool,
+        progress: inout Progress,
         log: @escaping @Sendable (String) -> Void
     ) async throws -> AppInteractionOutcome {
         guard let app = apps.resolve(goal.app) else { return .failed(.appNotInstalled(goal.app)) }
         let name = app.displayName
+        progress.appName = name
 
         // The same refusal screen control applies: a terminal stays out of reach whichever backend
         // would drive it (plan §12).
         let verdict = ScreenControlPolicy.verdict(bundleIdentifier: app.bundleIdentifier, displayName: name)
         if let refusal = verdict.refusal { return .failed(.refusedApp(name, refusal)) }
+        guard supportedApps.contains(app.bundleIdentifier.lowercased()) else { return .failed(.appNotSupported(name)) }
 
         // `.notApplicable` cannot happen with a bundle identifier in hand; treated as a refusal so a
         // resolver change fails closed rather than open.
@@ -106,9 +134,11 @@ public struct AppInteractionRuntime: Sendable {
             try Task.checkCancellation()
             let snapshot = try await observe(processIdentifier, goal: goal, appName: name)
 
-            // Checked before asking the model, so a goal already met costs no model call.
-            if typed, let outcome = verifiedOutcome(snapshot, goal: goal, appName: name) {
-                return outcome
+            // Checked before asking the model, so a goal already met costs no model call — but only
+            // a confirmed one. An unconfirmed placement waits for the model to say it is finished,
+            // so a draft in the wrong chat gets a turn to be moved (PR #289 review, F3).
+            if progress.typed, AppInteractionVerifier.check(snapshot, goal: goal) == .satisfied {
+                return .done(AppInteractionReport(appName: name, goal: goal, targetConfirmed: true))
             }
 
             let built = screenBuilder.build(from: snapshot, goal: goal)
@@ -129,11 +159,10 @@ public struct AppInteractionRuntime: Sendable {
             case .finished:
                 try await sleep(budget.settle)
                 let fresh = try await observe(processIdentifier, goal: goal, appName: name)
-                if let outcome = verifiedOutcome(fresh, goal: goal, appName: name) { return outcome }
-                history.append(AppInteractionHistoryEntry(
-                    did: "said finished",
-                    result: "Sonny checked and the goal is not met yet"
-                ))
+                if let outcome = finishedOutcome(fresh, goal: goal, appName: name, typed: progress.typed) {
+                    return outcome
+                }
+                history.append(AppInteractionHistoryEntry(did: "said finished", result: notFinishedReason(fresh, goal: goal)))
             case .step(let kind, let ref):
                 guard let id = built.references[ref] else {
                     history.append(AppInteractionHistoryEntry(did: "\(kind.rawValue) \(ref)", result: "no element has that ref"))
@@ -141,7 +170,7 @@ public struct AppInteractionRuntime: Sendable {
                 }
                 let label = built.screen.candidates.first { $0.ref == ref }?.label ?? ref
                 let did = "\(kind.rawValue) \(ref) (\(label))"
-                switch AppInteractionPolicy.decide(kind, on: id, in: snapshot, goal: goal) {
+                switch AppInteractionPolicy.decide(kind, on: id, in: snapshot, goal: goal, sonnyWrote: progress.written) {
                 case .refuse(.mightCommit):
                     // Not something to route around: the plan's rule is that a refusal is never a
                     // reason to try another way (§3).
@@ -153,9 +182,12 @@ public struct AppInteractionRuntime: Sendable {
                 case .refuse(let refusal):
                     history.append(AppInteractionHistoryEntry(did: did, result: "refused: \(refusal)"))
                 case .allow(let action):
+                    // The model call can take many seconds; a Stop pressed during it lands here,
+                    // before the action rather than after it (PR #289 review, F11).
+                    try Task.checkCancellation()
                     do {
                         try await accessibility.perform(action, on: id)
-                        if case .setValue = action { typed = true }
+                        if case .setValue(let text) = action { progress.written.insert(text) }
                         log("\(kind.rawValue) on \(label)")
                         history.append(AppInteractionHistoryEntry(did: did, result: "done"))
                     } catch AccessibilityError.notTrusted {
@@ -170,15 +202,26 @@ public struct AppInteractionRuntime: Sendable {
         return .failed(.ranOutOfSteps(name, budget.maxSteps))
     }
 
-    private func verifiedOutcome(
+    /// The model says it is finished. Sonny agrees only for text it typed itself (PR #289 review,
+    /// F7), in a chat that is not visibly someone else's.
+    private func finishedOutcome(
         _ snapshot: AccessibilitySnapshot,
         goal: AppInteractionGoal,
-        appName: String
+        appName: String,
+        typed: Bool
     ) -> AppInteractionOutcome? {
+        if goal.text != nil, !typed { return nil }
         switch AppInteractionVerifier.check(snapshot, goal: goal) {
         case .satisfied: return .done(AppInteractionReport(appName: appName, goal: goal, targetConfirmed: true))
         case .targetUnconfirmed: return .done(AppInteractionReport(appName: appName, goal: goal, targetConfirmed: false))
-        case .notYet: return nil
+        case .otherTargetOpen, .notYet: return nil
+        }
+    }
+
+    private func notFinishedReason(_ snapshot: AccessibilitySnapshot, goal: AppInteractionGoal) -> String {
+        switch AppInteractionVerifier.check(snapshot, goal: goal) {
+        case .otherTargetOpen: return "Sonny checked: a different chat is open"
+        default: return "Sonny checked and the goal is not met yet"
         }
     }
 
@@ -227,21 +270,16 @@ public struct AppInteractionReport: Equatable, Sendable {
     public let targetConfirmed: Bool
 
     public var summary: String {
-        let placed: String
         if let text = goal.text {
             if let target = goal.target {
-                placed = targetConfirmed
+                return targetConfirmed
                     ? "The message is in the \(target) chat in \(appName), not sent: \"\(text)\""
-                    : "The message is in a message box in \(appName), but I couldn't confirm the open chat is \(target). Check it before you send: \"\(text)\""
-            } else {
-                placed = "The message is in \(appName), not sent: \"\(text)\""
+                    : "The message is in a message box in \(appName), but I couldn't see which chat is open, so check it's \(target)'s before you send: \"\(text)\""
             }
-        } else if let target = goal.target {
-            placed = "\(target) is open in \(appName)."
-        } else {
-            placed = "Done in \(appName)."
+            return "The message is in \(appName), not sent: \"\(text)\""
         }
-        return placed
+        if let target = goal.target { return "\(target) is open in \(appName)." }
+        return "Done in \(appName)."
     }
 }
 
@@ -249,12 +287,15 @@ public enum AppInteractionOutcome: Equatable, Sendable {
     case done(AppInteractionReport)
     case needsUserInput(String)
     case failed(AppInteractionFailure)
-    case cancelled(typedSomething: Bool)
+    /// A failure reached after Sonny had typed into the app: what it typed is still there, unsent.
+    case failedAfterTyping(AppInteractionFailure, app: String)
+    case cancelled(typedSomething: Bool, app: String)
 }
 
 public enum AppInteractionFailure: Equatable, Sendable {
     case appNotInstalled(String)
     case refusedApp(String, ScreenControlRefusal)
+    case appNotSupported(String)
     case appControlNotAllowed(String)
     case accessibilityNotGranted
     case couldNotOpen(String)
@@ -274,6 +315,8 @@ public enum AppInteractionFailure: Equatable, Sendable {
             return "I couldn't find \(app) on this Mac."
         case .refusedApp(let app, _):
             return "I don't control \(app). Terminal apps are off limits."
+        case .appNotSupported(let app):
+            return "I can only draft in WhatsApp for now, so I left \(app) alone."
         case .appControlNotAllowed(let app):
             return "I'm not allowed to control \(app) in your current mode. Allow it in Settings, or switch to Normal mode."
         case .accessibilityNotGranted:
@@ -337,6 +380,7 @@ public struct LiveAppInteractionAppOpener: AppInteractionAppOpening {
     }
 }
 
+
 // MARK: - Into a run result
 
 /// How a finished interaction reaches the rest of the app: a done outcome is a result, and every
@@ -344,6 +388,7 @@ public struct LiveAppInteractionAppOpener: AppInteractionAppOpening {
 public enum AppInteractionRunError: Error, LocalizedError, Equatable {
     case needsUserInput(String)
     case failed(AppInteractionFailure)
+    case failedAfterTyping(AppInteractionFailure, app: String)
 
     public var errorDescription: String? {
         switch self {
@@ -353,8 +398,23 @@ public enum AppInteractionRunError: Error, LocalizedError, Equatable {
             return "\(question) Ask again with the exact name and I'll try once more."
         case .failed(let failure):
             return failure.userMessage
+        case .failedAfterTyping(let failure, let app):
+            return "\(failure.userMessage) Anything I typed is still in \(app), unsent."
         }
     }
+}
+
+/// A Stop pressed after Sonny typed into an app. The view model treats it as a cancellation, and
+/// its sentence replaces the plain "Canceled." because the text is still there (PR #289 review, F8).
+public struct AppInteractionStoppedAfterTyping: Error, LocalizedError, Equatable {
+    public let app: String
+
+    public init(app: String) {
+        self.app = app
+    }
+
+    public var summary: String { "Stopped. Anything I typed is still in \(app), unsent." }
+    public var errorDescription: String? { summary }
 }
 
 extension AppInteractionOutcome {
@@ -366,7 +426,11 @@ extension AppInteractionOutcome {
             throw AppInteractionRunError.needsUserInput(question)
         case .failed(let failure):
             throw AppInteractionRunError.failed(failure)
-        case .cancelled:
+        case .failedAfterTyping(let failure, let app):
+            throw AppInteractionRunError.failedAfterTyping(failure, app: app)
+        case .cancelled(typedSomething: true, let app):
+            throw AppInteractionStoppedAfterTyping(app: app)
+        case .cancelled(typedSomething: false, _):
             throw CancellationError()
         }
     }

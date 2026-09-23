@@ -2869,7 +2869,13 @@ final class AgentViewModel: ObservableObject {
     /// was told something went wrong. `SonnyBackendError.isCancellation` is the one predicate now,
     /// and its own doc comment says which wrappers it does not yet reach.
     func isCancellationError(_ error: Error) -> Bool {
-        SonnyBackendError.isCancellation(error)
+        SonnyBackendError.isCancellation(error) || error is AppInteractionStoppedAfterTyping
+    }
+
+    /// "Canceled.", unless the stop left something behind that the person should know about: a
+    /// draft typed into another app stays there, unsent (SONNY-544, PR #289 review F8).
+    nonisolated static func cancellationSummary(for error: any Error) -> String {
+        (error as? AppInteractionStoppedAfterTyping)?.summary ?? "Canceled."
     }
 
     private func performStart(
@@ -3285,7 +3291,7 @@ final class AgentViewModel: ObservableObject {
         } catch {
             if isCancellationError(error) {
                 markAllSteps(.canceled)
-                finalSummary = "Canceled."
+                finalSummary = Self.cancellationSummary(for: error)
                 logStore.append(.summarize, "Canceled by user")
                 if let preparedRun {
                     recordPriorTaskContext(
@@ -7619,17 +7625,24 @@ final class AgentViewModel: ObservableObject {
         // **V2 Milestone A's one door onto the old path** (SONNY-544). A plan whose only step is
         // `interact_with_app` runs on `AppInteractionRuntime`, which owns it start to finish, and
         // comes back here as a result or an error like any other run, so the publishing, history
-        // and failure handling around this call serve it unchanged. Every other plan, including one
-        // that mixes the step with others, continues to `runner.execute` below. The approval the
-        // caller already settled covers it: the step is tier 2 with nothing to escalate.
+        // and failure handling around this call serve it unchanged. It passes the runner's own
+        // execution-time gate first, the same one `execute` runs, so a stale approval or a scope
+        // that changed since the prompt stops it exactly as it would stop any other run (PR #289
+        // review, F10). Every other plan continues to `runner.execute` below; a plan mixing the
+        // step with others never gets here, because the adapter turns it into a question.
         if let goal = try AppInteractionCapabilityAdapter.standaloneGoal(in: preparedRun.plan) {
+            try runner.authorizeExecution(
+                preparedRun,
+                approvalDecision: approvalDecision,
+                confirmationMessage: confirmationMessage,
+                logRiskAssessment: logRiskAssessment,
+                scope: activeTaskScope,
+                context: approvalContext(visionTarget: nil)
+            )
             markAllSteps(.running)
             let runtime = appInteractionRuntimeOverride?(goal) ?? makeLiveAppInteractionRuntime()
             let outcome = await runtime.run(goal) { [weak self] line in
                 Task { @MainActor in self?.logStore.append(.act, line) }
-            }
-            if case .cancelled(typedSomething: true) = outcome {
-                logStore.append(.summarize, "Stopped after typing into \(goal.app); the text may still be there")
             }
             let result = try outcome.runResult(plan: preparedRun.plan, previews: preparedRun.previews)
             markAllSteps(.complete)
@@ -7815,7 +7828,7 @@ final class AgentViewModel: ObservableObject {
             refreshSavedItems()
         } catch let error where isCancellationError(error) {
             markAllSteps(.canceled)
-            finalSummary = "Canceled."
+            finalSummary = Self.cancellationSummary(for: error)
             logStore.append(.summarize, "Canceled by user")
             if let pendingCommandForPriorTaskContext {
                 recordPriorTaskContext(

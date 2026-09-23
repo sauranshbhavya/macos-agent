@@ -15,12 +15,16 @@ public struct FakeChatAppState: Sendable, Equatable {
     public var drafts: [String: String] = [:]
     public var sentMessages: [String] = []
     public var callsPlaced = 0
+    public var linksOpened = 0
     /// Off models an app whose open-chat name is not exposed to Accessibility.
     public var exposesHeader = true
     /// "AXRow", or "AXButton" for an app that draws its rows as buttons.
     public var rowRole = "AXRow"
     /// Off models an app whose message box ignores `AXValue` writes.
     public var messageBoxIsSettable = true
+    /// Pressable things inside the open conversation, the kind a model should never be shown or
+    /// allowed to press: a link in a message, and a "Join" on an ongoing group call.
+    public var conversationControls = false
 
     public init(chats: [String], openChat: String? = nil) {
         self.chats = chats
@@ -37,6 +41,7 @@ public actor FakeChatAppAccessibility: AccessibilityProviding {
     private var windowlessObservations: Int
     private var generation = 0
     private var keys: [String] = []
+    private var observedIdentities: [AccessibilityIdentity] = []
 
     public init(state: FakeChatAppState, trusted: Bool = true, windowlessObservations: Int = 0) {
         self.state = state
@@ -48,6 +53,10 @@ public actor FakeChatAppAccessibility: AccessibilityProviding {
 
     public func revokeTrust() { trusted = false }
 
+    /// Reorders the chat list between an observation and an action, the way a new message moves a
+    /// chat to the top while the model is deciding.
+    public func reorderChats(_ chats: [String]) { state.chats = chats }
+
     public func observe(processIdentifier: pid_t, limits: AccessibilityLimits) throws -> AccessibilitySnapshot {
         guard trusted else { throw AccessibilityError.notTrusted }
         observations += 1
@@ -56,6 +65,13 @@ public actor FakeChatAppAccessibility: AccessibilityProviding {
             throw AccessibilityError.noWindow
         }
         generation += 1
+        let (snapshot, built) = render(processIdentifier: processIdentifier)
+        keys = built
+        observedIdentities = snapshot.elements.map { snapshot.identity(of: $0) }
+        return snapshot
+    }
+
+    private func render(processIdentifier: pid_t) -> (AccessibilitySnapshot, [String]) {
         var builder = TreeBuilder(generation: generation)
         let window = builder.add("window", role: "AXWindow", parent: nil, title: "Chats")
         let sidebar = builder.add("sidebar", role: "AXGroup", parent: window)
@@ -84,14 +100,18 @@ public actor FakeChatAppAccessibility: AccessibilityProviding {
             builder.add("call", role: "AXButton", parent: main, label: "Voice call", actions: ["AXPress"])
             let messages = builder.add("messages", role: "AXScrollArea", parent: main)
             builder.add("bubble", role: "AXStaticText", parent: messages, value: "an earlier private message")
+            if state.conversationControls {
+                let link = builder.add("link", role: "AXLink", parent: messages, actions: ["AXPress"])
+                builder.add("linktext", role: "AXStaticText", parent: link, value: "https://example.com/private-invite")
+                builder.add("join", role: "AXButton", parent: messages, label: "Join", actions: ["AXPress"])
+            }
             builder.add(
                 "messagebox", role: "AXTextArea", parent: main, placeholder: "Type a message",
                 value: state.drafts[open], canSetValue: state.messageBoxIsSettable, canFocus: true
             )
             builder.add("send", role: "AXButton", parent: main, label: "Send", actions: ["AXPress"])
         }
-        keys = builder.keys
-        return AccessibilitySnapshot(
+        let snapshot = AccessibilitySnapshot(
             generation: generation,
             app: AccessibilityObservedApp(bundleIdentifier: "com.example.chat", processIdentifier: processIdentifier, name: "Chat"),
             windowTitle: "Chats",
@@ -99,11 +119,19 @@ public actor FakeChatAppAccessibility: AccessibilityProviding {
             truncation: nil,
             takenAt: Date(timeIntervalSince1970: 0)
         )
+        return (snapshot, builder.keys)
     }
 
     public func perform(_ action: AccessibilityAction, on element: AccessibilityElementID) throws {
         guard trusted else { throw AccessibilityError.notTrusted }
         guard element.generation == generation, keys.indices.contains(element.index) else {
+            throw AccessibilityError.staleElement
+        }
+        // The live provider's identity check: what sits at this position now must be what was
+        // observed there, or the element is a reused view showing something else.
+        let (current, _) = render(processIdentifier: 0)
+        guard current.elements.indices.contains(element.index),
+              current.identity(of: current.elements[element.index]).matches(observedIdentities[element.index]) else {
             throw AccessibilityError.staleElement
         }
         performed.append(action)
@@ -121,8 +149,10 @@ public actor FakeChatAppAccessibility: AccessibilityProviding {
                 state.sentMessages.append(draft)
                 state.drafts[open] = nil
             }
-        case ("call", .press):
+        case ("call", .press), ("join", .press):
             state.callsPlaced += 1
+        case ("link", .press):
+            state.linksOpened += 1
         case (_, .focus):
             break
         default:

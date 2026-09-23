@@ -249,16 +249,21 @@ public final class AgentRunner {
     /// every caller but the foreground run's resumable checkpoint — the scheduled path passes none,
     /// deliberately, because a scheduled routine writes no resumable record at all
     /// (`AgentViewModel.beginResumableTask`).
-    public func execute(
+    /// The execution-time gate, run immediately before a prepared run does anything: a fresh
+    /// assessment, the stale-approval check against the decision the caller holds, and the
+    /// confirmation line in the trace.
+    ///
+    /// `execute` runs it first. So does any path that executes a prepared run without `execute` —
+    /// SONNY-544's interaction runtime — so neither can skip the check that notices the world
+    /// drifting between the prompt and the run (PR #289 review, F10).
+    public func authorizeExecution(
         _ preparedRun: PreparedAgentRun,
-        approvalDecision: RiskApprovalDecision = .notRequested,
-        confirmationMessage: String = "Execution approved",
-        logRiskAssessment: Bool = true,
+        approvalDecision: RiskApprovalDecision,
+        confirmationMessage: String,
+        logRiskAssessment: Bool,
         scope: TaskWorkspaceScope,
-        context: ApprovalContext,
-        onUnitCompleted: ((CompletedRunUnit) -> Void)? = nil,
-        onItemFailed: ((ItemJobFailure) -> Void)? = nil
-    ) async throws -> AgentRunResult {
+        context: ApprovalContext
+    ) throws {
         let request = try approvalRequest(
             for: preparedRun,
             logAssessment: logRiskAssessment,
@@ -308,6 +313,26 @@ public final class AgentRunner {
         }
 
         logStore.append(.confirm, confirmationMessage)
+    }
+
+    public func execute(
+        _ preparedRun: PreparedAgentRun,
+        approvalDecision: RiskApprovalDecision = .notRequested,
+        confirmationMessage: String = "Execution approved",
+        logRiskAssessment: Bool = true,
+        scope: TaskWorkspaceScope,
+        context: ApprovalContext,
+        onUnitCompleted: ((CompletedRunUnit) -> Void)? = nil,
+        onItemFailed: ((ItemJobFailure) -> Void)? = nil
+    ) async throws -> AgentRunResult {
+        try authorizeExecution(
+            preparedRun,
+            approvalDecision: approvalDecision,
+            confirmationMessage: confirmationMessage,
+            logRiskAssessment: logRiskAssessment,
+            scope: scope,
+            context: context
+        )
         let result = try await executor.execute(
             plan: preparedRun.plan,
             onUnitCompleted: onUnitCompleted,

@@ -4,17 +4,29 @@ import Foundation
 /// a reference that means something only for this observation.
 ///
 /// This is the whole of what leaves the Mac per step, so it is kept small on purpose (V2 plan §8,
-/// "new AX text egress needs its own explicit minimization"): only elements a step could act on,
-/// labels cut short and passed through local redaction, and context text only from outside lists,
-/// which keeps a chat's message history out of the request.
+/// "new AX text egress needs its own explicit minimization"). Exactly this goes:
+///
+/// - Elements a step could act on that sit **outside** every list and scroll area — a search
+///   field, the message box, a toolbar — each named by one string, `displayName(of:)`.
+/// - From **inside** lists and scroll areas, only row-like elements whose name contains the
+///   target's, named by that one name. A chat row's last-message preview is its second text and is
+///   never read; the conversation's messages are not rows matching the target and are left out
+///   (PR #289 review, F4). A message that happens to be named like the target can still appear,
+///   cut to one short line: that residue is the price of letting the model pick between "Mom" and
+///   "Mom & Dad".
+/// - A text field's contents never: only whether it is empty, holds the target, holds the
+///   message, or holds something else.
+/// - Headings and similar text outside every list and scroll area, such as the name at the top of
+///   an open chat.
+///
+/// Every string is flattened to one line, passed through local redaction and cut to
+/// `maxLabelLength`.
 public struct AppInteractionScreen: Equatable, Sendable, Encodable {
     public struct Candidate: Equatable, Sendable, Encodable {
         /// "e12": stable only within this screen.
         public let ref: String
         public let kind: String
         public let label: String
-        /// A text field's current contents, so the model can see what is already typed.
-        public let value: String?
         /// What the model may ask for on this element: a subset of `AppInteractionStepKind`.
         public let can: [String]
         public let state: [String]
@@ -22,7 +34,6 @@ public struct AppInteractionScreen: Equatable, Sendable, Encodable {
 
     public let windowTitle: String?
     public let candidates: [Candidate]
-    /// Headings and similar text outside any list, such as the name at the top of an open chat.
     public let context: [String]
     /// True when the observation stopped early or candidates were dropped to stay within budget.
     public let partial: Bool
@@ -46,8 +57,8 @@ public struct AppInteractionScreenBuilder: Sendable {
     }
 
     public func build(from snapshot: AccessibilitySnapshot, goal: AppInteractionGoal) -> Built {
-        let actionable = snapshot.elements.filter { Self.isActionable($0) }
-        let chosen = Self.prioritised(actionable, goal: goal).prefix(maxCandidates)
+        let shown = snapshot.elements.filter { Self.isActionable($0) && Self.mayBeShown($0, in: snapshot, goal: goal) }
+        let chosen = Self.prioritised(shown, in: snapshot, goal: goal).prefix(maxCandidates)
             .sorted { $0.id.index < $1.id.index }
 
         var references: [String: AccessibilityElementID] = [:]
@@ -59,10 +70,9 @@ public struct AppInteractionScreenBuilder: Sendable {
                 AppInteractionScreen.Candidate(
                     ref: ref,
                     kind: Self.kind(of: element),
-                    label: clean(Self.label(for: element, in: snapshot)),
-                    value: element.isTextInput ? element.value.map(clean) : nil,
+                    label: clean(snapshot.displayName(of: element)),
                     can: Self.capabilities(of: element).map(\.rawValue),
-                    state: Self.state(of: element)
+                    state: Self.state(of: element, goal: goal)
                 )
             )
         }
@@ -79,7 +89,7 @@ public struct AppInteractionScreenBuilder: Sendable {
                 windowTitle: snapshot.windowTitle.map(clean),
                 candidates: candidates,
                 context: Array(context),
-                partial: !snapshot.isComplete || actionable.count > chosen.count
+                partial: !snapshot.isComplete || shown.count > chosen.count
             ),
             references: references
         )
@@ -92,27 +102,41 @@ public struct AppInteractionScreenBuilder: Sendable {
         return !capabilities(of: element).isEmpty
     }
 
+    /// Outside lists and scroll areas, anything actionable. Inside them, only a row-like element
+    /// whose name contains the target's: the rows the goal is about, and nothing of the
+    /// conversation.
+    static func mayBeShown(_ element: AccessibilityElement, in snapshot: AccessibilitySnapshot, goal: AppInteractionGoal) -> Bool {
+        guard snapshot.isInsideListOrScrollArea(element) else { return true }
+        guard AccessibilityVocabulary.selectionRoles.contains(element.role) || element.role == "AXButton",
+              let target = goal.target else { return false }
+        let wanted = AppInteractionVerifier.normalized(target)
+        return !wanted.isEmpty && AppInteractionVerifier.normalized(snapshot.displayName(of: element)).contains(wanted)
+    }
+
     static func capabilities(of element: AccessibilityElement) -> [AppInteractionStepKind] {
         var kinds: [AppInteractionStepKind] = []
         if element.canPress { kinds.append(.press) }
         if element.canSelect { kinds.append(.select) }
         if element.isTextInput && element.canSetValue {
-            kinds.append(.enterTarget)
-            kinds.append(.enterText)
+            kinds.append(element.isSearchField ? .enterTarget : .enterText)
         } else if element.isTextInput && element.canFocus {
             kinds.append(.focus)
         }
         return kinds
     }
 
-    /// Text fields first, then anything whose label mentions the target, then the rest in window
+    /// Text fields first, then anything whose name mentions the target, then the rest in window
     /// order, so the cap drops the least useful elements.
-    static func prioritised(_ elements: [AccessibilityElement], goal: AppInteractionGoal) -> [AccessibilityElement] {
-        let target = goal.target?.lowercased()
+    static func prioritised(
+        _ elements: [AccessibilityElement],
+        in snapshot: AccessibilitySnapshot,
+        goal: AppInteractionGoal
+    ) -> [AccessibilityElement] {
+        let target = goal.target.map(AppInteractionVerifier.normalized)
         func rank(_ element: AccessibilityElement) -> Int {
             if element.isTextInput { return 0 }
-            if let target, [element.title, element.label, element.value]
-                .compactMap({ $0?.lowercased() }).contains(where: { $0.contains(target) }) { return 1 }
+            if let target, !target.isEmpty,
+               AppInteractionVerifier.normalized(snapshot.displayName(of: element)).contains(target) { return 1 }
             return 2
         }
         return elements.enumerated()
@@ -124,28 +148,15 @@ public struct AppInteractionScreenBuilder: Sendable {
     }
 
     static func isContext(_ element: AccessibilityElement, in snapshot: AccessibilitySnapshot) -> Bool {
-        guard ["AXStaticText", "AXHeading"].contains(element.role) else { return false }
-        return !snapshot.ancestors(of: element).contains {
-            AccessibilityVocabulary.listRoles.contains($0.role) || isActionable($0)
-        }
+        guard ["AXStaticText", "AXHeading"].contains(element.role),
+              !snapshot.isInsideListOrScrollArea(element) else { return false }
+        return !snapshot.ancestors(of: element).contains { isActionable($0) }
     }
 
     // MARK: - Wording
 
-    /// An element's own name, or failing that the text inside it: a chat row usually carries no
-    /// title of its own and holds the contact's name in a child.
-    static func label(for element: AccessibilityElement, in snapshot: AccessibilitySnapshot) -> String {
-        if let own = [element.title, element.label].compactMap({ $0 }).first { return own }
-        if element.isTextInput, let placeholder = element.placeholder { return placeholder }
-        if !element.isTextInput, let value = element.value { return value }
-        let inner = snapshot.descendants(of: element)
-            .compactMap { $0.title ?? $0.value ?? $0.label }
-            .prefix(3)
-        return inner.joined(separator: " · ")
-    }
-
     static func kind(of element: AccessibilityElement) -> String {
-        if element.subrole == AccessibilityVocabulary.searchFieldSubrole { return "search field" }
+        if element.isSearchField { return "search field" }
         switch element.role {
         case "AXTextField", "AXComboBox": return "text field"
         case "AXTextArea": return "text area"
@@ -162,10 +173,24 @@ public struct AppInteractionScreenBuilder: Sendable {
         }
     }
 
-    static func state(of element: AccessibilityElement) -> [String] {
+    /// Focus, selection, and for a text field what it holds, as a word rather than the text.
+    static func state(of element: AccessibilityElement, goal: AppInteractionGoal) -> [String] {
         var state: [String] = []
         if element.isFocused { state.append("focused") }
         if element.isSelected { state.append("selected") }
+        if element.isTextInput {
+            if let typed = element.typedText {
+                if let target = goal.target, AppInteractionPolicy.sameText(typed, target) {
+                    state.append("holds the target")
+                } else if let text = goal.text, AppInteractionPolicy.sameText(typed, text) {
+                    state.append("holds the message")
+                } else {
+                    state.append("holds other text")
+                }
+            } else {
+                state.append("empty")
+            }
+        }
         return state
     }
 

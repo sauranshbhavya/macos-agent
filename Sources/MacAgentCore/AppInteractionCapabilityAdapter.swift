@@ -13,21 +13,21 @@ public struct AppInteractionCapabilityAdapter: CapabilityAdapter {
 
     public static let metadata = CapabilityMetadata(
         id: "local.accessibility.interact",
-        displayName: "Draft in an app",
-        description: "Open a chat or item by name in another app and leave text there unsent, through its accessibility tree.",
+        displayName: "Draft in WhatsApp",
+        description: "Open a chat by name in WhatsApp and leave text there unsent, through its accessibility tree.",
         operations: [.interactWithApp],
         plannerTools: [
             AgentTool(
                 operation: .interactWithApp,
-                name: "Draft in an app without sending",
+                name: "Draft in WhatsApp without sending",
                 description: """
-                Open a chat, contact or item by name inside a Mac app and leave text there, unsent. \
-                Use this, and not vision_session, when the user asks to draft, write or prepare a \
-                message without sending it. It never sends: when the user asks to send, use \
-                vision_session as before. Use it as the plan's only step. Set appName to the app, \
-                interactionGoal to the outcome in one sentence, interactionTarget to the chat or \
-                contact name exactly as the user said it, and interactionText to the exact text to \
-                leave. Never target a terminal app.
+                Open a chat by name in WhatsApp and leave text there, unsent. Use this, and not \
+                vision_session, when the user asks to draft, write or prepare a WhatsApp message \
+                without sending it. WhatsApp only for now: a draft in any other app, and any request \
+                to send, stays with vision_session as before. Use it as the plan's only step. Set \
+                appName to WhatsApp, interactionGoal to the outcome in one sentence, \
+                interactionTarget to the chat or contact name exactly as the user said it, and \
+                interactionText to the exact text to leave.
                 """,
                 requiredFields: ["appName", "interactionGoal"],
                 sideEffects: [
@@ -48,7 +48,9 @@ public struct AppInteractionCapabilityAdapter: CapabilityAdapter {
     )
 
     /// A goal that cannot be built is asked about before anything runs: the person can answer by
-    /// saying it again, where a failure would make them start over.
+    /// saying it again, where a failure would make them start over. A plan mixing the step with
+    /// others is asked about too, by `AgentActionExecutor.prepare`, which sees the whole plan where
+    /// this sees only its own segment.
     public func resolveDefaultOutputs(in plan: AgentPlan, context: CapabilityExecutionContext) throws -> AgentPlan {
         for step in plan.steps where step.operation == .interactWithApp {
             do {
@@ -84,6 +86,9 @@ public struct AppInteractionCapabilityAdapter: CapabilityAdapter {
     ) async throws -> AgentRunResult {
         throw AppInteractionPlanError.notAlone
     }
+
+    /// Asked by `AgentActionExecutor.prepare` of a plan that mixes this step with others.
+    public static let aloneQuestion = "I can only draft in WhatsApp as a request on its own. Should I just do the draft? Ask for the rest separately."
 
     static func clarification(_ question: String) -> AgentPlan {
         AgentPlan(
