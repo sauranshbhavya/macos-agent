@@ -112,8 +112,12 @@ public enum AppInteractionPolicy {
     }
 
     /// The words that mark a row as a call rather than a chat, read from everything a row carries.
+    /// "join", "ongoing" and "ring" catch a group row offering its live call (PR #289 check of
+    /// 0bc0587f). "voice" and "video" alone are deliberately absent: a chat whose last message was
+    /// a voice note or a video shows exactly those words, and "voice call" and "video call" are
+    /// still caught by "call".
     static let callWords: [String] = [
-        "call", "voice", "video", "dial", "missed", "outgoing", "incoming", "facetime", "huddle",
+        "call", "dial", "missed", "outgoing", "incoming", "facetime", "huddle", "join", "ongoing", "ring",
     ]
 
     /// Two strings the app may have tidied: compared without case and with whitespace collapsed.

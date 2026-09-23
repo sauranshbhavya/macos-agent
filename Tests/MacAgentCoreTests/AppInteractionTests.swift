@@ -352,8 +352,13 @@ struct AppInteractionScreenTests {
             node(3, "AXStaticText", parent: 2, depth: 3, value: "10:32"),
             node(4, "AXStaticText", parent: 2, depth: 3, value: "Mom"),
             node(5, "AXRow", parent: 1, depth: 2, label: "Smith, John", actions: ["AXPress"]),
+            node(6, "AXRow", parent: 1, depth: 2, actions: ["AXPress"]),
+            node(7, "AXStaticText", parent: 6, depth: 3, value: "3"),
+            node(8, "AXStaticText", parent: 6, depth: 3, value: "07700 900123"),
         ])
         #expect(shot.rowName(of: shot.elements[2]) == "Mom")
+        // An unsaved contact goes by its number, past an unread count.
+        #expect(shot.rowName(of: shot.elements[6]) == "07700 900123")
         let builder = AppInteractionScreenBuilder(redact: { $0 })
         #expect(builder.build(from: shot, goal: try goal()).screen.candidates.map(\.label) == ["Mom"])
         #expect(builder.build(from: shot, goal: try goal(target: "Smith, John")).screen.candidates.map(\.label) == ["Smith, John"])
@@ -450,6 +455,11 @@ struct AppInteractionPolicyTests {
             node(7, "AXStaticText", parent: 5, depth: 3, value: "Did you send it? I'd like to add you"),
             node(8, "AXRow", parent: 1, depth: 2, label: "Mom, did you send it?, 10:32", actions: ["AXPress"]),
             node(9, "AXRow", parent: 1, depth: 2, label: "Mom, call me later, 10:32", actions: ["AXPress"]),
+            node(10, "AXRow", parent: 1, depth: 2, label: "Family, Join", actions: ["AXPress"]),        // live group call
+            node(11, "AXRow", parent: 1, depth: 2, actions: ["AXPress"]),                               // voice note preview
+            node(12, "AXStaticText", parent: 11, depth: 3, value: "Mom"),
+            node(13, "AXStaticText", parent: 11, depth: 3, value: "Voice message (0:12)"),
+            node(14, "AXRow", parent: 1, depth: 2, label: "Mom, Video", actions: ["AXPress"]),          // video preview
         ])
         let g = try goal()
         let decide = { (index: Int) in AppInteractionPolicy.decide(.press, on: shot.elements[index].id, in: shot, goal: g) }
@@ -458,6 +468,10 @@ struct AppInteractionPolicyTests {
         #expect(decide(8) == .allow(.press))
         // The safe direction: a preview that talks about calling refuses the chat.
         #expect(decide(9) == .refuse(.mightCommit))
+        #expect(decide(10) == .refuse(.mightCommit))
+        // A voice note or a video as the last message is not a call.
+        #expect(decide(11) == .allow(.press))
+        #expect(decide(14) == .allow(.press))
     }
 
     /// The reviewer's probes, each of which was allowed before (PR #289 review, F1).

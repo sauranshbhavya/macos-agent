@@ -226,10 +226,14 @@ public struct AccessibilitySnapshot: Equatable, Sendable {
         (text.components(separatedBy: ", ").first ?? text).trimmingCharacters(in: .whitespaces)
     }
 
-    /// Text that decorates a row rather than naming it: an unread count, a time or date such as
-    /// "10:32" or "22/09", and the usual status words.
+    /// Text that decorates a row rather than naming it: a short unread count, a time or date such
+    /// as "10:32", "22/09" or "22.09", and the usual status words. A longer run of digits with no
+    /// separator of that kind is a phone number, which is an unsaved contact's name.
     static func isBadge(_ text: String) -> Bool {
-        if text.allSatisfy({ $0.isNumber || ":./- ".contains($0) }) { return true }
+        if text.allSatisfy({ $0.isNumber || ":./- ".contains($0) }),
+           text.count <= 3 || text.contains(where: { ":/.".contains($0) }) {
+            return true
+        }
         return [
             "pinned", "muted", "unread", "archived", "new", "today", "yesterday",
             "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
