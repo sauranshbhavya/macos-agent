@@ -2,16 +2,59 @@
   "format": 1,
   "id": "greenhouse",
   "name": "Greenhouse",
-  "domain": "greenhouse.com",
+  "domain": "app.greenhouse.io",
   "category": "recruiting_hr",
   "summary": "Hiring software and applicant tracking.",
   "signInURL": "https://app.greenhouse.io/users/sign_in",
   "triggers": [
     "greenhouse recruiting",
     "greenhouse candidate",
-    "greenhouse.com"
+    "greenhouse.io"
   ],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Create a job",
+      "startURL": "https://app.greenhouse.io/users/sign_in",
+      "steps": [
+        "In Greenhouse Recruiting, click the Add button at the top of the page and select Create a Job from the drop-down menu.",
+        "Select Copy an Existing Job, Sample Job or Blank Job.",
+        "Complete the steps of the job setup flow, then click Finish. The job's dashboard opens.",
+        "If the job needs approval before it opens, click Request Approval in the job page's navigation bar. Until then it is a Draft."
+      ],
+      "source": "https://support.greenhouse.io/hc/en-us/articles/200668380-Create-a-new-job"
+    },
+    {
+      "title": "Add a candidate",
+      "startURL": "https://app.greenhouse.io/users/sign_in",
+      "steps": [
+        "In Greenhouse Recruiting, hover over Add at the top of the page and click Add a Candidate.",
+        "Select the Job for the candidate and, if needed, the Initial Stage.",
+        "Enter the candidate's information; required fields are marked with an asterisk. Dragging their resume into the top left corner fills in some fields automatically.",
+        "Upload any documents at the bottom of the page, then click Add this candidate."
+      ],
+      "source": "https://support.greenhouse.io/hc/en-us/articles/115002195063-Manually-add-a-candidate-or-prospect"
+    },
+    {
+      "title": "Add a prospect",
+      "startURL": "https://app.greenhouse.io/users/sign_in",
+      "steps": [
+        "In Greenhouse Recruiting, hover over Add at the top of the page and click Add a Candidate.",
+        "Select the Prospect tab at the top of the page. A prospect has not applied, and can be added to several jobs, departments or offices.",
+        "Fill in the details the same way as for a candidate, then click Add this candidate."
+      ],
+      "source": "https://support.greenhouse.io/hc/en-us/articles/115002195063-Manually-add-a-candidate-or-prospect"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://app.greenhouse.io/users/sign_in",
+      "landedURL": "https://app.greenhouse.io/users/sign_in",
+      "title": "Sign In | Greenhouse Recruiting",
+      "heading": "Better hiring, all-together.",
+      "offers": "sign-in",
+      "read": "2026-09-23"
+    }
+  ]
 }
