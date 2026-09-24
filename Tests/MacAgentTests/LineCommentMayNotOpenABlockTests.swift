@@ -137,11 +137,19 @@ struct LineCommentMayNotOpenABlockTests {
             encoding: .utf8
         )
         var paths: [String] = []
+        // A `.systemLibrary` target is a C module map (cua-driver's, since 2026-09-24): its path
+        // compiles no Swift, so it is not a tree this refusal reads.
+        var inSystemLibrary = false
         for rawLine in manifest.split(separator: "\n", omittingEmptySubsequences: false) {
             let line = String(rawLine).trimmingCharacters(in: .whitespaces)
+            if line.hasPrefix(".systemLibrary(") { inSystemLibrary = true }
             guard !line.hasPrefix("//"), let opening = line.range(of: "path: \"") else { continue }
             let rest = line[opening.upperBound...]
             guard let closing = rest.firstIndex(of: "\"") else { continue }
+            if inSystemLibrary {
+                inSystemLibrary = false
+                continue
+            }
             paths.append(String(rest[..<closing]))
         }
         return paths.sorted()

@@ -13,31 +13,31 @@ public struct AppInteractionCapabilityAdapter: CapabilityAdapter {
 
     public static let metadata = CapabilityMetadata(
         id: "local.accessibility.interact",
-        displayName: "Draft in WhatsApp",
-        description: "Open a chat by name in WhatsApp and leave text there unsent, through its accessibility tree.",
+        displayName: "New note in Notes",
+        description: "Make a new note in the Notes app holding the given text, through its accessibility tree.",
         operations: [.interactWithApp],
         plannerTools: [
             AgentTool(
                 operation: .interactWithApp,
-                name: "Draft in WhatsApp without sending",
+                name: "Make a new note in the Notes app",
                 description: """
-                Open a chat by name in WhatsApp and leave text there, unsent. Use this, and not \
-                vision_session, when the user asks to draft, write or prepare a WhatsApp message \
-                without sending it. WhatsApp only for now: a draft in any other app, and any request \
-                to send, stays with vision_session as before. Use it as the plan's only step. Set \
-                appName to WhatsApp, interactionGoal to the outcome in one sentence, \
-                interactionTarget to the chat or contact name exactly as the user said it, and \
-                interactionText to the exact text to leave.
+                Start a new note in the Notes app, in whichever folder is open there, and put the \
+                user's text in it. Use this only when the user names the Notes app: "make a note \
+                in Notes", "add a note to Notes". A note request that does not name the Notes app \
+                stays with create_local_draft, and every other app stays with its own operation. \
+                Use it as the plan's only step. Set appName to Notes, interactionGoal to the outcome \
+                in one sentence, interactionTarget to null, and interactionText to the note's text \
+                word for word; it may run over several lines.
                 """,
-                requiredFields: ["appName", "interactionGoal"],
+                requiredFields: ["appName", "interactionGoal", "interactionText"],
                 sideEffects: [
-                    "Types into the named app as the user would, and leaves the text unsent",
-                    "Sends the names and labels in that app's window to Sonny's model, which stores none of it"
+                    "Starts a new note in the folder open in Notes and puts the text in it",
+                    "Sends the labels of the Notes window's controls to Sonny's model, which stores none of it; never the text of any note"
                 ],
-                dryRunBehavior: "Describe the app, the chat and the text; touch nothing.",
+                dryRunBehavior: "Describe the app and the note's text; touch nothing.",
                 examples: [
-                    "draft a WhatsApp to Mom saying I'll be home by 8",
-                    "write 'see you at 6' to Alex in WhatsApp but don't send it"
+                    "make a note in Notes saying buy milk and eggs",
+                    "add a note to Notes: call the dentist on Monday"
                 ]
             )
         ],
@@ -66,15 +66,15 @@ public struct AppInteractionCapabilityAdapter: CapabilityAdapter {
         try plan.steps.filter { $0.operation == .interactWithApp }.map { step in
             let goal = try Self.goal(from: step)
             var details = ["App: \(goal.app)"]
-            if let target = goal.target { details.append("Open: \(target)") }
-            if let text = goal.text { details.append("Leave unsent: \(text)") }
-            return ActionPreview(title: "Draft in \(goal.app)", details: details)
+            if let text = goal.text { details.append("New note: \(text)") }
+            return ActionPreview(title: "New note in \(goal.app)", details: details)
         }
     }
 
-    /// Tier 2 with no escalation: the draft stays on the Mac until the person sends it (founders,
-    /// 2026-09-23). What guards the rest is `AppInteractionPolicy`, which refuses every step that
-    /// could send, delete or call.
+    /// Tier 2 with no escalation: a new note changes nothing that was there before, and nothing
+    /// leaves the Mac beyond what Notes already syncs (founders, 2026-09-23 and 2026-09-24). What
+    /// guards the rest is `AppInteractionPolicy`, which refuses every step that could send, delete
+    /// or call, and never writes over text Sonny did not put there.
     public func assessRisk(plan: AgentPlan, context: CapabilityExecutionContext) throws -> CapabilityRiskAssessment {
         CapabilityRiskAssessment(defaultTier: metadata.defaultRiskTier)
     }
@@ -88,7 +88,7 @@ public struct AppInteractionCapabilityAdapter: CapabilityAdapter {
     }
 
     /// Asked by `AgentActionExecutor.prepare` of a plan that mixes this step with others.
-    public static let aloneQuestion = "I can only draft in WhatsApp as a request on its own. Should I just do the draft? Ask for the rest separately."
+    public static let aloneQuestion = "I can only make a note in Notes as a request on its own. Should I just make the note? Ask for the rest separately."
 
     static func clarification(_ question: String) -> AgentPlan {
         AgentPlan(
@@ -98,20 +98,28 @@ public struct AppInteractionCapabilityAdapter: CapabilityAdapter {
                 AgentStep(
                     id: "clarify-app-interaction",
                     operation: .clarify,
-                    description: "Ask a question before drafting in another app.",
+                    description: "Ask a question before working in another app.",
                     question: question
                 )
             ]
         )
     }
 
+    /// Milestone A's goal is a new note in whichever folder is open, so it has text and nothing to
+    /// find. A named folder or note is asked about rather than dropped, because dropping it would
+    /// put the note somewhere the person did not ask for (founders, 2026-09-24).
     public static func goal(from step: AgentStep) throws(AppInteractionGoalError) -> AppInteractionGoal {
-        try AppInteractionGoal.validated(
+        if let target = step.interactionTarget, !target.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            throw .targetNotSupported
+        }
+        let goal = try AppInteractionGoal.validated(
             app: step.appName ?? "",
             objective: step.interactionGoal ?? "",
-            target: step.interactionTarget,
+            target: nil,
             text: step.interactionText
         )
+        guard goal.text != nil else { throw .nothingToDo }
+        return goal
     }
 
     /// The goal of a plan the new runtime should run: exactly one step, and it is this operation.
@@ -128,7 +136,7 @@ public enum AppInteractionPlanError: Error, LocalizedError, Equatable {
     case notAlone
 
     public var errorDescription: String? {
-        "I can draft in another app only as a request on its own. Ask for the draft by itself."
+        "I can make a note in Notes only as a request on its own. Ask for the note by itself."
     }
 }
 
@@ -136,12 +144,12 @@ extension AppInteractionGoalError {
     /// The same fault as `userMessage`, put as the question that fixes it.
     var clarifyingQuestion: String {
         switch self {
-        case .missingApp: return "Which app should I draft this in?"
-        case .missingObjective, .nothingToDo: return "Who is it for, and what should it say?"
+        case .missingApp: return "Which app should I use?"
+        case .missingObjective, .nothingToDo: return "What should the note say?"
         case .objectiveTooLong: return "Can you say that more briefly?"
-        case .targetTooLong, .targetHasLineBreak: return "What's the name of the chat, on one line?"
-        case .textTooLong: return "That's longer than \(AppInteractionGoal.maxTextLength) characters. What shorter message should I draft?"
-        case .textHasLineBreak: return "I can only draft a message on one line for now. What should it say?"
+        case .targetTooLong, .targetHasLineBreak: return "What's the name, on one line?"
+        case .textTooLong: return "That's longer than \(AppInteractionGoal.maxTextLength) characters. What shorter note should I make?"
+        case .targetNotSupported: return "I can only put a new note in the folder that's open in Notes. Should I make it there?"
         }
     }
 }

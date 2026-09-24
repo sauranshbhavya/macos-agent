@@ -391,7 +391,7 @@ public enum AutomationStoreError: Error, LocalizedError, Equatable {
         case .createReminder:
             return "A routine can't add a reminder."
         case .interactWithApp:
-            return "A routine can't draft in another app."
+            return "A routine can't make a note in Notes."
         case .clarify:
             return "A routine can't stop to ask you a question."
         case .unsupported:

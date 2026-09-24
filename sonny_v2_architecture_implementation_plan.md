@@ -1,16 +1,26 @@
 # Sonny v2 Architecture and Implementation Plan
 
-Reviewed against repository HEAD `336959ca` on 2026-09-22; updated after the workflow simplification, and again on 2026-09-23 with the founders' decisions in the next section. This is the detailed working plan for a cleaner execution core, not a frozen architecture or a requirement to implement every section before the first useful delivery. Existing internals are replaceable. Source links below are relative to this repository. Proposed types, interfaces, phase names and examples are design sketches, not existing APIs or mandatory class/file layouts. Revisit them after each real workflow exposes what works.
+Reviewed against repository HEAD `336959ca` on 2026-09-22; updated after the workflow simplification, on 2026-09-23 with the founders' decisions in the next section, and on 2026-09-24 when Milestone A moved to Notes on cua-driver. This is the detailed working plan for a cleaner execution core, not a frozen architecture or a requirement to implement every section before the first useful delivery. Existing internals are replaceable. Source links below are relative to this repository. Proposed types, interfaces, phase names and examples are design sketches, not existing APIs or mandatory class/file layouts. Revisit them after each real workflow exposes what works.
 
 See [the comparison](docs/archive/sonny_v2_architecture_comparison.md) and [original draft](docs/archive/sonny_v2_architecture_implementation_plan_1.md) for earlier tradeoffs. The [recovered intermediate plan](docs/archive/sonny_v2_architecture_implementation_plan_2026-09-22.md) preserves the version before this update. The inventory below describes reusable evidence, not architecture that must be preserved.
 
-## Current phase, decisions and rules (2026-09-23)
+## Current phase, decisions and rules (2026-09-23, updated 2026-09-24)
 
 The sections after this one are the detailed design. This section is what holds right now.
 
 **Phase.** New features are frozen until Milestone A lands. No features, capabilities or improvements go onto the current execution path; the only exception is a fix for a defect that loses data, breaks security or blocks everyday use, approved by a founder each time.
 
-**Milestone A's workflow.** WhatsApp (the native Mac app, `net.whatsapp.WhatsApp`) with a draft-only goal: open the chat the user names and leave the message they asked for in its composer, never sent. Notes stays available as the controlled fixture if WhatsApp's Accessibility tree turns out to be poor. What that choice means for the first slice is under Milestone A in §15.
+**Milestone A's workflow.** Notes (`com.apple.Notes`): make a new note holding the text the user asked for, in whichever folder is open, changing nothing that was there before (founders, 2026-09-24). What that choice means for the first slice is under Milestone A in §15.
+
+WhatsApp was the first pick and did not survive its first live run. Each app below was measured before the next was chosen:
+
+| App | Measured 2026-09-24 | Outcome |
+|---|---|---|
+| WhatsApp | A Catalyst app: no `AXList`, scroll area or `AXTextField` anywhere in its window. Chats are `AXButton`s in a group, and the search box is `AXStaticText` that takes no value. | No chat could be opened. The privacy rule of the time, which hid what sat inside lists, never applied, so chat names reached the model on that one run. Waits for Catalyst support. |
+| Messages | Catalyst too: it loads UIKit from `/System/iOSSupport`. | Same as WhatsApp. |
+| Mail | To and Subject take a value, but the message body is a web view that accepts none: setting its value, inserting at the selection, replacing a range and a text operation all report success and change nothing. | §16 lists Mail under typed scripting, which is where it belongs. |
+| Telegram | Its own UI kit exposes only the title-bar buttons, even in screen-reader mode. | Screen-control fallback territory. |
+| Notes | Standard AppKit: folders in an `AXOutline`, the editor an `AXTextArea` that takes a value, a real search field. | Chosen. |
 
 **On hold.**
 
@@ -35,19 +45,22 @@ The sections after this one are the detailed design. This section is what holds 
 
 **How Milestone A is built** (founders, 2026-09-23, before implementation started; SONNY-544):
 
+- **The Accessibility layer is [cua-driver](https://github.com/trycua/cua) (MIT), not code of Sonny's** (founders, 2026-09-24). Its in-process library, `libcua_driver_sdk.dylib`, runs inside Sonny, so Sonny's own Accessibility permission is the only one a person grants; cua's CLI and MCP routes run through a daemon of its own that macOS asks about separately. It is pinned (0.28.3, by SHA-256) and fetched by `scripts/fetch-cua-driver.sh`, bundled by `scripts/package-app.sh`, and carries no telemetry: the library holds none, and the fetch script refuses a release whose library does. It runs in cua's `bounded` mode under a capability manifest naming only the on-screen tools and only Notes, a second fence behind Sonny's rules that refuses any other tool or app on its own.
 - The model picks each step from a short, redacted list of the app's on-screen elements, through a new gateway route, `POST /v1/interact/step`. Each call is metered on its own route name, charged by nothing, and sent with retention `none` whatever the task's setting.
-- A request reaches the new path through a new hosted-planner operation, `interact_with_app`, used as a plan's only step. Drafting requests use it; a request to send stays with the existing screen-control path.
-- Drafting asks no approval, because nothing is sent. No keys are ever synthesized. Sonny types only the goal's own chat name, and only into a search field, and the message, never over text the person typed and never while another chat is visibly open. It never types text the model wrote.
-- The runtime runs in WhatsApp only (`AppInteractionRuntime.milestoneAApps`), and the planner routes only WhatsApp drafts to it. Its rules are shaped by one chat app, and web views and call-centred apps break them (PR #289 review).
+- A request reaches the new path through a new hosted-planner operation, `interact_with_app`, used as a plan's only step, and only when the request names the Notes app. A note request that does not stays with `create_local_draft`, unchanged.
+- A new note asks no approval, because nothing that was there changes and nothing leaves the Mac beyond what Notes syncs. Sonny starts the note itself with Notes' File › New Note, through cua's `invoke_menu`, and the model's part is placing the text. Sonny places only the goal's own text, never over text the person typed, and never text the model wrote. A request naming a folder or a note is asked about, not dropped.
+- What the model may ask for is cua's on-screen tools, each judged first: a click only on a row, cell or tab, or a named button inside a list, never one named for a commit; a click at a point judged as a click on what is there; keys only Tab, the arrows, Escape, Page Up, Page Down, Home and End; shortcuts only ⌘F; a menu command by its path, never one named for a commit; scrolling; no dragging.
+- Privacy is by role, because cua reports no containers and no plain text: rows and cells go only when one is exactly the target, a text field only as its kind and a state word, and anything else only by its label with a step Sonny would take on it. A new note sends no window title.
+- The runtime runs in Notes only (`AppInteractionRuntime.notes`), here and in cua's manifest.
 - So Milestone A uses the hosted planner, which answers the question this section used to ask. Development runs against the local gateway (`server/scripts/deploy.sh local`). Shipping it to users needs the hosting in §14: `SonnyBackendHost.productionBaseURL` is nil and the staging and production deploys are stubs.
 
 **Left for Milestone B, by design of the first slice:**
 
-- A question from the model (two chats with the same name) ends the run with that question. There is no pause to answer into yet.
+- The target path — finding a chat or item by name — is built and tested but not reachable: a new note has no target. It comes back with the first app that needs it, and with it a question from the model ends the run; there is no pause to answer into yet.
 - An app the person has not allowed for control in the current mode (Safe mode, for one) is refused with a sentence saying how to allow it. There is no prompt yet.
-- Every button, link and pressable text is refused except a row drawn as a button inside a list (a scroll area does not count) whose shown name commits nothing. Sending, calling, joining and deleting wait for exact approval (§9).
-- The model sees a list row only when one of its short names is the target, compared whole, and only by that name; never a preview, never the conversation, never a text field's contents. Other egress rules wait for a per-app review.
-- Confirming the open chat relies on its name being exposed outside any list. When it is not, Sonny reports the draft as placed but the chat as unconfirmed.
+- Sending, calling, joining and deleting wait for exact approval (§9).
+- Catalyst apps (WhatsApp, Messages) need their own rules before they return: their rows are buttons outside any list, and a rule by role has to be re-checked against each one's real tree.
+- File › New Note is found by its English menu names; a Mac in another language gets a clear failure.
 
 ## 1. Outcome and confirmed decisions
 
@@ -378,13 +391,13 @@ These are milestones, not a fixed dependency graph. Pick the next slice from use
 
 ### Milestone A — Choose and prove one useful workflow
 
-Choose an unfamiliar non-refused app and a user goal with an observable result. Prefer an action without external send or destructive effects for the first proof. The founders' pick is WhatsApp with a draft-only goal (top of this plan). What that pick implies:
+Choose an unfamiliar non-refused app and a user goal with an observable result. Prefer an action without external send or destructive effects for the first proof. The founders' pick is a new note in Notes, reached after WhatsApp, Messages, Mail and Telegram were each measured and set aside (top of this plan). What that pick implies:
 
-- **The Accessibility tree is the only semantic route.** WhatsApp 26.36.74 declares no scripting dictionary (its `Info.plist` has neither `NSAppleScriptEnabled` nor `OSAScriptingDefinition`, where Notes has both), so there is no osascript template to write. The slice exercises exactly the missing capability of §7, and the vision fallback of §12 where the tree is poor.
-- **Return sends.** The draft is entered by setting the composer's value, not by typing keys, and text containing a newline is refused rather than typed. No step in this slice may press Return in that window. That is §12's no-batched-Return rule, with the stakes named.
-- **The postcondition is the draft.** Success means the named chat is open and its composer holds exactly the requested text. A missing or ambiguous chat name, or two chats with similar names, ends in a clarification, never a best guess.
-- **Chat names and messages are private and untrusted.** Send the model only what choosing the target needs, and treat a contact name or message text as observation data (rules 2 and 7 above).
-- WhatsApp is already on `AppControlStarterList` as `net.whatsapp.whatsapp`, so the existing app-control standing applies without new policy. A controlled AppKit fixture can establish AX behavior; a disposable real-app case shows whether the discovery is useful outside a fixture. Inspect the AX tree and existing native or vision support before deciding which backend to implement.
+- **The Accessibility tree is the route, through cua-driver.** Notes also has a scripting dictionary, so this proves the loop on a well-behaved app rather than on one where Accessibility is the only way in; the harder apps come with Catalyst and Electron support.
+- **The goal is a new note, and nothing that was there changes.** Sonny starts the note itself with File › New Note; the model's part is placing the text. The text is set as a value, never typed, so a line break is fine and no Return is pressed.
+- **The postcondition is the note.** Success means Notes' editor holds exactly the requested text in a note Sonny started, checked by Sonny against a fresh reading, independently of the model. Text the person typed is never written over.
+- **What leaves the Mac is kept small by role.** The model sees text fields as their kind and a state word, and folder rows, note text and dates never (rules 2 and 7 above).
+- Notes is already on `AppControlStarterList` as `com.apple.notes`, so the existing app-control standing applies without new policy.
 
 Record only the current behavior and data contracts that this slice touches. Establish a small number of acceptance cases and a baseline for the user's perceived wait. The full retained-feature ledger belongs to migration planning, not a requirement to start the first slice.
 
@@ -432,7 +445,8 @@ The milestones can be rearranged when a concrete dependency requires it. A small
 | Word conversion | Existing fixed-script regression case | Output file verification |
 | Mail | Typed scripting, attachment, exact send barrier | Verified draft plus strongest available submission/delivery evidence |
 | Native AppKit fixture | Stable AX roles, text, menus, disabled controls | Deterministic fixture state |
-| WhatsApp (Milestone A), Slack or comparable messaging app | AX discovery without a dedicated native adapter | Exact conversation/draft state, approval before send |
+| Notes (Milestone A) | A new note through cua-driver: menu command, editor value, privacy by role | The note holds exactly the text; nothing else changed |
+| WhatsApp, Messages (Catalyst), Slack or comparable messaging app | AX discovery without a dedicated native adapter | Exact conversation/draft state, approval before send |
 | Safari and Chrome | Script support differences, web content, navigation | Bound tab/window and observed result |
 | Generic Electron app | Incomplete/lazy AX tree and repeated labels | Unique target resolution or explicit fallback |
 | Preview/file picker | Selected document, dialogs and app handoff | Pinned file/document and picker result |

@@ -1124,7 +1124,7 @@ struct ItemJobTests {
         #expect(AgentOperation.readCalendarEvents.jobTemplateRefusal == nil)
         #expect(
             AgentOperation.interactWithApp.jobTemplateRefusal
-                == .refused("Sonny will not draft in an app for each item. Ask for each draft on its own.")
+                == .refused("Sonny will not make a note for each item — that would fill Notes with copies of one note. Ask for the note on its own.")
         )
         #expect(
             AgentOperation.startWatching.jobTemplateRefusal

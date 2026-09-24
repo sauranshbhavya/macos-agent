@@ -2053,10 +2053,10 @@ public final class AgentActionExecutor {
             if plan.steps.contains(where: { $0.operation == .createReminder }) {
                 return "Delete the reminder in Reminders if needed."
             }
-            // SONNY-544, the same kind of branch: a draft generates no files, and it is still sitting
-            // unsent in the app's message box.
+            // SONNY-544, the same kind of branch: a new note generates no files, and it is sitting
+            // in Notes.
             if plan.steps.contains(where: { $0.operation == .interactWithApp }) {
-                return "Delete the unsent text from the app's message box if needed."
+                return "Delete the new note in Notes if needed."
             }
             return "Delete generated local files manually if needed."
         case .tier3:

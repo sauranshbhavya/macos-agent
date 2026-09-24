@@ -150,14 +150,14 @@
             ]
           },
           "interactionTarget" : {
-            "description" : "For interact_with_app: the name of the chat, contact or item to open, exactly as the user said it. Null when there is none, and for every other operation.",
+            "description" : "For interact_with_app: null. A new note goes in whichever folder is open in Notes. Null for every other operation.",
             "type" : [
               "string",
               "null"
             ]
           },
           "interactionText" : {
-            "description" : "For interact_with_app: the exact text to leave in the app, unsent, as the user dictated it. Null when there is none, and for every other operation.",
+            "description" : "For interact_with_app: the new note's text, word for word as the user dictated it; it may run over several lines. Null for every other operation.",
             "type" : [
               "string",
               "null"
@@ -355,14 +355,14 @@
                   ]
                 },
                 "interactionTarget" : {
-                  "description" : "For interact_with_app: the name of the chat, contact or item to open, exactly as the user said it. Null when there is none, and for every other operation.",
+                  "description" : "For interact_with_app: null. A new note goes in whichever folder is open in Notes. Null for every other operation.",
                   "type" : [
                     "string",
                     "null"
                   ]
                 },
                 "interactionText" : {
-                  "description" : "For interact_with_app: the exact text to leave in the app, unsent, as the user dictated it. Null when there is none, and for every other operation.",
+                  "description" : "For interact_with_app: the new note's text, word for word as the user dictated it; it may run over several lines. Null for every other operation.",
                   "type" : [
                     "string",
                     "null"

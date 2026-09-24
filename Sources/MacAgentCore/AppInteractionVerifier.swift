@@ -1,20 +1,20 @@
 import Foundation
 
-/// Checks a goal against a fresh observation, independently of anything the model said
+/// Checks a goal against a fresh cua reading, independently of anything the model said
 /// (V2 plan §10: "A model saying 'done' is not independent evidence").
 public enum AppInteractionVerifier {
     public enum Result: Equatable, Sendable {
-        /// The text is in a writable field and the target is visibly open.
+        /// The text is in a field Sonny could have written, and the target, if any, is visibly open.
         case satisfied
-        /// The text is in a writable field, but nothing names the target as open, so Sonny cannot
-        /// tell whether it is in the right place.
+        /// The text is in place, but nothing names the target as open, so Sonny cannot tell
+        /// whether it is in the right place.
         case targetUnconfirmed
-        /// Something else is visibly open: never a success, whatever the text field holds.
+        /// Something else is visibly open: never a success, whatever the field holds.
         case otherTargetOpen
         case notYet
     }
 
-    /// What an observation says about whether the target is the thing open.
+    /// What a reading says about whether the target is the thing open.
     public enum TargetState: Equatable, Sendable {
         case shown
         /// A selected row in a list names something else, and nothing names the target.
@@ -22,68 +22,47 @@ public enum AppInteractionVerifier {
         case unknown
     }
 
-    public static func check(_ snapshot: AccessibilitySnapshot, goal: AppInteractionGoal) -> Result {
-        let target = goal.target.map { targetState($0, in: snapshot) }
+    public static func check(_ state: CuaWindowState, goal: AppInteractionGoal) -> Result {
+        let target = goal.target.map { targetState($0, in: state) }
         if target == .contradicted { return .otherTargetOpen }
         guard let text = goal.text else { return target == .shown ? .satisfied : .notYet }
-        guard textIsPlaced(text, in: snapshot) else { return .notYet }
+        guard textIsPlaced(text, in: state) else { return .notYet }
         guard let target else { return .satisfied }
         return target == .shown ? .satisfied : .targetUnconfirmed
     }
 
-    /// The text sits in a field Sonny could have written: writable, not a search field, and not a
-    /// cell inside a list (PR #289 review, F7). A scroll area is allowed, because a Mac text view
-    /// always sits inside one (delta review, N1); a sent message shown as a text view there is
-    /// read-only, which `canSetValue` already refuses.
-    static func textIsPlaced(_ text: String, in snapshot: AccessibilitySnapshot) -> Bool {
-        snapshot.elements.contains {
-            $0.isTextInput && !$0.isSearchField && $0.canSetValue
-                && $0.value == text
-                && !snapshot.isInsideList($0)
+    /// The text sits in a field Sonny could have written: a text field or area that is not a
+    /// search field and not inside a list (PR #289 review, F7). Compared apart from whitespace at
+    /// either end, which an editor may add or drop around a value it was given.
+    static func textIsPlaced(_ text: String, in state: CuaWindowState) -> Bool {
+        let wanted = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return state.elements.contains {
+            state.isTextInput($0) && !state.isSearchField($0) && !state.isInsideList($0)
+                && $0.value?.trimmingCharacters(in: .whitespacesAndNewlines) == wanted
         }
     }
 
-    /// Which of a row's names (`rowNames`) is the target, compared whole after dropping case and
-    /// symbols, so "Mom ❤️" is Mom and "Mom & Dad", "Family" and "Give me a moment" are not. The
-    /// same test decides what the model may see, what counts as another chat being open, and what
-    /// confirms the right one.
-    public static func targetName(in names: [String], _ target: String) -> String? {
+    /// Whether a name is the target, compared whole after dropping case and symbols, so "Mom ❤️"
+    /// is Mom and "Mom & Dad" and "Family" are not.
+    public static func isTarget(_ name: String?, _ target: String) -> Bool {
         let wanted = normalized(target)
-        guard !wanted.isEmpty else { return nil }
-        return names.first { normalized($0) == wanted }
+        guard !wanted.isEmpty, let name else { return false }
+        return normalized(AppInteractionPolicy.firstSegment(name)) == wanted || normalized(name) == wanted
     }
 
-    public static func targetState(_ target: String, in snapshot: AccessibilitySnapshot) -> TargetState {
-        let wanted = normalized(target)
-        guard !wanted.isEmpty else { return .unknown }
-        if targetIsShown(wanted, in: snapshot) { return .shown }
+    public static func targetState(_ target: String, in state: CuaWindowState) -> TargetState {
+        if isTarget(state.windowTitle, target) { return .shown }
+        // Something outside every list naming the target, such as a heading over an open chat.
+        if state.elements.contains(where: { !state.isPrivateByRole($0) && !state.isTextInput($0) && !state.isInMenus($0) && isTarget($0.label, target) }) {
+            return .shown
+        }
         // A selected row is the one thing an app shows as open inside a list. If its name is not
-        // the target, typing now would put the message in someone else's chat (PR #289 review, F3).
-        // Its one name (`rowName`): "Mom, see you soon, 10:32" and a row led by an unread count are
-        // Mom's; a "Family" group whose last sender was Mom is not.
-        let selectedElsewhere = snapshot.elements.contains { element in
-            guard element.isSelected,
-                  AccessibilityVocabulary.selectionRoles.contains(element.role) || element.role == "AXButton",
-                  snapshot.isInsideList(element) else { return false }
-            let names = snapshot.rowNames(of: element)
-            return !names.isEmpty && targetName(in: names, target) == nil
+        // the target, typing now would put the text in someone else's (PR #289 review, F3).
+        let selectedElsewhere = state.elements.contains { element in
+            element.isSelected && AppInteractionRoles.rows.contains(element.role)
+                && element.label != nil && !isTarget(element.label, target)
         }
         return selectedElsewhere ? .contradicted : .unknown
-    }
-
-    /// True when the target's name appears as the window's title or as text outside every list and
-    /// scroll area and outside every text field: where an app shows what is open, not where it lists
-    /// what could be. Compared whole, after dropping symbols and case, so "Mom" does not confirm
-    /// "Mom & Dad". Scroll areas count here because a SwiftUI app often draws its chat list as one
-    /// with no list inside, and a row there must not confirm that the chat is open.
-    static func targetIsShown(_ wanted: String, in snapshot: AccessibilitySnapshot) -> Bool {
-        if let title = snapshot.windowTitle, normalized(title) == wanted { return true }
-        return snapshot.elements.contains { element in
-            guard !element.isTextInput else { return false }
-            let names = [element.title, element.value, element.label].compactMap { $0 }
-            guard names.contains(where: { normalized($0) == wanted }) else { return false }
-            return !snapshot.isInsideListOrScrollArea(element)
-        }
     }
 
     static func normalized(_ text: String) -> String {

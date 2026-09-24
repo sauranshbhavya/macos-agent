@@ -15,6 +15,7 @@ The normal loop is build, run focused behavioral tests for changed behavior, ins
 The app and server have separate checks:
 
 ```sh
+scripts/fetch-cua-driver.sh   # once, and whenever its pinned version changes
 swift build
 env CLANG_MODULE_CACHE_PATH="$PWD/.build/clang-module-cache" swift test --disable-sandbox \
   -Xswiftc -F -Xswiftc /Library/Developer/CommandLineTools/Library/Developer/Frameworks \
@@ -22,7 +23,7 @@ env CLANG_MODULE_CACHE_PATH="$PWD/.build/clang-module-cache" swift test --disabl
   -Xlinker -rpath -Xlinker /Library/Developer/CommandLineTools/Library/Developer/usr/lib
 ```
 
-Use `--filter` on that Swift test invocation while iterating. The extra flags are required on the documented local Command Line Tools installation. For server changes, run the relevant commands from `server/`: `npm run build`, `npm run typecheck`, `npm test`, and DB-backed tests when database contracts change. Follow [server/README.md](server/README.md) for an isolated test database. A Swift-only change does not require starting Postgres or running the server suite.
+The fetch script puts cua-driver's in-process library, which Sonny drives other apps through, in the gitignored `Vendor/cua-driver/`; without it the package does not link. Use `--filter` on that Swift test invocation while iterating. The extra flags are required on the documented local Command Line Tools installation. For server changes, run the relevant commands from `server/`: `npm run build`, `npm run typecheck`, `npm test`, and DB-backed tests when database contracts change. Follow [server/README.md](server/README.md) for an isolated test database. A Swift-only change does not require starting Postgres or running the server suite.
 
 Run `server/scripts/check-secrets.sh` for changes that add or edit tracked content. An incremental build reports warnings only for the files it recompiles, so to see every warning before a release, build into an empty directory: `swift build --scratch-path "$(mktemp -d)"`.
 

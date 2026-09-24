@@ -274,7 +274,7 @@ struct AutomationStoresTests {
             // itself, so it is not a pin and is not stripped — and a routine cannot carry either
             // operation that reads these anyway.
             "calendarDay", "reminderTitle", "reminderMinutesFromNow", "reminderTime",
-            // SONNY-544. The user's own goal, name and text for a draft in another app. Not pins,
+            // SONNY-544. The user's own goal and text for a new note in Notes. Not pins,
             // and a routine cannot carry the operation that reads them.
             "interactionGoal", "interactionTarget", "interactionText"
         ]
@@ -524,7 +524,7 @@ struct AutomationStoresTests {
             .startWatching: "A routine can't watch a page for changes.",
             .readCalendarEvents: "A routine can't read your calendar.",
             .createReminder: "A routine can't add a reminder.",
-            .interactWithApp: "A routine can't draft in another app.",
+            .interactWithApp: "A routine can't make a note in Notes.",
             .clarify: "A routine can't stop to ask you a question.",
             .unsupported: "A routine can't include something Sonny can't do yet."
         ]

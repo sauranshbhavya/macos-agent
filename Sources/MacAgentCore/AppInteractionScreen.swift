@@ -1,53 +1,51 @@
 import Foundation
 
-/// What the model is shown of one observation: a short list of elements it may act on, each with
-/// a reference that means something only for this observation.
+/// What the model is shown of one cua reading: a short list of elements it may act on, each with
+/// a reference that means something only for this reading.
 ///
 /// This is the whole of what leaves the Mac per step, so it is kept small on purpose (V2 plan §8,
-/// "new AX text egress needs its own explicit minimization"). Exactly this goes:
+/// "new AX text egress needs its own explicit minimization"). The rule goes by role (founders,
+/// 2026-09-24), because cua reports no containers and no plain text:
 ///
-/// - Elements a step could act on that sit **outside** every list and scroll area — the search
-///   field, a toolbar — each named by one string, `displayName(of:)`.
-/// - Text fields outside a list, the message box included even inside a scroll area, because a
-///   Mac text view always sits in one (PR #289 delta review, N1) — but inside a scroll area only a
-///   writable one, so a read-only message bubble is not a field. Named by placeholder alone, never
-///   by a title or description a bubble could carry its message in (final check, F4), and never
-///   their contents: only whether one is empty, holds the target, holds the message, or holds
-///   something else.
-/// - From **inside** lists and scroll areas, only row-like elements one of whose own names
-///   (`rowNames`: its `rowName`, or its own title or description whole) *is* the target, compared
-///   whole (`AppInteractionVerifier.targetName`), shown by that name alone. A
-///   combined label's preview, a row's other texts and the conversation's messages never match and
-///   never go. What can still go is a message whose first text is exactly the target's name — the
-///   word "Mom" on its own.
-/// - Headings and similar text outside every list and scroll area, such as the name at the top of
-///   an open chat.
+/// - Rows and cells, and anything inside a list — where apps keep chats, notes and folders — go
+///   only when one's name is exactly the goal's target, by that name alone. WhatsApp draws its
+///   chats as plain buttons outside any list, which a rule by container could not see (the live
+///   run, 2026-09-24); it stays out of Milestone A.
+/// - A text field or text area goes as its kind and a state word — "empty", "holds the target",
+///   "holds the text", "holds other text" — never its label or contents.
+/// - Anything else goes by its label, and only with the steps the policy would take on it now, so
+///   the model is never shown a control Sonny will always refuse; a menu command goes by its path.
+/// - The window's title only when the goal names a target, because it is there to show which one
+///   is open. A new note sends none.
 ///
 /// Every string is flattened to one line, passed through local redaction and cut to
 /// `maxLabelLength`.
 public struct AppInteractionScreen: Equatable, Sendable, Encodable {
     public struct Candidate: Equatable, Sendable, Encodable {
-        /// "e12": stable only within this screen.
+        /// "e12": stable only within this reading.
         public let ref: String
         public let kind: String
         public let label: String
-        /// What the model may ask for on this element: a subset of `AppInteractionStepKind`.
+        /// The element steps the model may ask for here: a subset of `AppInteractionStepKind`.
         public let can: [String]
         public let state: [String]
+        /// x, y, width and height in screen points, the coordinates `click_at` takes.
+        public let at: [Int]?
     }
 
     public let windowTitle: String?
     public let candidates: [Candidate]
-    public let context: [String]
-    /// True when the observation stopped early or candidates were dropped to stay within budget.
+    /// The keys `press_key` may send and the shortcuts `shortcut` may press, fixed by the rules.
+    public let keys: [String]
+    public let shortcuts: [String]
+    /// True when candidates were dropped to stay within budget.
     public let partial: Bool
 }
 
-/// Builds an `AppInteractionScreen` from a snapshot and remembers which element each reference
+/// Builds an `AppInteractionScreen` from a reading and remembers which element each reference
 /// points to.
 public struct AppInteractionScreenBuilder: Sendable {
     public var maxCandidates = 60
-    public var maxContext = 12
     public var maxLabelLength = 80
     private let redact: @Sendable (String) -> String
 
@@ -57,43 +55,42 @@ public struct AppInteractionScreenBuilder: Sendable {
 
     public struct Built: Sendable {
         public let screen: AppInteractionScreen
-        public let references: [String: AccessibilityElementID]
+        /// Ref to element index in the reading.
+        public let references: [String: Int]
     }
 
-    public func build(from snapshot: AccessibilitySnapshot, goal: AppInteractionGoal) -> Built {
-        let shown = snapshot.elements.filter { Self.isActionable($0) && Self.shownName($0, in: snapshot, goal: goal) != nil }
-        let chosen = Self.prioritised(shown, in: snapshot, goal: goal).prefix(maxCandidates)
-            .sorted { $0.id.index < $1.id.index }
+    public func build(from state: CuaWindowState, goal: AppInteractionGoal, sonnyWrote: Set<String> = []) -> Built {
+        var offers: [Int: [AppInteractionStepKind]] = [:]
+        for element in state.elements where Self.shownName(element, in: state, goal: goal) != nil {
+            let kinds = Self.offered(element, in: state, goal: goal, sonnyWrote: sonnyWrote)
+            if !kinds.isEmpty { offers[element.index] = kinds }
+        }
+        let shown = state.elements.filter { offers[$0.index] != nil }
+        let chosen = Self.prioritised(shown, in: state, goal: goal).prefix(maxCandidates)
+            .sorted { $0.index < $1.index }
 
-        var references: [String: AccessibilityElementID] = [:]
+        var references: [String: Int] = [:]
         var candidates: [AppInteractionScreen.Candidate] = []
         for element in chosen {
-            let ref = "e\(element.id.index)"
-            references[ref] = element.id
-            candidates.append(
-                AppInteractionScreen.Candidate(
-                    ref: ref,
-                    kind: Self.kind(of: element),
-                    label: clean(Self.shownName(element, in: snapshot, goal: goal) ?? ""),
-                    can: Self.capabilities(of: element).map(\.rawValue),
-                    state: Self.state(of: element, goal: goal)
-                )
-            )
+            let ref = "e\(element.index)"
+            references[ref] = element.index
+            candidates.append(AppInteractionScreen.Candidate(
+                ref: ref,
+                kind: Self.kind(of: element, in: state),
+                label: clean(Self.shownName(element, in: state, goal: goal) ?? ""),
+                can: (offers[element.index] ?? []).map(\.rawValue),
+                state: Self.state(of: element, in: state, goal: goal),
+                at: element.frame.map { [Int($0.x), Int($0.y), Int($0.w), Int($0.h)] }
+            ))
         }
-
-        let context = snapshot.elements
-            .filter { Self.isContext($0, in: snapshot) }
-            .compactMap { $0.title ?? $0.value ?? $0.label }
-            .map(clean)
-            .filter { !$0.isEmpty }
-            .prefix(maxContext)
 
         return Built(
             screen: AppInteractionScreen(
-                windowTitle: snapshot.windowTitle.map(clean),
+                windowTitle: goal.target != nil ? state.windowTitle.map(clean) : nil,
                 candidates: candidates,
-                context: Array(context),
-                partial: !snapshot.isComplete || shown.count > chosen.count
+                keys: AppInteractionPolicy.allowedKeys,
+                shortcuts: AppInteractionPolicy.allowedShortcuts,
+                partial: shown.count > chosen.count
             ),
             references: references
         )
@@ -101,49 +98,64 @@ public struct AppInteractionScreenBuilder: Sendable {
 
     // MARK: - Selection
 
-    static func isActionable(_ element: AccessibilityElement) -> Bool {
-        guard element.isEnabled, !windowChromeSubroles.contains(element.subrole ?? "") else { return false }
-        return !capabilities(of: element).isEmpty
-    }
-
-    /// The name an element is shown to the model by, or nil when it is not shown at all. Text
-    /// fields outside lists and everything outside lists and scroll areas go by `displayName`.
-    /// Inside them, only a row-like element with a name that is the target, shown by that name.
-    static func shownName(_ element: AccessibilityElement, in snapshot: AccessibilitySnapshot, goal: AppInteractionGoal) -> String? {
-        if element.isTextInput {
-            guard !snapshot.isInsideList(element) else { return nil }
-            if snapshot.isInsideListOrScrollArea(element), !element.canSetValue { return nil }
-            return element.placeholder ?? ""
+    /// The name an element is shown to the model by, or nil when it is not shown at all.
+    static func shownName(_ element: CuaElement, in state: CuaWindowState, goal: AppInteractionGoal) -> String? {
+        guard element.role != "AXWindow" else { return nil }
+        if element.role == "AXMenuItem" {
+            return state.menuPath(of: element)?.joined(separator: " › ")
         }
-        guard snapshot.isInsideListOrScrollArea(element) else { return snapshot.displayName(of: element) }
-        guard AccessibilityVocabulary.selectionRoles.contains(element.role) || element.role == "AXButton",
-              let target = goal.target else { return nil }
-        return AppInteractionVerifier.targetName(in: snapshot.rowNames(of: element), target)
+        if state.isInMenus(element) { return nil }
+        if state.isTextInput(element) {
+            return state.isInsideList(element) ? nil : ""
+        }
+        if state.isPrivateByRole(element) {
+            guard let target = goal.target, AppInteractionVerifier.isTarget(element.label, target) else { return nil }
+            return target
+        }
+        return element.label
     }
 
-    static func capabilities(of element: AccessibilityElement) -> [AppInteractionStepKind] {
+    /// The element steps the policy would take on this element now. Two refusals that hold only
+    /// for the moment stay on offer — a box holding the person's own text, and someone else's chat
+    /// being open — so choosing one ends the run with its plain reason, or lets the model move
+    /// first, rather than leaving the model to guess why the box vanished.
+    static func offered(
+        _ element: CuaElement,
+        in state: CuaWindowState,
+        goal: AppInteractionGoal,
+        sonnyWrote: Set<String>
+    ) -> [AppInteractionStepKind] {
+        capabilities(of: element, in: state).filter { kind in
+            // Any direction stands in for scrolling in general.
+            let input = kind == .scroll ? "down" : nil
+            switch AppInteractionPolicy.decideOnElement(kind, element, in: state, goal: goal, sonnyWrote: sonnyWrote, input: input) {
+            case .allow, .refuse(.wouldReplaceTypedText), .refuse(.otherTargetOpen): return true
+            case .refuse: return false
+            }
+        }
+    }
+
+    /// What the element itself could take, before the policy has its say.
+    static func capabilities(of element: CuaElement, in state: CuaWindowState) -> [AppInteractionStepKind] {
+        if element.role == "AXMenuItem" { return [.menu] }
         var kinds: [AppInteractionStepKind] = []
-        if element.canPress { kinds.append(.press) }
-        if element.canSelect { kinds.append(.select) }
-        if element.isTextInput && element.canSetValue {
-            kinds.append(element.isSearchField ? .enterTarget : .enterText)
-        } else if element.isTextInput && element.canFocus {
-            kinds.append(.focus)
+        if AppInteractionRoles.clickable.contains(element.role) || element.actions.contains("AXPress") {
+            kinds += [.click, .doubleClick, .rightClick]
         }
+        if state.isTextInput(element) {
+            kinds.append(state.isSearchField(element) ? .enterTarget : .enterText)
+        }
+        if element.actions.contains(where: { $0.hasPrefix("AXScroll") }) { kinds.append(.scroll) }
         return kinds
     }
 
-    /// Text fields first, then anything whose name mentions the target, then the rest in window
-    /// order, so the cap drops the least useful elements.
-    static func prioritised(
-        _ elements: [AccessibilityElement],
-        in snapshot: AccessibilitySnapshot,
-        goal: AppInteractionGoal
-    ) -> [AccessibilityElement] {
-        func rank(_ element: AccessibilityElement) -> Int {
-            if element.isTextInput { return 0 }
-            if let target = goal.target,
-               AppInteractionVerifier.targetName(in: snapshot.rowNames(of: element), target) != nil { return 1 }
+    /// Text fields first, then anything named for the target, then the rest in window order, and
+    /// menu commands last, so the cap drops the least useful elements.
+    static func prioritised(_ elements: [CuaElement], in state: CuaWindowState, goal: AppInteractionGoal) -> [CuaElement] {
+        func rank(_ element: CuaElement) -> Int {
+            if state.isTextInput(element) { return 0 }
+            if let target = goal.target, AppInteractionVerifier.isTarget(element.label, target) { return 1 }
+            if element.role == "AXMenuItem" { return 3 }
             return 2
         }
         return elements.enumerated()
@@ -154,16 +166,10 @@ public struct AppInteractionScreenBuilder: Sendable {
             .map(\.element)
     }
 
-    static func isContext(_ element: AccessibilityElement, in snapshot: AccessibilitySnapshot) -> Bool {
-        guard ["AXStaticText", "AXHeading"].contains(element.role),
-              !snapshot.isInsideListOrScrollArea(element) else { return false }
-        return !snapshot.ancestors(of: element).contains { isActionable($0) }
-    }
-
     // MARK: - Wording
 
-    static func kind(of element: AccessibilityElement) -> String {
-        if element.isSearchField { return "search field" }
+    static func kind(of element: CuaElement, in state: CuaWindowState) -> String {
+        if state.isSearchField(element) { return "search field" }
         switch element.role {
         case "AXTextField", "AXComboBox": return "text field"
         case "AXTextArea": return "text area"
@@ -172,33 +178,30 @@ public struct AppInteractionScreenBuilder: Sendable {
         case "AXCell": return "cell"
         case "AXRadioButton", "AXTab": return "tab"
         case "AXLink": return "link"
-        case "AXMenuItem": return "menu item"
+        case "AXMenuItem": return "menu command"
         case "AXCheckBox": return "checkbox"
         case "AXPopUpButton", "AXMenuButton": return "menu button"
-        case "AXStaticText": return "text"
         default: return element.role.hasPrefix("AX") ? String(element.role.dropFirst(2)).lowercased() : element.role
         }
     }
 
-    /// Focus, selection, and for a text field what it holds, as a word rather than the text.
-    static func state(of element: AccessibilityElement, goal: AppInteractionGoal) -> [String] {
-        var state: [String] = []
-        if element.isFocused { state.append("focused") }
-        if element.isSelected { state.append("selected") }
-        if element.isTextInput {
-            if let typed = element.typedText {
-                if let target = goal.target, AppInteractionPolicy.sameText(typed, target) {
-                    state.append("holds the target")
-                } else if let text = goal.text, AppInteractionPolicy.sameText(typed, text) {
-                    state.append("holds the message")
-                } else {
-                    state.append("holds other text")
-                }
+    /// Selection, and for a text field what it holds, as a word rather than the text.
+    static func state(of element: CuaElement, in state: CuaWindowState, goal: AppInteractionGoal) -> [String] {
+        var words: [String] = []
+        if element.isSelected { words.append("selected") }
+        if state.isTextInput(element) {
+            let typed = element.value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if typed.isEmpty {
+                words.append("empty")
+            } else if let target = goal.target, AppInteractionPolicy.sameText(typed, target) {
+                words.append("holds the target")
+            } else if let text = goal.text, AppInteractionPolicy.sameText(typed, text) {
+                words.append("holds the text")
             } else {
-                state.append("empty")
+                words.append("holds other text")
             }
         }
-        return state
+        return words
     }
 
     private func clean(_ text: String) -> String {
@@ -206,18 +209,4 @@ public struct AppInteractionScreenBuilder: Sendable {
         let redacted = redact(flattened)
         return redacted.count > maxLabelLength ? String(redacted.prefix(maxLabelLength)) + "…" : redacted
     }
-
-    static let windowChromeSubroles: Set<String> = [
-        "AXCloseButton", "AXMinimizeButton", "AXZoomButton", "AXFullScreenButton", "AXToolbarButton",
-    ]
-}
-
-/// The step kinds the model may choose. `enterTarget` and `enterText` carry no text: the runtime
-/// types the goal's own `target` or `text`, never words the model supplies.
-public enum AppInteractionStepKind: String, CaseIterable, Sendable, Codable {
-    case press
-    case select
-    case focus
-    case enterTarget = "enter_target"
-    case enterText = "enter_text"
 }

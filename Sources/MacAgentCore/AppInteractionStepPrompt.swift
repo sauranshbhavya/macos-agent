@@ -20,7 +20,7 @@ public enum AppInteractionStepPrompt {
 
         var request = "App: \(goal.app)\nGoal: \(goal.objective)"
         if let target = goal.target { request += "\nTarget (typed by enter_target): \(target)" }
-        if let text = goal.text { request += "\nMessage (typed by enter_text): \(text)" }
+        if let text = goal.text { request += "\nText (placed by enter_text): \(text)" }
 
         let user = [
             delimiters.trustedInstruction(request),
@@ -39,15 +39,16 @@ public enum AppInteractionStepPrompt {
     goal and a list of elements now on screen, and you choose exactly one step.
 
     - Only use elements from the list, by their ref, and only a step listed in that element's "can".
-    - enter_target types the goal's target name. enter_text types the goal's message. You never \
+    - enter_target types the goal's target name. enter_text places the goal's text. You never \
     write text of your own.
-    - Never send, submit, call, delete or confirm anything. The message stays unsent; the person \
-    sends it themselves.
-    - To reach the target: if its row is listed, press or select it. Otherwise use enter_target on a \
-    search field first, then pick the matching row.
-    - Put the message only in the message box of the open chat named in the goal, never in a search \
-    field. Open the right chat before you type it.
-    - Answer finished when the target is open and its message box holds the message.
+    - Never send, submit, call, delete or confirm anything. Anything you leave stays unsent; the \
+    person sends it themselves.
+    - When the goal has no target, the item to write in is already open: put the text in its empty \
+    text area or text field with enter_text.
+    - When the goal has a target, reach it first: if its row is listed, press or select it. \
+    Otherwise use enter_target on a search field, then pick the matching row. Put the text only in \
+    the text box of the open target, never in a search field.
+    - Answer finished when the text is in place, and the target is open if the goal has one.
     - If more than one item could be the target and you cannot tell which one the person means, \
     answer ask_user with one short question.
     - If the app offers no way to reach the goal, answer give_up with one short reason.

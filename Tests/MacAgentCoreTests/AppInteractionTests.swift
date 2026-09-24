@@ -1,1037 +1,468 @@
 import Foundation
-import MacAgentCore
 import MacAgentTestSupport
 import Testing
+@testable import MacAgentCore
 
-// MARK: - Test doubles
+/// V2 Milestone A on cua-driver: a new note in Notes (SONNY-544; founders, 2026-09-24). Every run
+/// here goes through the real runtime, policy, screen and verifier, and through cua's own JSON at
+/// the `CuaToolInvoking` seam, answered by `FakeCuaNotes`.
+struct AppInteractionNotesTests {
+    @Test
+    func aNewNoteHoldsTheTextAndNothingElseChanges() async throws {
+        let notes = FakeCuaNotes()
+        let outcome = await runtime(notes, chooser: WritesIntoTheEditor()).run(try noteGoal("Buy milk"))
 
-/// Plays the model: reads the screen it was given and answers the way a competent model would,
-/// unless a test overrides a turn.
-private final class ScriptedChooser: AppInteractionStepChoosing, @unchecked Sendable {
-    private let lock = NSLock()
-    private var turns: [(AppInteractionScreen) -> AppInteractionModelDecision?]
-    private(set) var screens: [AppInteractionScreen] = []
-    private(set) var histories: [[AppInteractionHistoryEntry]] = []
-
-    /// Each override is consulted once, in order; a nil answer or no override left falls back to
-    /// `competent`.
-    init(overrides: [(AppInteractionScreen) -> AppInteractionModelDecision?] = []) {
-        turns = overrides
+        let report = try #require(outcome.report)
+        #expect(report.summary == #"I made a new note in Notes: "Buy milk""#)
+        let state = await notes.state
+        #expect(state.menus == [["File", "New Note"]])
+        #expect(state.notes == ["Groceries for Sunday", "Mom's birthday ideas", "Buy milk"])
+        #expect(state.clicked.isEmpty)
+        #expect(state.keysPressed.isEmpty)
     }
 
-    var calls: Int { lock.withLock { screens.count } }
+    @Test
+    func aNoteMayRunOverSeveralLines() async throws {
+        let notes = FakeCuaNotes()
+        let outcome = await runtime(notes, chooser: WritesIntoTheEditor()).run(try noteGoal("Buy milk\nEggs\nBread"))
+        #expect(outcome.report != nil)
+        #expect(await notes.state.notes.last == "Buy milk\nEggs\nBread")
+    }
 
-    func chooseStep(
-        goal: AppInteractionGoal,
-        screen: AppInteractionScreen,
-        history: [AppInteractionHistoryEntry]
-    ) async throws -> AppInteractionModelDecision {
-        let override: ((AppInteractionScreen) -> AppInteractionModelDecision?)? = lock.withLock {
-            screens.append(screen)
-            histories.append(history)
-            return turns.isEmpty ? nil : turns.removeFirst()
+    /// Founders, 2026-09-24: privacy by role. Folder rows, a folder's name in its edit field, the
+    /// date over the note and every note's text are the person's, and none of it reaches the model.
+    @Test
+    func theModelSeesNoFolderNoteOrOtherTextOfThePersons() async throws {
+        let notes = FakeCuaNotes()
+        let chooser = WritesIntoTheEditor()
+        _ = await runtime(notes, chooser: chooser).run(try noteGoal("Buy milk"))
+
+        let screens = chooser.screens
+        #expect(!screens.isEmpty)
+        let sent = try screens.map { String(decoding: try JSONEncoder().encode($0), as: UTF8.self) }.joined()
+        for private_ in ["Recipes", "Family", "Groceries for Sunday", "Mom's birthday", "24 September", "Note Body", "Folders"] {
+            #expect(!sent.contains(private_), "\(private_) reached the model")
         }
-        if let override, let decision = override(screen) { return decision }
-        return Self.competent(goal: goal, screen: screen)
+        #expect(screens.allSatisfy { $0.windowTitle == nil })
+        let editor = try #require(screens.first?.candidates.first { $0.kind == "text area" })
+        #expect(editor.label == "")
+        #expect(editor.state == ["empty"])
     }
 
-    static func competent(goal: AppInteractionGoal, screen: AppInteractionScreen) -> AppInteractionModelDecision {
-        let target = goal.target ?? ""
-        let box = screen.candidates.first { $0.kind == "text area" }
-        if box?.state.contains("holds the message") == true { return .finished }
-        let row = screen.candidates.first { ($0.kind == "row" || $0.kind == "button") && $0.label == target }
-        if let box, screen.context.contains(target) || row?.state.contains("selected") == true {
-            return .step(.enterText, ref: box.ref)
+    /// The model is shown only what Sonny would do: no toolbar button, no unnamed button, no menu
+    /// command named for a commit — the live WhatsApp run's `pressing ""` (2026-09-24) cannot recur.
+    @Test
+    func onlyStepsTheRulesAllowAreOffered() async throws {
+        let notes = FakeCuaNotes()
+        let chooser = WritesIntoTheEditor()
+        _ = await runtime(notes, chooser: chooser).run(try noteGoal("Buy milk"))
+
+        let screen = try #require(chooser.screens.first)
+        #expect(screen.candidates.allSatisfy { !$0.can.isEmpty })
+        #expect(!screen.candidates.contains { $0.kind == "button" })
+        #expect(screen.candidates.filter { $0.kind == "menu command" }.map(\.label) == ["File › New Note", "Edit › Undo", "Format › Title"])
+        #expect(screen.keys == ["tab", "up", "down", "left", "right", "escape", "pageup", "pagedown", "home", "end"])
+        #expect(screen.shortcuts == ["cmd+f"])
+    }
+
+    @Test
+    func aStepTheScreenNeverOfferedIsNotTaken() async throws {
+        let notes = FakeCuaNotes()
+        // e12 is the toolbar's Delete button, which the screen never offers.
+        let chooser = Scripted([
+            { _ in .step(.click, ref: "e12") },
+            { screen in .step(.enterText, ref: screen.editorRef) },
+        ])
+        let outcome = await runtime(notes, chooser: chooser).run(try noteGoal("Buy milk"))
+
+        #expect(outcome.report != nil)
+        #expect(await notes.state.clicked.isEmpty)
+        #expect(chooser.histories.last?.contains { $0.result == "no element has that ref" } == true)
+    }
+
+    @Test
+    func aClickAtAPointIsJudgedAsAClickOnWhatIsThere() async throws {
+        let notes = FakeCuaNotes()
+        // The middle of the toolbar's Delete button.
+        let outcome = await runtime(notes, chooser: Scripted([{ _ in .step(AppInteractionStep(.clickAt, x: 356, y: 26)) }]))
+            .run(try noteGoal("Buy milk"))
+
+        #expect(outcome == .failedAfterChange(.stepNotAllowed("Notes", "Delete"), app: "Notes", left: .newItem("note")))
+        #expect(throws: AppInteractionRunError.self) { try outcome.runResult(plan: emptyPlan, previews: []) }
+        #expect(AppInteractionRunError.failedAfterChange(.stepNotAllowed("Notes", "Delete"), app: "Notes", left: .newItem("note")).errorDescription
+            == #"I stopped before pressing "Delete" in Notes, because it could send or change something. I had already started a new note in Notes."#)
+        #expect(await notes.state.clicked.isEmpty)
+    }
+
+    @Test
+    func aClickWhereNothingIsIsRefusedAndTheRunGoesOn() async throws {
+        let notes = FakeCuaNotes()
+        let chooser = Scripted([
+            { _ in .step(AppInteractionStep(.clickAt, x: 1910, y: 1070)) },
+            { screen in .step(.enterText, ref: screen.editorRef) },
+        ])
+        let outcome = await runtime(notes, chooser: chooser).run(try noteGoal("Buy milk"))
+        #expect(outcome.report != nil)
+        #expect(chooser.histories.last?.contains { $0.result == "refused: nothingThere" } == true)
+    }
+
+    /// Keys: Tab, the arrows, Escape, Page Up, Page Down, Home and End, never Return or Delete.
+    /// Shortcuts: only ⌘F (founders, 2026-09-24).
+    @Test
+    func keysAndShortcutsFollowTheRules() async throws {
+        let notes = FakeCuaNotes()
+        let chooser = Scripted([
+            { _ in .step(AppInteractionStep(.pressKey, input: "return")) },
+            { _ in .step(AppInteractionStep(.pressKey, input: "delete")) },
+            { _ in .step(AppInteractionStep(.pressKey, input: "tab")) },
+            { _ in .step(AppInteractionStep(.shortcut, input: "cmd+delete")) },
+            { _ in .step(AppInteractionStep(.shortcut, input: "⌘F")) },
+            { screen in .step(.enterText, ref: screen.editorRef) },
+        ])
+        let outcome = await runtime(notes, chooser: chooser).run(try noteGoal("Buy milk"))
+
+        #expect(outcome.report != nil)
+        let state = await notes.state
+        #expect(state.keysPressed == ["tab"])
+        #expect(state.shortcuts == [["cmd", "f"]])
+    }
+
+    @Test
+    func aMenuCommandRunsByItsPathAndOneThatCommitsIsNeverOffered() async throws {
+        let notes = FakeCuaNotes()
+        let chooser = Scripted([
+            { screen in .step(.menu, ref: screen.ref(labelled: "Edit › Undo")) },
+            { screen in .step(.enterText, ref: screen.editorRef) },
+        ])
+        _ = await runtime(notes, chooser: chooser).run(try noteGoal("Buy milk"))
+        #expect(await notes.state.menus == [["File", "New Note"], ["Edit", "Undo"]])
+        #expect(!chooser.screens.contains { $0.candidates.contains { $0.label.contains("Delete") || $0.label.contains("Close") } })
+    }
+
+    @Test
+    func aNewNoteNotesWillNotStartEndsTheRunPlainly() async throws {
+        var state = FakeCuaNotesState()
+        state.newNoteEnabled = false
+        let notes = FakeCuaNotes(state: state)
+        let outcome = await runtime(notes, chooser: WritesIntoTheEditor()).run(try noteGoal("Buy milk"))
+
+        #expect(outcome == .failed(.couldNotStartItem("Notes", "note")))
+        #expect(AppInteractionFailure.couldNotStartItem("Notes", "note").userMessage
+            == "I couldn't start a new note in Notes. Open one of your folders there and try again.")
+        #expect(await notes.state.notes == ["Groceries for Sunday", "Mom's birthday ideas"])
+    }
+
+    /// If New Note left the person's own note open, nothing is written over it.
+    @Test
+    func thePersonsTextIsNeverWrittenOver() async throws {
+        var state = FakeCuaNotesState()
+        state.newNoteKeepsOpenNote = true
+        let notes = FakeCuaNotes(state: state)
+        let chooser = WritesIntoTheEditor()
+        let outcome = await runtime(notes, chooser: chooser).run(try noteGoal("Buy milk"))
+
+        #expect(outcome == .failedAfterChange(.typedTextKept("Notes"), app: "Notes", left: .newItem("note")))
+        #expect(chooser.screens.first?.candidates.first { $0.kind == "text area" }?.state == ["holds other text"])
+        #expect(await notes.state.notes == ["Groceries for Sunday", "Mom's birthday ideas"])
+    }
+
+    @Test
+    func aFieldThatTakesNoWholeValueGetsTheTextInsertedInstead() async throws {
+        var state = FakeCuaNotesState()
+        state.editorTakesValue = false
+        let notes = FakeCuaNotes(state: state)
+        let outcome = await runtime(notes, chooser: WritesIntoTheEditor()).run(try noteGoal("Buy milk"))
+
+        #expect(outcome.report != nil)
+        #expect(await notes.state.notes.last == "Buy milk")
+        #expect(await notes.callNames.contains("type_text"))
+    }
+
+    /// cua refuses a token from an older reading, so a redraw between the model's reading and the
+    /// action never lands the text somewhere else.
+    @Test
+    func anElementFromAnOlderReadingIsNeverActedOn() async throws {
+        let notes = FakeCuaNotes()
+        let chooser = Scripted([
+            { screen in await notes.redraw(); return .step(.enterText, ref: screen.editorRef) },
+            { screen in .step(.enterText, ref: screen.editorRef) },
+        ])
+        let outcome = await runtime(notes, chooser: chooser).run(try noteGoal("Buy milk"))
+
+        #expect(outcome.report != nil)
+        #expect(chooser.histories.last?.contains { $0.result.contains("stale") } == true)
+    }
+
+    /// In full screen, Notes' toolbar is a window of its own; the runtime reads the main one.
+    @Test
+    func theAppsLargestWindowIsTheOneRead() async throws {
+        let notes = FakeCuaNotes()
+        _ = await runtime(notes, chooser: WritesIntoTheEditor()).run(try noteGoal("Buy milk"))
+        let reads = await notes.windowsRead
+        #expect(!reads.isEmpty)
+        #expect(reads.allSatisfy { $0 == FakeCuaNotes.mainWindow })
+    }
+
+    @Test
+    func aWindowCuaCannotReadYetIsReadAgainThenReportedHonestly() async throws {
+        var state = FakeCuaNotesState()
+        state.degradedReadings = 2
+        let settling = FakeCuaNotes(state: state)
+        #expect(await runtime(settling, chooser: WritesIntoTheEditor()).run(try noteGoal("Buy milk")).report != nil)
+
+        state.degradedReadings = .max
+        let unreadable = FakeCuaNotes(state: state)
+        let outcome = await runtime(unreadable, chooser: WritesIntoTheEditor()).run(try noteGoal("Buy milk"))
+        #expect(outcome == .failedAfterChange(.unreadable("Notes"), app: "Notes", left: .newItem("note")))
+    }
+
+    @Test
+    func eachGateStopsTheRunBeforeNotesIsTouched() async throws {
+        var denied = FakeCuaNotesState()
+        denied.accessibilityGranted = false
+        let noPermission = FakeCuaNotes(state: denied)
+        #expect(await runtime(noPermission, chooser: WritesIntoTheEditor()).run(try noteGoal("x")) == .failed(.accessibilityNotGranted))
+        #expect(await noPermission.callNames == ["check_permissions"])
+
+        let notAllowed = FakeCuaNotes()
+        #expect(await runtime(notAllowed, chooser: WritesIntoTheEditor(), appControl: .needsApproval).run(try noteGoal("x"))
+            == .failed(.appControlNotAllowed("Notes")))
+        #expect(await notAllowed.callNames.isEmpty)
+
+        let other = FakeCuaNotes()
+        let outcome = await runtime(other, chooser: WritesIntoTheEditor(), apps: OneApp(name: "Mail", bundle: "com.apple.mail"))
+            .run(try noteGoal("x", app: "Mail"))
+        #expect(outcome == .failed(.appNotSupported("Mail")))
+        #expect(AppInteractionFailure.appNotSupported("Mail").userMessage == "I can only make new notes in Notes for now, so I left Mail alone.")
+
+        let terminal = await runtime(FakeCuaNotes(), chooser: WritesIntoTheEditor(), apps: OneApp(name: "Terminal", bundle: "com.apple.Terminal"))
+            .run(try noteGoal("x", app: "Terminal"))
+        guard case .failed(.refusedApp("Terminal", _)) = terminal else {
+            Issue.record("a terminal was not refused: \(terminal)")
+            return
         }
-        if let row { return .step(.press, ref: row.ref) }
-        if let search = screen.candidates.first(where: { $0.kind == "search field" }),
-           !search.state.contains("holds the target") {
-            return .step(.enterTarget, ref: search.ref)
+    }
+
+    @Test
+    func stoppingAfterTheNoteStartedSaysSo() async throws {
+        let notes = FakeCuaNotes()
+        let hangs = HangsUntilCancelled()
+        let goal = try noteGoal("Buy milk")
+        let task = Task { await runtime(notes, chooser: hangs).run(goal) }
+        await hangs.waitUntilHanging()
+        task.cancel()
+        let outcome = await task.value
+
+        #expect(outcome == .cancelled(app: "Notes", left: .newItem("note")))
+        #expect(throws: AppInteractionStoppedAfterChange(app: "Notes", left: .newItem("note"))) {
+            try outcome.runResult(plan: emptyPlan, previews: [])
         }
-        return .giveUp("nothing matches")
+        #expect(AppInteractionStoppedAfterChange(app: "Notes", left: .newItem("note")).summary
+            == "Stopped. I had already started a new note in Notes.")
+        #expect(AppInteractionStoppedAfterChange(app: "Notes", left: .text).summary
+            == "Stopped. The text I added is still in Notes.")
     }
 }
 
-private struct FakeApps: AppInteractionAppOpening {
-    var installed: [String: InstalledApp] = [
-        "chat": InstalledApp(displayName: "Chat", bundleIdentifier: "com.example.chat", applicationURL: URL(fileURLWithPath: "/Applications/Chat.app")),
-        "terminal": InstalledApp(displayName: "Terminal", bundleIdentifier: "com.apple.Terminal", applicationURL: URL(fileURLWithPath: "/System/Applications/Utilities/Terminal.app")),
-    ]
-    var openCount: OpenCounter = OpenCounter()
+// MARK: - cua's own ceiling
 
-    func resolve(_ name: String) -> InstalledApp? { installed[name.lowercased()] }
+struct CuaCeilingTests {
+    /// The founders' list (2026-09-24): on-screen tools only, less dragging, and Notes alone.
+    @Test
+    func theManifestNamesOnlyTheOnScreenToolsAndNotes() {
+        let manifest = CuaCapabilityManifest.milestoneA
+        #expect(Set(manifest.tools) == [
+            "check_permissions", "list_windows", "get_window_state", "click", "double_click", "right_click",
+            "set_value", "type_text", "press_key", "hotkey", "scroll", "invoke_menu",
+        ])
+        for never in ["kill_app", "clipboard_read", "clipboard_write", "set_config", "install_extension",
+                      "check_for_update", "start_recording", "browser_download", "get_desktop_state", "drag", "launch_app"] {
+            #expect(!manifest.tools.contains(never), "\(never) is inside Sonny's ceiling")
+        }
+        #expect(manifest.bundleIdentifiers == ["com.apple.Notes"])
+        #expect(manifest.yaml.contains("    - bundle_id: com.apple.Notes\n      launch: false\n      windows: all"))
+        #expect(manifest.yaml.contains("  desktop:\n    display: false"))
+    }
 
-    func open(bundleIdentifier: String) async throws -> pid_t {
-        openCount.increment()
-        return 4242
+    /// Sonny's rules allow the step; cua's ceiling refuses the tool; the run stops rather than
+    /// trying another way.
+    @Test
+    func aCallOutsideTheCeilingEndsTheRun() async throws {
+        let narrow = CuaCapabilityManifest(
+            tools: CuaCapabilityManifest.milestoneA.tools.filter { $0 != "set_value" && $0 != "type_text" },
+            bundleIdentifiers: ["com.apple.Notes"]
+        )
+        let notes = FakeCuaNotes(manifest: narrow)
+        let outcome = await runtime(notes, chooser: WritesIntoTheEditor()).run(try noteGoal("Buy milk"))
+        #expect(outcome == .failedAfterChange(.outsideCeiling("Notes"), app: "Notes", left: .newItem("note")))
+    }
+
+    /// The real library, in this process, under Sonny's own options: the ceiling it enforces is the
+    /// one above. Touches no app — every call here is one cua refuses before acting.
+    @Test
+    func theRealLibraryRefusesWhatTheCeilingLeavesOut() async throws {
+        let client = CuaDriverClient(invoker: try CuaDriverLibrary())
+        do {
+            _ = try await client.windows(pid: 1)
+            Issue.record("cua listed the windows of an app outside the manifest")
+        } catch let error as CuaToolError {
+            #expect(error.isOutsideCeiling, "\(error.message)")
+        }
+        let library = try CuaDriverLibrary()
+        for tool in ["clipboard_read", "kill_app", "get_desktop_state"] {
+            let answer = try await library.invoke(tool, arguments: Data("{}".utf8))
+            let object = try #require(try JSONSerialization.jsonObject(with: answer) as? [String: Any])
+            #expect(object["isError"] as? Bool == true, "\(tool) was not refused")
+            let text = (object["content"] as? [[String: Any]])?.first?["text"] as? String ?? ""
+            #expect(text.contains("outside the capability manifest"), "\(tool): \(text)")
+        }
     }
 }
 
-private final class OpenCounter: @unchecked Sendable {
-    private let lock = NSLock()
-    private var value = 0
-    func increment() { lock.withLock { value += 1 } }
-    var count: Int { lock.withLock { value } }
+// MARK: - The rules on a hand-built reading
+
+/// The target path is dormant in Milestone A (a new note has no target) and kept for the chat work
+/// that follows; these hold its rules on a reading shaped like a chat list.
+struct AppInteractionRuleTests {
+    private static func chatList(selected: String? = nil) -> CuaWindowState {
+        var elements = [
+            CuaElement(index: 0, role: "AXWindow", label: "Chat"),
+            CuaElement(index: 1, role: "AXTable", actions: ["AXScrollDownByPage"], parentIndex: 0),
+        ]
+        for (offset, name) in ["Mom", "Mom & Dad", "Missed call from Dad"].enumerated() {
+            elements.append(CuaElement(index: 2 + offset, role: "AXRow", label: name, selected: name == selected,
+                                       actions: ["AXPress"], parentIndex: 1, token: "s1:\(2 + offset)"))
+        }
+        elements.append(CuaElement(index: 5, role: "AXButton", label: "Send", actions: ["AXPress"], parentIndex: 0, token: "s1:5"))
+        elements.append(CuaElement(index: 6, role: "AXTextArea", value: "", actions: [], parentIndex: 0, token: "s1:6"))
+        return CuaWindowState(snapshotID: "s1", windowID: 1, windowTitle: "Chats", elements: elements)
+    }
+
+    private static func goal() throws -> AppInteractionGoal {
+        try AppInteractionGoal.validated(app: "Chat", objective: "Draft to Mom", target: "Mom", text: "Running late")
+    }
+
+    @Test
+    func aRowGoesOnlyWhenItIsExactlyTheTargetAndByThatName() throws {
+        let screen = AppInteractionScreenBuilder(redact: { $0 }).build(from: Self.chatList(), goal: try Self.goal()).screen
+        #expect(screen.candidates.filter { $0.kind == "row" }.map(\.label) == ["Mom"])
+        #expect(!screen.candidates.contains { $0.label == "Send" })
+    }
+
+    @Test
+    func aCallEntryAndACommittingButtonAreRefused() throws {
+        let state = Self.chatList()
+        let goal = try Self.goal()
+        #expect(AppInteractionPolicy.decide(.init(.click, ref: "e4"), in: state, goal: goal) == .refuse(.mightCommit))
+        #expect(AppInteractionPolicy.decide(.init(.click, ref: "e5"), in: state, goal: goal) == .refuse(.mightCommit))
+        #expect(AppInteractionPolicy.decide(.init(.click, ref: "e2"), in: state, goal: goal)
+            == .allow(.click(CuaElementRef(snapshotID: "s1", index: 2, token: "s1:2"))))
+    }
+
+    @Test
+    func someoneElsesChatOpenBlocksTheTextAndIsNeverASuccess() throws {
+        let state = Self.chatList(selected: "Mom & Dad")
+        let goal = try Self.goal()
+        #expect(AppInteractionPolicy.decide(.init(.enterText, ref: "e6"), in: state, goal: goal) == .refuse(.otherTargetOpen))
+        #expect(AppInteractionVerifier.check(state, goal: goal) == .otherTargetOpen)
+    }
 }
 
-private func goal(
-    app: String = "Chat",
-    target: String? = "Mom",
-    text: String? = "Running late, home by 8"
-) throws -> AppInteractionGoal {
-    try AppInteractionGoal.validated(
-        app: app,
-        objective: "Open the chat and leave the message unsent",
-        target: target,
-        text: text
-    )
-}
+// MARK: - Doubles
 
-/// The fake chat app stands in for WhatsApp, so the tests allow its bundle identifier; one test
-/// runs with the shipping allowlist to show everything else is refused.
-private let fakeAppAllowed: Set<String> = ["com.example.chat"]
+private let emptyPlan = AgentPlan(summary: "", requiresConfirmation: false, steps: [])
+
+private func noteGoal(_ text: String, app: String = "Notes") throws -> AppInteractionGoal {
+    try AppInteractionGoal.validated(app: app, objective: "A new note", target: nil, text: text)
+}
 
 private func runtime(
-    _ app: FakeChatAppAccessibility,
+    _ notes: FakeCuaNotes,
     chooser: any AppInteractionStepChoosing,
-    apps: FakeApps = FakeApps(),
-    standing: AppControlStanding = .allowed,
-    supportedApps: Set<String> = fakeAppAllowed,
-    budget: AppInteractionRuntime.Budget = AppInteractionRuntime.Budget(),
-    sleep: @escaping @Sendable (Duration) async throws -> Void = { _ in }
+    apps: any AppInteractionAppOpening = OneApp(name: "Notes", bundle: "com.apple.Notes"),
+    appControl: AppControlStanding = .allowed
 ) -> AppInteractionRuntime {
-    AppInteractionRuntime(
-        accessibility: app,
+    var budget = AppInteractionRuntime.Budget()
+    budget.windowWait = .milliseconds(200)
+    return AppInteractionRuntime(
+        driver: CuaDriverClient(invoker: notes),
         chooser: chooser,
         apps: apps,
-        appControl: { _ in standing },
-        redact: { $0.replacingOccurrences(of: "sk-SECRET", with: "[redacted]") },
-        supportedApps: supportedApps,
+        appControl: { _ in appControl },
+        redact: { $0 },
         budget: budget,
-        sleep: sleep
+        sleep: { _ in await Task.yield() }
     )
 }
 
-private func snapshot(_ state: FakeChatAppState) async throws -> AccessibilitySnapshot {
-    try await FakeChatAppAccessibility(state: state).observe(processIdentifier: 1, limits: AccessibilityLimits())
-}
+struct OneApp: AppInteractionAppOpening {
+    let name: String
+    let bundle: String
 
-private func element(_ snapshot: AccessibilitySnapshot, _ match: (AccessibilityElement) -> Bool) throws -> AccessibilityElement {
-    let found = snapshot.elements.first(where: match)
-    return try #require(found)
-}
-
-/// One element of a hand-written snapshot, with only the fields these tests vary.
-private func node(
-    _ index: Int,
-    _ role: String,
-    parent: Int?,
-    depth: Int,
-    title: String? = nil,
-    label: String? = nil,
-    placeholder: String? = nil,
-    value: String? = nil,
-    selected: Bool = false,
-    actions: [String] = [],
-    settable: Bool = false
-) -> AccessibilityElement {
-    AccessibilityElement(
-        id: AccessibilityElementID(generation: 1, index: index),
-        parentIndex: parent,
-        depth: depth,
-        role: role,
-        title: title,
-        label: label,
-        placeholder: placeholder,
-        value: value,
-        isSelected: selected,
-        actions: actions,
-        canSetValue: settable
-    )
-}
-
-private func snapshot(of elements: [AccessibilityElement]) -> AccessibilitySnapshot {
-    AccessibilitySnapshot(
-        generation: 1,
-        app: AccessibilityObservedApp(bundleIdentifier: nil, processIdentifier: 1, name: nil),
-        windowTitle: nil,
-        elements: elements,
-        truncation: nil,
-        takenAt: Date(timeIntervalSince1970: 0)
-    )
-}
-
-/// A snapshot written by hand, in depth-first order, each row naming its parent's index.
-private func handMade(_ rows: [(role: String, parent: Int?, label: String?, value: String?, actions: [String])]) -> AccessibilitySnapshot {
-    var depths: [Int] = []
-    var elements: [AccessibilityElement] = []
-    for (index, row) in rows.enumerated() {
-        let depth = row.parent.map { depths[$0] + 1 } ?? 0
-        depths.append(depth)
-        elements.append(AccessibilityElement(
-            id: AccessibilityElementID(generation: 1, index: index),
-            parentIndex: row.parent,
-            depth: depth,
-            role: row.role,
-            label: row.label,
-            value: row.value,
-            actions: row.actions
-        ))
-    }
-    return AccessibilitySnapshot(
-        generation: 1,
-        app: AccessibilityObservedApp(bundleIdentifier: nil, processIdentifier: 1, name: nil),
-        windowTitle: nil,
-        elements: elements,
-        truncation: nil,
-        takenAt: Date(timeIntervalSince1970: 0)
-    )
-}
-
-// MARK: - Goal
-
-@Suite
-struct AppInteractionGoalTests {
-    @Test
-    func aLineBreakInTheMessageIsRefusedBeforeAnythingRuns() {
-        #expect(throws: AppInteractionGoalError.textHasLineBreak) {
-            try AppInteractionGoal.validated(app: "Chat", objective: "draft", target: "Mom", text: "one\ntwo")
-        }
-        #expect(throws: AppInteractionGoalError.textHasLineBreak) {
-            try AppInteractionGoal.validated(app: "Chat", objective: "draft", target: "Mom", text: "one\u{2028}two")
-        }
+    func resolve(_ name: String) -> InstalledApp? {
+        InstalledApp(displayName: self.name, bundleIdentifier: bundle, applicationURL: URL(fileURLWithPath: "/Applications/\(self.name).app"))
     }
 
-    @Test
-    func surroundingWhitespaceIsTrimmedSoVerificationComparesLikeWithLike() throws {
-        let goal = try AppInteractionGoal.validated(app: " Chat ", objective: " draft ", target: " Mom ", text: "  hi  ")
-        #expect(goal.app == "Chat")
-        #expect(goal.target == "Mom")
-        #expect(goal.text == "hi")
-    }
+    func open(bundleIdentifier: String) async throws -> pid_t { 4242 }
+}
 
-    @Test
-    func aGoalWithNothingToFindAndNothingToTypeIsRefused() {
-        #expect(throws: AppInteractionGoalError.nothingToDo) {
-            try AppInteractionGoal.validated(app: "Chat", objective: "draft", target: "  ", text: nil)
-        }
-        #expect(throws: AppInteractionGoalError.missingApp) {
-            try AppInteractionGoal.validated(app: " ", objective: "draft", target: "Mom", text: "hi")
-        }
-    }
-
-    @Test
-    func tooLongATextIsRefusedAtTheLimitAndNotBelowIt() throws {
-        let atLimit = String(repeating: "a", count: AppInteractionGoal.maxTextLength)
-        _ = try AppInteractionGoal.validated(app: "Chat", objective: "draft", target: "Mom", text: atLimit)
-        #expect(throws: AppInteractionGoalError.textTooLong) {
-            try AppInteractionGoal.validated(app: "Chat", objective: "draft", target: "Mom", text: atLimit + "a")
-        }
+extension AppInteractionOutcome {
+    var report: AppInteractionReport? {
+        if case .done(let report) = self { return report }
+        return nil
     }
 }
 
-// MARK: - Decision decoding
+extension AppInteractionScreen {
+    var editorRef: String { candidates.first { $0.kind == "text area" }?.ref ?? "none" }
 
-@Suite
-struct AppInteractionDecisionTests {
-    @Test
-    func eachDecisionDecodes() throws {
-        #expect(try AppInteractionModelDecision.decode(from: #"{"decision":"act","step":"enter_text","ref":"e7","message":null}"#) == .step(.enterText, ref: "e7"))
-        #expect(try AppInteractionModelDecision.decode(from: #"{"decision":"finished","step":null,"ref":null,"message":null}"#) == .finished)
-        #expect(try AppInteractionModelDecision.decode(from: #"{"decision":"ask_user","step":null,"ref":null,"message":"Which Alex?"}"#) == .askUser("Which Alex?"))
-        #expect(try AppInteractionModelDecision.decode(from: #"{"decision":"give_up","step":null,"ref":null,"message":"No chats"}"#) == .giveUp("No chats"))
-    }
-
-    @Test(arguments: [
-        #"{"decision":"act","step":"type_keys","ref":"e7","message":null}"#,
-        #"{"decision":"act","step":"press","ref":" ","message":null}"#,
-        #"{"decision":"ask_user","step":null,"ref":null,"message":""}"#,
-        #"{"decision":"send","step":null,"ref":null,"message":null}"#,
-        "not json",
-    ])
-    func anythingOutsideTheSchemaIsMalformed(_ json: String) {
-        #expect(throws: AppInteractionDecisionError.malformed) {
-            try AppInteractionModelDecision.decode(from: json)
-        }
-    }
+    func ref(labelled label: String) -> String { candidates.first { $0.label == label }?.ref ?? "none" }
 }
 
-// MARK: - What the model is shown
-
-@Suite
-struct AppInteractionScreenTests {
-    /// PR #289 review, F4: no preview, no draft, no conversation, no other chat's name.
-    @Test
-    func theModelSeesOnlyTheTargetsRowsByNameAndNothingOfAnyConversation() async throws {
-        var state = FakeChatAppState(chats: ["Mom", "Dad sk-SECRET", "Maddie"], openChat: "Dad sk-SECRET")
-        state.drafts["Dad sk-SECRET"] = "my unsent words to Dad"
-        state.conversationControls = true
-        let shot = try await snapshot(state)
-        let built = AppInteractionScreenBuilder(redact: { $0.replacingOccurrences(of: "sk-SECRET", with: "[redacted]") })
-            .build(from: shot, goal: try goal())
-
-        let everything = try String(data: JSONEncoder().encode(built.screen), encoding: .utf8) ?? ""
-        for kept in ["an earlier private message", "last message in", "my unsent words", "private-invite", "Join", "Maddie", "sk-SECRET"] {
-            #expect(!everything.contains(kept), "\(kept) reached the model")
-        }
-        #expect(built.screen.candidates.filter { $0.kind == "row" }.map(\.label) == ["Mom"])
-        // The open chat's name goes as context, through redaction.
-        #expect(built.screen.context == ["Dad [redacted]"])
-        let box = try #require(built.screen.candidates.first { $0.kind == "text area" })
-        #expect(box.state.contains("holds other text"))
-        #expect(box.can == ["enter_text"])
-        let search = try #require(built.screen.candidates.first { $0.kind == "search field" })
-        #expect(search.can == ["enter_target"])
-        for candidate in built.screen.candidates {
-            #expect(built.references[candidate.ref] != nil)
-        }
-    }
-
-    /// Delta review, F4: a message that merely contains the target's letters, or a combined label's
-    /// preview, never reaches the model.
-    @Test
-    func onlyANameThatIsTheTargetGoesAndOnlyThatName() async throws {
-        var state = FakeChatAppState(chats: ["Mom", "Dad"], openChat: "Dad")
-        state.combinedRowLabels = true
-        state.conversationCells = ["Give me a moment, my PIN is 4471", "I really need the account number", "Mom"]
-        let shot = try await snapshot(state)
-        let builder = AppInteractionScreenBuilder(redact: { $0 })
-
-        let forMom = builder.build(from: shot, goal: try goal())
-        let momJSON = try String(data: JSONEncoder().encode(forMom.screen), encoding: .utf8) ?? ""
-        for kept in ["moment", "4471", "account", "last message in", "10:32"] {
-            #expect(!momJSON.contains(kept), "\(kept) reached the model")
-        }
-        // Mom's row by its name alone, and the one message that is exactly the word "Mom".
-        #expect(forMom.screen.candidates.filter { $0.kind == "row" }.map(\.label) == ["Mom"])
-
-        let forAl = builder.build(from: shot, goal: try goal(target: "Al"))
-        let alJSON = try String(data: JSONEncoder().encode(forAl.screen), encoding: .utf8) ?? ""
-        #expect(!alJSON.contains("account"))
-    }
-
-    /// Delta review, N1: a message box inside a scroll area, as an AppKit text view always is, is
-    /// still shown, as a state and never its text.
-    @Test
-    func aMessageBoxInsideAScrollAreaIsStillShown() async throws {
-        var state = FakeChatAppState(chats: ["Mom"], openChat: "Mom")
-        state.messageBoxInScrollArea = true
-        state.drafts["Mom"] = "private words"
-        let built = AppInteractionScreenBuilder(redact: { $0 }).build(from: try await snapshot(state), goal: try goal())
-        let box = try #require(built.screen.candidates.first { $0.kind == "text area" })
-        #expect(box.state.contains("holds other text"))
-        #expect(!(try String(data: JSONEncoder().encode(built.screen), encoding: .utf8) ?? "").contains("private words"))
-    }
-
-    /// Final check, F4: a read-only message bubble exposed as a text area, its message in its
-    /// description, is not a field and never goes; a writable box goes by its placeholder alone.
-    @Test
-    func aReadOnlyBubbleIsNotAFieldAndAFieldGoesByItsPlaceholderAlone() throws {
-        let shot = snapshot(of: [
-            node(0, "AXWindow", parent: nil, depth: 0),
-            node(1, "AXScrollArea", parent: 0, depth: 1),
-            node(2, "AXTextArea", parent: 1, depth: 2, label: "Mom: the door code is 4471", value: "the door code is 4471"),
-            node(3, "AXScrollArea", parent: 0, depth: 1),
-            node(4, "AXTextArea", parent: 3, depth: 2, title: "Message to Mom: call me", placeholder: "Type a message", settable: true),
-        ])
-        let built = AppInteractionScreenBuilder(redact: { $0 }).build(from: shot, goal: try goal())
-        let everything = try String(data: JSONEncoder().encode(built.screen), encoding: .utf8) ?? ""
-        #expect(!everything.contains("4471"))
-        #expect(!everything.contains("call me"))
-        #expect(built.screen.candidates.map(\.label) == ["Type a message"])
-    }
-
-    /// Final check's note: a time before the name is a badge, not the row's name, and a contact
-    /// saved with a comma in its name is still found by all of it.
-    @Test
-    func aTimeIsNotANameAndACommaNameIsFoundWhole() throws {
-        let shot = snapshot(of: [
-            node(0, "AXWindow", parent: nil, depth: 0),
-            node(1, "AXTable", parent: 0, depth: 1),
-            node(2, "AXRow", parent: 1, depth: 2, actions: ["AXPress"]),
-            node(3, "AXStaticText", parent: 2, depth: 3, value: "10:32"),
-            node(4, "AXStaticText", parent: 2, depth: 3, value: "Mom"),
-            node(5, "AXRow", parent: 1, depth: 2, label: "Smith, John", actions: ["AXPress"]),
-            node(6, "AXRow", parent: 1, depth: 2, actions: ["AXPress"]),
-            node(7, "AXStaticText", parent: 6, depth: 3, value: "3"),
-            node(8, "AXStaticText", parent: 6, depth: 3, value: "07700 900123"),
-        ])
-        #expect(shot.rowName(of: shot.elements[2]) == "Mom")
-        // An unsaved contact goes by its number, past an unread count.
-        #expect(shot.rowName(of: shot.elements[6]) == "07700 900123")
-        let builder = AppInteractionScreenBuilder(redact: { $0 })
-        #expect(builder.build(from: shot, goal: try goal()).screen.candidates.map(\.label) == ["Mom"])
-        #expect(builder.build(from: shot, goal: try goal(target: "Smith, John")).screen.candidates.map(\.label) == ["Smith, John"])
-    }
-
-    @Test
-    func labelsAreCutToTheBudget() async throws {
-        let long = "Mom " + String(repeating: "x", count: AppInteractionGoal.maxTargetLength - 4)
-        let shot = try await snapshot(FakeChatAppState(chats: [long]))
-        let built = AppInteractionScreenBuilder(redact: { $0 }).build(from: shot, goal: try goal(target: long))
-        let row = try #require(built.screen.candidates.first { $0.kind == "row" })
-        #expect(row.label.count == 81)
-        #expect(row.label.hasSuffix("…"))
-    }
-}
-
-// MARK: - Policy
-
-@Suite
-struct AppInteractionPolicyTests {
-    @Test
-    func sendAndCallButtonsAreRefusedAsPossibleCommits() async throws {
-        let shot = try await snapshot(FakeChatAppState(chats: ["Mom"], openChat: "Mom"))
-        let send = try element(shot) { $0.label == "Send" }
-        let call = try element(shot) { $0.label == "Voice call" }
-        #expect(AppInteractionPolicy.decide(.press, on: send.id, in: shot, goal: try goal()) == .refuse(.mightCommit))
-        #expect(AppInteractionPolicy.decide(.press, on: call.id, in: shot, goal: try goal()) == .refuse(.mightCommit))
-    }
-
-    @Test
-    func aRowNavigatesAndSoDoesARowDrawnAsAButton() async throws {
-        let shot = try await snapshot(FakeChatAppState(chats: ["Mom", "Callum"]))
-        let row = try element(shot) { $0.role == "AXRow" }
-        #expect(AppInteractionPolicy.decide(.press, on: row.id, in: shot, goal: try goal()) == .allow(.press))
-        // A person's name that happens to contain a verb opens: rows are matched word by word.
-        let callum = try element(shot) { $0.role == "AXRow" && shot.displayName(of: $0) == "Callum" }
-        #expect(AppInteractionPolicy.decide(.press, on: callum.id, in: shot, goal: try goal()) == .allow(.press))
-
-        var buttons = FakeChatAppState(chats: ["Mom"])
-        buttons.rowRole = "AXButton"
-        let buttonShot = try await snapshot(buttons)
-        let buttonRow = try element(buttonShot) { $0.role == "AXButton" }
-        #expect(AppInteractionPolicy.decide(.press, on: buttonRow.id, in: buttonShot, goal: try goal()) == .allow(.press))
-    }
-
-    /// Delta review, N2: a row drawn as a button inside a list is a person's name, not a command,
-    /// and a combined label's preview is someone's message, not the row.
-    @Test
-    func rowsDrawnAsButtonsOpenWhateverThePersonIsCalled() async throws {
-        var state = FakeChatAppState(chats: ["Maddie", "Callum", "Book club meetup"])
-        state.rowRole = "AXButton"
-        let shot = try await snapshot(state)
-        for name in ["Maddie", "Callum", "Book club meetup"] {
-            let row = try element(shot) { $0.role == "AXButton" && shot.rowName(of: $0) == name }
-            #expect(AppInteractionPolicy.decide(.press, on: row.id, in: shot, goal: try goal(target: name)) == .allow(.press), "\(name)")
-        }
-
-        var combined = FakeChatAppState(chats: ["Mom"])
-        combined.combinedRowLabels = true
-        let labelled = try await snapshot(combined)
-        let row = try element(labelled) { $0.role == "AXRow" }
-        #expect(AppInteractionPolicy.decide(.press, on: row.id, in: labelled, goal: try goal()) == .allow(.press))
-    }
-
-    /// Final check, F1: a call-log entry shown as "Mom" is still judged by everything it carries.
-    @Test
-    func aCallLogEntryShownByTheTargetsNameIsNotPressable() throws {
-        let shot = snapshot(of: [
-            node(0, "AXWindow", parent: nil, depth: 0),
-            node(1, "AXTable", parent: 0, depth: 1),
-            node(2, "AXRow", parent: 1, depth: 2, label: "Mom, Outgoing voice call, yesterday", actions: ["AXPress"]),
-            node(3, "AXRow", parent: 1, depth: 2, title: "Mom", label: "Missed video call", actions: ["AXPress"]),
-            node(4, "AXButton", parent: 1, depth: 2, title: "Mom", label: "Voice call", actions: ["AXPress"]),
-        ])
-        let g = try goal()
-        for index in [2, 3, 4] {
-            #expect(shot.rowName(of: shot.elements[index]) == "Mom")
-            #expect(AppInteractionPolicy.decide(.press, on: shot.elements[index].id, in: shot, goal: g) == .refuse(.mightCommit), "element \(index)")
-        }
-    }
-
-    /// Final check's note: a call-log entry whose texts are all children is still a call, while a
-    /// chat whose preview merely uses a committing word is still a chat.
-    @Test
-    func aCallIsKnownByAnyTextItCarriesAndAChatPreviewDoesNotStopTheChat() throws {
-        let shot = snapshot(of: [
-            node(0, "AXWindow", parent: nil, depth: 0),
-            node(1, "AXTable", parent: 0, depth: 1),
-            node(2, "AXRow", parent: 1, depth: 2, actions: ["AXPress"]),            // call log, all children
-            node(3, "AXStaticText", parent: 2, depth: 3, value: "Mom"),
-            node(4, "AXStaticText", parent: 2, depth: 3, value: "Outgoing voice call"),
-            node(5, "AXRow", parent: 1, depth: 2, actions: ["AXPress"]),            // chat, preview in a child
-            node(6, "AXStaticText", parent: 5, depth: 3, value: "Mom"),
-            node(7, "AXStaticText", parent: 5, depth: 3, value: "Did you send it? I'd like to add you"),
-            node(8, "AXRow", parent: 1, depth: 2, label: "Mom, did you send it?, 10:32", actions: ["AXPress"]),
-            node(9, "AXRow", parent: 1, depth: 2, label: "Mom, call me later, 10:32", actions: ["AXPress"]),
-            node(10, "AXRow", parent: 1, depth: 2, label: "Family, Join", actions: ["AXPress"]),        // live group call
-            node(11, "AXRow", parent: 1, depth: 2, actions: ["AXPress"]),                               // voice note preview
-            node(12, "AXStaticText", parent: 11, depth: 3, value: "Mom"),
-            node(13, "AXStaticText", parent: 11, depth: 3, value: "Voice message (0:12)"),
-            node(14, "AXRow", parent: 1, depth: 2, label: "Mom, Video", actions: ["AXPress"]),          // video preview
-        ])
-        let g = try goal()
-        let decide = { (index: Int) in AppInteractionPolicy.decide(.press, on: shot.elements[index].id, in: shot, goal: g) }
-        #expect(decide(2) == .refuse(.mightCommit))
-        #expect(decide(5) == .allow(.press))
-        #expect(decide(8) == .allow(.press))
-        // The safe direction: a preview that talks about calling refuses the chat.
-        #expect(decide(9) == .refuse(.mightCommit))
-        #expect(decide(10) == .refuse(.mightCommit))
-        // A voice note or a video as the last message is not a call.
-        #expect(decide(11) == .allow(.press))
-        #expect(decide(14) == .allow(.press))
-    }
-
-    /// The reviewer's probes, each of which was allowed before (PR #289 review, F1).
-    @Test
-    func whatAButtonShowsAndWhereItSitsDecideItNotItsOwnTitleAlone() throws {
-        let shot = handMade([
-            ("AXWindow", nil, nil, nil, []),                          // 0
-            ("AXTable", 0, nil, nil, []),                             // 1
-            ("AXButton", 1, nil, nil, ["AXPress"]),                   // 2: named only by its child
-            ("AXStaticText", 2, nil, "Send", []),                     // 3
-            ("AXButton", 1, "Resend", nil, ["AXPress"]),              // 4: an inflection
-            ("AXLink", 1, nil, nil, ["AXPress"]),                     // 5: a link
-            ("AXStaticText", 5, nil, "https://evil.example/x", []),   // 6
-            ("AXRow", 1, "Join call", nil, ["AXPress"]),              // 7: a row whose words commit
-            ("AXStaticText", 0, nil, "Send", ["AXPress"]),            // 8: pressable text
-            ("AXScrollArea", 0, nil, nil, []),                        // 9
-            ("AXButton", 9, "Join", nil, ["AXPress"]),                // 10: in a scroll area, not a list
-            ("AXButton", 9, "Mom", nil, ["AXPress"]),                 // 11: harmless name, not in a list
-        ])
-        let id = { AccessibilityElementID(generation: 1, index: $0) }
-        let g = try goal()
-        for index in [2, 4, 5, 7, 8, 10, 11] {
-            #expect(
-                AppInteractionPolicy.decide(.press, on: id(index), in: shot, goal: g) == .refuse(.mightCommit),
-                "element \(index) could be pressed"
-            )
-        }
-    }
-
-    @Test
-    func theTargetNameIsTypedOnlyIntoSearchAndTheMessageNeverIntoSearch() async throws {
-        let shot = try await snapshot(FakeChatAppState(chats: ["Mom"], openChat: "Mom"))
-        let search = try element(shot) { $0.subrole == AccessibilityVocabulary.searchFieldSubrole }
-        let box = try element(shot) { $0.role == "AXTextArea" }
-        let row = try element(shot) { $0.role == "AXRow" }
-        let g = try goal()
-        #expect(AppInteractionPolicy.decide(.enterTarget, on: search.id, in: shot, goal: g) == .allow(.setValue("Mom")))
-        #expect(AppInteractionPolicy.decide(.enterText, on: box.id, in: shot, goal: g) == .allow(.setValue("Running late, home by 8")))
-        #expect(AppInteractionPolicy.decide(.enterText, on: search.id, in: shot, goal: g) == .refuse(.searchFieldForMessage))
-        #expect(AppInteractionPolicy.decide(.enterText, on: row.id, in: shot, goal: g) == .refuse(.notATextField))
-        // PR #289 review, F2: the name typed into the message box would replace a draft with a name.
-        #expect(AppInteractionPolicy.decide(.enterTarget, on: box.id, in: shot, goal: g) == .refuse(.notASearchField))
-        let noText = try goal(text: nil)
-        #expect(AppInteractionPolicy.decide(.enterText, on: box.id, in: shot, goal: noText) == .refuse(.nothingToType))
-    }
-
-    @Test
-    func theMessageNeverReplacesWhatThePersonTypedButMayReplaceWhatSonnyTyped() async throws {
-        var state = FakeChatAppState(chats: ["Mom"], openChat: "Mom")
-        state.drafts["Mom"] = "my own half-written words"
-        let shot = try await snapshot(state)
-        let box = try element(shot) { $0.role == "AXTextArea" }
-        #expect(AppInteractionPolicy.decide(.enterText, on: box.id, in: shot, goal: try goal()) == .refuse(.wouldReplaceTypedText))
-        #expect(
-            AppInteractionPolicy.decide(.enterText, on: box.id, in: shot, goal: try goal(), sonnyWrote: ["My own  half-written words"])
-                == .allow(.setValue("Running late, home by 8"))
-        )
-
-        state.drafts["Mom"] = "Running late, home by 8"
-        let same = try await snapshot(state)
-        let sameBox = try element(same) { $0.role == "AXTextArea" }
-        #expect(AppInteractionPolicy.decide(.enterText, on: sameBox.id, in: same, goal: try goal()) == .allow(.setValue("Running late, home by 8")))
-    }
-
-    @Test
-    func theMessageIsNotTypedWhileSomeoneElsesChatIsOpen() async throws {
-        let shot = try await snapshot(FakeChatAppState(chats: ["Mom", "Dad"], openChat: "Dad"))
-        let box = try element(shot) { $0.role == "AXTextArea" }
-        #expect(AppInteractionPolicy.decide(.enterText, on: box.id, in: shot, goal: try goal()) == .refuse(.otherTargetOpen))
-    }
-
-    @Test
-    func aPlaceholderShownAsTheValueCountsAsEmptyAndAPasswordFieldIsNoField() throws {
-        let id = { AccessibilityElementID(generation: 1, index: $0) }
-        let shot = AccessibilitySnapshot(
-            generation: 1,
-            app: AccessibilityObservedApp(bundleIdentifier: nil, processIdentifier: 1, name: nil),
-            windowTitle: nil,
-            elements: [
-                AccessibilityElement(id: id(0), parentIndex: nil, depth: 0, role: "AXWindow"),
-                AccessibilityElement(
-                    id: id(1), parentIndex: 0, depth: 1, role: "AXTextArea",
-                    placeholder: "Type a message", value: "Type a message", canSetValue: true
-                ),
-                AccessibilityElement(
-                    id: id(2), parentIndex: 0, depth: 1, role: "AXTextField", subrole: "AXSecureTextField",
-                    placeholder: "Search", canSetValue: true, canFocus: true
-                ),
-            ],
-            truncation: nil,
-            takenAt: Date(timeIntervalSince1970: 0)
-        )
-        let g = try goal()
-        #expect(AppInteractionPolicy.decide(.enterText, on: id(1), in: shot, goal: g) == .allow(.setValue("Running late, home by 8")))
-        #expect(!shot.elements[2].isTextInput)
-        #expect(AppInteractionPolicy.decide(.enterTarget, on: id(2), in: shot, goal: g) == .refuse(.notASearchField))
-        let built = AppInteractionScreenBuilder(redact: { $0 }).build(from: shot, goal: g)
-        #expect(built.screen.candidates.map(\.ref) == ["e1"])
-    }
-
-    @Test
-    func anIdFromAnEarlierObservationIsGone() async throws {
-        let app = FakeChatAppAccessibility(state: FakeChatAppState(chats: ["Mom"]))
-        let first = try await app.observe(processIdentifier: 1, limits: AccessibilityLimits())
-        let second = try await app.observe(processIdentifier: 1, limits: AccessibilityLimits())
-        let row = try element(first) { $0.role == "AXRow" }
-        #expect(AppInteractionPolicy.decide(.press, on: row.id, in: second, goal: try goal()) == .refuse(.elementGone))
-    }
-}
-
-// MARK: - Verification
-
-@Suite
-struct AppInteractionVerifierTests {
-    private func check(_ state: FakeChatAppState, _ goal: AppInteractionGoal) async throws -> AppInteractionVerifier.Result {
-        AppInteractionVerifier.check(try await snapshot(state), goal: goal)
-    }
-
-    @Test
-    func theTextInTheNamedOpenChatIsSatisfied() async throws {
-        var state = FakeChatAppState(chats: ["Mom"], openChat: "Mom")
-        state.drafts["Mom"] = "Running late, home by 8"
-        #expect(try await check(state, try goal()) == .satisfied)
-    }
-
-    @Test
-    func withNoVisibleChatNameTheResultIsUnconfirmedNotSatisfied() async throws {
-        var state = FakeChatAppState(chats: ["Mom"], openChat: "Mom")
-        state.drafts["Mom"] = "Running late, home by 8"
-        state.exposesHeader = false
-        #expect(try await check(state, try goal()) == .targetUnconfirmed)
-    }
-
-    /// PR #289 review, F3: a different chat visibly open is never "couldn't confirm".
-    @Test
-    func someoneElsesChatVisiblyOpenIsNeverASuccess() async throws {
-        var state = FakeChatAppState(chats: ["Mom & Dad", "Mom"], openChat: "Mom & Dad")
-        state.drafts["Mom & Dad"] = "Running late, home by 8"
-        #expect(try await check(state, try goal()) == .otherTargetOpen)
-
-        var hidden = FakeChatAppState(chats: ["Mom", "Dad"], openChat: "Dad")
-        hidden.drafts["Dad"] = "Running late, home by 8"
-        hidden.exposesHeader = false
-        #expect(try await check(hidden, try goal()) == .otherTargetOpen)
-    }
-
-    /// Delta review, F3: a selected row whose combined label or first text is not simply the name
-    /// is still the target's, not someone else's.
-    @Test
-    func aCombinedLabelOrAnUnreadCountDoesNotMakeTheRightChatLookWrong() async throws {
-        var combined = FakeChatAppState(chats: ["Mom", "Dad"], openChat: "Mom")
-        combined.combinedRowLabels = true
-        combined.exposesHeader = false
-        let labelled = try await snapshot(combined)
-        #expect(AppInteractionVerifier.targetState("Mom", in: labelled) == .unknown)
-        #expect(AppInteractionVerifier.targetState("Dad", in: labelled) == .contradicted)
-
-        var counted = FakeChatAppState(chats: ["Mom", "Dad"], openChat: "Mom")
-        counted.unreadCountFirst = true
-        counted.exposesHeader = false
-        #expect(AppInteractionVerifier.targetState("Mom", in: try await snapshot(counted)) == .unknown)
-    }
-
-    /// Final check, F3: a group row whose last sender is the target is the group's, not the
-    /// target's. The row has one name, "Family", and "Mom:" is not it.
-    @Test
-    func aGroupWhoseLastSenderIsTheTargetIsNotTheTargetsChat() throws {
-        let shot = snapshot(of: [
-            node(0, "AXWindow", parent: nil, depth: 0),
-            node(1, "AXTable", parent: 0, depth: 1),
-            node(2, "AXRow", parent: 1, depth: 2, selected: true, actions: ["AXPress"]),
-            node(3, "AXStaticText", parent: 2, depth: 3, value: "Family"),
-            node(4, "AXStaticText", parent: 2, depth: 3, value: "Mom:"),
-            node(5, "AXStaticText", parent: 2, depth: 3, value: "see you soon"),
-            node(6, "AXStaticText", parent: 0, depth: 1, value: "Family"),
-            node(7, "AXTextArea", parent: 0, depth: 1, placeholder: "Type a message", settable: true),
-        ])
-        let g = try goal()
-        #expect(AppInteractionVerifier.targetState("Mom", in: shot) == .contradicted)
-        #expect(AppInteractionPolicy.decide(.enterText, on: shot.elements[7].id, in: shot, goal: g) == .refuse(.otherTargetOpen))
-        let built = AppInteractionScreenBuilder(redact: { $0 }).build(from: shot, goal: g)
-        #expect(!built.screen.candidates.contains { $0.kind == "row" })
-    }
-
-    @Test
-    func theTextInTheSearchFieldOrNowhereIsNotYet() async throws {
-        var state = FakeChatAppState(chats: ["Mom"], openChat: "Mom")
-        #expect(try await check(state, try goal()) == .notYet)
-        state.search = "Running late, home by 8"
-        #expect(try await check(state, try goal()) == .notYet)
-    }
-
-    /// PR #289 review, F7: a sent message shown in a read-only text view is not a draft.
-    @Test
-    func aReadOnlyTextInsideTheConversationIsNotADraft() throws {
-        let shot = handMade([
-            ("AXWindow", nil, nil, nil, []),
-            ("AXStaticText", 0, nil, "Mom", []),
-            ("AXScrollArea", 0, nil, nil, []),
-            ("AXTextArea", 2, nil, "Running late, home by 8", []),
-        ])
-        #expect(AppInteractionVerifier.check(shot, goal: try goal()) == .notYet)
-    }
-}
-
-@Suite
-struct AccessibilityIdentityTests {
-    @Test
-    func aRowShowingADifferentChatIsADifferentElementButATypedFieldIsTheSame() async throws {
-        let before = try await snapshot(FakeChatAppState(chats: ["Mom", "Dad"], openChat: "Mom"))
-        let after = try await snapshot(FakeChatAppState(chats: ["Dad", "Mom"], openChat: "Mom"))
-        let firstRowBefore = try element(before) { $0.role == "AXRow" }
-        let firstRowAfter = after.elements[firstRowBefore.id.index]
-        #expect(!after.identity(of: firstRowAfter).matches(before.identity(of: firstRowBefore)))
-
-        var typed = FakeChatAppState(chats: ["Mom"], openChat: "Mom")
-        let empty = try await snapshot(typed)
-        typed.drafts["Mom"] = "hello"
-        let full = try await snapshot(typed)
-        let box = try element(empty) { $0.role == "AXTextArea" }
-        #expect(full.identity(of: full.elements[box.id.index]).matches(empty.identity(of: box)))
-    }
-}
-
-// MARK: - Runtime
-
-@Suite
-struct AppInteractionRuntimeTests {
-    @Test
-    func draftsIntoTheNamedChatAndSendsNothing() async throws {
-        let app = FakeChatAppAccessibility(state: FakeChatAppState(chats: ["Dad", "Mom", "Mom & Dad"]))
-        let outcome = await runtime(app, chooser: ScriptedChooser()).run(try goal())
-
-        guard case .done(let report) = outcome else {
-            Issue.record("expected done, got \(outcome)")
-            return
-        }
-        #expect(report.targetConfirmed)
-        #expect(report.summary.contains("not sent"))
-        let state = await app.state
-        #expect(state.openChat == "Mom")
-        #expect(state.drafts == ["Mom": "Running late, home by 8"])
-        #expect(state.sentMessages.isEmpty)
-        #expect(state.callsPlaced == 0)
-    }
-
-    /// Delta review, N1 and F3 together: the box in a scroll area, rows with combined labels and no
-    /// header, the shape a real Mac app is likely to have, still ends with the draft placed.
-    @Test
-    func aDraftLandsInAnAppKitShapedWindow() async throws {
-        var state = FakeChatAppState(chats: ["Dad", "Mom"])
-        state.messageBoxInScrollArea = true
-        state.combinedRowLabels = true
-        state.exposesHeader = false
-        let app = FakeChatAppAccessibility(state: state)
-        let outcome = await runtime(app, chooser: ScriptedChooser()).run(try goal())
-        guard case .done(let report) = outcome else {
-            Issue.record("expected done, got \(outcome)")
-            return
-        }
-        #expect(!report.targetConfirmed)
-        #expect(await app.state.drafts == ["Mom": "Running late, home by 8"])
-    }
-
-    /// Delta review, F7: having typed only the name into search is not having typed the message.
-    @Test
-    func finishedIsNotBelievedUntilSonnyTypedTheMessageItself() async throws {
-        var state = FakeChatAppState(chats: ["Mom"], openChat: "Mom")
-        state.drafts["Mom"] = "Running late, home by 8"
-        let app = FakeChatAppAccessibility(state: state)
-        let chooser = ScriptedChooser(overrides: [
-            { screen in screen.candidates.first { $0.kind == "search field" }.map { .step(.enterTarget, ref: $0.ref) } },
-            { _ in .finished },
-            { screen in screen.candidates.first { $0.kind == "text area" }.map { .step(.enterText, ref: $0.ref) } },
-        ])
-        let outcome = await runtime(app, chooser: chooser).run(try goal())
-        guard case .done(let report) = outcome else {
-            Issue.record("expected done, got \(outcome)")
-            return
-        }
-        #expect(report.targetConfirmed)
-        #expect(chooser.histories[2].last?.did == "said finished")
-    }
-
-    /// PR #289 review, F6.
-    @Test
-    func everyAppButWhatsAppIsRefusedByName() async throws {
-        let app = FakeChatAppAccessibility(state: FakeChatAppState(chats: ["Mom"]))
-        let apps = FakeApps()
-        let outcome = await runtime(app, chooser: ScriptedChooser(), apps: apps, supportedApps: AppInteractionRuntime.milestoneAApps)
-            .run(try goal())
-        #expect(outcome == .failed(.appNotSupported("Chat")))
-        #expect(apps.openCount.count == 0)
-        #expect(AppInteractionRuntime.milestoneAApps.contains("net.whatsapp.whatsapp"))
-    }
-
-    @Test
-    func whenTheChatNameCannotBeSeenTheReportSaysSo() async throws {
-        var state = FakeChatAppState(chats: ["Mom"], openChat: "Mom")
-        state.exposesHeader = false
-        let app = FakeChatAppAccessibility(state: state)
-        let outcome = await runtime(app, chooser: ScriptedChooser()).run(try goal())
-        guard case .done(let report) = outcome else {
-            Issue.record("expected done, got \(outcome)")
-            return
-        }
-        #expect(!report.targetConfirmed)
-        #expect(report.summary.contains("couldn't see which chat is open"))
-    }
-
-    /// PR #289 review, F3: typing first into someone else's open chat is refused, and the run goes
-    /// on to the right chat instead of ending as a success.
-    @Test
-    func aModelThatTypesIntoTheWrongOpenChatIsTurnedAround() async throws {
-        let app = FakeChatAppAccessibility(state: FakeChatAppState(chats: ["Mom", "Dad"], openChat: "Dad"))
-        let chooser = ScriptedChooser(overrides: [{ screen in
-            screen.candidates.first { $0.kind == "text area" }.map { .step(.enterText, ref: $0.ref) }
-        }])
-        let outcome = await runtime(app, chooser: chooser).run(try goal())
-        guard case .done(let report) = outcome else {
-            Issue.record("expected done, got \(outcome)")
-            return
-        }
-        #expect(report.targetConfirmed)
-        #expect(await app.state.drafts == ["Mom": "Running late, home by 8"])
-        #expect(chooser.histories[1].first?.result == "refused: otherTargetOpen")
-    }
-
-    @Test
-    func aModelThatReachesForSendIsStoppedAndNothingIsSent() async throws {
-        var state = FakeChatAppState(chats: ["Mom"], openChat: "Mom")
-        state.drafts["Mom"] = "Running late, home by 8"
-        state.exposesHeader = false
-        let app = FakeChatAppAccessibility(state: state)
-        let chooser = ScriptedChooser(overrides: [{ screen in
-            screen.candidates.first { $0.label == "Send" }.map { .step(.press, ref: $0.ref) }
-        }])
-        let outcome = await runtime(app, chooser: chooser).run(try goal())
-        #expect(outcome == .failed(.stepNotAllowed("Chat", "Send")))
-        #expect(await app.state.sentMessages.isEmpty)
-        #expect(await app.performed.isEmpty)
-    }
-
-    @Test
-    func aChatWithTheirOwnDraftInItIsLeftAloneAndTheRunSaysWhy() async throws {
-        var state = FakeChatAppState(chats: ["Mom"], openChat: "Mom")
-        state.drafts["Mom"] = "my own half-written words"
-        let app = FakeChatAppAccessibility(state: state)
-        let outcome = await runtime(app, chooser: ScriptedChooser()).run(try goal())
-        #expect(outcome == .failed(.typedTextKept("Chat")))
-        #expect(await app.state.drafts == ["Mom": "my own half-written words"])
-        #expect(await app.performed.isEmpty)
-    }
-
-    /// PR #289 review, F5: a row that a new message moved during the model call is not pressed.
-    @Test
-    func aRowThatMovedWhileTheModelWasDecidingIsNotPressed() async throws {
-        let app = FakeChatAppAccessibility(state: FakeChatAppState(chats: ["Mom", "Dad"]))
-        let reorders = ReorderingChooser(app: app)
-        let outcome = await runtime(app, chooser: reorders).run(try goal())
-        guard case .done = outcome else {
-            Issue.record("expected done, got \(outcome)")
-            return
-        }
-        #expect(reorders.firstResult == "failed: staleElement")
-        #expect(await app.state.drafts == ["Mom": "Running late, home by 8"])
-    }
-
-    @Test
-    func withoutAccessibilityNothingIsAskedOrOpened() async throws {
-        let app = FakeChatAppAccessibility(state: FakeChatAppState(chats: ["Mom"]), trusted: false)
-        let chooser = ScriptedChooser()
-        let apps = FakeApps()
-        let outcome = await runtime(app, chooser: chooser, apps: apps).run(try goal())
-        #expect(outcome == .failed(.accessibilityNotGranted))
-        #expect(chooser.calls == 0)
-        #expect(apps.openCount.count == 0)
-    }
-
-    @Test
-    func aTerminalIsRefusedAndAnAppNotAllowedInThisModeIsNotOpened() async throws {
-        let app = FakeChatAppAccessibility(state: FakeChatAppState(chats: ["Mom"]))
-        let apps = FakeApps()
-        let terminal = await runtime(app, chooser: ScriptedChooser(), apps: apps).run(try goal(app: "Terminal"))
-        #expect(terminal == .failed(.refusedApp("Terminal", .terminal)))
-        let notAllowed = await runtime(app, chooser: ScriptedChooser(), apps: apps, standing: .needsApproval).run(try goal())
-        #expect(notAllowed == .failed(.appControlNotAllowed("Chat")))
-        let missing = await runtime(app, chooser: ScriptedChooser(), apps: apps).run(try goal(app: "Nowhere"))
-        #expect(missing == .failed(.appNotInstalled("Nowhere")))
-        #expect(apps.openCount.count == 0)
-        #expect(await app.observations == 0)
-    }
-
-    @Test
-    func askingTheUserAndGivingUpEndTheRunWithTheirWords() async throws {
-        let app = FakeChatAppAccessibility(state: FakeChatAppState(chats: ["Alex", "Alex"]))
-        let asks = await runtime(app, chooser: ScriptedChooser(overrides: [{ _ in .askUser("Which Alex?") }])).run(try goal(target: "Alex"))
-        #expect(asks == .needsUserInput("Which Alex?"))
-        let quits = await runtime(app, chooser: ScriptedChooser(overrides: [{ _ in .giveUp("no such chat") }])).run(try goal())
-        #expect(quits == .failed(.gaveUp("Chat", "no such chat")))
-    }
-
-    /// PR #289 review, F8.
-    @Test
-    func aFailureAfterTypingSaysTheTextIsStillThere() async throws {
-        let app = FakeChatAppAccessibility(state: FakeChatAppState(chats: ["Dad"]))
-        let chooser = ScriptedChooser(overrides: [
-            { screen in screen.candidates.first { $0.kind == "search field" }.map { .step(.enterTarget, ref: $0.ref) } },
-            { _ in .giveUp("no chat called Mom") },
-        ])
-        let outcome = await runtime(app, chooser: chooser).run(try goal())
-        #expect(outcome == .failedAfterTyping(.gaveUp("Chat", "no chat called Mom"), app: "Chat", messageTyped: false))
-        // Only the name went into search, and the sentence says exactly that (delta review, F8).
-        let searched = AppInteractionRunError.failedAfterTyping(.gaveUp("Chat", "no chat called Mom"), app: "Chat", messageTyped: false)
-        #expect(searched.errorDescription?.hasSuffix("I left the name I searched for in Chat's search field.") == true)
-        let messaged = AppInteractionRunError.failedAfterTyping(.gaveUp("Chat", "x"), app: "Chat", messageTyped: true)
-        #expect(messaged.errorDescription?.hasSuffix("The message I typed is still in Chat, unsent.") == true)
-    }
-
-    /// PR #289 review, F7: "finished" before anything was typed is not believed.
-    @Test
-    func aModelThatSaysFinishedBeforeTypingIsNotBelieved() async throws {
-        let app = FakeChatAppAccessibility(state: FakeChatAppState(chats: ["Mom"]))
-        let chooser = ScriptedChooser(overrides: [{ _ in .finished }])
-        let outcome = await runtime(app, chooser: chooser).run(try goal())
-        guard case .done = outcome else {
-            Issue.record("expected done, got \(outcome)")
-            return
-        }
-        #expect(chooser.histories[1].first?.did == "said finished")
-        #expect(await app.state.drafts == ["Mom": "Running late, home by 8"])
-    }
-
-    @Test
-    func aRefusedOrUnknownStepIsReportedBackAndCountsAgainstTheBudget() async throws {
-        let app = FakeChatAppAccessibility(state: FakeChatAppState(chats: ["Mom"]))
-        var budget = AppInteractionRuntime.Budget()
-        budget.maxSteps = 3
-        let chooser = ScriptedChooser(overrides: [
-            { _ in .step(.press, ref: "e999") },
-            { screen in screen.candidates.first { $0.kind == "row" }.map { .step(.enterText, ref: $0.ref) } },
-            { _ in .step(.press, ref: "e999") },
-        ])
-        let outcome = await runtime(app, chooser: chooser, budget: budget).run(try goal())
-        #expect(outcome == .failed(.ranOutOfSteps("Chat", 3)))
-        #expect(chooser.histories[1].first?.result == "no element has that ref")
-        #expect(chooser.histories[2].last?.result == "refused: notATextField")
-    }
-
-    @Test
-    func aMessageBoxThatIgnoresWritesIsReportedAndNotClaimed() async throws {
-        var state = FakeChatAppState(chats: ["Mom"])
-        state.messageBoxIsSettable = false
-        let app = FakeChatAppAccessibility(state: state)
-        var budget = AppInteractionRuntime.Budget()
-        budget.maxSteps = 5
-        let outcome = await runtime(app, chooser: ScriptedChooser(), budget: budget).run(try goal())
-        #expect(outcome == .failed(.ranOutOfSteps("Chat", 5)))
-        #expect(await app.state.drafts.isEmpty)
-    }
-
-    @Test
-    func aWindowThatTakesAMomentIsWaitedFor() async throws {
-        let app = FakeChatAppAccessibility(state: FakeChatAppState(chats: ["Mom"]), windowlessObservations: 3)
-        let outcome = await runtime(app, chooser: ScriptedChooser()).run(try goal())
-        guard case .done = outcome else {
-            Issue.record("expected done, got \(outcome)")
-            return
-        }
-    }
-
-    @Test
-    func aWindowThatNeverAppearsFailsWithinTheWait() async throws {
-        let app = FakeChatAppAccessibility(state: FakeChatAppState(chats: ["Mom"]), windowlessObservations: .max)
-        var budget = AppInteractionRuntime.Budget()
-        budget.windowWait = .milliseconds(30)
-        budget.windowPoll = .milliseconds(5)
-        let outcome = await runtime(app, chooser: ScriptedChooser(), budget: budget, sleep: { try await Task.sleep(for: $0) })
-            .run(try goal())
-        #expect(outcome == .failed(.noWindow("Chat")))
-    }
-
-    @Test
-    func losingAccessibilityMidRunStopsWithThatReason() async throws {
-        let app = FakeChatAppAccessibility(state: FakeChatAppState(chats: ["Mom"]))
-        let revoking = RevokingChooser(inner: ScriptedChooser(), app: app, revokeOnCall: 2)
-        #expect(await runtime(app, chooser: revoking).run(try goal()) == .failed(.accessibilityNotGranted))
-    }
-
-    @Test
-    func stoppingAfterTextWasTypedSaysSo() async throws {
-        let app = FakeChatAppAccessibility(state: FakeChatAppState(chats: ["Dad"]))
-        // Call 1 types the name into search, which counts as typing; call 2 hangs.
-        let typesIntoSearch = ScriptedChooser(overrides: [{ screen in
-            screen.candidates.first { $0.kind == "search field" }.map { .step(.enterTarget, ref: $0.ref) }
-        }])
-        let gate = HangingChooser(inner: typesIntoSearch, hangOnCall: 2)
-        let running = runtime(app, chooser: gate)
-        let g = try goal(text: "one")
-        let task = Task { await running.run(g) }
-        await gate.waitUntilHanging()
-        task.cancel()
-        #expect(await task.value == .cancelled(typedSomething: true, messageTyped: false, app: "Chat"))
-        #expect(await app.state.search == "Mom")
-    }
-}
-
-/// Revokes trust just before answering its `revokeOnCall`th decision, so the action that follows
-/// meets a provider that no longer trusts Sonny.
-private struct RevokingChooser: AppInteractionStepChoosing {
-    let inner: ScriptedChooser
-    let app: FakeChatAppAccessibility
-    let revokeOnCall: Int
-
-    func chooseStep(goal: AppInteractionGoal, screen: AppInteractionScreen, history: [AppInteractionHistoryEntry]) async throws -> AppInteractionModelDecision {
-        let decision = try await inner.chooseStep(goal: goal, screen: screen, history: history)
-        if inner.calls == revokeOnCall { await app.revokeTrust() }
-        return decision
-    }
-}
-
-/// On its first turn, answers "press Mom's row" and then moves Dad to the top before the press
-/// lands, as a new message would; after that, plays the competent model.
-private final class ReorderingChooser: AppInteractionStepChoosing, @unchecked Sendable {
-    private let app: FakeChatAppAccessibility
-    private let inner = ScriptedChooser()
+/// The model's part, played by rule: put the text in the editor, then say finished.
+final class WritesIntoTheEditor: AppInteractionStepChoosing, @unchecked Sendable {
     private let lock = NSLock()
-    private var turn = 0
-    private var recorded: String?
-
-    init(app: FakeChatAppAccessibility) {
-        self.app = app
-    }
-
-    var firstResult: String? { lock.withLock { recorded } }
+    private var seen: [AppInteractionScreen] = []
+    var screens: [AppInteractionScreen] { lock.withLock { seen } }
 
     func chooseStep(goal: AppInteractionGoal, screen: AppInteractionScreen, history: [AppInteractionHistoryEntry]) async throws -> AppInteractionModelDecision {
-        let current = lock.withLock { () -> Int in
-            turn += 1
-            if turn == 2 { recorded = history.first?.result }
-            return turn
-        }
-        let decision = try await inner.chooseStep(goal: goal, screen: screen, history: history)
-        if current == 1 { await app.reorderChats(["Dad", "Mom"]) }
-        return decision
+        lock.withLock { seen.append(screen) }
+        if history.last?.did.hasPrefix("enter_text") == true { return .finished }
+        return screen.candidates.contains { $0.kind == "text area" } ? .step(.enterText, ref: screen.editorRef) : .giveUp("no editor")
     }
 }
 
-/// Suspends on its `hangOnCall`th decision until the task is cancelled, and lets the test wait
-/// for that moment on a signal rather than on the clock.
-private final class HangingChooser: AppInteractionStepChoosing, @unchecked Sendable {
-    private let inner: ScriptedChooser
-    private let hangOnCall: Int
-    private let signal: AsyncStream<Void>
-    private let signalContinuation: AsyncStream<Void>.Continuation
+/// Answers from a script, one entry per turn, then says finished.
+final class Scripted: AppInteractionStepChoosing, @unchecked Sendable {
+    private let lock = NSLock()
+    private var turns: [@Sendable (AppInteractionScreen) async -> AppInteractionModelDecision]
+    private var seen: [AppInteractionScreen] = []
+    private var heard: [[AppInteractionHistoryEntry]] = []
+    var screens: [AppInteractionScreen] { lock.withLock { seen } }
+    var histories: [[AppInteractionHistoryEntry]] { lock.withLock { heard } }
 
-    init(inner: ScriptedChooser, hangOnCall: Int) {
-        self.inner = inner
-        self.hangOnCall = hangOnCall
-        (signal, signalContinuation) = AsyncStream.makeStream(of: Void.self)
+    init(_ turns: [@Sendable (AppInteractionScreen) async -> AppInteractionModelDecision]) {
+        self.turns = turns
+    }
+
+    func chooseStep(goal: AppInteractionGoal, screen: AppInteractionScreen, history: [AppInteractionHistoryEntry]) async throws -> AppInteractionModelDecision {
+        let next = lock.withLock { () -> (@Sendable (AppInteractionScreen) async -> AppInteractionModelDecision)? in
+            seen.append(screen)
+            heard.append(history)
+            return turns.isEmpty ? nil : turns.removeFirst()
+        }
+        guard let next else { return .finished }
+        return await next(screen)
+    }
+}
+
+/// Waits until cancelled, signalling when it starts waiting.
+final class HangsUntilCancelled: AppInteractionStepChoosing, @unchecked Sendable {
+    private let signal: AsyncStream<Void>
+    private let continuation: AsyncStream<Void>.Continuation
+
+    init() {
+        (signal, continuation) = AsyncStream.makeStream(of: Void.self)
     }
 
     func waitUntilHanging() async {
@@ -1039,11 +470,9 @@ private final class HangingChooser: AppInteractionStepChoosing, @unchecked Senda
     }
 
     func chooseStep(goal: AppInteractionGoal, screen: AppInteractionScreen, history: [AppInteractionHistoryEntry]) async throws -> AppInteractionModelDecision {
-        let decision = try await inner.chooseStep(goal: goal, screen: screen, history: history)
-        guard inner.calls == hangOnCall else { return decision }
-        signalContinuation.yield()
+        continuation.yield()
         // A hang backstop, not a bet on a window: only a failure to cancel ever reaches it.
         try await Task.sleep(for: .seconds(3_600))
-        return decision
+        return .giveUp("unreachable")
     }
 }

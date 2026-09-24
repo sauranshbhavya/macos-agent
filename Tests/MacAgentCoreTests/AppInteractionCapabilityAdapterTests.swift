@@ -6,15 +6,15 @@ import Testing
 @MainActor
 struct AppInteractionCapabilityAdapterTests {
     private static func step(
-        app: String? = "WhatsApp",
-        goal: String? = "Open the chat with Mom and leave the message unsent",
-        target: String? = "Mom",
-        text: String? = "Running late, home by 8"
+        app: String? = "Notes",
+        goal: String? = "A new note that says buy milk",
+        target: String? = nil,
+        text: String? = "Buy milk\nEggs"
     ) -> AgentStep {
         AgentStep(
-            id: "draft",
+            id: "note",
             operation: .interactWithApp,
-            description: "Draft to Mom",
+            description: "New note in Notes",
             appName: app,
             interactionGoal: goal,
             interactionTarget: target,
@@ -23,68 +23,66 @@ struct AppInteractionCapabilityAdapterTests {
     }
 
     private static func plan(_ steps: [AgentStep]) -> AgentPlan {
-        AgentPlan(summary: "Draft", requiresConfirmation: false, steps: steps)
+        AgentPlan(summary: "New note", requiresConfirmation: false, steps: steps)
     }
 
     @Test
-    func thePlannersStepDecodesWithItsThreeFields() throws {
+    func thePlannersStepDecodesWithItsFields() throws {
         var step: [String: Any] = [:]
-        step["id"] = "draft"
+        step["id"] = "note"
         step["operation"] = "interact_with_app"
-        step["description"] = "Draft to Mom"
-        step["appName"] = "WhatsApp"
-        step["interactionGoal"] = "Open the chat with Mom and leave the message unsent"
-        step["interactionTarget"] = "Mom"
-        step["interactionText"] = "Running late"
-        let json: [String: Any] = ["summary": "Draft", "requiresConfirmation": false, "itemJob": NSNull(), "steps": [step]]
+        step["description"] = "New note in Notes"
+        step["appName"] = "Notes"
+        step["interactionGoal"] = "A new note that says buy milk"
+        step["interactionTarget"] = NSNull()
+        step["interactionText"] = "Buy milk\nEggs"
+        let json: [String: Any] = ["summary": "New note", "requiresConfirmation": false, "itemJob": NSNull(), "steps": [step]]
         let data = try JSONSerialization.data(withJSONObject: json)
 
         let decoded = try AgentPlanDecoder.decodeStrict(from: data)
         let goal = try #require(try AppInteractionCapabilityAdapter.standaloneGoal(in: decoded))
-        #expect(goal.app == "WhatsApp")
-        #expect(goal.target == "Mom")
-        #expect(goal.text == "Running late")
+        #expect(goal.app == "Notes")
+        #expect(goal.target == nil)
+        // A note may run over several lines: the text is set as a value, and no Return is pressed.
+        #expect(goal.text == "Buy milk\nEggs")
     }
 
+    /// Founders, 2026-09-24: a new note goes in whichever folder is open, so a named folder or note
+    /// is asked about rather than dropped, and a note with nothing to say is asked about too.
     @Test
-    func aMessageWithALineBreakBecomesAQuestionBeforeAnythingRuns() throws {
+    func aNamedFolderOrAMissingTextBecomesAQuestionBeforeAnythingRuns() throws {
         let adapter = AppInteractionCapabilityAdapter()
-        let resolved = try adapter.resolveDefaultOutputs(
-            in: Self.plan([Self.step(text: "one\ntwo")]),
-            context: VisionTestContext.make(installed: [])
-        )
-        #expect(resolved.steps.map(\.operation) == [.clarify])
-        #expect(resolved.steps.first?.question == "I can only draft a message on one line for now. What should it say?")
-
-        let noApp = try adapter.resolveDefaultOutputs(
-            in: Self.plan([Self.step(app: nil)]),
-            context: VisionTestContext.make(installed: [])
-        )
-        #expect(noApp.steps.first?.question == "Which app should I draft this in?")
+        let context = VisionTestContext.make(installed: [])
+        func question(_ step: AgentStep) throws -> String? {
+            try adapter.resolveDefaultOutputs(in: Self.plan([step]), context: context).steps.first?.question
+        }
+        #expect(try question(Self.step(target: "Work")) == "I can only put a new note in the folder that's open in Notes. Should I make it there?")
+        #expect(try question(Self.step(text: nil)) == "What should the note say?")
+        #expect(try question(Self.step(app: nil)) == "Which app should I use?")
 
         let fine = Self.plan([Self.step()])
-        #expect(try adapter.resolveDefaultOutputs(in: fine, context: VisionTestContext.make(installed: [])) == fine)
+        #expect(try adapter.resolveDefaultOutputs(in: fine, context: context) == fine)
     }
 
     @Test
-    func thePreviewNamesTheAppTheChatAndTheUnsentText() throws {
+    func thePreviewNamesTheAppAndTheNotesText() throws {
         let previews = try AppInteractionCapabilityAdapter().preview(
             plan: Self.plan([Self.step()]),
             context: VisionTestContext.make(installed: [])
         )
-        #expect(previews.map(\.title) == ["Draft in WhatsApp"])
-        #expect(previews.first?.details == ["App: WhatsApp", "Open: Mom", "Leave unsent: Running late, home by 8"])
+        #expect(previews.map(\.title) == ["New note in Notes"])
+        #expect(previews.first?.details == ["App: Notes", "New note: Buy milk\nEggs"])
     }
 
     @Test
     func onlyAPlanOfThisStepAloneGoesToTheNewRuntime() throws {
         #expect(try AppInteractionCapabilityAdapter.standaloneGoal(in: Self.plan([Self.step()])) != nil)
         let mixed = Self.plan([
-            AgentStep(id: "open", operation: .openApp, description: "Open Notes", appName: "Notes"),
+            AgentStep(id: "open", operation: .openApp, description: "Open Safari", appName: "Safari"),
             Self.step(),
         ])
         #expect(try AppInteractionCapabilityAdapter.standaloneGoal(in: mixed) == nil)
-        let other = Self.plan([AgentStep(id: "open", operation: .openApp, description: "Open Notes", appName: "Notes")])
+        let other = Self.plan([AgentStep(id: "open", operation: .openApp, description: "Open Safari", appName: "Safari")])
         #expect(try AppInteractionCapabilityAdapter.standaloneGoal(in: other) == nil)
     }
 

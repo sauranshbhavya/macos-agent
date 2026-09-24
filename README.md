@@ -79,6 +79,7 @@ https://drive.google.com/file/d/12lJnnqiBrbGnua2pGyE2GsYaVBcil0qe/view?usp=shari
 export OPENAI_API_KEY="sk-..."
 export OPENAI_MODEL="gpt-5.5"
 export OPENAI_TRANSCRIBE_MODEL="gpt-4o-mini-transcribe"
+scripts/fetch-cua-driver.sh   # once: cua-driver's library, which Sonny drives other apps through
 swift build
 swift run MacAgent
 ```

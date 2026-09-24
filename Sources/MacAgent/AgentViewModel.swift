@@ -2869,13 +2869,13 @@ final class AgentViewModel: ObservableObject {
     /// was told something went wrong. `SonnyBackendError.isCancellation` is the one predicate now,
     /// and its own doc comment says which wrappers it does not yet reach.
     func isCancellationError(_ error: Error) -> Bool {
-        SonnyBackendError.isCancellation(error) || error is AppInteractionStoppedAfterTyping
+        SonnyBackendError.isCancellation(error) || error is AppInteractionStoppedAfterChange
     }
 
-    /// "Canceled.", unless the stop left something behind that the person should know about: a
-    /// draft typed into another app stays there, unsent (SONNY-544, PR #289 review F8).
+    /// "Canceled.", unless the stop left something behind that the person should know about: a note
+    /// Sonny had started, or text it placed, stays in the other app (SONNY-544, PR #289 review F8).
     nonisolated static func cancellationSummary(for error: any Error) -> String {
-        (error as? AppInteractionStoppedAfterTyping)?.summary ?? "Canceled."
+        (error as? AppInteractionStoppedAfterChange)?.summary ?? "Canceled."
     }
 
     private func performStart(
@@ -7640,7 +7640,7 @@ final class AgentViewModel: ObservableObject {
                 context: approvalContext(visionTarget: nil)
             )
             markAllSteps(.running)
-            let runtime = appInteractionRuntimeOverride?(goal) ?? makeLiveAppInteractionRuntime()
+            let runtime = try appInteractionRuntimeOverride?(goal) ?? makeLiveAppInteractionRuntime()
             let outcome = await runtime.run(goal) { [weak self] line in
                 Task { @MainActor in self?.logStore.append(.act, line) }
             }
@@ -7694,10 +7694,19 @@ final class AgentViewModel: ObservableObject {
     /// The live runtime for one interaction: the real Accessibility provider, the gateway's step
     /// route under this task's id and usage recorder, and the same app-control standing screen
     /// control reads.
-    private func makeLiveAppInteractionRuntime() -> AppInteractionRuntime {
+    /// A fresh cua-driver for each run, released when the run's runtime is: its ceiling expires
+    /// (`CuaCapabilityManifest`), and Sonny stays open far longer than any one run.
+    private func makeLiveAppInteractionRuntime() throws -> AppInteractionRuntime {
+        let library: CuaDriverLibrary
+        do {
+            library = try CuaDriverLibrary()
+        } catch {
+            logStore.append(.act, "cua-driver did not start: \(error)")
+            throw AppInteractionRunError.failed(.driverUnavailable)
+        }
         let redaction = LocalRedactionService()
         return AppInteractionRuntime(
-            accessibility: LiveAccessibilityProvider(),
+            driver: CuaDriverClient(invoker: library),
             chooser: GatewayAppInteractionStepChooser(
                 client: backendClient,
                 taskID: currentTaskID,

@@ -7,13 +7,14 @@ import Foundation
 /// strings the runtime will ever type into the app, which keeps the model from composing text of
 /// its own.
 public struct AppInteractionGoal: Equatable, Sendable {
-    /// The app as the user named it, e.g. "WhatsApp".
+    /// The app as the user named it, e.g. "Notes".
     public let app: String
-    /// The outcome in plain words, e.g. "Open the chat with Mom and leave the message unsent".
+    /// The outcome in plain words, e.g. "A new note that says buy milk".
     public let objective: String
     /// A name Sonny may type to find something, such as a chat or contact.
     public let target: String?
-    /// The exact text to leave in a text field. Milestone A never sends it.
+    /// The exact text to leave in a text field. It may run over several lines: it is set as the
+    /// field's value, never typed, so no Return is pressed.
     public let text: String?
 
     public static let maxTextLength = 2_000
@@ -50,9 +51,6 @@ public struct AppInteractionGoal: Equatable, Sendable {
         let text = text?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
         if let text {
             guard text.count <= maxTextLength else { throw .textTooLong }
-            // In a chat app Return sends. Milestone A refuses a line break instead of deciding how
-            // each app wants one typed (founders, 2026-09-23).
-            guard !text.containsLineBreak else { throw .textHasLineBreak }
         }
         guard target != nil || text != nil else { throw .nothingToDo }
         return AppInteractionGoal(app: app, objective: objective, target: target, text: text)
@@ -66,8 +64,10 @@ public enum AppInteractionGoalError: Error, Equatable, Sendable {
     case targetTooLong
     case targetHasLineBreak
     case textTooLong
-    case textHasLineBreak
     case nothingToDo
+    /// The request names something to find, such as a folder or a note, and the milestone's goal
+    /// is a new note in whichever folder is open.
+    case targetNotSupported
 
     /// Wording for the person who asked, naming what to change.
     public var userMessage: String {
@@ -75,7 +75,7 @@ public enum AppInteractionGoalError: Error, Equatable, Sendable {
         case .missingApp:
             return "I couldn't tell which app to use. Name the app and try again."
         case .missingObjective, .nothingToDo:
-            return "I couldn't tell what to do in that app. Say who it's for and what to write."
+            return "I couldn't tell what to write. Say what it should say."
         case .objectiveTooLong:
             return "That request is too long for me to follow in one go. Try a shorter one."
         case .targetTooLong:
@@ -83,9 +83,9 @@ public enum AppInteractionGoalError: Error, Equatable, Sendable {
         case .targetHasLineBreak:
             return "That name has a line break in it. Try it on one line."
         case .textTooLong:
-            return "That message is longer than \(AppInteractionGoal.maxTextLength) characters. Try a shorter one."
-        case .textHasLineBreak:
-            return "I can only draft a message on one line for now. Try it without line breaks."
+            return "That's longer than \(AppInteractionGoal.maxTextLength) characters. Try something shorter."
+        case .targetNotSupported:
+            return "I can only make a new note in the folder that's open in Notes."
         }
     }
 }

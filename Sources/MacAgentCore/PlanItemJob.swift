@@ -381,9 +381,9 @@ public extension AgentOperation {
             // reminders they want.
             return .refused("Sonny will not add a reminder for each item — that would fill Reminders with copies of one reminder. Ask for the reminder on its own.")
         case .interactWithApp:
-            // One draft per item would type the same text into one app again and again, and the
-            // runtime only runs a plan of this step alone anyway (SONNY-544).
-            return .refused("Sonny will not draft in an app for each item. Ask for each draft on its own.")
+            // One note per item would fill Notes with copies of one note, and the runtime only
+            // runs a plan of this step alone anyway (SONNY-544).
+            return .refused("Sonny will not make a note for each item — that would fill Notes with copies of one note. Ask for the note on its own.")
         case .scanSelectLargestFiles, .createZip, .scanDocx, .convertDocxToPDF, .revealInFinder,
              .openGeneratedArtifact, .invokeShortcut, .openHackerNews, .fetchHNHeadlines,
              .writeMarkdown, .webToMarkdown, .openApp, .openAppSearchURL, .openURL, .playMedia,

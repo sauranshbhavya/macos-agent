@@ -173,16 +173,17 @@ public struct AgentStep: Codable, Equatable, Identifiable, Sendable {
     /// screen can be wrapped as untrusted and told apart from it.
     public var visionGoal: String?
 
-    /// For `interact_with_app`: the outcome in the user's words, e.g. "open the chat with Mom and
-    /// leave the message unsent". Trusted, like `visionGoal`: it comes from the user's command.
+    /// For `interact_with_app`: the outcome in the user's words, e.g. "a new note that says buy
+    /// milk". Trusted, like `visionGoal`: it comes from the user's command.
     public var interactionGoal: String?
 
     /// For `interact_with_app`: the name Sonny may type to find what the goal is about, such as a
-    /// chat or contact. One of the two strings the runtime ever types.
+    /// chat or contact. One of the two strings the runtime ever types. Always nil for Milestone A's
+    /// new note, which is asked about when the planner sets it (SONNY-544).
     public var interactionTarget: String?
 
-    /// For `interact_with_app`: the exact text to leave in a field, never sent. The other string the
-    /// runtime ever types.
+    /// For `interact_with_app`: the exact text to leave in a field, never sent — for Milestone A,
+    /// the new note's text. The other string the runtime ever types.
     public var interactionText: String?
 
     /// The browser the user named for a URL-opening step, verbatim, or `nil` when they named none.
@@ -476,17 +477,17 @@ public enum AgentOperation: String, Codable, CaseIterable, Sendable {
     /// routine runs under a standing tier-2 grant, which a tier-2 reminder would pass without anyone
     /// being asked, once per occurrence.
     case createReminder = "create_reminder"
-    /// Sonny opens a named item in another app and leaves text in a field there, unsent, working
-    /// through the app's Accessibility tree with the model choosing each step (SONNY-544, V2 plan
-    /// Milestone A; the first proof is a WhatsApp draft).
+    /// Sonny leaves text in a field of another app, unsent, working through the app's Accessibility
+    /// tree with the model choosing each step (SONNY-544, V2 plan Milestone A). The first proof is a
+    /// new note in Notes, which Sonny starts itself with Notes' own New Note command.
     ///
     /// **Not run by `AgentRunner.execute`.** A plan whose only step is this one is handed to
     /// `AppInteractionRuntime`, the new path's own owner; its adapter exists for planning, preview and
     /// risk, and refuses to execute so a plan mixing it with other steps fails plainly instead of
     /// running half on each path.
     ///
-    /// **Tier 2, and it asks nothing**: nothing is sent, deleted or changed outside the draft, and the
-    /// person sends it themselves (founders' decision 2026-09-23). **Refused inside a routine**: a
+    /// **Tier 2, and it asks nothing**: nothing is sent or deleted, and nothing that was there before
+    /// changes — a new note is added (founders' decisions 2026-09-23 and 2026-09-24). **Refused inside a routine**: a
     /// routine can run with nobody at the Mac, and this drives another app's window.
     case interactWithApp = "interact_with_app"
     case clarify
@@ -1054,11 +1055,11 @@ public enum AgentPlanSchema {
             ],
             "interactionTarget": [
                 "type": ["string", "null"],
-                "description": "For interact_with_app: the name of the chat, contact or item to open, exactly as the user said it. Null when there is none, and for every other operation."
+                "description": "For interact_with_app: null. A new note goes in whichever folder is open in Notes. Null for every other operation."
             ],
             "interactionText": [
                 "type": ["string", "null"],
-                "description": "For interact_with_app: the exact text to leave in the app, unsent, as the user dictated it. Null when there is none, and for every other operation."
+                "description": "For interact_with_app: the new note's text, word for word as the user dictated it; it may run over several lines. Null for every other operation."
             ]
         ]
     }
