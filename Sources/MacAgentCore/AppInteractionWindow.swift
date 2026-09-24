@@ -80,6 +80,44 @@ extension CuaWindowState {
         return nil
     }
 
+    /// Rows whose own text is exactly `name`, top first, read from cua's Markdown: a row there is
+    /// `- [N] AXRow …` and its texts are the deeper-indented `AXStaticText = "…"` lines under it.
+    /// Local only — used to find the folder Sonny opens itself, and never shown to the model.
+    public func rows(named name: String) -> [CuaElement] {
+        guard let markdown = treeMarkdown else { return [] }
+        let lines = markdown.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        func indent(_ line: String) -> Int { line.prefix { $0 == " " }.count }
+        func invisible(_ scalar: Unicode.Scalar) -> Bool {
+            scalar.properties.generalCategory == .format || CharacterSet.whitespaces.contains(scalar)
+        }
+        func clean(_ text: String) -> String {
+            var scalars = String.UnicodeScalarView(text.unicodeScalars)
+            while let first = scalars.first, invisible(first) { scalars.removeFirst() }
+            while let last = scalars.last, invisible(last) { scalars.removeLast() }
+            return String(scalars)
+        }
+        var found: [CuaElement] = []
+        for (offset, line) in lines.enumerated() {
+            let trimmed = line.drop { $0 == " " }
+            guard trimmed.hasPrefix("- ["), let close = trimmed.firstIndex(of: "]"),
+                  let index = Int(trimmed[trimmed.index(trimmed.startIndex, offsetBy: 3)..<close]),
+                  let element = element(index), AppInteractionRoles.rows.contains(element.role) else { continue }
+            let depth = indent(line)
+            for child in lines[(offset + 1)...] {
+                // A nested row, such as a subfolder, carries its own name, not this row's.
+                guard indent(child) > depth, !child.contains("] AXRow"), !child.contains("] AXOutlineRow") else { break }
+                guard let range = child.range(of: "AXStaticText"), let equals = child[range.upperBound...].range(of: "= \"") else { continue }
+                var text = String(child[equals.upperBound...])
+                if text.hasSuffix("\"") { text.removeLast() }
+                if clean(text) == name {
+                    found.append(element)
+                    break
+                }
+            }
+        }
+        return found
+    }
+
     /// The smallest element under a point, leaving out the window and the menus: what a click
     /// there would land on. Nil when nothing is there.
     public func element(atX x: Double, y: Double) -> CuaElement? {

@@ -153,18 +153,26 @@ public struct CuaWindowState: Decodable, Equatable, Sendable {
     public let elements: [CuaElement]
     /// Set when cua could not read the window, which then comes back with no elements.
     public let degradedReason: String?
+    /// cua's Markdown rendering of the same tree, the one place it gives a row's name when the name
+    /// sits in a child text. Read on the Mac only, to find a folder Sonny opens itself
+    /// (`rows(named:)`); the screen the model sees is built from `elements` and never carries it.
+    public let treeMarkdown: String?
 
     enum CodingKeys: String, CodingKey {
         case snapshotID = "snapshot_id", windowID = "window_id", windowTitle = "window_title", elements
-        case degradedReason = "degraded_reason"
+        case degradedReason = "degraded_reason", treeMarkdown = "tree_markdown"
     }
 
-    public init(snapshotID: String?, windowID: Int, windowTitle: String? = nil, elements: [CuaElement], degradedReason: String? = nil) {
+    public init(
+        snapshotID: String?, windowID: Int, windowTitle: String? = nil, elements: [CuaElement],
+        degradedReason: String? = nil, treeMarkdown: String? = nil
+    ) {
         self.snapshotID = snapshotID
         self.windowID = windowID
         self.windowTitle = windowTitle
         self.elements = elements
         self.degradedReason = degradedReason
+        self.treeMarkdown = treeMarkdown
     }
 
     public init(from decoder: Decoder) throws {
@@ -174,6 +182,7 @@ public struct CuaWindowState: Decodable, Equatable, Sendable {
         windowTitle = try container.decodeIfPresent(String.self, forKey: .windowTitle)
         elements = try container.decodeIfPresent([CuaElement].self, forKey: .elements) ?? []
         degradedReason = try container.decodeIfPresent(String.self, forKey: .degradedReason)
+        treeMarkdown = try container.decodeIfPresent(String.self, forKey: .treeMarkdown)
     }
 }
 

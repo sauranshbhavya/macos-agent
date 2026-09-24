@@ -139,17 +139,90 @@ struct AppInteractionNotesTests {
         #expect(!chooser.screens.contains { $0.candidates.contains { $0.label.contains("Delete") || $0.label.contains("Close") } })
     }
 
+    /// Founders, 2026-09-24, after the first live run: when Notes has New Note greyed out where it
+    /// is — a shared view, a smart folder, Recently Deleted — Sonny opens the Notes folder, found by
+    /// name on the Mac, and tries once more, and the result says it switched.
     @Test
-    func aNewNoteNotesWillNotStartEndsTheRunPlainly() async throws {
+    func aGreyedOutNewNoteOpensTheNotesFolderAndTriesOnceMore() async throws {
         var state = FakeCuaNotesState()
-        state.newNoteEnabled = false
+        state.selectedFolder = "Family"
+        state.newNoteOnlyIn = "Notes"
+        let notes = FakeCuaNotes(state: state)
+        let chooser = WritesIntoTheEditor()
+        let outcome = await runtime(notes, chooser: chooser).run(try noteGoal("Buy milk"))
+
+        let report = try #require(outcome.report)
+        #expect(report.summary == #"I opened your Notes folder and made a new note there: "Buy milk""#)
+        let after = await notes.state
+        #expect(after.foldersOpened == ["Notes"])
+        #expect(after.menus == [["File", "New Note"]])
+        #expect(after.notes.last == "Buy milk")
+        // Found by name on the Mac; the names never reach the model.
+        let sent = try chooser.screens.map { String(decoding: try JSONEncoder().encode($0), as: UTF8.self) }.joined()
+        #expect(!sent.contains("Family"))
+    }
+
+    @Test
+    func withNoNotesFolderTheRunEndsPlainlyHavingChangedNothing() async throws {
+        var state = FakeCuaNotesState()
+        state.folders = ["Recipes", "Family"]
+        state.selectedFolder = "Family"
+        state.newNoteOnlyIn = "Notes"
         let notes = FakeCuaNotes(state: state)
         let outcome = await runtime(notes, chooser: WritesIntoTheEditor()).run(try noteGoal("Buy milk"))
 
         #expect(outcome == .failed(.couldNotStartItem("Notes", "note")))
         #expect(AppInteractionFailure.couldNotStartItem("Notes", "note").userMessage
-            == "I couldn't start a new note in Notes. Open one of your folders there and try again.")
+            == "Notes wouldn't start a new note. Open an ordinary folder there, like Notes, and try again.")
+        let after = await notes.state
+        #expect(after.foldersOpened.isEmpty)
+        #expect(after.notes == ["Groceries for Sunday", "Mom's birthday ideas"])
+    }
+
+    @Test
+    func aNewNoteGreyedOutEvenInTheNotesFolderSaysTheFolderWasOpened() async throws {
+        var state = FakeCuaNotesState()
+        state.selectedFolder = "Family"
+        state.newNoteEnabled = false
+        let notes = FakeCuaNotes(state: state)
+        let outcome = await runtime(notes, chooser: WritesIntoTheEditor()).run(try noteGoal("Buy milk"))
+
+        #expect(outcome == .failedAfterChange(.couldNotStartItem("Notes", "note"), app: "Notes", left: .openedFolder("Notes")))
+        #expect(AppInteractionRunError.failedAfterChange(.couldNotStartItem("Notes", "note"), app: "Notes", left: .openedFolder("Notes")).errorDescription
+            == "Notes wouldn't start a new note. Open an ordinary folder there, like Notes, and try again. I switched Notes to your Notes folder.")
         #expect(await notes.state.notes == ["Groceries for Sunday", "Mom's birthday ideas"])
+    }
+
+    /// The lookup reads cua's Markdown, where a name follows an invisible direction mark, and it
+    /// matches a name whole: "Notes" is not "Quick Notes", and a subfolder's name is its own.
+    @Test
+    func aFolderIsFoundByItsWholeNameAndNotBySomeoneElses() {
+        let state = CuaWindowState(
+            snapshotID: "s1", windowID: 1,
+            elements: [
+                CuaElement(index: 0, role: "AXWindow"),
+                CuaElement(index: 1, role: "AXOutline", parentIndex: 0),
+                CuaElement(index: 2, role: "AXRow", parentIndex: 1),
+                CuaElement(index: 3, role: "AXRow", parentIndex: 1),
+                CuaElement(index: 4, role: "AXRow", parentIndex: 3),
+                CuaElement(index: 5, role: "AXRow", parentIndex: 1),
+            ],
+            treeMarkdown: """
+            - [0] AXWindow [actions=[raise]]
+              - [1] AXOutline [actions=[showmenu]]
+                - [2] AXRow [actions=[showdefaultui]]
+                  - AXStaticText = "\u{200E}Quick Notes"
+                - [3] AXRow [actions=[showdefaultui]]
+                  - AXStaticText = "Work"
+                  - [4] AXRow [actions=[showdefaultui]]
+                    - AXStaticText = "Notes"
+                - [5] AXRow [actions=[showdefaultui]]
+                  - AXStaticText = "\u{200E}Notes"
+            """
+        )
+        #expect(state.rows(named: "Notes").map(\.index) == [4, 5])
+        #expect(state.rows(named: "Work").map(\.index) == [3])
+        #expect(CuaWindowState(snapshotID: nil, windowID: 1, elements: []).rows(named: "Notes").isEmpty)
     }
 
     /// If New Note left the person's own note open, nothing is written over it.

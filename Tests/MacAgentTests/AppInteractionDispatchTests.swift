@@ -38,7 +38,10 @@ struct AppInteractionDispatchTests {
         fixture.viewModel.start()
         try await waitForIdle(fixture.viewModel)
 
-        #expect(fixture.viewModel.errorMessage == AppInteractionFailure.couldNotStartItem("Notes", "note").userMessage)
+        // Greyed out even in the Notes folder, which Sonny opened first and says so.
+        #expect(fixture.viewModel.errorMessage == AppInteractionRunError.failedAfterChange(
+            .couldNotStartItem("Notes", "note"), app: "Notes", left: .openedFolder("Notes")
+        ).errorDescription)
         #expect(await notes.state.notes == ["Groceries for Sunday", "Mom's birthday ideas"])
     }
 

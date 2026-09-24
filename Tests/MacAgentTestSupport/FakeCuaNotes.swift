@@ -14,6 +14,10 @@ import MacAgentCore
 /// (`notes`, `clicked`, `keysPressed`) rather than on which calls were made.
 public struct FakeCuaNotesState: Sendable, Equatable {
     public var folders = ["Notes", "Recipes", "Family"]
+    public var selectedFolder = "Notes"
+    /// Set to a folder's name to model a New Note that is greyed out everywhere but there, as
+    /// Notes' is in a shared view, a smart folder or Recently Deleted.
+    public var newNoteOnlyIn: String?
     /// Each note's text. The last one is open in the editor when `editorOpen` is set.
     public var notes: [String] = ["Groceries for Sunday", "Mom's birthday ideas"]
     public var editorOpen = true
@@ -28,6 +32,8 @@ public struct FakeCuaNotesState: Sendable, Equatable {
     public var degradedReadings = 0
     /// Clicks, by the element's label or role.
     public var clicked: [String] = []
+    /// Folders opened by clicking their row.
+    public var foldersOpened: [String] = []
     public var keysPressed: [String] = []
     public var shortcuts: [[String]] = []
     public var menus: [[String]] = []
@@ -92,9 +98,11 @@ public actor FakeCuaNotes: CuaToolInvoking {
             }
             snapshot += 1
             redrawnSinceReading = false
+            let listed = elements()
             return Self.result([
                 "snapshot_id": "s\(snapshot)", "window_id": Self.mainWindow, "window_title": "Notes",
-                "elements": elements().map { $0.json(snapshot: snapshot) },
+                "elements": listed.map { $0.json(snapshot: snapshot) },
+                "tree_markdown": Self.markdown(listed),
             ])
         case "invoke_menu":
             let path = arguments["path"] as? [String] ?? []
@@ -139,7 +147,12 @@ public actor FakeCuaNotes: CuaToolInvoking {
         case "scroll":
             state.scrolls.append(arguments["direction"] as? String ?? "")
         default:
-            state.clicked.append(target?.label ?? target?.role ?? "nothing")
+            if let folder = target?.folder {
+                state.selectedFolder = folder
+                state.foldersOpened.append(folder)
+            } else {
+                state.clicked.append(target?.label ?? target?.role ?? "nothing")
+            }
         }
         return Self.result(["effect": "confirmed"])
     }
@@ -157,6 +170,8 @@ public actor FakeCuaNotes: CuaToolInvoking {
         var frame: (Double, Double, Double, Double)
         var parent: Int?
         var menuPath: [String]?
+        /// For a folder row: the folder's name, which cua lists nowhere but its Markdown.
+        var folder: String?
 
         func json(snapshot: Int) -> [String: Any] {
             var json: [String: Any] = [
@@ -175,14 +190,14 @@ public actor FakeCuaNotes: CuaToolInvoking {
 
     private func elements() -> [Element] {
         var list: [Element] = []
-        func add(_ role: String, label: String? = nil, value: String? = nil, actions: [String] = [], at frame: (Double, Double, Double, Double), parent: Int? = 0, selected: Bool? = nil, enabled: Bool = true, menuPath: [String]? = nil) -> Int {
-            list.append(Element(index: list.count, role: role, label: label, value: value, enabled: enabled, selected: selected, actions: actions, frame: frame, parent: parent, menuPath: menuPath))
+        func add(_ role: String, label: String? = nil, value: String? = nil, actions: [String] = [], at frame: (Double, Double, Double, Double), parent: Int? = 0, selected: Bool? = nil, enabled: Bool = true, menuPath: [String]? = nil, folder: String? = nil) -> Int {
+            list.append(Element(index: list.count, role: role, label: label, value: value, enabled: enabled, selected: selected, actions: actions, frame: frame, parent: parent, menuPath: menuPath, folder: folder))
             return list.count - 1
         }
         _ = add("AXWindow", label: "Notes", actions: ["AXRaise"], at: (0, 0, 1920, 1080), parent: nil)
         let outline = add("AXOutline", label: "Folders", actions: ["AXShowMenu"], at: (0, 52, 240, 1028))
         for (offset, folder) in state.folders.enumerated() {
-            let row = add("AXRow", actions: ["AXShowDefaultUI", "AXShowAlternateUI"], at: (0, 60 + Double(offset) * 30, 240, 30), parent: outline, selected: offset == 0)
+            let row = add("AXRow", actions: ["AXShowDefaultUI", "AXShowAlternateUI"], at: (0, 60 + Double(offset) * 30, 240, 30), parent: outline, selected: folder == state.selectedFolder, folder: folder)
             // The one folder whose name is an editable field, carrying the name as label and value.
             if offset == 1 {
                 _ = add("AXTextField", label: folder, value: folder, actions: ["AXConfirm"], at: (20, 60 + Double(offset) * 30, 200, 30), parent: row)
@@ -206,11 +221,37 @@ public actor FakeCuaNotes: CuaToolInvoking {
             let barItem = add("AXMenuBarItem", label: menu, at: (0, 0, 40, 24), parent: bar)
             let menuElement = add("AXMenu", at: (0, 24, 200, 200), parent: barItem)
             for item in items {
-                let enabled = !(menu == "File" && item == "New Note" && !state.newNoteEnabled)
+                let greyedHere = state.newNoteOnlyIn.map { $0 != state.selectedFolder } ?? false
+                let enabled = !(menu == "File" && item == "New Note" && (!state.newNoteEnabled || greyedHere))
                 _ = add("AXMenuItem", label: item, actions: ["AXPress", "AXCancel"], at: (0, 24, 200, 20), parent: menuElement, enabled: enabled, menuPath: [menu, item])
             }
         }
         return list
+    }
+
+    /// cua's Markdown shape, measured 2026-09-24: `- [N] Role (label) [actions=…]` per listed element,
+    /// indented by depth, with a folder row's name as an `AXStaticText = "…"` line beneath it.
+    private static func markdown(_ elements: [Element]) -> String {
+        func depth(_ element: Element) -> Int {
+            var depth = 0
+            var next = element.parent
+            while let index = next, let parent = elements.first(where: { $0.index == index }) {
+                depth += 1
+                next = parent.parent
+            }
+            return depth
+        }
+        var lines: [String] = []
+        for element in elements {
+            let indent = String(repeating: "  ", count: depth(element))
+            let label = element.label.map { " (\($0))" } ?? ""
+            lines.append("\(indent)- [\(element.index)] \(element.role)\(label) [actions=[\(element.actions.joined(separator: ","))]]")
+            // The real tree marks names with a left-to-right mark, which the lookup has to ignore.
+            if let folder = element.folder, folder != "Recipes" {
+                lines.append("\(indent)  - AXStaticText = \"\u{200E}\(folder)\"")
+            }
+        }
+        return lines.joined(separator: "\n")
     }
 
     private static func result(_ structured: [String: Any]) -> Data {

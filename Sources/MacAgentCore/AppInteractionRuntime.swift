@@ -31,11 +31,16 @@ public struct AppInteractionRuntime: Sendable {
         public let startingMenuPath: [String]?
         /// What that command makes, in the person's words: "note".
         public let itemNoun: String
+        /// The folder Sonny opens when the starting command is greyed out where the app is, then
+        /// tries once more: Notes cannot make a note in a shared view, a smart folder or Recently
+        /// Deleted (the first live run, 2026-09-24).
+        public let defaultFolder: String?
 
-        public init(bundleIdentifier: String, startingMenuPath: [String]?, itemNoun: String) {
+        public init(bundleIdentifier: String, startingMenuPath: [String]?, itemNoun: String, defaultFolder: String? = nil) {
             self.bundleIdentifier = bundleIdentifier
             self.startingMenuPath = startingMenuPath
             self.itemNoun = itemNoun
+            self.defaultFolder = defaultFolder
         }
     }
 
@@ -53,7 +58,8 @@ public struct AppInteractionRuntime: Sendable {
     public static let notes = SupportedApp(
         bundleIdentifier: "com.apple.Notes",
         startingMenuPath: ["File", "New Note"],
-        itemNoun: "note"
+        itemNoun: "note",
+        defaultFolder: "Notes"
     )
 
     private let driver: CuaDriverClient
@@ -90,6 +96,8 @@ public struct AppInteractionRuntime: Sendable {
         var appName: String?
         /// The noun of the item Sonny started with the app's own command, once it has.
         var startedItem: String?
+        /// The folder Sonny opened because the starting command was greyed out where the app was.
+        var openedFolder: String?
         /// Everything Sonny set as a field's value, so the policy can tell its own text from the
         /// person's (PR #289 review, F8).
         var written: Set<String> = []
@@ -103,7 +111,8 @@ public struct AppInteractionRuntime: Sendable {
         func leftBehind(for goal: AppInteractionGoal) -> AppInteractionLeftBehind? {
             if typedMessage(of: goal) { return .text }
             if !written.isEmpty { return .searchedName }
-            return startedItem.map { .newItem($0) }
+            if let startedItem { return .newItem(startedItem) }
+            return openedFolder.map { .openedFolder($0) }
         }
     }
 
@@ -177,13 +186,29 @@ public struct AppInteractionRuntime: Sendable {
         let windowID = try await mainWindow(of: processIdentifier, appName: name)
 
         if let path = supported.startingMenuPath {
-            try Task.checkCancellation()
-            do {
-                try await driver.perform(.menu(path), pid: processIdentifier, windowID: windowID)
-            } catch let error as CuaToolError {
-                if error.isOutsideCeiling { return .failed(.outsideCeiling(name)) }
-                return .failed(.couldNotStartItem(name, supported.itemNoun))
+            var started = try await runMenu(path, pid: processIdentifier, windowID: windowID, appName: name, log: log)
+            if !started, let folder = supported.defaultFolder {
+                // Founders, 2026-09-24: when the command is greyed out where the app is, open the
+                // default folder and try once more. Sonny finds it by name on this Mac, from cua's
+                // own rendering of the window; the model has no part in it and never sees the names.
+                let state = try await observe(processIdentifier, windowID: windowID, appName: name)
+                if let row = state.rows(named: folder).first {
+                    try Task.checkCancellation()
+                    do {
+                        try await driver.perform(.click(CuaElementRef(row, in: state)), pid: processIdentifier, windowID: windowID)
+                        progress.openedFolder = folder
+                        log("Opened the \(folder) folder in \(name)")
+                        try await sleep(budget.settle)
+                        started = try await runMenu(path, pid: processIdentifier, windowID: windowID, appName: name, log: log)
+                    } catch let error as CuaToolError {
+                        if error.isOutsideCeiling { return .failed(.outsideCeiling(name)) }
+                        log("Opening the \(folder) folder failed: \(error.message)")
+                    }
+                } else {
+                    log("\(name) has no folder named \(folder)")
+                }
             }
+            guard started else { return .failed(.couldNotStartItem(name, supported.itemNoun)) }
             progress.startedItem = supported.itemNoun
             log("Started a new \(supported.itemNoun) in \(name)")
             try await sleep(budget.settle)
@@ -198,7 +223,7 @@ public struct AppInteractionRuntime: Sendable {
             // a confirmed one. An unconfirmed placement waits for the model to say it is finished,
             // so text in the wrong item gets a turn to be moved (PR #289 review, F3).
             if progress.typedMessage(of: goal), AppInteractionVerifier.check(state, goal: goal) == .satisfied {
-                return .done(AppInteractionReport(appName: name, goal: goal, targetConfirmed: true, newItem: progress.startedItem))
+                return .done(AppInteractionReport(appName: name, goal: goal, targetConfirmed: true, newItem: progress.startedItem, folder: progress.openedFolder))
             }
 
             let built = screenBuilder.build(from: state, goal: goal, sonnyWrote: progress.written)
@@ -260,6 +285,24 @@ public struct AppInteractionRuntime: Sendable {
         return .failed(.ranOutOfSteps(name, budget.maxSteps))
     }
 
+    /// Runs the app's starting menu command: true when it ran, false when the app has it missing or
+    /// greyed out, with cua's reason in the activity log so a failure can be read rather than
+    /// guessed at. A refusal by cua's own ceiling ends the run.
+    private func runMenu(
+        _ path: [String], pid: pid_t, windowID: Int, appName: String,
+        log: @escaping @Sendable (String) -> Void
+    ) async throws -> Bool {
+        try Task.checkCancellation()
+        do {
+            try await driver.perform(.menu(path), pid: pid, windowID: windowID)
+            return true
+        } catch let error as CuaToolError {
+            if error.isOutsideCeiling { throw AppInteractionStop(.failed(.outsideCeiling(appName))) }
+            log("\(path.joined(separator: " › ")) did not run: \(error.message)")
+            return false
+        }
+    }
+
     /// Sets a field's value, and inserts the text instead when the field takes no whole value:
     /// what cua's `type_text` does, at the field's selection, still without a key being typed.
     private func perform(_ action: CuaAction, pid: pid_t, windowID: Int) async throws {
@@ -312,9 +355,9 @@ public struct AppInteractionRuntime: Sendable {
         if goal.text != nil, !progress.typedMessage(of: goal) { return nil }
         switch AppInteractionVerifier.check(state, goal: goal) {
         case .satisfied:
-            return .done(AppInteractionReport(appName: appName, goal: goal, targetConfirmed: true, newItem: progress.startedItem))
+            return .done(AppInteractionReport(appName: appName, goal: goal, targetConfirmed: true, newItem: progress.startedItem, folder: progress.openedFolder))
         case .targetUnconfirmed:
-            return .done(AppInteractionReport(appName: appName, goal: goal, targetConfirmed: false, newItem: progress.startedItem))
+            return .done(AppInteractionReport(appName: appName, goal: goal, targetConfirmed: false, newItem: progress.startedItem, folder: progress.openedFolder))
         case .otherTargetOpen, .notYet: return nil
         }
     }
@@ -391,12 +434,15 @@ public struct AppInteractionReport: Equatable, Sendable {
     public let targetConfirmed: Bool
     /// The noun of the item Sonny started itself, such as "note", when it did.
     public let newItem: String?
+    /// The folder Sonny opened first, when the app could not start one where it was.
+    public let folder: String?
 
-    public init(appName: String, goal: AppInteractionGoal, targetConfirmed: Bool, newItem: String? = nil) {
+    public init(appName: String, goal: AppInteractionGoal, targetConfirmed: Bool, newItem: String? = nil, folder: String? = nil) {
         self.appName = appName
         self.goal = goal
         self.targetConfirmed = targetConfirmed
         self.newItem = newItem
+        self.folder = folder
     }
 
     public var summary: String {
@@ -406,6 +452,7 @@ public struct AppInteractionReport: Equatable, Sendable {
                     ? "The message is in the \(target) chat in \(appName), not sent: \"\(text)\""
                     : "The message is in a message box in \(appName), but I couldn't see which chat is open, so check it's \(target)'s before you send: \"\(text)\""
             }
+            if let newItem, let folder { return "I opened your \(folder) folder and made a new \(newItem) there: \"\(text)\"" }
             if let newItem { return "I made a new \(newItem) in \(appName): \"\(text)\"" }
             return "The text is in \(appName): \"\(text)\""
         }
@@ -422,12 +469,15 @@ public enum AppInteractionLeftBehind: Equatable, Sendable {
     case searchedName
     /// The goal's text is in the app.
     case text
+    /// Sonny opened this folder, the app's starting command having been greyed out where it was.
+    case openedFolder(String)
 
     func sentence(app: String) -> String {
         switch self {
         case .newItem(let noun): return "I had already started a new \(noun) in \(app)."
         case .searchedName: return "I left the name I searched for in \(app)'s search field."
         case .text: return "The text I added is still in \(app)."
+        case .openedFolder(let folder): return "I switched \(app) to your \(folder) folder."
         }
     }
 }
@@ -487,7 +537,7 @@ public enum AppInteractionFailure: Equatable, Sendable {
         case .unreadable(let app):
             return "I couldn't read \(app)'s window."
         case .couldNotStartItem(let app, let noun):
-            return "I couldn't start a new \(noun) in \(app). Open one of your folders there and try again."
+            return "\(app) wouldn't start a new \(noun). Open an ordinary folder there, like Notes, and try again."
         case .stepNotAllowed(let app, let label):
             // A control can have no name the app exposes; quoting an empty one read as a glitch.
             let what = label.isEmpty ? "a button" : "\"\(label)\""
