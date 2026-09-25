@@ -227,7 +227,7 @@ public struct SonnyBackendRetryDelays: Sendable, Equatable {
 /// memory is lost at exactly the moment a first-run user meets it. Writing the Keychain first also
 /// means a failed write cannot leave the process believing it is signed in with something no disk
 /// holds — the failure surfaces to whoever asked, and the user is not told they are signed in.
-public actor SonnyBackendClient {
+public actor SonnyBackendClient: GatewayCredentials {
     private let environment: SonnyBackendEnvironment?
     private let tokenStore: any SonnyAccountTokenStoring
     private let session: URLSession
@@ -424,6 +424,16 @@ public actor SonnyBackendClient {
     /// hand the requests riding on that refresh `cancelled`, which the copy layer renders as an
     /// unexplained failure. Letting it run to its own refusal gives them `notSignedIn`, which is
     /// both true and the sentence the user needs.
+    /// A current access token for the V2 gateway socket, refreshed first when it is close to expiry
+    /// or when `forceRefresh` asks (the gateway's `reauth.required`). The socket carries it in its
+    /// Authorization header and in `reauth`, never in the URL.
+    public func accessToken(forceRefresh: Bool) async throws -> String {
+        let snapshot = forceRefresh
+            ? try await refreshedSnapshot(newerThan: try requireSnapshot().generation)
+            : try await authorizedSnapshot()
+        return snapshot.tokens.accessToken
+    }
+
     public func discardSessionLocally() throws {
         try tokenStore.clearTokens()
         cachedTokens = nil
