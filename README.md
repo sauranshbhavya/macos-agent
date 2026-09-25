@@ -180,6 +180,9 @@ Coverage spans strict plan decoding, the full capability-adapter registry, risk-
 
 ## Architecture
 
+See [the current and V2 architecture diagrams](docs/sonny-architecture-diagrams.md) for a visual map
+of the codebase and the V2 implementation status.
+
 **The repository has two halves.** `Sources/` and `Tests/` are the macOS app, below. `server/` is
 the backend gateway — TypeScript on Node 22, its own build, its own tests, its own deploy, and its
 own `server/README.md`. It holds provider credentials and forwards to model providers; Sonny's agent
