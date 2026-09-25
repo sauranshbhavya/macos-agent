@@ -1,0 +1,246 @@
+#!/usr/bin/env python3
+"""Generate the table `AccountCreationClassTests` holds the account-creation matcher to (SONNY-539).
+
+Usage:
+  scripts/account-creation-class-table                  print the generated block
+  scripts/account-creation-class-table --write          replace the generated block in
+                                                        Tests/MacAgentCoreTests/AccountCreationClassTable.swift
+  scripts/account-creation-class-table --check          exit 2 if that block is not what the class run
+                                                        produces
+  ... --commit <rev>                                    run another commit's matcher instead of the
+                                                        floor's (see "Raising the floor" below)
+
+What it does. It takes `SkillPackStartPageRule.namesAccountCreation` as one commit wrote it, compiles
+it as that commit wrote it, and asks it about every address of a class:
+
+    https://example.com/ + up to DEPTH tokens, each one of TOKENS
+
+which is lane-529's class run on SONNY-529, the one that found two shapes three rounds of measurement
+over the shipped addresses could not. A test cannot fetch another commit, so the verdicts are written
+into the test target by value, and this script is the only place the other commit is read.
+
+The table is lossless, and small because the verdicts repeat. Walking the class token by token is a
+tree, and two addresses whose whole subtrees carry the same verdicts are one row: the matcher at the
+floor cannot tell them apart from there on. A row is a verdict and, for each token, the row that token
+leads to. Expanding the rows from row 0 gives back every verdict of the run, bit for bit, which this
+script checks before it prints anything. No rule about URLs is written here or in the test: a row is
+what the floor's matcher answered, not a model of how it decides.
+
+An address goes in through `URLComponents(string:)?.url`, because that is the door the pack decoder
+uses (`SkillPack.swift`, `httpsURL`), and the run refuses to produce a table when any address of the
+class does not parse there.
+
+Raising the floor. FLOOR is `main` as wave 12 closed it, the last matcher before SONNY-529 rewrote it,
+and the commit all three of the ticket's measurements compare against. The matcher has refused more
+than that since, and none of it less (the test is that claim). `--commit <rev> --write` writes any
+other commit's verdicts instead, after which the test's held counts fail until someone re-counts them
+on purpose. Whether the floor should move is the founders' decision, not this script's.
+
+Exit codes: 0 done, or `--check` found the block current. 2 `--check` found it stale. 1 nothing could
+be measured: the commit or a source file did not resolve, the matcher did not compile, an address did
+not parse, or the table did not expand back to the run. A 1 is never a clean answer.
+"""
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+FLOOR = "8f3d1d02a14f9ebac84da2aaa3750667bcbfe40b"
+TOKENS = ["signup", "Register", "x", "/", "?", "&", "=", ".", "#", "-", "_"]
+DEPTH = 5
+# What the matcher needs to compile on its own, without the package's dependencies.
+SOURCES = ["SkillPack.swift", "SkillPackStartPages.swift", "SkillPackContentRules.swift", "SearchTextNormalization.swift"]
+TABLE = Path("Tests/MacAgentCoreTests/AccountCreationClassTable.swift")
+BEGIN = "    // BEGIN GENERATED TABLE: scripts/account-creation-class-table --write. Do not edit by hand."
+END = "    // END GENERATED TABLE"
+
+RUNNER = """import Foundation
+let tokens: [String] = [%(tokens)s]
+let depth = %(depth)d
+var verdicts = "", unparsed = 0
+func verdict(_ address: String) -> Character {
+    guard let url = URLComponents(string: address)?.url else { unparsed += 1; return "0" }
+    return SkillPackStartPageRule.namesAccountCreation(url) ? "1" : "0"
+}
+func walk(_ address: String, _ length: Int) {
+    for token in tokens {
+        verdicts.append(verdict(address + token))
+        if length + 1 < depth { walk(address + token, length + 1) }
+    }
+}
+let root = verdict("https://example.com/")
+walk("https://example.com/", 0)
+print(root); print(verdicts); print(unparsed)
+"""
+
+
+def refuse(message):
+    print(f"account-creation-class-table: {message}", file=sys.stderr)
+    sys.exit(1)
+
+
+def run(command, **kwargs):
+    return subprocess.run(command, capture_output=True, text=True, **kwargs)
+
+
+def class_run(commit):
+    """Every verdict of `commit`'s matcher over the class, in the order the walk visits them."""
+    with tempfile.TemporaryDirectory(prefix="account-creation-class-") as scratch:
+        scratch = Path(scratch)
+        for name in SOURCES:
+            shown = run(["git", "show", f"{commit}:Sources/MacAgentCore/{name}"])
+            if shown.returncode != 0 or not shown.stdout.strip():
+                refuse(f"{commit[:8]} has no Sources/MacAgentCore/{name}: {shown.stderr.strip()}")
+            (scratch / name).write_text(shown.stdout, encoding="utf-8")
+        literal = ", ".join('"%s"' % token for token in TOKENS)
+        (scratch / "main.swift").write_text(RUNNER % {"tokens": literal, "depth": DEPTH}, encoding="utf-8")
+        built = run(["swiftc", "-O", "-module-name", "AccountCreationClass", "-o", str(scratch / "run")]
+                    + [str(scratch / name) for name in SOURCES] + [str(scratch / "main.swift")])
+        if built.returncode != 0:
+            refuse(f"{commit[:8]}'s matcher did not compile on its own:\n{built.stderr}")
+        ran = run([str(scratch / "run")])
+        lines = ran.stdout.split("\n")
+        if ran.returncode != 0 or len(lines) < 3:
+            refuse(f"the class run did not finish: exit {ran.returncode} {ran.stderr.strip()}")
+    root, verdicts, unparsed = lines[0], lines[1], int(lines[2])
+    expected = sum(len(TOKENS) ** length for length in range(1, DEPTH + 1))
+    if unparsed or len(verdicts) != expected or set(verdicts) - {"0", "1"} or root not in ("0", "1"):
+        refuse(f"the class run is not a whole one: {len(verdicts)} verdicts for {expected} addresses, {unparsed} unparsed")
+    return root == "1", [bit == "1" for bit in verdicts]
+
+
+def rows_of(root_refused, verdicts):
+    """The run as rows: (refused, next row per token), merged wherever two subtrees are the same, numbered from
+    row 0 outwards in the order a reader following an address meets them. Also, per row, how many addresses
+    reach it and the shortest one that does."""
+    cursor = [0]
+    ids, merged, reached = {}, [], {}
+
+    def subtree(refused, remaining):
+        children = ()
+        if remaining:
+            picked = []
+            for _ in TOKENS:
+                child_refused = verdicts[cursor[0]]
+                cursor[0] += 1
+                picked.append(subtree(child_refused, remaining - 1))
+            children = tuple(picked)
+        key = (refused, children)
+        if key not in ids:
+            ids[key] = len(merged)
+            merged.append(key)
+        reached[ids[key]] = reached.get(ids[key], 0) + 1
+        return ids[key]
+
+    root = subtree(root_refused, DEPTH)
+    if cursor[0] != len(verdicts):
+        refuse("the walk that builds the rows did not consume the whole run")
+    order, shortest, queue = {root: 0}, {root: ""}, [root]
+    while queue:
+        row = queue.pop(0)
+        for token, child in zip(TOKENS, merged[row][1]):
+            if child not in order:
+                order[child] = len(order)
+                shortest[child] = shortest[row] + token
+                queue.append(child)
+    rows = [None] * len(order)
+    for old, new in order.items():
+        refused, children = merged[old]
+        rows[new] = (refused, [order[child] for child in children], reached[old], shortest[old])
+    return rows
+
+
+def expand(rows):
+    """Every verdict the rows hold, in the walk's order: what the test reads, recomputed from the rows alone."""
+    verdicts = []
+
+    def walk(row, remaining):
+        for child in rows[row][1]:
+            verdicts.append(rows[child][0])
+            if remaining > 1:
+                walk(child, remaining - 1)
+
+    walk(0, DEPTH)
+    return verdicts
+
+
+def block(commit, rows, verdicts):
+    per_length = [0] * DEPTH
+
+    def count(row, length):
+        for child in rows[row][1]:
+            if rows[child][0]:
+                per_length[length] += 1
+            if length + 1 < DEPTH:
+                count(child, length + 1)
+
+    count(0, 0)
+    width = len(str(len(rows) - 1))
+    lines = [
+        BEGIN,
+        f"    // The matcher of {commit}, asked about {len(verdicts)} addresses; it refused {sum(verdicts)}",
+        f"    // ({', '.join(str(n) for n in per_length)} by length). {len(rows)} rows.",
+        f'    static let floorCommit = "{commit}"',
+        "    static let tokens = [" + ", ".join('"%s"' % token for token in TOKENS) + "]",
+        f"    static let depth = {DEPTH}",
+        "    static let shapes: [Shape] = [",
+    ]
+    for number, (refused, children, reached, first) in enumerate(rows):
+        following = ", ".join(str(child).rjust(width) for child in children)
+        what = "the bare address" if number == 0 else f'{reached} of the class, shortest "{first}"'
+        verdict = "true, " if refused else "false,"
+        lines.append(f"        Shape({str(number).rjust(width)}, refused: {verdict} next: [{following}]), // {what}")
+    lines += ["    ]", END]
+    return lines
+
+
+def main():
+    arguments = sys.argv[1:]
+    if "--help" in arguments or "-h" in arguments:
+        print(__doc__)
+        return 0
+    commit = FLOOR
+    if "--commit" in arguments:
+        at = arguments.index("--commit")
+        if at + 1 >= len(arguments):
+            refuse("--commit needs a revision")
+        commit = arguments[at + 1]
+        del arguments[at:at + 2]
+    mode = arguments[0] if arguments else "--print"
+    if len(arguments) > 1 or mode not in ("--print", "--write", "--check"):
+        refuse("usage: scripts/account-creation-class-table [--write | --check] [--commit <rev>]")
+
+    resolved = run(["git", "rev-parse", "--verify", "--quiet", f"{commit}^{{commit}}"])
+    if resolved.returncode != 0:
+        refuse(f"{commit} is not a commit here")
+    commit = resolved.stdout.strip()
+
+    root_refused, verdicts = class_run(commit)
+    rows = rows_of(root_refused, verdicts)
+    if expand(rows) != verdicts:
+        refuse("the rows do not expand back to the run they were built from")
+    generated = block(commit, rows, verdicts)
+    print(f"{commit[:8]}: {len(verdicts)} addresses, {sum(verdicts)} refused, {len(rows)} rows", file=sys.stderr)
+
+    if mode == "--print":
+        print("\n".join(generated))
+        return 0
+    if not TABLE.exists():
+        refuse(f"{TABLE} is not here; run this from the repository root")
+    held = TABLE.read_text(encoding="utf-8").split("\n")
+    if held.count(BEGIN) != 1 or held.count(END) != 1 or held.index(BEGIN) > held.index(END):
+        refuse(f"{TABLE} does not hold exactly one generated block")
+    start, stop = held.index(BEGIN), held.index(END)
+    if mode == "--check":
+        if held[start:stop + 1] == generated:
+            print(f"{TABLE}: current")
+            return 0
+        print(f"{TABLE}: the generated block is not what {commit[:8]}'s matcher answers")
+        return 2
+    TABLE.write_text("\n".join(held[:start] + generated + held[stop + 1:]), encoding="utf-8")
+    print(f"{TABLE}: written")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
