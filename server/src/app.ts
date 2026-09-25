@@ -42,6 +42,10 @@ import type { BillingProvider } from "./billing/provider.js";
 import { registerBillingRoutes } from "./routes/billing.js";
 import { authenticateAccessToken } from "./auth/gate.js";
 import { unavailableAgent, type AgentFactory } from "./agent/agent.js";
+import { agentModelChainsFrom } from "./agent/model/adapter.js";
+import { modelRouter } from "./agent/model/router.js";
+import { tiersConfigured } from "./agent/model/tiers.js";
+import { taskAgentFactory } from "./agent/task-agent.js";
 import { postgresModelCallLedger, type ModelCallLedger } from "./agent/credits.js";
 import { DEFAULT_SESSION_TIMING, type SessionTiming } from "./agent/session/connection.js";
 import { SessionRegistry, type MessageRate } from "./agent/session/registry.js";
@@ -314,6 +318,14 @@ export interface AppOverrides {
   readonly agentTiming?: SessionTiming;
   readonly agentBudgets?: TaskBudgets;
   readonly agentMessageRate?: MessageRate;
+}
+
+/** The planner and screen agent when every tier has a model, otherwise an honest refusal. */
+function configuredAgent(config: Config): AgentFactory {
+  const chains = agentModelChainsFrom(config, config.agentTiers);
+  return tiersConfigured(config.agentTiers) && Object.values(chains).every((chain) => chain.length > 0)
+    ? taskAgentFactory(modelRouter(chains))
+    : unavailableAgent;
 }
 
 export function buildApp(
@@ -767,7 +779,7 @@ export function buildApp(
           defaultCapUnits: requireSpendCapUnits(config),
         }),
       rates: tokenRates,
-      agentFor: overrides.agentFactory ?? unavailableAgent,
+      agentFor: overrides.agentFactory ?? configuredAgent(config),
       deliver: (task, messages) => agentSessions.peerFor(task.accountId, task.deviceId)?.sendTask(messages),
       now,
       log: app.log,

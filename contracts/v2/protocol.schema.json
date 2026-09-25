@@ -15,7 +15,7 @@
     },
     "Seq": { "type": "integer", "minimum": 1, "maximum": 1000000 },
     "SeqOrZero": { "type": "integer", "minimum": 0, "maximum": 1000000 },
-    "BundleId": { "type": "string", "minLength": 1, "maxLength": 255 },
+    "BundleId": { "description": "A bundle id, or an app name the Mac resolves to one.", "type": "string", "minLength": 1, "maxLength": 255 },
     "Rect": {
       "type": "object",
       "additionalProperties": false,
