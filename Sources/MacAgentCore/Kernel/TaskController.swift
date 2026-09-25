@@ -242,12 +242,14 @@ public final class TaskController: ObservableObject {
         guard liveTask == nil, !waiting.isEmpty else { return }
         let next = waiting.removeFirst()
         guard let runtime = runtimes[next] else { return }
+        // Claimed before the wait below, so a second call can't start another task meanwhile.
+        liveTask = next
         guard await connection.ensureConnected(within: connectTimeout) else {
+            liveTask = nil
             await runtime.fail(.serverUnavailable)
             await startNext()
             return
         }
-        liveTask = next
         await runtime.start(generation: generation)
     }
 }

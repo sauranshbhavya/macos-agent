@@ -103,26 +103,32 @@ public enum ActionGate {
         if effect == .credential { return .refuse(.secureField) }
         if context.standing == .refused { return .refuse(.targetRefused) }
 
-        var decision: GateDecision
+        // Nobody is at the Mac: the Unattended column decides, whatever the mode. Local edits and
+        // new things run; anything that would need a yes is refused, since nobody can give one.
+        if context.unattended {
+            switch effect {
+            case .observe, .navigate:
+                return .run
+            case .editLocal, .create:
+                return context.standing == .notAllowed && context.mode != .power ? .refuse(.unattendedRefused) : .run
+            case .destructive, .external, .financial, .unknown, .credential:
+                return .refuse(.unattendedRefused)
+            }
+        }
+
         switch effect {
         case .observe, .navigate:
-            decision = .run
+            return .run
         case .editLocal, .create:
-            decision = context.mode == .safe ? .confirm : .run
+            // Power skips the per-app standing check; Safe asks for every change; Normal asks in an
+            // app the user hasn't allowed.
+            if context.mode == .safe { return .confirm }
+            if context.standing == .notAllowed, context.mode != .power { return .confirm }
+            return .run
         case .destructive, .external, .financial, .unknown:
-            decision = .confirm
+            return .confirm
         case .credential:
             return .refuse(.secureField)
         }
-
-        // Power skips the per-app standing check; Safe and Normal ask before acting in an app the
-        // user hasn't allowed. Looking is never gated by standing.
-        if decision == .run, effect > .navigate, context.standing == .notAllowed, context.mode != .power {
-            decision = .confirm
-        }
-        if decision == .confirm, context.unattended {
-            return .refuse(.unattendedRefused)
-        }
-        return decision
     }
 }

@@ -259,6 +259,40 @@ struct KernelTests {
     }
 
     @Test
+    func aRelaunchDuringADispatchPausesAndNeverRunsTheActionAgain() async throws {
+        let ledgers = MemoryTaskLedgerStore()
+        let first = ScriptedGateway()
+        // The send never returns: the app dies while it is in flight.
+        let send = TestCapability(name: "send", floor: .external, released: Shared(false))
+        let before = makeController(first, ledgers: ledgers, capabilities: [send])
+        await before.launch()
+        let task = try await startedTask(before, TaskRequest(goal: "Send it", mode: .power))
+        _ = try await first.next("task.start")
+        let action = ActionID()
+        await first.send(task, propose([call("send", action, effect: .external)]), re: 1)
+        var commit: PreparedCommit?
+        #expect(await eventually {
+            if case .awaitingApproval(let pending) = before.snapshot(task)?.phase { commit = pending; return true }
+            return false
+        })
+        await before.decide(task: task, action: action, commit: try #require(commit).commitID, approved: true)
+        #expect(await eventually { send.started.value })
+        await before.shutDown()
+
+        // A new launch reads the same ledger.
+        let second = ScriptedGateway()
+        let after = makeController(second, ledgers: ledgers, capabilities: [send])
+        await after.launch()
+        #expect(await eventually {
+            if case .paused(.outcomeUnknown(action, .external, _)) = after.snapshot(task)?.phase { return true }
+            return false
+        })
+        #expect(await second.unread("outcome").isEmpty)
+        send.released.value = true
+        #expect(send.executed.value.count <= 1)
+    }
+
+    @Test
     func aNavigationWithAnUnknownEndIsReportedWithoutPausing() async throws {
         let gateway = ScriptedGateway()
         let ledgers = MemoryTaskLedgerStore()
@@ -507,6 +541,10 @@ struct ActionGateTests {
         (.unknown, .power, true, .refuse(.unattendedRefused)),
         (.external, .normal, true, .refuse(.unattendedRefused)),
         (.editLocal, .normal, true, .run),
+        (.editLocal, .safe, true, .run),
+        (.create, .safe, true, .run),
+        (.navigate, .safe, true, .run),
+        (.destructive, .power, true, .refuse(.unattendedRefused)),
         (.credential, .power, false, .refuse(.secureField)),
     ])
     func theModeTableDecides(effect: Effect, mode: AgentInteractionMode, unattended: Bool, expected: GateDecision) {
