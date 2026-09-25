@@ -2,10 +2,10 @@
 
 This is the current guidance for agents and contributors. Start with the user's requested outcome and the code that implements it. Historical plans and branch records are context, not standing instructions.
 
-## Current phase (founders, 2026-09-23)
+## Current phase (founders, 2026-09-23, updated 2026-09-24)
 
 - **Feature freeze until Milestone A of the [V2 plan](sonny_v2_architecture_implementation_plan.md) lands.** Do not add features, capabilities or improvements to the current execution path. The only exception is a fix for a defect that loses data, breaks security or blocks everyday use, and a founder approves each one.
-- Skill-pack work waits until the core rewrite is done (Milestone C, core cutover). The Jev local decision model is on hold.
+- Skill packs come first, then the V2 plan resumes from Milestone A (founders, 2026-09-24, reversing the hold of 2026-09-23). The work is the pack groups SONNY-545 to SONNY-552, plus the sites SONNY-537 already has in flight. Only sites in the Chrome UX Report top 10,000 get deep packs; niche sites stay shallow. The Jev local decision model is still on hold.
 - If a request conflicts with this phase, say so and ask before starting.
 
 ## Make changes
