@@ -143,6 +143,45 @@ struct ConcurrentRunTests {
     }
 }
 
+/// `⌃⌥⎋` says a user stopped something only when it did (PR #287's F3).
+///
+/// The line sat above the loop, so every press wrote it, including one that found every slot idle.
+/// Nothing machine-readable consumes it — the journal's `endReasonCode` comes from
+/// `VisionSessionContainment` — so this is log fidelity, and the log is what a session reads when
+/// reconstructing what happened.
+@Suite(.serialized)
+@MainActor
+struct EmergencyKeyLogTests {
+    @Test
+    func theKeyLogsAStopOnlyWhenItStoppedSomething() throws {
+        let fixture = try makeDispatchFixture()
+        defer { fixture.tearDown() }
+        let viewModel = fixture.viewModel
+        var press: (@MainActor () -> Void)?
+        viewModel.visionEmergencyStopHotKeyFactory = { onStop in
+            press = onStop
+            return try KeyThatOnlyRemembersItsHandler(onStop: onStop)
+        }
+        viewModel.registerEmergencyStopHotKey()
+        let pressTheKey = try #require(press, "the key was registered with no handler")
+        let userStopped = "vision: user_stopped - emergency stop"
+        func stopsLogged() -> Int {
+            viewModel.logStore.events.filter { $0.message == userStopped }.count
+        }
+
+        let background = viewModel.addRunSlotForTests()
+        try #require(viewModel.runSlots.allSatisfy { !$0.isInFlight }, "precondition: every run is idle")
+        pressTheKey()
+        #expect(stopsLogged() == 0, "a press that stopped nothing claimed a user stop")
+
+        // Something in flight, on a run the widget is not showing.
+        RunScope.$current.withValue(background) { viewModel.isRunning = true }
+        pressTheKey()
+        #expect(stopsLogged() == 1, "a press that stopped a run said nothing about it")
+        RunScope.$current.withValue(background) { viewModel.isRunning = false }
+    }
+}
+
 private final class KeyThatOnlyRemembersItsHandler: EmergencyStopHotKeyRegistering {
     init(onStop: @escaping @MainActor () -> Void) throws {}
 }

@@ -181,7 +181,7 @@ struct RunAttributedRetryTests {
         try await HangBackstop.waitOrAbandon(for: "the task to finish") {
             slot(run, in: viewModel).map { !$0.isRunning && planned.commands.count == 1 } == true
         }
-        try #require(viewModel.hasRetryableCommand, "precondition: the run holds a last command")
+        try #require(!viewModel.lastCommand.isEmpty, "precondition: the run holds a last command")
 
         var raised: [RaisedFailure] = []
         let subscription = viewModel.errorMessageRaised.sink { raised.append($0) }
@@ -200,6 +200,107 @@ struct RunAttributedRetryTests {
         )
         #expect(content.categoryIdentifier != withRetry.categoryIdentifier, "it was posted in the category that carries Retry")
         #expect(content.userInfo.isEmpty)
+    }
+
+    /// A Retry the cap refuses keeps its banner, and the door says it did not start (PR #287's F1).
+    ///
+    /// The cap's refusal is the one refusal on this path that *writes* — it publishes
+    /// `tooManyRunsMessage` through `setError`, and publishing a failure retires the run's retry
+    /// token. So before the fix this press returned `true`, replaced the failure on screen with the
+    /// cap's sentence, and left the banner answering nothing ever after: the user was told to try
+    /// again once a run finished, and trying again found nothing. Inert in the shipping app, since
+    /// nothing there makes a second run; live in the lane that switches the feature on.
+    @Test
+    func aRetryTheCapRefusesKeepsItsBannerAndReportsThatItDidNotStart() async throws {
+        let planned = PlannedCommands()
+        let fixture = try makeDispatchFixture(planner: { RetryPlanner(folder: $0, planned: planned) })
+        defer { fixture.tearDown() }
+        let viewModel = fixture.viewModel
+        var raised: [RaisedFailure] = []
+        let subscription = viewModel.errorMessageRaised.sink { raised.append($0) }
+        defer { subscription.cancel() }
+
+        let run = viewModel.focusedRunID
+        viewModel.command = "Draft one, which fails"
+        viewModel.start()
+        try await HangBackstop.waitOrAbandon(for: "the task to fail") {
+            slot(run, in: viewModel).map { !$0.isRunning && $0.errorMessage != nil } == true
+        }
+        let banner = try #require(raised.last?.retry)
+        let theFailureItWasPostedFor = try #require(slot(run, in: viewModel)?.errorMessage)
+
+        // Three other runs fill the cap, and the widget stays on the run holding the banner.
+        let others = (0..<3).map { _ in viewModel.addRunSlotForTests() }
+        for id in others {
+            RunScope.$current.withValue(id) { viewModel.isRunning = true }
+        }
+        try #require(viewModel.runsInFlight == AgentViewModel.maximumConcurrentRuns)
+        try #require(!viewModel.canStartAnotherRun)
+
+        #expect(!viewModel.retryFailedRun(banner.runID, token: banner.token), "the door reported a retry that never started")
+        #expect(slot(run, in: viewModel)?.retryToken == banner.token, "the refusal spent the banner it was pressed on")
+        #expect(slot(run, in: viewModel)?.errorMessage == theFailureItWasPostedFor, "the refusal replaced the failure the banner is about")
+        #expect(!viewModel.isRunning, "a refused retry started a run")
+        #expect(planned.commands.count == 1, "a refused retry reached the planner")
+
+        // One run finishes, and the same banner — pressed a second time — still works.
+        RunScope.$current.withValue(others[0]) { viewModel.isRunning = false }
+        #expect(viewModel.retryFailedRun(banner.runID, token: banner.token))
+        try await HangBackstop.waitOrAbandon(for: "the retried task to fail again") {
+            slot(run, in: viewModel).map { !$0.isRunning && planned.commands.count == 2 } == true
+        }
+        #expect(planned.commands == ["Draft one, which fails", "Draft one, which fails"])
+        for id in others.dropFirst() {
+            RunScope.$current.withValue(id) { viewModel.isRunning = false }
+        }
+    }
+
+    /// The two in-app Retry controls offer nothing for a failure that is not a task (PR #287's F2),
+    /// which is the answer the notification for the same failure already gives by carrying no
+    /// button — `aFailureThatIsNobodysTaskIsAnnouncedWithNothingToRetry` holds that half.
+    ///
+    /// The old gate asked whether the run had ever run a command, so after a microphone that would
+    /// not open the widget offered a Retry that re-ran the last real task. That is SONNY-533's own
+    /// sentence — work the person never asked to repeat — on the surface they are most likely to be
+    /// looking at, and it is reachable today with one run.
+    @Test
+    func aFailureThatIsNobodysTaskOffersNoRetryOnEitherSurface() async throws {
+        let planned = PlannedCommands()
+        let fixture = try makeDispatchFixture(planner: { RetryPlanner(folder: $0, planned: planned) })
+        defer { fixture.tearDown() }
+        let viewModel = fixture.viewModel
+        let run = viewModel.focusedRunID
+
+        viewModel.command = "Draft one, which fails"
+        viewModel.start()
+        try await HangBackstop.waitOrAbandon(for: "the task to fail") {
+            slot(run, in: viewModel).map { !$0.isRunning && $0.errorMessage != nil } == true
+        }
+        #expect(viewModel.canRetryFailedTask, "a task that failed is what Retry is for")
+
+        viewModel.setError("Microphone permission was denied.", persistent: true)
+        #expect(!viewModel.lastCommand.isEmpty, "precondition: the run still holds the task a stale Retry would re-run")
+        #expect(!viewModel.canRetryFailedTask, "the failure on screen is not a task, and Retry would re-run a different one")
+        #expect(slot(run, in: viewModel)?.failedTask == nil)
+
+        // And pressing it anyway re-runs nothing: the gate is what hides the button, not the only
+        // thing standing between the press and the planner.
+        viewModel.retryLastCommand()
+        #expect(viewModel.isRunning, "precondition: this press does dispatch, so the gate is the control")
+        try await HangBackstop.waitOrAbandon(for: "the dispatched retry to settle") { !viewModel.isRunning }
+    }
+
+    /// Both controls read that one predicate, at their own site. The views cannot be built in a
+    /// test process, so the wiring is read; what the predicate answers is held by the test above.
+    @Test
+    func bothInAppRetryControlsGateOnTheFailedTask() throws {
+        let widget = try MacAgentSource.read("FloatingWidgetView.swift")
+        #expect(MacAgentSource.count(of: "canRetry: viewModel.canRetryFailedTask,", inText: widget) == 1)
+        #expect(MacAgentSource.count(of: "viewModel.retryLastCommand(", inText: widget) == 1)
+
+        let commandCenter = try MacAgentSource.read("CommandCenterView.swift")
+        #expect(MacAgentSource.count(of: "if viewModel.canRetryFailedTask {", inText: commandCenter) == 1)
+        #expect(MacAgentSource.count(of: "viewModel.retryLastCommand(", inText: commandCenter) == 1)
     }
 
     /// The delegate's half, read off the wiring for the reason the Allow's is: the closures cannot

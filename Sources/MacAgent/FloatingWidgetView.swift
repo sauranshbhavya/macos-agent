@@ -1240,7 +1240,7 @@ private extension FloatingWidgetView {
                 plan: viewModel.plan,
                 stepStatuses: viewModel.stepStatuses,
                 message: message,
-                canRetry: viewModel.hasRetryableCommand,
+                canRetry: viewModel.canRetryFailedTask,
                 onRetry: { viewModel.retryLastCommand() }
             )
         case .tooOld(let prompt), .updateAvailable(let prompt):
@@ -2481,10 +2481,12 @@ private struct WidgetFailurePanel: View {
     let plan: AgentPlan?
     let stepStatuses: [String: AgentStepStatus]
     let message: String
-    /// `errorMessage` also carries pre-flight errors (empty-command validation, voice-
-    /// transcription failures) that never reached a real submission — showing a Retry button for
-    /// those was a real dead-end-button bug, since `retryLastCommand()` silently no-ops when
-    /// there's no real last command behind it.
+    /// `errorMessage` also carries failures that are not this run's task at all — a microphone
+    /// that would not open, a transcription that failed, a control that could not do what it was
+    /// pressed for. Showing a Retry button for those was a dead-end-button bug when the run held no
+    /// command, and a worse one when it held an unrelated command that the press then re-ran
+    /// (PR #287's F2). `AgentViewModel.canRetryFailedTask` is the gate, and it asks whether the
+    /// failure on screen is a failed task.
     let canRetry: Bool
     let onRetry: () -> Void
 

@@ -609,9 +609,10 @@ final class AgentViewModel: ObservableObject {
     }
 
     /// Retries the task that failed on `runID`, and only if its failure is still the one raised
-    /// with `token` (SONNY-533). Returns `false` when the run and the token name no failed task that
-    /// is showing now, and `true` when they did and it was handed to `retryLastCommand` — which
-    /// still declines, as it always has, while that run has anything in flight.
+    /// with `token` (SONNY-533). Returns whether that task was dispatched: `false` when the run and
+    /// the token name no failed task that is showing now, and `false` again when `retryLastCommand`
+    /// declines — while that run has anything in flight, or while the cap is full. A declined retry
+    /// writes nothing, so the banner it was pressed on stays live for the next press (PR #287's F1).
     ///
     /// **The one door by which a Retry reaches a named run**, and `approveParkedRun`'s twin. The
     /// notification's Retry used to call `retryLastCommand()` bare, which re-runs the last command
@@ -630,10 +631,13 @@ final class AgentViewModel: ObservableObject {
             logStore.append(.observe, "Not retried: that failure is no longer showing.")
             return false
         }
-        RunScope.$current.withValue(runID) {
+        let started = RunScope.$current.withValue(runID) {
             retryLastCommand()
         }
-        return true
+        if !started {
+            logStore.append(.observe, "Not retried: Sonny was not ready to begin that task again.")
+        }
+        return started
     }
 
     /// Adds an empty slot and returns its id. **A test seam, and until the rest of SONNY-456 lands
@@ -1931,6 +1935,13 @@ final class AgentViewModel: ObservableObject {
         runSlots.filter(\.isInFlight).count
     }
 
+    /// Whether another run may begin now. The cap's one rule, so the two doors that have to obey it
+    /// cannot drift: `start()`, which refuses at the door, and `retryLastCommand`, which declines
+    /// before it writes anything (PR #287's F1).
+    var canStartAnotherRun: Bool {
+        runsInFlight < Self.maximumConcurrentRuns
+    }
+
     /// Whether any run is running, whichever one the widget shows (SONNY-456).
     ///
     /// **What a control that deletes reads, and `isRunning` is not it.** The whole wipe, the
@@ -2848,7 +2859,7 @@ final class AgentViewModel: ObservableObject {
         // the *other* runs. The typed command is left in the composer, so it can be sent again the
         // moment one finishes; `dispatch` clears it for a programmatic caller, as it does for every
         // refusal. `setError`, not a run's own failure: nothing ran, so there is nothing to retry.
-        guard runsInFlight < Self.maximumConcurrentRuns else {
+        guard canStartAnotherRun else {
             setError(Self.tooManyRunsMessage)
             return
         }
@@ -3602,14 +3613,23 @@ final class AgentViewModel: ObservableObject {
         currentTask?.cancel()
     }
 
-    /// Whether `retryLastCommand()` would actually do anything. `errorMessage` also carries
-    /// pre-flight errors that never reached a real submission (an empty-command validation
-    /// message, a voice-transcription failure) — those leave `lastCommand` empty, so a UI that
-    /// shows a Retry button for *any* `errorMessage` would show one that's silently a no-op for
-    /// exactly those cases. Exposed as a bool here since retry-eligibility callers only need the
-    /// yes/no, not the text — see `runningCommandDisplayText` below for the text itself.
-    var hasRetryableCommand: Bool {
-        !lastCommand.isEmpty
+    /// Whether a Retry drawn on this run's failure would re-run **the task that failed** — the one
+    /// question both in-app Retry controls gate on (PR #287's F2).
+    ///
+    /// **It reads the failed task, not the last command, and the difference is the defect
+    /// SONNY-533 is about.** This was `!lastCommand.isEmpty`, which asks whether a command was ever
+    /// run on this slot. `errorMessage` carries two kinds of failure, and only one of them is a
+    /// task: a microphone that would not open, a transcription that failed, a control that could
+    /// not do what it was pressed for. After one of those the run still holds the last command it
+    /// really did run, so the old gate showed a live Retry that re-ran an unrelated task — the same
+    /// press the notification refuses, three inches away, because its banner carries no button at
+    /// all. `RunSlot.failedTask` is `nil` for exactly those failures, so both surfaces now agree.
+    ///
+    /// It still cannot show a dead button, which is the property the old gate was written for: a
+    /// run's own task can only have failed after `start()` wrote its command, so a non-nil
+    /// `failedTask` implies a non-empty `lastCommand`. The gate is strictly narrower, never wider.
+    var canRetryFailedTask: Bool {
+        runSlotInScope.failedTask != nil
     }
 
     /// The real command driving the current/last run — `command` itself is cleared the instant
@@ -3713,7 +3733,7 @@ final class AgentViewModel: ObservableObject {
 
     /// Resubmits the last real command as-is. Used by the floating widget's task-level-failure
     /// retry button (§3.3.6), the error notification's "Retry" action, and Command Center's own
-    /// failure row.
+    /// failure row. Returns whether the retry was dispatched.
     ///
     /// - Parameter origin: Which surface's retry control this is. Defaults to `.widget` so the
     ///   two pre-existing call sites keep their original behavior. This used to be hardcoded
@@ -3721,13 +3741,23 @@ final class AgentViewModel: ObservableObject {
     ///   10 checkpoint 1 gave it one. The retry action is a fresh interaction on whichever surface
     ///   the user pressed it, not an inheritance of the failed task's origin, so the caller states
     ///   it rather than it being inferred — same convention as `toggleVoiceRecording(origin:)`.
-    func retryLastCommand(origin: TaskOrigin = .widget) {
+    /// **The cap is tested here and not left to `start()`** (PR #287's F1). Every refusal on this
+    /// path declines before writing anything, except the cap's, which publishes
+    /// `tooManyRunsMessage` through `setError` — and publishing a failure is what retires a run's
+    /// retry token. So a Retry refused by the cap used to spend the banner it was pressed on: the
+    /// user was told to try again once a run finishes, and the banner they pressed answered nothing
+    /// ever after. Declining here leaves the token's three retirement rules the ones the user
+    /// caused — a clear, a newer failure, a new submission — and a refusal is none of the three.
+    /// It is the same rule `start()` refuses at, read from `canStartAnotherRun` rather than spelled
+    /// twice. Inert while one run exists: `!isTaskInFlight` already covers the only slot.
+    @discardableResult
+    func retryLastCommand(origin: TaskOrigin = .widget) -> Bool {
         // `clarificationQuestion == nil` for the same reason every other in-flight term here exists:
         // a pause is a task the user has not finished answering, and retry is a *new* dispatch.
         // Without it, the notification's Retry — which fires from outside SwiftUI, so no view gate
         // can cover it — wrote the old command straight into a live pause.
-        guard !lastCommand.isEmpty, !isTaskInFlight else {
-            return
+        guard !lastCommand.isEmpty, !isTaskInFlight, canStartAnotherRun else {
+            return false
         }
         // Carries the original run's workspace. `lastAssessedScope` is the post-terminal record of
         // what the last task was assessed under and is deliberately never cleared, which is exactly
@@ -3749,7 +3779,7 @@ final class AgentViewModel: ObservableObject {
         // failed attempt behind as a live offer even after the retry succeeded. Continuing it keeps
         // one record for one task, which is the same invariant the other two doors hold.
         armRestartOfTaskInFlight()
-        dispatch(command: lastCommand, origin: origin, workspaceBinding: retryBinding)
+        return dispatch(command: lastCommand, origin: origin, workspaceBinding: retryBinding)
     }
 
     /// Runs a past task again by **re-asking Sonny with the same words**, never by replaying the
@@ -7363,7 +7393,7 @@ final class AgentViewModel: ObservableObject {
         }
         // This is the bug that made the auto-clear timer feel broken: a failed
         // transcription (e.g. no speech captured) never calls `start()`, so it never
-        // touches `lastCommand` — the old `hasRetryableCommand`-based gate treated that
+        // touches `lastCommand` — the old `!lastCommand.isEmpty` gate treated that
         // exactly like a persistent config problem and refused to time it out. It isn't
         // one: try again and it's just as likely to work fine.
         setError(error.localizedDescription)
@@ -8898,7 +8928,7 @@ final class AgentViewModel: ObservableObject {
             let previousOrigin = activeTaskOrigin
             activeTaskOrigin = .scheduled
             // Deliberately does not touch `lastCommand`. That property is the user's own last
-            // submission: it feeds `hasRetryableCommand` and `retryLastCommand()`, so overwriting
+            // submission: it feeds `retryLastCommand()` and the widget's Retry, so overwriting
             // it here would point the widget's Retry button at a routine the user never ran.
             // `runningCommandDisplayText` reads the scheduled label separately while this runs.
             // Bound to the slot it started in, like every run (SONNY-456): the timer that got here

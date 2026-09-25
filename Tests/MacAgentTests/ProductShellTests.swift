@@ -2653,7 +2653,7 @@ struct ProductShellTests {
         viewModel.start()
         try await waitForViewModelToBecomeIdle(viewModel)
         #expect(viewModel.errorMessage != nil)
-        #expect(viewModel.hasRetryableCommand)
+        #expect(viewModel.canRetryFailedTask)
 
         viewModel.markOutcomeAsNotified()
         #expect(viewModel.outcomeWasNotified)
@@ -3666,7 +3666,7 @@ struct ProductShellTests {
         viewModel.openWorkspaceWidget(workspace)
         try await waitForViewModelToBecomeIdle(viewModel)
         #expect(viewModel.activeTaskOrigin == .commandCenter)
-        #expect(viewModel.hasRetryableCommand)
+        #expect(!viewModel.lastCommand.isEmpty)
 
         viewModel.retryLastCommand()
 

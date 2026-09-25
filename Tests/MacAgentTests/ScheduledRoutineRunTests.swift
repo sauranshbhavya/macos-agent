@@ -1138,9 +1138,9 @@ struct ScheduledRoutineRunTests {
         #expect(fixture.viewModel.priorTaskContext?.previousCommand == "= 2 + 3")
     }
 
-    /// `lastCommand` moves with `priorTaskContext` on purpose — it also feeds
-    /// `hasRetryableCommand` and `retryLastCommand()`, so a scheduled run claiming it would point
-    /// the widget's Retry button at a routine the user never ran.
+    /// `lastCommand` moves with `priorTaskContext` on purpose — it is also what
+    /// `retryLastCommand()` resubmits, so a scheduled run claiming it would point the widget's
+    /// Retry button at a routine the user never ran.
     @Test
     func aScheduledRunDoesNotBecomeTheRetryTarget() async throws {
         let fixture = try makeFixture()

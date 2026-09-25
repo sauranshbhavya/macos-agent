@@ -237,16 +237,26 @@ extension AgentViewModel: VisionSessionInteracting {
     /// A slot with nothing in flight is left alone rather than handed to `cancelCurrentRun`, whose
     /// last branch is `currentTask?.cancel()` and would be harmless, because "nothing was running
     /// there" should not depend on reading that function to its end.
+    /// **The line is written only when something was stopped** (PR #287's F3). It sat above the
+    /// loop and so was written on every press, including one that found every slot idle — a log
+    /// claiming a user stop that did not happen. `emergencyStopVisionSession`, the handler this
+    /// replaced, logs after its own `guard isVisionSessionLive`, and this keeps that: one line per
+    /// press that stopped something, and none for a press that stopped nothing.
     func stopEveryRun() {
-        logStore.append(.summarize, "vision: user_stopped - emergency stop")
+        var stopped = 0
         for id in runSlots.map(\.id) {
             RunScope.$current.withValue(id) {
                 guard isTaskInFlight || isVisionSessionLive else {
                     return
                 }
+                stopped += 1
                 cancelCurrentRun()
             }
         }
+        guard stopped > 0 else {
+            return
+        }
+        logStore.append(.summarize, "vision: user_stopped - emergency stop")
     }
 
     /// Whether a screen-control session is live in any of its states — running, paused, or holding
