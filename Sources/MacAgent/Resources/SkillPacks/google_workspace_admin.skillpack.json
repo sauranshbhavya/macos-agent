@@ -19,7 +19,7 @@
       "steps": [
         "This needs the User management privilege. Without it, not all of the controls below are visible.",
         "In the Google Admin console, go to Menu, then Directory, then Users.",
-        "At the top of the user list, click Add new user.",
+        "At the top of the user list, click Add new user to open the form.",
         "Enter the user's first and last name, and accept or change the suggested Primary email. If the organization has more than one domain, click the Down arrow to the right of the @ sign and choose a domain.",
         "Recommended: enter a Secondary email, a current address where the user can receive their new account details. Optional: enter a phone number.",
         "Click Add New User, then click Done."
