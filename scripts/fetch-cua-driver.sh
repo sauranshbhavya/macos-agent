@@ -8,7 +8,9 @@
 #
 # The version and the SHA-256 are pinned HERE and never read from the release at download time:
 # a changed asset under the same tag fails the check instead of reaching a build. To move to a new
-# release, change both lines together, from that release's checksums.txt.
+# release, change both lines together, from that release's checksums.txt, and first read that
+# release's cua-driver-sdk source for anything that sends data out: the telemetry check below only
+# recognises the sender cua uses today.
 set -euo pipefail
 
 VERSION="0.28.3"
@@ -46,8 +48,9 @@ tar -xzf "${WORK}/${ASSET}" -C "${WORK}"
 UNPACKED="${WORK}/cua-driver-rs-${VERSION}-darwin-arm64"
 
 # Sonny switches cua's telemetry off always (founders, 2026-09-24). The in-process library carries
-# none — the PostHog sender lives in the CLI — and this keeps it that way: a release that brings it
-# into the library stops here rather than shipping inside Sonny.
+# none — the PostHog sender lives in the CLI. This check stops a release that brings that sender
+# into the library. It finds PostHog by name only, so it is a tripwire, not an audit: a renamed or
+# different sender would pass it, which is why a version bump needs the source read first.
 if strings -n 8 "${UNPACKED}/libcua_driver_sdk.dylib" | grep -qi 'posthog'; then
   echo "error: cua-driver ${VERSION}'s library contains telemetry code; Sonny ships none" >&2
   exit 1
