@@ -1,0 +1,36 @@
+{
+  "v": 1,
+  "type": "outcome",
+  "id": "00000000-0000-4000-8000-000000000011",
+  "task": "7d9f1c2e-4b3a-4e8f-9a21-0c5d6e7f8a90",
+  "seq": 6,
+  "re": 5,
+  "body": {
+    "results": [
+      {
+        "action_id": "aaaaaaaa-0000-4000-8000-000000000002",
+        "status": "done",
+        "effect": "navigate"
+      },
+      {
+        "action_id": "aaaaaaaa-0000-4000-8000-000000000003",
+        "status": "refused",
+        "effect": "external",
+        "error": {
+          "code": "unattended_refused",
+          "message": "Sending needs you at the Mac."
+        }
+      },
+      {
+        "action_id": "aaaaaaaa-0000-4000-8000-000000000004",
+        "status": "skipped",
+        "effect": "navigate"
+      },
+      {
+        "action_id": "aaaaaaaa-0000-4000-8000-000000000005",
+        "status": "outcome_unknown",
+        "effect": "external"
+      }
+    ]
+  }
+}

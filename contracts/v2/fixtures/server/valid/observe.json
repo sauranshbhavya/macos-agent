@@ -1,0 +1,14 @@
+{
+  "v": 1,
+  "type": "observe",
+  "id": "00000000-0000-4000-8000-000000000107",
+  "task": "7d9f1c2e-4b3a-4e8f-9a21-0c5d6e7f8a90",
+  "seq": 1,
+  "re": 1,
+  "body": {
+    "app": "com.apple.Notes",
+    "ax": true,
+    "screenshot": false,
+    "max_nodes": 400
+  }
+}

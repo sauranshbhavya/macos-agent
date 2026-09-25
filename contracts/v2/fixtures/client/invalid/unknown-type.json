@@ -1,0 +1,8 @@
+{
+  "v": 1,
+  "type": "hello.again",
+  "id": "00000000-0000-4000-8000-000000000003",
+  "body": {
+    "access_token": "eyJhbGciOiJIUzI1NiJ9.e30.sig"
+  }
+}

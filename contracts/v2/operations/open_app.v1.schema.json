@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sonny.app/contracts/v2/operations/open_app.v1.schema.json",
+  "title": "open_app v1",
+  "description": "Open or bring forward one installed app. Floor effect: navigate.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["app"],
+  "properties": {
+    "app": { "description": "The app's name or bundle id, as the user said it.", "type": "string", "minLength": 1, "maxLength": 255 }
+  }
+}

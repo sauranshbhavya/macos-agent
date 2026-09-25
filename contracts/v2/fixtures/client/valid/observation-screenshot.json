@@ -1,0 +1,31 @@
+{
+  "v": 1,
+  "type": "observation",
+  "id": "00000000-0000-4000-8000-000000000008",
+  "task": "7d9f1c2e-4b3a-4e8f-9a21-0c5d6e7f8a90",
+  "seq": 3,
+  "re": 2,
+  "body": {
+    "generation": 2,
+    "app": {
+      "bundle_id": "com.apple.Notes",
+      "name": "Notes",
+      "pid": 812
+    },
+    "window": {
+      "id": 4471,
+      "frame": {
+        "x": 100.5,
+        "y": 80,
+        "w": 1200,
+        "h": 800
+      }
+    },
+    "screenshot": {
+      "media_type": "image/jpeg",
+      "data": "/9j/4AAQSkZJRgABAQ==",
+      "width": 1200,
+      "height": 800
+    }
+  }
+}

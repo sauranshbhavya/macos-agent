@@ -1,0 +1,722 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sonny.app/contracts/v2/protocol.schema.json",
+  "title": "Sonny V2 session protocol",
+  "description": "Every JSON text frame on the /v2/session WebSocket. The Swift Codable types (Sources/MacAgentCore/Kernel/Wire) and the server Zod schemas (server/src/agent/protocol.ts) mirror this file, and both test suites decode every fixture under fixtures/.",
+  "oneOf": [
+    { "$ref": "#/$defs/ClientMessage" },
+    { "$ref": "#/$defs/ServerMessage" }
+  ],
+  "$defs": {
+    "Id": {
+      "description": "A lowercase canonical UUID.",
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "Seq": { "type": "integer", "minimum": 1, "maximum": 1000000 },
+    "SeqOrZero": { "type": "integer", "minimum": 0, "maximum": 1000000 },
+    "BundleId": { "type": "string", "minLength": 1, "maxLength": 255 },
+    "Rect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["x", "y", "w", "h"],
+      "properties": {
+        "x": { "type": "number" },
+        "y": { "type": "number" },
+        "w": { "type": "number", "minimum": 0 },
+        "h": { "type": "number", "minimum": 0 }
+      }
+    },
+    "AppRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["bundle_id", "name"],
+      "properties": {
+        "bundle_id": { "$ref": "#/$defs/BundleId" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 255 }
+      }
+    },
+
+    "Effect": {
+      "description": "What an action does to the world. The model declares it; the Mac may only raise it (docs/sonny-v2-implementation-plan.md section 7).",
+      "enum": ["observe", "navigate", "edit_local", "create", "destructive", "external", "financial", "credential", "unknown"]
+    },
+    "Mode": { "enum": ["safe", "normal", "power"] },
+    "PermissionState": { "enum": ["granted", "denied", "not_determined"] },
+    "ScreenToolName": {
+      "enum": ["observe_ax", "screenshot", "press", "set_value", "type_text", "key", "scroll", "menu", "click_point"]
+    },
+    "LedgerState": {
+      "enum": ["received", "prepared", "approved", "dispatched", "done", "failed", "refused", "declined", "stale", "skipped", "outcome_unknown"]
+    },
+
+    "Manifest": {
+      "description": "What this Mac can do right now. Sent in hello.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operations", "screen", "permissions"],
+      "properties": {
+        "operations": {
+          "type": "array",
+          "maxItems": 128,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "version"],
+            "properties": {
+              "name": { "type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$" },
+              "version": { "type": "integer", "minimum": 1, "maximum": 1000 }
+            }
+          }
+        },
+        "screen": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["tools"],
+          "properties": {
+            "tools": { "type": "array", "uniqueItems": true, "maxItems": 16, "items": { "$ref": "#/$defs/ScreenToolName" } }
+          }
+        },
+        "permissions": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["accessibility", "screen_recording", "automation"],
+          "properties": {
+            "accessibility": { "$ref": "#/$defs/PermissionState" },
+            "screen_recording": { "$ref": "#/$defs/PermissionState" },
+            "automation": {
+              "type": "array",
+              "maxItems": 64,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["bundle_id", "state"],
+                "properties": {
+                  "bundle_id": { "$ref": "#/$defs/BundleId" },
+                  "state": { "$ref": "#/$defs/PermissionState" }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+
+    "ElementRef": {
+      "description": "An element from an earlier observation. A ref is only valid for the generation it was observed in.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ref", "generation"],
+      "properties": {
+        "ref": { "type": "string", "pattern": "^e[0-9]{1,5}$" },
+        "generation": { "$ref": "#/$defs/Seq" }
+      }
+    },
+    "AXNode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ref", "depth", "role"],
+      "properties": {
+        "ref": { "type": "string", "pattern": "^e[0-9]{1,5}$" },
+        "depth": { "type": "integer", "minimum": 0, "maximum": 64 },
+        "role": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "label": { "type": "string", "maxLength": 500 },
+        "value": { "type": "string", "maxLength": 2000 },
+        "enabled": { "type": "boolean" },
+        "focused": { "type": "boolean" },
+        "selected": { "type": "boolean" },
+        "secure": { "description": "A secure text field. Its value is never sent.", "type": "boolean" },
+        "frame": { "$ref": "#/$defs/Rect" },
+        "actions": { "type": "array", "maxItems": 8, "items": { "type": "string", "minLength": 1, "maxLength": 64 } }
+      }
+    },
+
+    "ScreenAction": {
+      "oneOf": [
+        { "$ref": "#/$defs/ScreenPress" },
+        { "$ref": "#/$defs/ScreenSetValue" },
+        { "$ref": "#/$defs/ScreenTypeText" },
+        { "$ref": "#/$defs/ScreenKey" },
+        { "$ref": "#/$defs/ScreenScroll" },
+        { "$ref": "#/$defs/ScreenMenu" },
+        { "$ref": "#/$defs/ScreenClickPoint" }
+      ]
+    },
+    "ScreenPress": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tool", "app", "element"],
+      "properties": {
+        "tool": { "const": "press" },
+        "app": { "$ref": "#/$defs/BundleId" },
+        "element": { "$ref": "#/$defs/ElementRef" }
+      }
+    },
+    "ScreenSetValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tool", "app", "element", "value"],
+      "properties": {
+        "tool": { "const": "set_value" },
+        "app": { "$ref": "#/$defs/BundleId" },
+        "element": { "$ref": "#/$defs/ElementRef" },
+        "value": { "type": "string", "maxLength": 10000 }
+      }
+    },
+    "ScreenTypeText": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tool", "app", "text"],
+      "properties": {
+        "tool": { "const": "type_text" },
+        "app": { "$ref": "#/$defs/BundleId" },
+        "text": { "type": "string", "minLength": 1, "maxLength": 10000 },
+        "element": { "$ref": "#/$defs/ElementRef" }
+      }
+    },
+    "ScreenKey": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tool", "app", "keys"],
+      "properties": {
+        "tool": { "const": "key" },
+        "app": { "$ref": "#/$defs/BundleId" },
+        "keys": {
+          "description": "One chord, modifiers first, for example [\"cmd\", \"n\"].",
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 5,
+          "items": { "type": "string", "pattern": "^[a-z0-9]{1,16}$" }
+        }
+      }
+    },
+    "ScreenScroll": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tool", "app", "direction", "amount"],
+      "properties": {
+        "tool": { "const": "scroll" },
+        "app": { "$ref": "#/$defs/BundleId" },
+        "direction": { "enum": ["up", "down", "left", "right"] },
+        "amount": { "type": "integer", "minimum": 1, "maximum": 20 },
+        "element": { "$ref": "#/$defs/ElementRef" }
+      }
+    },
+    "ScreenMenu": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tool", "app", "path"],
+      "properties": {
+        "tool": { "const": "menu" },
+        "app": { "$ref": "#/$defs/BundleId" },
+        "path": {
+          "description": "Menu titles from the menu bar down, for example [\"File\", \"New Note\"].",
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 6,
+          "items": { "type": "string", "minLength": 1, "maxLength": 200 }
+        }
+      }
+    },
+    "ScreenClickPoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tool", "app", "x", "y", "generation"],
+      "properties": {
+        "tool": { "const": "click_point" },
+        "app": { "$ref": "#/$defs/BundleId" },
+        "x": { "description": "Pixels in that generation's screenshot.", "type": "number", "minimum": 0 },
+        "y": { "type": "number", "minimum": 0 },
+        "generation": { "$ref": "#/$defs/Seq" },
+        "count": { "type": "integer", "minimum": 1, "maximum": 2 }
+      }
+    },
+
+    "OperationCall": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version", "args"],
+      "properties": {
+        "name": { "type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$" },
+        "version": { "type": "integer", "minimum": 1, "maximum": 1000 },
+        "args": {
+          "description": "Checked against contracts/v2/operations/<name>.v<version>.schema.json by the gateway before sending and by the Mac before preparing.",
+          "type": "object"
+        }
+      }
+    },
+    "Action": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["action_id", "effect"],
+      "properties": {
+        "action_id": { "$ref": "#/$defs/Id" },
+        "effect": { "$ref": "#/$defs/Effect" },
+        "expect": { "type": "string", "maxLength": 500 },
+        "operation": { "$ref": "#/$defs/OperationCall" },
+        "screen": { "$ref": "#/$defs/ScreenAction" }
+      },
+      "oneOf": [
+        { "required": ["operation"], "not": { "required": ["screen"] } },
+        { "required": ["screen"], "not": { "required": ["operation"] } }
+      ]
+    },
+    "OutcomeStatus": {
+      "enum": ["done", "failed", "refused", "declined", "stale", "skipped", "outcome_unknown"]
+    },
+    "OutcomeErrorCode": {
+      "enum": [
+        "permission_denied", "app_not_running", "target_not_found", "target_refused", "stale_reference",
+        "invalid_arguments", "unsupported_operation", "secure_field", "mode_refused", "unattended_refused",
+        "foreground_unavailable", "timeout", "execution_error", "cancelled"
+      ]
+    },
+    "ActionResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["action_id", "status", "effect"],
+      "properties": {
+        "action_id": { "$ref": "#/$defs/Id" },
+        "status": { "$ref": "#/$defs/OutcomeStatus" },
+        "effect": { "description": "The effect the Mac judged, after raising.", "$ref": "#/$defs/Effect" },
+        "evidence": { "type": "string", "maxLength": 2000 },
+        "error": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["code"],
+          "properties": {
+            "code": { "$ref": "#/$defs/OutcomeErrorCode" },
+            "message": { "type": "string", "maxLength": 1000 }
+          }
+        }
+      }
+    },
+
+    "ConnectionEnvelope": {
+      "description": "Messages without a task: hello, welcome, reauth, reauth.required, goodbye, error.",
+      "required": ["v", "type", "id", "body"],
+      "properties": {
+        "v": { "const": 1 },
+        "id": { "$ref": "#/$defs/Id" }
+      },
+      "not": { "anyOf": [{ "required": ["task"] }, { "required": ["seq"] }, { "required": ["re"] }] }
+    },
+    "TaskEnvelope": {
+      "description": "Messages about one task. seq counts per task and per direction; re is the other side's seq this message answers.",
+      "required": ["v", "type", "id", "task", "seq", "body"],
+      "properties": {
+        "v": { "const": 1 },
+        "id": { "$ref": "#/$defs/Id" },
+        "task": { "$ref": "#/$defs/Id" },
+        "seq": { "$ref": "#/$defs/Seq" },
+        "re": { "$ref": "#/$defs/Seq" }
+      }
+    },
+
+    "ClientMessage": {
+      "description": "Mac to gateway.",
+      "oneOf": [
+        { "$ref": "#/$defs/Hello" },
+        { "$ref": "#/$defs/Reauth" },
+        { "$ref": "#/$defs/TaskStart" },
+        { "$ref": "#/$defs/Observation" },
+        { "$ref": "#/$defs/Outcome" },
+        { "$ref": "#/$defs/Answer" },
+        { "$ref": "#/$defs/TaskCancel" }
+      ]
+    },
+    "ServerMessage": {
+      "description": "Gateway to Mac.",
+      "oneOf": [
+        { "$ref": "#/$defs/Welcome" },
+        { "$ref": "#/$defs/ReauthRequired" },
+        { "$ref": "#/$defs/Goodbye" },
+        { "$ref": "#/$defs/Error" },
+        { "$ref": "#/$defs/Observe" },
+        { "$ref": "#/$defs/Propose" },
+        { "$ref": "#/$defs/Ask" },
+        { "$ref": "#/$defs/Progress" },
+        { "$ref": "#/$defs/Finish" }
+      ]
+    },
+
+    "Hello": {
+      "$ref": "#/$defs/ConnectionEnvelope",
+      "type": "object",
+      "unevaluatedProperties": false,
+      "properties": {
+        "type": { "const": "hello" },
+        "body": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["device_id", "app_version", "os_version", "manifest", "resume"],
+          "properties": {
+            "device_id": { "$ref": "#/$defs/Id" },
+            "app_version": { "type": "string", "minLength": 1, "maxLength": 32 },
+            "os_version": { "type": "string", "minLength": 1, "maxLength": 32 },
+            "manifest": { "$ref": "#/$defs/Manifest" },
+            "resume": {
+              "description": "Every task this Mac has not seen finish.",
+              "type": "array",
+              "maxItems": 16,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["task", "last_seq_in", "last_seq_out", "ledger"],
+                "properties": {
+                  "task": { "$ref": "#/$defs/Id" },
+                  "last_seq_in": { "description": "The last gateway seq this Mac received.", "$ref": "#/$defs/SeqOrZero" },
+                  "last_seq_out": { "description": "The last seq this Mac sent.", "$ref": "#/$defs/SeqOrZero" },
+                  "ledger": {
+                    "type": "array",
+                    "maxItems": 64,
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["action_id", "state"],
+                      "properties": {
+                        "action_id": { "$ref": "#/$defs/Id" },
+                        "state": { "$ref": "#/$defs/LedgerState" }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "Reauth": {
+      "$ref": "#/$defs/ConnectionEnvelope",
+      "type": "object",
+      "unevaluatedProperties": false,
+      "properties": {
+        "type": { "const": "reauth" },
+        "body": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["access_token"],
+          "properties": { "access_token": { "type": "string", "minLength": 1, "maxLength": 8192 } }
+        }
+      }
+    },
+    "TaskStart": {
+      "$ref": "#/$defs/TaskEnvelope",
+      "type": "object",
+      "unevaluatedProperties": false,
+      "properties": {
+        "type": { "const": "task.start" },
+        "body": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["goal", "origin", "private", "unattended", "mode", "context"],
+          "properties": {
+            "goal": { "type": "string", "minLength": 1, "maxLength": 4000 },
+            "origin": { "enum": ["composer", "voice", "routine", "schedule", "follow_up", "watcher"] },
+            "private": { "description": "Don't keep this task: the gateway deletes its transcript when it ends.", "type": "boolean" },
+            "unattended": { "description": "Nobody is at the Mac. Anything that needs confirmation is refused.", "type": "boolean" },
+            "mode": { "$ref": "#/$defs/Mode" },
+            "prior_task": { "$ref": "#/$defs/Id" },
+            "context": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "frontmost_app": { "$ref": "#/$defs/AppRef" },
+                "finder_selection": { "type": "array", "maxItems": 50, "items": { "type": "string", "minLength": 1, "maxLength": 1024 } }
+              }
+            }
+          }
+        }
+      }
+    },
+    "Observation": {
+      "$ref": "#/$defs/TaskEnvelope",
+      "type": "object",
+      "unevaluatedProperties": false,
+      "required": ["re"],
+      "properties": {
+        "type": { "const": "observation" },
+        "body": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["generation"],
+          "properties": {
+            "generation": { "$ref": "#/$defs/Seq" },
+            "app": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["bundle_id", "name", "pid"],
+              "properties": {
+                "bundle_id": { "$ref": "#/$defs/BundleId" },
+                "name": { "type": "string", "minLength": 1, "maxLength": 255 },
+                "pid": { "type": "integer", "minimum": 1 }
+              }
+            },
+            "window": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["id", "frame"],
+              "properties": {
+                "id": { "type": "integer", "minimum": 0 },
+                "title": { "type": "string", "maxLength": 500 },
+                "frame": { "$ref": "#/$defs/Rect" }
+              }
+            },
+            "ax": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["nodes", "truncated"],
+              "properties": {
+                "nodes": { "type": "array", "maxItems": 2000, "items": { "$ref": "#/$defs/AXNode" } },
+                "truncated": { "type": "boolean" }
+              }
+            },
+            "screenshot": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["media_type", "data", "width", "height"],
+              "properties": {
+                "media_type": { "enum": ["image/jpeg", "image/png"] },
+                "data": { "description": "Base64 of the redacted image, at most 3,000,000 bytes before encoding.", "type": "string", "minLength": 1, "maxLength": 4000000 },
+                "width": { "type": "integer", "minimum": 1, "maximum": 20000 },
+                "height": { "type": "integer", "minimum": 1, "maximum": 20000 }
+              }
+            },
+            "error": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["code"],
+              "properties": {
+                "code": { "enum": ["permission_denied", "app_not_running", "no_window", "unreadable", "foreground_unavailable"] },
+                "message": { "type": "string", "maxLength": 1000 }
+              }
+            }
+          }
+        }
+      }
+    },
+    "Outcome": {
+      "$ref": "#/$defs/TaskEnvelope",
+      "type": "object",
+      "unevaluatedProperties": false,
+      "required": ["re"],
+      "properties": {
+        "type": { "const": "outcome" },
+        "body": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["results"],
+          "properties": {
+            "results": { "type": "array", "minItems": 1, "maxItems": 8, "items": { "$ref": "#/$defs/ActionResult" } }
+          }
+        }
+      }
+    },
+    "Answer": {
+      "$ref": "#/$defs/TaskEnvelope",
+      "type": "object",
+      "unevaluatedProperties": false,
+      "required": ["re"],
+      "properties": {
+        "type": { "const": "answer" },
+        "body": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["text"],
+          "properties": { "text": { "type": "string", "minLength": 1, "maxLength": 4000 } }
+        }
+      }
+    },
+    "TaskCancel": {
+      "$ref": "#/$defs/TaskEnvelope",
+      "type": "object",
+      "unevaluatedProperties": false,
+      "properties": {
+        "type": { "const": "task.cancel" },
+        "body": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["reason"],
+          "properties": { "reason": { "enum": ["user", "shutdown", "outcome_unknown"] } }
+        }
+      }
+    },
+
+    "Welcome": {
+      "$ref": "#/$defs/ConnectionEnvelope",
+      "type": "object",
+      "unevaluatedProperties": false,
+      "properties": {
+        "type": { "const": "welcome" },
+        "body": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["session_id", "server_time_ms", "max_payload_bytes", "heartbeat_seconds", "tasks"],
+          "properties": {
+            "session_id": { "$ref": "#/$defs/Id" },
+            "server_time_ms": { "type": "integer", "minimum": 0 },
+            "max_payload_bytes": { "type": "integer", "minimum": 1024 },
+            "heartbeat_seconds": { "type": "integer", "minimum": 1, "maximum": 300 },
+            "tasks": {
+              "description": "The gateway's view of each task in hello's resume list.",
+              "type": "array",
+              "maxItems": 16,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["task", "state", "last_seq_in"],
+                "properties": {
+                  "task": { "$ref": "#/$defs/Id" },
+                  "state": { "enum": ["live", "finished", "unknown"] },
+                  "last_seq_in": { "description": "The last Mac seq the gateway stored. The Mac resends anything after it.", "$ref": "#/$defs/SeqOrZero" }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "ReauthRequired": {
+      "$ref": "#/$defs/ConnectionEnvelope",
+      "type": "object",
+      "unevaluatedProperties": false,
+      "properties": {
+        "type": { "const": "reauth.required" },
+        "body": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["expires_at_ms"],
+          "properties": { "expires_at_ms": { "type": "integer", "minimum": 0 } }
+        }
+      }
+    },
+    "Goodbye": {
+      "$ref": "#/$defs/ConnectionEnvelope",
+      "type": "object",
+      "unevaluatedProperties": false,
+      "properties": {
+        "type": { "const": "goodbye" },
+        "body": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["reason"],
+          "properties": {
+            "reason": { "enum": ["draining", "replaced", "signed_out", "auth_expired"] },
+            "reconnect_after_ms": { "type": "integer", "minimum": 0, "maximum": 600000 }
+          }
+        }
+      }
+    },
+    "Error": {
+      "$ref": "#/$defs/ConnectionEnvelope",
+      "type": "object",
+      "unevaluatedProperties": false,
+      "properties": {
+        "type": { "const": "error" },
+        "body": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["code", "message"],
+          "properties": {
+            "code": { "enum": ["malformed", "unsupported_version", "rate_limited", "payload_too_large", "unknown_task", "task_conflict", "sequence_gap", "internal"] },
+            "message": { "type": "string", "maxLength": 1000 },
+            "ref": { "description": "The id of the message this is about.", "$ref": "#/$defs/Id" }
+          }
+        }
+      }
+    },
+    "Observe": {
+      "$ref": "#/$defs/TaskEnvelope",
+      "type": "object",
+      "unevaluatedProperties": false,
+      "properties": {
+        "type": { "const": "observe" },
+        "body": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["app", "ax", "screenshot"],
+          "properties": {
+            "app": { "$ref": "#/$defs/BundleId" },
+            "ax": { "type": "boolean" },
+            "screenshot": { "type": "boolean" },
+            "max_nodes": { "type": "integer", "minimum": 1, "maximum": 2000 }
+          },
+          "anyOf": [
+            { "properties": { "ax": { "const": true } } },
+            { "properties": { "screenshot": { "const": true } } }
+          ]
+        }
+      }
+    },
+    "Propose": {
+      "$ref": "#/$defs/TaskEnvelope",
+      "type": "object",
+      "unevaluatedProperties": false,
+      "properties": {
+        "type": { "const": "propose" },
+        "body": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["agent", "actions", "final"],
+          "properties": {
+            "agent": { "enum": ["planner", "screen"] },
+            "actions": { "type": "array", "minItems": 1, "maxItems": 8, "items": { "$ref": "#/$defs/Action" } },
+            "final": { "description": "If every action ends done, the task is finished.", "type": "boolean" }
+          }
+        }
+      }
+    },
+    "Ask": {
+      "$ref": "#/$defs/TaskEnvelope",
+      "type": "object",
+      "unevaluatedProperties": false,
+      "properties": {
+        "type": { "const": "ask" },
+        "body": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["question"],
+          "properties": {
+            "question": { "type": "string", "minLength": 1, "maxLength": 2000 },
+            "choices": { "type": "array", "maxItems": 6, "items": { "type": "string", "minLength": 1, "maxLength": 200 } }
+          }
+        }
+      }
+    },
+    "Progress": {
+      "$ref": "#/$defs/TaskEnvelope",
+      "type": "object",
+      "unevaluatedProperties": false,
+      "properties": {
+        "type": { "const": "progress" },
+        "body": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["message"],
+          "properties": { "message": { "type": "string", "minLength": 1, "maxLength": 300 } }
+        }
+      }
+    },
+    "Finish": {
+      "$ref": "#/$defs/TaskEnvelope",
+      "type": "object",
+      "unevaluatedProperties": false,
+      "properties": {
+        "type": { "const": "finish" },
+        "body": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "summary"],
+          "properties": {
+            "status": { "description": "The gateway's claim. The Mac decides the verified status from its own evidence.", "enum": ["completed", "failed", "cancelled"] },
+            "summary": { "type": "string", "maxLength": 4000 },
+            "reason": {
+              "enum": ["credits_exhausted", "budget_exhausted", "model_unavailable", "invalid_output", "no_progress", "unsupported", "refused", "cancelled", "internal_error"]
+            }
+          }
+        }
+      }
+    }
+  }
+}
