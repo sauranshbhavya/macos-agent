@@ -807,7 +807,9 @@ struct AgentViewModelLocalStorageTests {
         // Settings' local-data controls are the nearest thing to somewhere to act on it. Without its
         // own case the default arm would front the widget, which offers nothing but Dismiss.
         #expect(service.contains("case SonnyNotificationCategory.storage:"))
-        #expect(service.contains("self?.onOpenStorageNotice()"))
+        // Two steps since SONNY-533: the category chooses the landing, and the landing's closure runs.
+        #expect(service.contains("case SonnyNotificationCategory.storage:\n                self = .openStorageNotice"))
+        #expect(service.contains("case .openStorageNotice:\n            onOpenStorageNotice()"))
         let wiring = try MacAgentSource.region(
             of: delegate,
             from: "onOpenStorageNotice: { [weak self] in",

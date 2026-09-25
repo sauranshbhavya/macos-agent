@@ -176,7 +176,7 @@ struct ResumeOfferPresentationTests {
 
         let doors: [(name: String, anchor: String, continuesTheTask: Bool)] = [
             // Continues: the same task starting over, or picking up where it stopped.
-            ("retryLastCommand", "func retryLastCommand(origin: TaskOrigin = .widget) {", true),
+            ("retryLastCommand", "func retryLastCommand(origin: TaskOrigin = .widget) -> Bool {", true),
             ("runTaskAgain", "func runTaskAgain(_ record: CompletedTaskRecord) -> Bool {", true),
             ("submitClarification", "func submitClarification() {", true),
             (

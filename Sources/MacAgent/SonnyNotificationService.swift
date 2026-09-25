@@ -11,6 +11,15 @@ enum SonnyNotificationLog {
 private enum SonnyNotificationCategory {
     static let permission = "SONNY_PERMISSION"
     static let error = "SONNY_ERROR"
+    /// A failure that is nobody's task — a control that could not do what it was pressed for, a
+    /// recording that would not start (SONNY-533).
+    ///
+    /// **The fifth category added for the reason the four below were**: `error` carries Retry, and
+    /// here there is no failed task for it to re-run. It used to re-run the run's last command
+    /// anyway, so "Microphone permission was denied" offered to repeat whatever had been asked
+    /// before it. A failed task's notification carries its `FailureTarget`; this is the category
+    /// for a failure that has none.
+    static let errorWithoutRetry = "SONNY_ERROR_NO_RETRY"
     /// A finished run's result. Its own category rather than reusing `error`, which carries a
     /// "Retry" action that makes no sense on a run that succeeded (SONNY-56).
     static let outcome = "SONNY_OUTCOME"
@@ -70,6 +79,25 @@ private enum SonnyNotificationUserInfo {
     /// with (SONNY-456). Written and read only by `ApprovalTarget`'s two members below.
     static let runID = "SONNY_RUN_ID"
     static let approvalToken = "SONNY_APPROVAL_TOKEN"
+    /// The token a failed task's notification was posted with (SONNY-533). Its own key, so a
+    /// failure's address never reads back as an approval's, nor the reverse.
+    static let retryToken = "SONNY_RETRY_TOKEN"
+
+    /// A run and a token, written under the run's key and `tokenKey`. The run is written from its
+    /// UUID, not from `RunID.description`, which exists for logs and is free to change.
+    static func address(runID: RunID, token: UUID, tokenKey: String) -> [String: String] {
+        [Self.runID: runID.value.uuidString, tokenKey: token.uuidString]
+    }
+
+    /// Reads a run and a token back, or fails when either half is missing or is not a UUID.
+    static func address(in userInfo: [AnyHashable: Any], tokenKey: String) -> (runID: RunID, token: UUID)? {
+        guard let run = (userInfo[Self.runID] as? String).flatMap(UUID.init(uuidString:)),
+              let token = (userInfo[tokenKey] as? String).flatMap(UUID.init(uuidString:))
+        else {
+            return nil
+        }
+        return (RunID(run), token)
+    }
 }
 
 /// How an "Approval needed" notification carries the approval it was posted for, and how its Allow
@@ -77,30 +105,130 @@ private enum SonnyNotificationUserInfo {
 /// trip: the service cannot be built in a test process, and a mismatch between the two halves turns
 /// every banner's Allow into a silent refusal with nothing else in the suite noticing.
 extension ApprovalTarget {
-    /// The notification's `userInfo`. The run is written from its UUID, not from `RunID.description`,
-    /// which exists for logs and is free to change.
+    /// The notification's `userInfo`.
     var notificationUserInfo: [String: String] {
-        [
-            SonnyNotificationUserInfo.runID: runID.value.uuidString,
-            SonnyNotificationUserInfo.approvalToken: token.uuidString
-        ]
+        SonnyNotificationUserInfo.address(
+            runID: runID, token: token, tokenKey: SonnyNotificationUserInfo.approvalToken
+        )
     }
 
     /// Reads a notification's `userInfo` back, or fails when either half is missing or is not a
     /// UUID — which approves nothing, since the Allow then has no approval to name.
     init?(notificationUserInfo userInfo: [AnyHashable: Any]) {
-        guard let run = (userInfo[SonnyNotificationUserInfo.runID] as? String).flatMap(UUID.init(uuidString:)),
-              let token = (userInfo[SonnyNotificationUserInfo.approvalToken] as? String).flatMap(UUID.init(uuidString:))
-        else {
+        guard let address = SonnyNotificationUserInfo.address(
+            in: userInfo, tokenKey: SonnyNotificationUserInfo.approvalToken
+        ) else {
             return nil
         }
-        self.init(runID: RunID(run), token: token)
+        self.init(runID: address.runID, token: address.token)
     }
 }
 
-private enum SonnyNotificationAction {
+/// The same two halves for a "Task failed" notification and its Retry (SONNY-533).
+extension FailureTarget {
+    var notificationUserInfo: [String: String] {
+        SonnyNotificationUserInfo.address(
+            runID: runID, token: token, tokenKey: SonnyNotificationUserInfo.retryToken
+        )
+    }
+
+    /// Fails when either half is missing or is not a UUID — which retries nothing.
+    init?(notificationUserInfo userInfo: [AnyHashable: Any]) {
+        guard let address = SonnyNotificationUserInfo.address(
+            in: userInfo, tokenKey: SonnyNotificationUserInfo.retryToken
+        ) else {
+            return nil
+        }
+        self.init(runID: address.runID, token: address.token)
+    }
+}
+
+/// Not `private`, so a test can press a notification's button by name.
+enum SonnyNotificationAction {
     static let allow = "SONNY_ALLOW"
     static let retry = "SONNY_RETRY"
+}
+
+/// What the two notifications that carry a control say and carry, built apart from the service that
+/// delivers them (SONNY-533).
+///
+/// **Apart, because the service cannot exist in a test process** — `UNUserNotificationCenter.current()`
+/// raises without a bundle identity — and that left the whole trip from "a run parked a question" to
+/// "its Allow was pressed" pinned by source scans alone (PR #279's review, F3). Content built here
+/// and handed to `SonnyNotificationResponse` below is that trip with only the banner itself left out.
+enum SonnyNotificationContent {
+    static func approvalNeeded(resource: String, target: ApprovalTarget) -> UNMutableNotificationContent {
+        let content = UNMutableNotificationContent()
+        content.title = "Approval needed"
+        content.body = "Requesting access to \(resource)"
+        content.categoryIdentifier = SonnyNotificationCategory.permission
+        // Carried rather than looked up when the click arrives, for the reason the outcome
+        // notification carries its task: by then a different question may be the one parked.
+        for (key, value) in target.notificationUserInfo {
+            content.userInfo[key] = value
+        }
+        return content
+    }
+
+    /// A failure with a failed task behind it offers Retry and carries that task's address; one
+    /// with none offers nothing, because there is nothing a Retry could mean.
+    static func taskFailed(message: String, retry: FailureTarget?) -> UNMutableNotificationContent {
+        let content = UNMutableNotificationContent()
+        content.title = "Task failed"
+        content.body = message
+        guard let retry else {
+            content.categoryIdentifier = SonnyNotificationCategory.errorWithoutRetry
+            return content
+        }
+        content.categoryIdentifier = SonnyNotificationCategory.error
+        for (key, value) in retry.notificationUserInfo {
+            content.userInfo[key] = value
+        }
+        return content
+    }
+}
+
+/// Where a pressed notification lands, decided from what the notification carries and nothing else
+/// (SONNY-533). The delegate callback reads three values off the response and hands them here, so
+/// the decision can be driven by a test and the callback is left with nothing to get wrong.
+enum SonnyNotificationResponse: Equatable {
+    /// Allow, with the approval the notification was posted for — or `nil`, which approves nothing.
+    case allow(ApprovalTarget?)
+    /// Retry, with the failed task the notification was posted for — or `nil`, which retries nothing.
+    case retry(FailureTarget?)
+    case openTask(String?)
+    case openScheduledRun
+    case openStorageNotice
+    case openWatcherNotice
+    case open
+    case ignore
+
+    init(actionIdentifier: String, categoryIdentifier: String, userInfo: [AnyHashable: Any]) {
+        switch actionIdentifier {
+        case SonnyNotificationAction.allow:
+            self = .allow(ApprovalTarget(notificationUserInfo: userInfo))
+        case SonnyNotificationAction.retry:
+            self = .retry(FailureTarget(notificationUserInfo: userInfo))
+        case UNNotificationDefaultActionIdentifier:
+            // Dispatched by category. The seam was already here and simply unused: every
+            // category shared one handler, so the outcome notification inherited behaviour
+            // written for the failure one (PR #67 review, F4).
+            switch categoryIdentifier {
+            case SonnyNotificationCategory.outcome:
+                self = .openTask(userInfo[SonnyNotificationUserInfo.taskID] as? String)
+            case SonnyNotificationCategory.scheduled:
+                self = .openScheduledRun
+            case SonnyNotificationCategory.storage:
+                self = .openStorageNotice
+            case SonnyNotificationCategory.watcher:
+                self = .openWatcherNotice
+            default:
+                self = .open
+            }
+        default:
+            self = .ignore
+        }
+    }
 }
 
 /// Real native macOS Notification Center banners (`UserNotifications`), not custom-built UI — per
@@ -116,7 +244,9 @@ final class SonnyNotificationService: NSObject, UNUserNotificationCenterDelegate
     /// The banner's Allow, handed the approval the notification was posted for (SONNY-456), or
     /// `nil` when it carried none that reads — which approves nothing.
     private let onAllow: (ApprovalTarget?) -> Void
-    private let onRetry: () -> Void
+    /// The banner's Retry, handed the failed task the notification was posted for (SONNY-533), or
+    /// `nil` when it carried none that reads — which retries nothing.
+    private let onRetry: (FailureTarget?) -> Void
     private let onOpen: () -> Void
     /// The default action for a finished-run notification, which opens that task rather than the
     /// widget (PR #67 review, F4). Separate from `onOpen` because the two land in different places:
@@ -152,7 +282,7 @@ final class SonnyNotificationService: NSObject, UNUserNotificationCenterDelegate
     /// Swift error) — this has to be checked *before* ever touching the class, not caught after.
     init?(
         onAllow: @escaping (ApprovalTarget?) -> Void,
-        onRetry: @escaping () -> Void,
+        onRetry: @escaping (FailureTarget?) -> Void,
         onOpen: @escaping () -> Void,
         onOpenTask: @escaping (String?) -> Void = { _ in },
         onOpenScheduledRun: @escaping () -> Void = {},
@@ -207,6 +337,13 @@ final class SonnyNotificationService: NSObject, UNUserNotificationCenterDelegate
                 intentIdentifiers: [],
                 options: []
             ),
+            // No actions: a failure with no failed task behind it has nothing to retry (SONNY-533).
+            UNNotificationCategory(
+                identifier: SonnyNotificationCategory.errorWithoutRetry,
+                actions: [],
+                intentIdentifiers: [],
+                options: []
+            ),
             // No actions. SONNY-121 owns acknowledgement and will decide what, if anything, this
             // one offers — adding a speculative button here would be a second place it has to undo.
             UNNotificationCategory(
@@ -254,25 +391,12 @@ final class SonnyNotificationService: NSObject, UNUserNotificationCenterDelegate
 
     func postPermissionNotification(resource: String, target: ApprovalTarget) {
         guard isEnabled(.approvalNeeded) else { return }
-        let content = UNMutableNotificationContent()
-        content.title = "Approval needed"
-        content.body = "Requesting access to \(resource)"
-        content.categoryIdentifier = SonnyNotificationCategory.permission
-        // Carried rather than looked up when the click arrives, for the reason the outcome
-        // notification carries its task: by then a different question may be the one parked.
-        for (key, value) in target.notificationUserInfo {
-            content.userInfo[key] = value
-        }
-        deliver(content)
+        deliver(SonnyNotificationContent.approvalNeeded(resource: resource, target: target))
     }
 
-    func postErrorNotification(message: String) {
+    func postErrorNotification(message: String, retry: FailureTarget?) {
         guard isEnabled(.taskFailed) else { return }
-        let content = UNMutableNotificationContent()
-        content.title = "Task failed"
-        content.body = message
-        content.categoryIdentifier = SonnyNotificationCategory.error
-        deliver(content)
+        deliver(SonnyNotificationContent.taskFailed(message: message, retry: retry))
     }
 
     /// A finished run's summary, for a user who was working somewhere else while it ran.
@@ -337,6 +461,28 @@ final class SonnyNotificationService: NSObject, UNUserNotificationCenterDelegate
         deliver(content)
     }
 
+    /// One closure per landing, and nothing decided here: `SonnyNotificationResponse` already chose.
+    private func land(_ response: SonnyNotificationResponse) {
+        switch response {
+        case .allow(let target):
+            onAllow(target)
+        case .retry(let target):
+            onRetry(target)
+        case .openTask(let taskID):
+            onOpenTask(taskID)
+        case .openScheduledRun:
+            onOpenScheduledRun()
+        case .openStorageNotice:
+            onOpenStorageNotice()
+        case .openWatcherNotice:
+            onOpenWatcherNotice()
+        case .open:
+            onOpen()
+        case .ignore:
+            break
+        }
+    }
+
     private func deliver(_ content: UNMutableNotificationContent) {
         center.add(UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)) { error in
             if let error {
@@ -360,35 +506,14 @@ final class SonnyNotificationService: NSObject, UNUserNotificationCenterDelegate
         didReceive response: UNNotificationResponse,
         withCompletionHandler completionHandler: @escaping () -> Void
     ) {
-        let actionIdentifier = response.actionIdentifier
-        let category = response.notification.request.content.categoryIdentifier
-        let taskID = response.notification.request.content.userInfo[SonnyNotificationUserInfo.taskID] as? String
-        let approvalTarget = ApprovalTarget(notificationUserInfo: response.notification.request.content.userInfo)
+        let content = response.notification.request.content
+        let landing = SonnyNotificationResponse(
+            actionIdentifier: response.actionIdentifier,
+            categoryIdentifier: content.categoryIdentifier,
+            userInfo: content.userInfo
+        )
         Task { @MainActor [weak self] in
-            switch actionIdentifier {
-            case SonnyNotificationAction.allow:
-                self?.onAllow(approvalTarget)
-            case SonnyNotificationAction.retry:
-                self?.onRetry()
-            case UNNotificationDefaultActionIdentifier:
-                // Dispatched by category. The seam was already here and simply unused: every
-                // category shared one handler, so the outcome notification inherited behaviour
-                // written for the failure one (PR #67 review, F4).
-                switch category {
-                case SonnyNotificationCategory.outcome:
-                    self?.onOpenTask(taskID)
-                case SonnyNotificationCategory.scheduled:
-                    self?.onOpenScheduledRun()
-                case SonnyNotificationCategory.storage:
-                    self?.onOpenStorageNotice()
-                case SonnyNotificationCategory.watcher:
-                    self?.onOpenWatcherNotice()
-                default:
-                    self?.onOpen()
-                }
-            default:
-                break
-            }
+            self?.land(landing)
         }
         completionHandler()
     }

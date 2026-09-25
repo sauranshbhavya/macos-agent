@@ -525,7 +525,9 @@ struct StandingWatcherRunTests {
         // The click opens Command Center — a place to look, rather than a thing done on the user's
         // behalf, which is the only kind of response this notification may have.
         #expect(service.contains("case SonnyNotificationCategory.watcher:"))
-        #expect(service.contains("self?.onOpenWatcherNotice()"))
+        // Two steps since SONNY-533: the category chooses the landing, and the landing's closure runs.
+        #expect(service.contains("case SonnyNotificationCategory.watcher:\n                self = .openWatcherNotice"))
+        #expect(service.contains("case .openWatcherNotice:\n            onOpenWatcherNotice()"))
         let wiring = try MacAgentSource.region(
             of: delegate,
             from: "onOpenWatcherNotice: { [weak self] in",
