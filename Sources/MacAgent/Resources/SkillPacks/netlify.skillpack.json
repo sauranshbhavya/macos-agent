@@ -29,6 +29,9 @@
         "Create the variable there individually, or import variables from a .env file.",
         "Build and deploy the site again for the addition to take effect. A variable with the same key set in a netlify.toml file overrides the one set in the Netlify UI."
       ],
+      "stops": [
+        "typing, pasting or reading a secret, an API key or any other credential in a variable's value"
+      ],
       "source": "https://docs.netlify.com/build/environment-variables/get-started/"
     }
   ],
