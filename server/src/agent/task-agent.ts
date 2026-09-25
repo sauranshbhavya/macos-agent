@@ -7,7 +7,7 @@
  * turn, so the planner decides what happens next without another round trip to the Mac.
  */
 import { randomUUID } from "node:crypto";
-import type { Agent, AgentFactory, AgentNote, TurnContext, TurnResult } from "./agent.js";
+import { AgentTurnFailed, type Agent, type AgentFactory, type AgentNote, type TurnContext, type TurnResult } from "./agent.js";
 import type { ModelRouter } from "./model/router.js";
 import { Planner } from "./planner/planner.js";
 import { ScreenAgent, type ScreenResult, type ScreenTaskSpec } from "./screen/screen-agent.js";
@@ -47,6 +47,16 @@ export class TaskAgent implements Agent {
 
   async turn(context: TurnContext): Promise<TurnResult> {
     const notes: AgentNote[] = [];
+    try {
+      return await this.hops(context, notes);
+    } catch (error) {
+      // Keep what earlier hops of this turn already decided (and paid for) in the transcript.
+      if (notes.length > 0) throw new AgentTurnFailed(error, notes);
+      throw error;
+    }
+  }
+
+  private async hops(context: TurnContext, notes: AgentNote[]): Promise<TurnResult> {
     const view = (): StoredMessage[] => [...context.transcript, ...notes.map(asNote)];
 
     for (let hop = 0; hop < MAX_HOPS; hop += 1) {
@@ -66,7 +76,12 @@ export class TaskAgent implements Agent {
         case "screen_task":
           notes.push({
             type: "screen.start",
-            body: { app: decision.app, objective: decision.objective, doneWhen: decision.doneWhen } satisfies ScreenTaskSpec,
+            body: {
+              app: decision.app,
+              objective: decision.objective,
+              doneWhen: decision.doneWhen,
+              request: context.task.goal,
+            } satisfies ScreenTaskSpec,
           });
           continue;
         case "ask":

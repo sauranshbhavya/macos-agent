@@ -106,7 +106,14 @@ export class Planner {
       const { tier } = chooseTier({ purpose: "plan", invalidOutputRetries: attempt, stepsWithoutProgress: 0, ambiguityFlagged: false });
       const text = await context.modelCall(
         { agent: "planner", tier, maxInputTokens: estimateRequestTokens(request) + 200, maxOutputTokens: 1500 },
-        (signal) => this.router.run(tier, { ...request, schemaName: PLANNER_DECISION_SCHEMA_NAME, schema: PLANNER_DECISION_SCHEMA, signal }),
+        (signal) =>
+          this.router.run(tier, {
+            ...request,
+            schemaName: PLANNER_DECISION_SCHEMA_NAME,
+            schema: PLANNER_DECISION_SCHEMA,
+            maxOutputTokens: 1500,
+            signal,
+          }),
       );
       const decision = interpret(text);
       if (typeof decision !== "string") return decision;

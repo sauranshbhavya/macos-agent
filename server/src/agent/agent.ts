@@ -81,6 +81,20 @@ export class BudgetExhausted extends Error {
   }
 }
 
+/**
+ * Thrown by an agent whose turn failed after it had already made progress: `notes` are what the
+ * earlier part of the turn decided, which the runner keeps in the transcript as it ends the task.
+ */
+export class AgentTurnFailed extends Error {
+  constructor(
+    override readonly cause: unknown,
+    readonly notes: readonly AgentNote[],
+  ) {
+    super(cause instanceof Error ? cause.message : String(cause));
+    this.name = "AgentTurnFailed";
+  }
+}
+
 /** Thrown by a model adapter when every provider for the tier is unavailable. */
 export class ModelUnavailable extends Error {
   constructor(message = "no model provider is available") {

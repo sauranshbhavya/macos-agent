@@ -30,6 +30,9 @@ export interface ScreenTaskSpec {
   readonly app: string;
   readonly objective: string;
   readonly doneWhen: string | null;
+  /** What the person asked for. The planner wrote the objective, having read untrusted content,
+   * so the person's request is what the objective is checked against. */
+  readonly request: string;
 }
 
 export type ScreenResultStatus = "done" | "failed" | "needs_clarification" | "outcome_unknown";
@@ -128,10 +131,8 @@ export class ScreenAgent {
     }
     if (last.type === "outcome") {
       const results = (last.body as { results: ActionResult[] }).results;
-      const unknown = results.find((r) => r.status === "outcome_unknown" && r.effect !== "observe" && r.effect !== "navigate");
-      if (unknown) {
-        return returned({ status: "outcome_unknown", summary: "An action may or may not have happened, so Sonny stopped." });
-      }
+      // An unknown end reaches here only once the person has checked and chosen to continue (the
+      // Mac pauses first); either way the window shows what happened, so look again.
       const declined = results.find((r) => r.status === "declined");
       if (declined) return returned({ status: "failed", summary: "You chose not to go ahead with that step." });
       const screenshot = notes.at(-1)?.screenshot ?? false;
@@ -176,7 +177,7 @@ export class ScreenAgent {
     const stepsWithoutProgress = lastLooks.length >= 3 && new Set(lastLooks).size === 1 ? 2 : 0;
     const screenshot = observation.screenshot ? context.screenshot(last.msgId) : undefined;
 
-    const ambiguityFlagged = notes.at(-1)?.unsure === true || notes.at(-2)?.unsure === true;
+    const ambiguityFlagged = [...notes].reverse().find((note) => note.kind === "act")?.unsure === true;
     let feedback: string | null = null;
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const decision = await this.decide(context, spec, observation, screenshot, history, feedback, {
@@ -207,7 +208,7 @@ export class ScreenAgent {
     feedback: string | null,
     signals: { invalidOutputRetries: number; stepsWithoutProgress: number; ambiguityFlagged: boolean },
   ): Promise<Decision | null> {
-    const prompt = screenPrompt({ objective: spec.objective, doneWhen: spec.doneWhen, observation, history, feedback });
+    const prompt = screenPrompt({ request: spec.request, objective: spec.objective, doneWhen: spec.doneWhen, observation, history, feedback });
     const images =
       screenshot !== undefined && observation.screenshot
         ? [{ mediaType: observation.screenshot.media_type, base64: screenshot }]
@@ -221,6 +222,7 @@ export class ScreenAgent {
           ...request,
           schemaName: SCREEN_DECISION_SCHEMA_NAME,
           schema: SCREEN_DECISION_SCHEMA,
+          maxOutputTokens: MAX_OUTPUT_TOKENS,
           signal,
         }),
     );

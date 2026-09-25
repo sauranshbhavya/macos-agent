@@ -164,6 +164,12 @@ export interface TextRequest {
   readonly responseSchema: unknown;
   /** Advisory. A provider with no equivalent ignores them (§4.2). */
   readonly reasoningEffort: string | undefined;
+  /**
+   * The most output tokens the provider may produce, when the caller must bound it: the V2 agents
+   * size a credit hold by it, so it has to be what the provider enforces too. Undefined keeps each
+   * adapter's own ceiling.
+   */
+  readonly maxOutputTokens?: number;
   readonly verbosity: string | undefined;
   readonly signal: AbortSignal;
 }

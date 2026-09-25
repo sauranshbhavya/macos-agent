@@ -32,6 +32,8 @@ export interface AgentModelRequest {
   readonly images: readonly AgentImage[];
   readonly schemaName: string;
   readonly schema: object;
+  /** Enforced by the provider: the credit hold for this call was sized by it. */
+  readonly maxOutputTokens: number;
   readonly signal: AbortSignal;
 }
 
@@ -105,6 +107,7 @@ export function openAIAgentModel(settings: {
         },
       ],
       text: { format: { type: "json_schema", name: request.schemaName, strict: true, schema: request.schema } },
+      max_output_tokens: request.maxOutputTokens,
     };
     let response: Response;
     try {
@@ -143,6 +146,7 @@ export function textOnlyAgentModel(adapter: TextAdapter): AgentModelEntry["call"
       responseSchema: request.schema,
       reasoningEffort: undefined,
       verbosity: undefined,
+      maxOutputTokens: request.maxOutputTokens,
       signal: request.signal,
     });
     return {

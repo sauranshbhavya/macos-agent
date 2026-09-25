@@ -177,10 +177,12 @@ describe("the planner and its screen subagent", () => {
     // The planner's second call saw what the screen agent reported.
     const lastPlannerCall = router.calls.filter((c) => c.schemaName === PLANNER_DECISION_SCHEMA_NAME).at(-1)!;
     expect(lastPlannerCall.user).toContain("The screen operator reported done: The new note says buy milk.");
-    // The screen agent saw only its objective, not the person's goal as the planner saw it.
+    // The screen agent saw its objective and, as the authority the objective answers to, the
+    // person's own request — nothing else of the planner's conversation.
     const screenCall = router.calls.find((c) => c.schemaName === SCREEN_DECISION_SCHEMA_NAME)!;
-    expect(screenCall.user).toContain("Make a new note that says buy milk");
-    expect(screenCall.user).not.toContain("Make a new note in Notes that says buy milk");
+    expect(screenCall.user).toContain("Your objective: Make a new note that says buy milk");
+    expect(screenCall.user).toContain("The person asked: Make a new note in Notes that says buy milk");
+    expect(screenCall.user).not.toContain("You asked the screen operator");
     expect(screenCall.tier).toBe("fast");
     expect(lastPlannerCall.tier).toBe("standard");
   });
@@ -229,20 +231,46 @@ describe("the planner and its screen subagent", () => {
     expect(router.calls.at(-1)!.user).toContain("The person answered: Never mind");
   });
 
-  it("stops the screen session when a consequential action's end is unknown", async () => {
+  it("looks again after an action whose end was unknown and the person chose to continue", async () => {
     const router = scriptedRouter({
       planner: [
         plan({ kind: "screen_task", app: "Mail", objective: "Send the draft" }),
-        plan({ kind: "finish", status: "failed", summary: "Sonny can't tell whether the message was sent." }),
+        plan({ kind: "finish", status: "completed", summary: "The draft was sent." }),
       ],
-      screen: [step({ tool: "press", ref: "e2", effect: "external" })],
+      screen: [step({ tool: "press", ref: "e2", effect: "external" }), step({ kind: "done", message: "The draft is in Sent." })],
     });
     const h = harness(router);
     const look = await h.start("Send my draft");
     const send = await h.observe(look.seq, notesWindow(1));
-    const finish = await h.outcome(send, "outcome_unknown");
-    expect(finish).toMatchObject({ type: "finish", body: { status: "failed" } });
-    expect(router.calls.at(-1)!.user).toContain("reported outcome_unknown");
+    const again = await h.outcome(send, "outcome_unknown");
+    expect(again.type).toBe("observe");
+    const finish = await h.observe(again.seq, notesWindow(2));
+    expect(finish).toMatchObject({ type: "finish", body: { status: "completed" } });
+  });
+
+  it("keeps what earlier hops of a turn decided when a later hop fails", async () => {
+    const router = scriptedRouter({
+      planner: [plan({ kind: "screen_task", app: "Notes", objective: "Look" })],
+      screen: [step({ kind: "done", message: "Seen." })],
+    });
+    const h = harness(router);
+    const look = await h.start("Look at Notes");
+    // The screen agent finishes, then the planner's next call has no scripted answer and throws.
+    const finish = await h.observe(look.seq, notesWindow(1));
+    expect(finish).toMatchObject({ type: "finish", body: { status: "failed", reason: "internal_error" } });
+    const transcript = await h.store.transcript(h.task);
+    expect(transcript.some((m) => m.type === "screen.result")).toBe(true);
+  });
+
+  it("never charges a call more than was held for it", async () => {
+    const router: ModelRouter = {
+      run: () =>
+        Promise.resolve({ value: JSON.stringify(plan({ kind: "finish", status: "completed", summary: "Done." })), usage: { inputTokens: 900_000, outputTokens: 900_000 }, provider: "p", model: "m" }),
+    };
+    const h = harness(router);
+    await h.start("Anything");
+    const [call] = [...h.ledger.calls.values()];
+    expect(call!.settle!.credits).toBe(call!.hold.credits);
   });
 
   it("charges every model call of both agents to the task", async () => {
@@ -266,6 +294,7 @@ describe("the model router", () => {
     images: Array.from({ length: images }, () => ({ mediaType: "image/png", base64: "AA" })),
     schemaName: "x",
     schema: {},
+    maxOutputTokens: 100,
     signal: new AbortController().signal,
   });
   const entry = (provider: string, images: boolean, call: () => Promise<never> | Promise<{ outputText: string; inputTokens: number; outputTokens: number }>) => ({
