@@ -23,8 +23,7 @@
         "Keep access to the repository set to Private unless it should be public, so that anyone can see it.",
         "If there are already files to put in it, select No from Include a README; otherwise keep the default or choose one of the included README options.",
         "Select the Version control system, keeping Git as the default if the difference is unfamiliar.",
-        "Select Create.",
-        "Clone the repository once it is created."
+        "Select Create."
       ],
       "source": "https://support.atlassian.com/bitbucket-cloud/docs/create-a-repository-in-bitbucket-cloud/"
     }

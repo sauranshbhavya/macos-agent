@@ -21,7 +21,7 @@
         "Navigate to the directory the file belongs in, then click Add file.",
         "Choose to create a new file, which opens the editor screen.",
         "Choose a name for the file and add its content.",
-        "Instead of committing straight to the repository's main branch, Open as a pull request may be selected to create a Pull Request.",
+        "Optional: instead of committing straight to the repository's main branch, select Open as a pull request to create a Pull Request.",
         "Save the file with a message that summarises the changes."
       ],
       "source": "https://huggingface.co/docs/hub/repositories-getting-started"
