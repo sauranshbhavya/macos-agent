@@ -237,7 +237,8 @@ enum SkillPackStartPageRule {
         // the pack that needs it.
         "login.microsoftonline.com": ["office.com", "microsoft.com", "microsoft365.com", "azure.com"],
         "login.live.com": ["live.com"],
-        "id.atlassian.com": ["trello.com"],
+        // bitbucket.org: bitbucket.org/account/signin/, read signed out 2026-09-25 (SONNY-548).
+        "id.atlassian.com": ["trello.com", "bitbucket.org"],
         "app.frontapp.com": ["front.com"],
         "app.notion.com": ["notion.so"],
         "authenticator.cursor.sh": ["cursor.com"],
