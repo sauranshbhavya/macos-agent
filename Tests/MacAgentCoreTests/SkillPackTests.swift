@@ -87,15 +87,19 @@ struct SkillPackTests {
             #expect(ids.contains(added), "\(added) was added by founder decision")
         }
         // Two of the column's three values are in use: the flows rest on re-openable documentation on
-        // 429 rows and on the running product on the other 44, and no row says `shallow` any more
+        // some rows and on the running product on the rest, and no row says `shallow` any more
         // (`awk -F'\t' 'NR > 1 {c[$8]++} END {for (k in c) print k, c[k]}' docs/sonny-skill-sites.tsv`).
-        // No SHA beside those numbers deliberately: this assertion re-counts them on every run, so
-        // unlike a stamped figure they cannot describe a tree that has since moved. It is also the
+        // **The counts live in the assertion below and nowhere else, this sentence included.** They
+        // used to be written here too, and the prose was left behind by a numeral change twice in one
+        // day — reading 426 and 47 above an assertion saying 427 and 46, and again at 429 and 44 — so
+        // a reader checking the comment against the tree was told something false by the one line
+        // whose job was to explain it. The assertion re-counts on every run, which is why it needs no
+        // SHA: unlike a stamped figure it cannot describe a tree that has since moved. It is also the
         // whole vocabulary check — a fourth word, or a near-miss spelling of one of these two, cannot
         // make this dictionary equal, so a separate set-membership assertion added only a message
         // (review-260's F3).
         let evidence = rows.map { $0["task_flow_docs"]! }
-        #expect(Dictionary(evidence.map { ($0, 1) }, uniquingKeysWith: +) == ["deep": 429, "site": 44])
+        #expect(Dictionary(evidence.map { ($0, 1) }, uniquingKeysWith: +) == ["deep": 431, "site": 42])
         #expect(rows.filter { $0["why_in_list"]!.hasPrefix("founder-named") }.count == 100)
         for row in rows {
             #expect(!row["domain"]!.isEmpty, "\(row["id"]!) has no domain")
