@@ -198,6 +198,8 @@ export function creditBalance(input: {
   readonly catalogue: CreditCatalogue;
   readonly planKey: string | undefined;
   readonly draw: ScreenControlDraw;
+  /** What V2 tasks' model calls spent this period, open holds included (`agent/credits.ts`). */
+  readonly agentCredits?: number;
   /**
    * What this period's granted top-ups added, in credits (SONNY-215). `0` for every account that
    * has bought none, which is every account by default.
@@ -213,7 +215,7 @@ export function creditBalance(input: {
   // which is `balance.ts`'s whole design — the audit row is the charge, and this is a grant.
   const toppedUp = round(Math.max(0, input.toppedUpCredits));
   const allowance = round(plan.monthlyCredits + toppedUp);
-  const drawn = creditsForDraw(input.catalogue.weights, input.draw);
+  const drawn = round(creditsForDraw(input.catalogue.weights, input.draw) + (input.agentCredits ?? 0));
   const remaining = round(Math.max(0, allowance - drawn));
   return {
     plan: plan.key,

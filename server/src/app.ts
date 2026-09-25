@@ -40,6 +40,24 @@ import { billingDepsFrom } from "./billing/deps.js";
 import { postgresBillingStore, type BillingStore } from "./billing/store.js";
 import type { BillingProvider } from "./billing/provider.js";
 import { registerBillingRoutes } from "./routes/billing.js";
+import { authenticateAccessToken } from "./auth/gate.js";
+import { unavailableAgent, type AgentFactory } from "./agent/agent.js";
+import { postgresModelCallLedger, type ModelCallLedger } from "./agent/credits.js";
+import { DEFAULT_SESSION_TIMING, type SessionTiming } from "./agent/session/connection.js";
+import { SessionRegistry, type MessageRate } from "./agent/session/registry.js";
+import { registerAgentSession } from "./agent/session/route.js";
+import { postgresTaskStore } from "./agent/tasks/postgres-store.js";
+import { TaskRunner, type TaskBudgets } from "./agent/tasks/runner.js";
+import type { TaskStore } from "./agent/tasks/store.js";
+
+declare module "fastify" {
+  interface FastifyInstance {
+    /** Every open V2 session. Sign-out and account closure close theirs through it. */
+    agentSessions: SessionRegistry;
+    /** The V2 task runner, when the session route is mounted. */
+    agentRunner: TaskRunner | null;
+  }
+}
 
 /** The API minor version this build serves. `Sonny-Api-Version`, contract §2.3. */
 export const API_VERSION = "1.0";
@@ -289,6 +307,13 @@ export interface AppOverrides {
    * whole suite green.
    */
   readonly topUpTotalDeadlineMs?: number | undefined;
+  /** V2 sessions: the task store, credit ledger, agent and timings a test controls. */
+  readonly agentTaskStore?: TaskStore;
+  readonly agentLedger?: ModelCallLedger;
+  readonly agentFactory?: AgentFactory;
+  readonly agentTiming?: SessionTiming;
+  readonly agentBudgets?: TaskBudgets;
+  readonly agentMessageRate?: MessageRate;
 }
 
 export function buildApp(
@@ -719,6 +744,45 @@ export function buildApp(
       plans: billing.plans,
       graceMilliseconds: billing.graceMilliseconds,
       now: auth?.now,
+    });
+  }
+
+  const agentSessions = new SessionRegistry(overrides.agentMessageRate);
+  app.decorate("agentSessions", agentSessions);
+  app.decorate("agentRunner", null);
+  const tokenRates = auth ? requireCreditCatalogue(config).tokenRates : undefined;
+  if (auth && tokenRates === undefined) {
+    app.log.warn({}, "CREDIT_PLANS has no tokenRates, so /v2/session is not mounted");
+  }
+  if (auth && tokenRates !== undefined) {
+    const agentTaskStore = overrides.agentTaskStore ?? postgresTaskStore(auth.withConnection);
+    const now = auth.now ?? (() => new Date());
+    const runner = new TaskRunner({
+      store: agentTaskStore,
+      ledger:
+        overrides.agentLedger ??
+        postgresModelCallLedger({
+          withConnection: auth.withConnection,
+          catalogue: requireCreditCatalogue(config),
+          defaultCapUnits: requireSpendCapUnits(config),
+        }),
+      rates: tokenRates,
+      agentFor: overrides.agentFactory ?? unavailableAgent,
+      deliver: (task, messages) => agentSessions.peerFor(task.accountId, task.deviceId)?.sendTask(messages),
+      now,
+      log: app.log,
+      ...(overrides.agentBudgets === undefined ? {} : { budgets: overrides.agentBudgets }),
+    });
+    app.agentRunner = runner;
+    const gate = { policy: requireSupabaseJwtPolicy(config), withConnection: auth.withConnection, now: auth.now };
+    registerAgentSession(app, {
+      runner,
+      store: agentTaskStore,
+      registry: agentSessions,
+      authenticate: (token, at) => authenticateAccessToken(token, gate, at, { consultDenylist: true }),
+      now,
+      timing: overrides.agentTiming ?? DEFAULT_SESSION_TIMING,
+      log: app.log,
     });
   }
 

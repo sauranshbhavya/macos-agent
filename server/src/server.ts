@@ -1,7 +1,10 @@
 import { buildApp } from "./app.js";
 import { authWiringFrom } from "./auth/deps.js";
-import { ConfigError, loadConfig } from "./config.js";
+import { ConfigError, loadConfig, requireCreditCatalogue, requireSpendCapUnits } from "./config.js";
 import { startContentExpirySweeper } from "./content/expiry.js";
+import { postgresModelCallLedger } from "./agent/credits.js";
+import { postgresTaskStore } from "./agent/tasks/postgres-store.js";
+import { startTaskRetentionSweeper } from "./agent/tasks/retention.js";
 
 /**
  * Process entry point. Kept separate from `app.ts` so that building the server and *listening* are
@@ -15,6 +18,9 @@ import { startContentExpirySweeper } from "./content/expiry.js";
  * credential problem. The other half was that no concrete `AuthProvider` existed to pass;
  * `auth/supabase.ts` is that adapter and `auth/deps.ts` decides whether this environment gets one.
  */
+/** How often ended V2 tasks are swept (`agent/tasks/retention.ts`). */
+const TASK_SWEEP_INTERVAL_MS = 10 * 60 * 1000;
+
 async function main(): Promise<void> {
   let config;
   try {
@@ -88,6 +94,21 @@ async function main(): Promise<void> {
       })
     : undefined;
 
+  const stopTaskSweeper =
+    wiring && app.agentRunner !== null
+      ? startTaskRetentionSweeper({
+          store: postgresTaskStore(wiring.deps.withConnection),
+          ledger: postgresModelCallLedger({
+            withConnection: wiring.deps.withConnection,
+            catalogue: requireCreditCatalogue(config),
+            defaultCapUnits: requireSpendCapUnits(config),
+          }),
+          now: () => new Date(),
+          intervalMs: TASK_SWEEP_INTERVAL_MS,
+          log: app.log,
+        })
+      : undefined;
+
   let shuttingDown = false;
   for (const signal of ["SIGTERM", "SIGINT"] as const) {
     process.on(signal, () => {
@@ -101,6 +122,7 @@ async function main(): Promise<void> {
       // pool, and a tick that fires mid-drain would ask for one that is going away. The timer is
       // already `unref`ed, so this is about not starting another pass rather than about the exit.
       stopSweeper?.();
+      stopTaskSweeper?.();
       void shutdown(app, wiring).then(() => process.exit(0));
     });
   }
