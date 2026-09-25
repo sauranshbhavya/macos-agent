@@ -26,22 +26,6 @@
         "Select Pins for your board and click Done when you are finished."
       ],
       "source": "https://help.pinterest.com/en/business/article/create-a-board"
-    },
-    {
-      "title": "Claim your website with an HTML tag",
-      "startURL": "https://pinterest.com/login",
-      "steps": [
-        "Click the chevron-down icon at the top-right corner to open your menu.",
-        "Select Settings.",
-        "Click Link to Pinterest from the left-side navigation.",
-        "Click Claim next to Websites.",
-        "Click the text in the box below Add HTML tag to copy it.",
-        "Click Continue.",
-        "Go to the index.html file of your website and add the tag to the head section before the body section.",
-        "Return to Pinterest and enter your website URL in the text box.",
-        "Click Verify."
-      ],
-      "source": "https://help.pinterest.com/en/business/article/claim-your-website"
     }
   ],
   "startPages": [
