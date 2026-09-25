@@ -6,8 +6,35 @@
   "category": "recruiting_hr",
   "summary": "LinkedIn's job posting and recruiting tools.",
   "signInURL": "https://www.linkedin.com/login",
-  "triggers": ["linkedin jobs", "linkedin recruiter"],
+  "triggers": [
+    "linkedin jobs",
+    "linkedin recruiter"
+  ],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Send an InMail message to a member",
+      "startURL": "https://www.linkedin.com/login",
+      "steps": [
+        "Go to the profile of the member you want to write to. You can also search for a member and send a new InMail message from the messaging page or conversation windows.",
+        "Click the More button in their introduction section.",
+        "Select Message, followed by the member's name, from the drop-down.",
+        "In the New message window, type a subject if you want one; the field is optional.",
+        "Type the message in the text box.",
+        "Click Send."
+      ],
+      "source": "https://www.linkedin.com/help/recruiter/answer/a546814"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://www.linkedin.com/login",
+      "landedURL": "https://www.linkedin.com/login/",
+      "title": "LinkedIn Login, Sign in | LinkedIn",
+      "heading": "Sign in",
+      "offers": "sign-in",
+      "read": "2026-09-25"
+    }
+  ]
 }
