@@ -232,7 +232,10 @@ enum SkillPackStartPageRule {
     static let identityHosts: [String: Set<String>] = [
         "accounts.google.com": ["google.com", "youtube.com"],
         // microsoft365.com: www.microsoft365.com/login, read signed out 2026-09-18 (SONNY-529).
-        "login.microsoftonline.com": ["office.com", "microsoft.com", "microsoft365.com"],
+        // azure.com: dev.azure.com/login, read signed out 2026-09-25 (SONNY-547) — the pairing
+        // SONNY-531 identified for portal.azure.com and could not ship, since a pairing lands with
+        // the pack that needs it.
+        "login.microsoftonline.com": ["office.com", "microsoft.com", "microsoft365.com", "azure.com"],
         "login.live.com": ["live.com"],
         "id.atlassian.com": ["trello.com"],
         "app.frontapp.com": ["front.com"],
