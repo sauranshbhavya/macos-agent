@@ -11,7 +11,7 @@
   "depth": "deep",
   "flows": [
     {
-      "title": "Create an event type",
+      "title": "Start a new event type",
       "startURL": "https://app.cal.com/",
       "steps": [
         "Go to the event types page and click the New event type button in the top right.",
