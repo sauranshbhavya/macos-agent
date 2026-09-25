@@ -3625,11 +3625,27 @@ final class AgentViewModel: ObservableObject {
     /// press the notification refuses, three inches away, because its banner carries no button at
     /// all. `RunSlot.failedTask` is `nil` for exactly those failures, so both surfaces now agree.
     ///
-    /// It still cannot show a dead button, which is the property the old gate was written for: a
-    /// run's own task can only have failed after `start()` wrote its command, so a non-nil
-    /// `failedTask` implies a non-empty `lastCommand`. The gate is strictly narrower, never wider.
+    /// **And it asks the cap, because a Retry the cap would refuse is a button that does nothing**
+    /// (PR #287's re-check, N1). `retryLastCommand` declines while three runs are in flight, and it
+    /// declines *silently* — it writes nothing by design, both views discard its result, and only
+    /// the notification's door logs the refusal. So the failed-task half alone would have drawn a
+    /// live Retry that answered a press with nothing at all: no run, no message, no change on
+    /// screen. The term is `canStartAnotherRun`, the same predicate `start()` and
+    /// `retryLastCommand` refuse at, read here rather than spelled a third and fourth time at the
+    /// two call sites. The button now disappears while the cap is full and comes back when a run
+    /// finishes, which is a reason the user cannot see — chosen over the alternative on 2026-09-24,
+    /// because the sentence they used to get was the thing that spent their banner (F1).
+    ///
+    /// **What this does and does not guarantee, stated because the sentence it replaces
+    /// over-claimed.** It guarantees the two terms of `retryLastCommand`'s guard that a surface
+    /// cannot otherwise know: that the run holds a command to resubmit — a run's own task can only
+    /// have failed after `start()` wrote one, so a non-nil `failedTask` implies a non-empty
+    /// `lastCommand` — and that the cap would let it start. The third term, `!isTaskInFlight`, is
+    /// left to the surfaces: both draw a failure only when nothing is running or parked on this
+    /// run, because a permission and a clarification each outrank a failure in the one precedence
+    /// they share. A surface that drew a failure panel over a live run would need that term too.
     var canRetryFailedTask: Bool {
-        runSlotInScope.failedTask != nil
+        runSlotInScope.failedTask != nil && canStartAnotherRun
     }
 
     /// The real command driving the current/last run — `command` itself is cleared the instant
@@ -3734,6 +3750,15 @@ final class AgentViewModel: ObservableObject {
     /// Resubmits the last real command as-is. Used by the floating widget's task-level-failure
     /// retry button (§3.3.6), the error notification's "Retry" action, and Command Center's own
     /// failure row. Returns whether the retry was dispatched.
+    ///
+    /// **What a new caller owes** (PR #287's re-check): this resubmits the run's last command and
+    /// never asks whether the failure on screen is that command's. A door that offers it as a
+    /// *Retry* has to ask, or it re-runs a task the user never asked to repeat after a failure that
+    /// was nobody's task — SONNY-533's own defect, reached through a fourth door. The three that
+    /// exist each ask in their own way: the notification carries a token minted for one failed task
+    /// (`retryFailedRun`), and the two in-app controls are drawn only when `canRetryFailedTask`
+    /// says a failed task is on screen. A caller that means "run this again" rather than "retry
+    /// what failed" wants `runTaskAgain` instead.
     ///
     /// - Parameter origin: Which surface's retry control this is. Defaults to `.widget` so the
     ///   two pre-existing call sites keep their original behavior. This used to be hardcoded

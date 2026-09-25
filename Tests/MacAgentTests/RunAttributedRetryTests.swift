@@ -290,17 +290,52 @@ struct RunAttributedRetryTests {
         try await HangBackstop.waitOrAbandon(for: "the dispatched retry to settle") { !viewModel.isRunning }
     }
 
-    /// Both controls read that one predicate, at their own site. The views cannot be built in a
-    /// test process, so the wiring is read; what the predicate answers is held by the test above.
+    /// The widget offers no Retry while the cap is full, and offers it again once a run finishes
+    /// (PR #287's re-check, N1).
+    ///
+    /// **A press the cap refuses does nothing and says nothing**, because F1 made that refusal
+    /// write nothing on purpose, so a button drawn on the failed-task half alone would be dead in
+    /// the hand. One test per surface: each drives the predicate its own control is drawn from, and
+    /// reads that control's wiring, because the views cannot be built in a test process.
     @Test
-    func bothInAppRetryControlsGateOnTheFailedTask() throws {
+    func theWidgetsFailurePanelOffersNoRetryWhileTheCapIsFull() async throws {
+        let full = try await makeAFailedTaskUnderAFullCap()
+        defer { full.fixture.tearDown() }
+        let viewModel = full.fixture.viewModel
+
+        #expect(!viewModel.canRetryFailedTask, "the widget would draw a Retry that answers a press with nothing")
+
         let widget = try MacAgentSource.read("FloatingWidgetView.swift")
         #expect(MacAgentSource.count(of: "canRetry: viewModel.canRetryFailedTask,", inText: widget) == 1)
         #expect(MacAgentSource.count(of: "viewModel.retryLastCommand(", inText: widget) == 1)
 
+        // The failure is still on screen; it is the cap that shut the gate, and a run finishing
+        // opens it again.
+        #expect(slot(full.run, in: viewModel)?.failedTask != nil)
+        RunScope.$current.withValue(full.others[0]) { viewModel.isRunning = false }
+        #expect(viewModel.canRetryFailedTask)
+        full.settle()
+    }
+
+    /// Command Center's failure row, the same way. Its control sits inside
+    /// `CommandCenterAttentionPanel`, which keeps reading the focused run — only the predicate
+    /// moved (founders, 2026-09-24).
+    @Test
+    func commandCentersFailureRowOffersNoRetryWhileTheCapIsFull() async throws {
+        let full = try await makeAFailedTaskUnderAFullCap()
+        defer { full.fixture.tearDown() }
+        let viewModel = full.fixture.viewModel
+
+        #expect(!viewModel.canRetryFailedTask, "Command Center would draw a Retry that answers a press with nothing")
+
         let commandCenter = try MacAgentSource.read("CommandCenterView.swift")
         #expect(MacAgentSource.count(of: "if viewModel.canRetryFailedTask {", inText: commandCenter) == 1)
         #expect(MacAgentSource.count(of: "viewModel.retryLastCommand(", inText: commandCenter) == 1)
+
+        #expect(slot(full.run, in: viewModel)?.failedTask != nil)
+        RunScope.$current.withValue(full.others[0]) { viewModel.isRunning = false }
+        #expect(viewModel.canRetryFailedTask)
+        full.settle()
     }
 
     /// The delegate's half, read off the wiring for the reason the Allow's is: the closures cannot
@@ -434,6 +469,35 @@ struct NotificationRoundTripTests {
 }
 
 // MARK: - Fixtures
+
+/// A run whose task failed, with the cap filled by three other runs — the state both in-app Retry
+/// controls are drawn in when the gate has to be shut (PR #287's re-check, N1).
+@MainActor
+private func makeAFailedTaskUnderAFullCap() async throws -> (fixture: DispatchFixture, run: RunID, others: [RunID], settle: @MainActor () -> Void) {
+    let planned = PlannedCommands()
+    let fixture = try makeDispatchFixture(planner: { RetryPlanner(folder: $0, planned: planned) })
+    let viewModel = fixture.viewModel
+    let run = viewModel.focusedRunID
+
+    viewModel.command = "Draft one, which fails"
+    viewModel.start()
+    try await HangBackstop.waitOrAbandon(for: "the task to fail") {
+        slot(run, in: viewModel).map { !$0.isRunning && $0.errorMessage != nil } == true
+    }
+    try #require(slot(run, in: viewModel)?.failedTask != nil, "precondition: a failed task is on screen")
+
+    let others = (0..<AgentViewModel.maximumConcurrentRuns).map { _ in viewModel.addRunSlotForTests() }
+    for id in others {
+        RunScope.$current.withValue(id) { viewModel.isRunning = true }
+    }
+    try #require(!viewModel.canStartAnotherRun, "precondition: the cap is full")
+
+    return (fixture, run, others, {
+        for id in others {
+            RunScope.$current.withValue(id) { viewModel.isRunning = false }
+        }
+    })
+}
 
 /// Every command the planner was asked to plan, in order — the record of which task ran.
 private final class PlannedCommands: @unchecked Sendable {
