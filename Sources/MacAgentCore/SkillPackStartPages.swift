@@ -34,6 +34,11 @@ import Foundation
 /// `offers` is what the page offered that visitor, in one of two words, and `read` is the date of the
 /// reading: a real calendar date, `YYYY-MM-DD`, and no earlier than `SkillPackStartPageRule.firstReadingDay`,
 /// so a typo such as `2026-13-45` or a placeholder such as `1970-01-01` does not load (SONNY-529).
+/// **The date is the reading's date in UTC — `date -u` — and never the machine's local one.** The two
+/// zones disagree for part of every day, and this corpus is read on a Mac on North American evening
+/// time, so a reading taken late in the evening carries the next day's local date. Records in this
+/// tree do, and they are right rather than post-dated. A column mixing the two could not be compared
+/// or sorted at all, which is the whole reason to pick one (founders, 2026-09-24, on SONNY-556).
 ///
 /// **The word is judged at each flow's own first step, not at the page's shape** (SONNY-510's round five).
 /// So two pages of one shape can carry different words, and that is the rule working. eBay's homepage and
