@@ -154,10 +154,17 @@ extension AgentViewModel: VisionSessionInteracting {
     ///
     /// **Since SONNY-456 the closure below calls `stopEveryRun()` and no longer names that method**,
     /// so the same command answers 4 over `Sources`, the four controls, and 0 over this file — both
-    /// at `49a245f7`, against 5 and 1 at `856bb7ee`, the head that branch was cut from and the
+    /// at `3da866ba`, against 5 and 1 at `856bb7ee`, the commit this branch was cut from and the
     /// control that the command still finds what this paragraph says it found. There are still five
     /// ways to stop and they still end in `cancelCurrentRun`; what changed is that the key names no
     /// run, and `stopEveryRun`'s own doc says why it may not.
+    ///
+    /// **The stamp read `49a245f7` and that commit is not in this history** (PR #287's F4). It was
+    /// this branch's own head before it was rebased onto the process reset, so it still resolves in
+    /// the clone that wrote it and `git merge-base --is-ancestor 49a245f7 HEAD` exits 1 — a stamp
+    /// that reads as checkable while describing a tree outside this branch. The figures were right
+    /// and were re-measured rather than re-stamped: the command above was re-run at `3da866ba`,
+    /// which is an ancestor, and answers what it answered before.
     func registerEmergencyStopHotKey() {
         guard visionEmergencyStopHotKey == nil else {
             return
