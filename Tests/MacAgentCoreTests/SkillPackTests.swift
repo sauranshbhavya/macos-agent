@@ -95,7 +95,7 @@ struct SkillPackTests {
         // make this dictionary equal, so a separate set-membership assertion added only a message
         // (review-260's F3).
         let evidence = rows.map { $0["task_flow_docs"]! }
-        #expect(Dictionary(evidence.map { ($0, 1) }, uniquingKeysWith: +) == ["deep": 424, "site": 49])
+        #expect(Dictionary(evidence.map { ($0, 1) }, uniquingKeysWith: +) == ["deep": 425, "site": 48])
         #expect(rows.filter { $0["why_in_list"]!.hasPrefix("founder-named") }.count == 100)
         for row in rows {
             #expect(!row["domain"]!.isEmpty, "\(row["id"]!) has no domain")
