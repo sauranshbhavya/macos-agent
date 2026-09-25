@@ -14,6 +14,7 @@
       "title": "Start a new chat",
       "startURL": "https://replit.com/login",
       "steps": [
+        "Open the mode selector below the prompt box and make sure the mode is set to Free.",
         "Select New in the Replit sidebar.",
         "Use the prompt box to write your request. For example, ask Replit to summarize our Slack activity from this week and flag messages that need my reply."
       ],
