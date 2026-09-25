@@ -14,10 +14,10 @@
       "title": "Edit the company's trade name",
       "startURL": "https://gusto.com/login",
       "steps": [
-        "In the left menu, click your company's name.",
+        "In the left menu, click your company name.",
         "Under Information, click Details.",
-        "Next to the company name, click Edit.",
-        "Under Trade name, enter the name the company does business as, then click Save."
+        "Next to your company name, click Edit.",
+        "Under Trade name, enter the DBA and click Save."
       ],
       "source": "https://support.gusto.com/article/106622257100000/edit-company-details-for-admins"
     }
