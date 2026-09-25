@@ -6,8 +6,35 @@
   "category": "code_hosting",
   "summary": "Platform for machine learning models, datasets and demos.",
   "signInURL": "https://huggingface.co/login",
-  "triggers": ["hugging face", "huggingface.co"],
+  "triggers": [
+    "hugging face",
+    "huggingface.co"
+  ],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Create a model repository",
+      "startURL": "https://huggingface.co/login",
+      "steps": [
+        "To create a new repository, visit huggingface.co/new.",
+        "Specify the owner of the repository: yourself, or any of the organizations you are affiliated with.",
+        "Enter the model's name. This is also the name of the repository, and the Hub uses it in the repository's address.",
+        "Specify whether the model is public or private.",
+        "Specify the license. The License field may be left blank for now.",
+        "After the repository is created, the Hub prompts you to create a Model Card."
+      ],
+      "source": "https://huggingface.co/docs/hub/repositories-getting-started"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://huggingface.co/login",
+      "landedURL": "https://huggingface.co/login",
+      "title": "Hugging Face – The AI community building the future.",
+      "heading": "Log In",
+      "offers": "sign-in",
+      "read": "2026-09-25"
+    }
+  ]
 }

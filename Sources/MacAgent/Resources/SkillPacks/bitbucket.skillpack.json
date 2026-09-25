@@ -6,8 +6,33 @@
   "category": "code_hosting",
   "summary": "Git code hosting from Atlassian.",
   "signInURL": "https://id.atlassian.com/login?continue=https%3A%2F%2Fwww.atlassian.com%2Fgateway%2Fapi%2Fstart%2Fauthredirect&application=wac--ic",
-  "triggers": ["bitbucket", "bitbucket.org"],
+  "triggers": [
+    "bitbucket",
+    "bitbucket.org"
+  ],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Create a repository",
+      "startURL": "https://bitbucket.org/account/signin/",
+      "steps": [
+        "From Bitbucket, select the Create button and then select Repository. Bitbucket shows the Create a new repository page.",
+        "Enter a name in the Name field. Bitbucket uses this name in the repository's address.",
+        "Everything on this page except the Repository type can be changed later.",
+        "The repository starts empty. It is the central repository for the files, and other people reach it only if they are given permission."
+      ],
+      "source": "https://support.atlassian.com/bitbucket-cloud/docs/create-a-git-repository/"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://bitbucket.org/account/signin/",
+      "landedURL": "https://id.atlassian.com/login",
+      "title": "Log in to continue - Log in with Atlassian account",
+      "heading": "Log in to continue",
+      "offers": "sign-in",
+      "read": "2026-09-25"
+    }
+  ]
 }
