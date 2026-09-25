@@ -72,7 +72,9 @@ struct CommandCenterAttentionSurfaceTests {
         while viewModel.isRunning {
             try await Task.sleep(nanoseconds: 10_000_000)
         }
-        #expect(viewModel.hasRetryableCommand)
+        // The run holds a command to resubmit. Not `canRetryFailedTask`, which asks whether a
+        // *failed task* is on screen and is `false` here because this run succeeded (PR #287's F2).
+        #expect(!viewModel.lastCommand.isEmpty)
 
         viewModel.retryLastCommand(origin: .commandCenter)
         while viewModel.isRunning {
