@@ -23,7 +23,7 @@ CREATE INDEX device_account_idx ON sonny.device (account_id);
 CREATE TABLE sonny.agent_task (
   id uuid PRIMARY KEY,
   account_id uuid NOT NULL REFERENCES sonny.account(id) ON DELETE CASCADE,
-  device_id uuid NOT NULL,
+  device_id uuid NOT NULL REFERENCES sonny.device(id) ON DELETE CASCADE,
   status text NOT NULL CHECK (status IN ('live', 'completed', 'failed', 'cancelled')),
   private boolean NOT NULL,
   unattended boolean NOT NULL,

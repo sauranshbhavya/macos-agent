@@ -64,6 +64,7 @@ describeDb("V2 tasks in Postgres", () => {
     await client.query("TRUNCATE sonny.agent_model_call");
     const { rows } = await client.query<{ id: string }>("INSERT INTO sonny.account DEFAULT VALUES RETURNING id");
     account = rows[0]!.id;
+    await store.touchDevice(DEVICE, account, at);
   });
 
   itUnderHangBackstop("stores a task, its transcript in order, and resends what came after a seq", async () => {
@@ -196,6 +197,18 @@ describeDb("V2 tasks in Postgres", () => {
     await ledger.hold({ stepId, accountId: account, taskId: randomUUID(), agent: "screen", tier: "fast", credits: 900, now: at });
     expect(await ledger.expireHolds(new Date(at.getTime() + 1), at)).toBe(1);
     expect(await ledger.hold({ stepId: randomUUID(), accountId: account, taskId: randomUUID(), agent: "screen", tier: "fast", credits: 900, now: at })).toEqual({ kind: "held" });
+  });
+
+  itUnderHangBackstop("spends nothing for a closed account, whatever its balance", async () => {
+    const ledger = postgresModelCallLedger({
+      withConnection,
+      catalogue: parseCreditCatalogue(TEST_CREDIT_PLANS_WITH_RATES),
+      defaultCapUnits: 1000,
+    });
+    await client.query("UPDATE sonny.account SET deleted_at = now() WHERE id = $1", [account]);
+    expect(
+      await ledger.hold({ stepId: randomUUID(), accountId: account, taskId: randomUUID(), agent: "planner", tier: "fast", credits: 1, now: at }),
+    ).toEqual({ kind: "insufficient", remaining: 0 });
   });
 
   itUnderHangBackstop("stops at the spend cap even with credits left", async () => {

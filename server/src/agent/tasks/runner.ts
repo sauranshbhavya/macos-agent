@@ -42,6 +42,20 @@ export const DEFAULT_BUDGETS: TaskBudgets = {
 
 /** How many recent screenshots the runner keeps in memory per task. Older ones are dropped. */
 const SCREENSHOTS_PER_TASK = 2;
+/**
+ * How long a screenshot stays in memory. A turn reads the one it was triggered by within seconds,
+ * so this only bounds memory for tasks the runner never hears from again (a Mac that went away,
+ * a task the sweep abandoned), which nothing else would ever clear.
+ */
+export const SCREENSHOT_TTL_MS = 10 * 60_000;
+/** And how many tasks may hold screenshots at once, oldest dropped first. */
+const MAX_TASKS_WITH_SCREENSHOTS = 1000;
+/**
+ * The longest one model call may take. It is shorter than the spend-cap reservation's five-minute
+ * life (`entitlement/period.ts`), so a reservation is always settled by its own call rather than
+ * reclaimed by the operator's sweep first.
+ */
+export const MODEL_CALL_DEADLINE_MS = 180_000;
 
 export interface RunnerLog {
   info(data: object, message: string): void;
@@ -58,6 +72,8 @@ export interface RunnerDeps {
   readonly now: () => Date;
   readonly log: RunnerLog;
   readonly budgets?: TaskBudgets;
+  /** Overrides `MODEL_CALL_DEADLINE_MS`, for tests. */
+  readonly modelCallDeadlineMs?: number;
 }
 
 export type StartOutcome = "created" | "duplicate" | "conflict";
@@ -133,8 +149,8 @@ function lastExchanged(transcript: readonly StoredMessage[]): StoredMessage | un
 
 export class TaskRunner {
   private readonly chains = new Map<string, Promise<void>>();
-  private readonly running = new Map<string, AbortController>();
-  private readonly screenshots = new Map<string, Map<string, string>>();
+  private readonly running = new Map<string, { controller: AbortController; accountId: string }>();
+  private readonly screenshots = new Map<string, Map<string, { data: string; keptAt: number }>>();
   private readonly budgets: TaskBudgets;
   private stopped = false;
 
@@ -218,7 +234,7 @@ export class TaskRunner {
   /** Stops every running turn without ending its task, for a shutdown; resume runs it again. */
   async stop(): Promise<void> {
     this.stopped = true;
-    for (const controller of this.running.values()) controller.abort(new Error("shutting down"));
+    for (const { controller } of this.running.values()) controller.abort(new Error("shutting down"));
     await Promise.allSettled([...this.chains.values()]);
   }
 
@@ -227,11 +243,49 @@ export class TaskRunner {
     while (this.chains.size > 0) await Promise.allSettled([...this.chains.values()]);
   }
 
+  /**
+   * Stops every running turn of a closed account and ends its tasks, so nothing more is spent for
+   * an account that no longer exists.
+   */
+  async stopAccount(accountId: string): Promise<void> {
+    const ending: Promise<void>[] = [];
+    for (const [taskId, turn] of this.running) {
+      if (turn.accountId !== accountId) continue;
+      turn.controller.abort(new Error("account closed"));
+      ending.push(
+        this.deps.store.end(taskId, "failed", this.deps.now()).then(() => {
+          this.screenshots.delete(taskId);
+        }),
+      );
+    }
+    await Promise.all(ending);
+  }
+
   private keepScreenshot(taskId: string, msgId: string, data: string): void {
-    const kept = this.screenshots.get(taskId) ?? new Map<string, string>();
-    kept.set(msgId, data);
+    const now = this.deps.now().getTime();
+    this.pruneScreenshots(now);
+    const kept = this.screenshots.get(taskId) ?? new Map<string, { data: string; keptAt: number }>();
+    kept.set(msgId, { data, keptAt: now });
     while (kept.size > SCREENSHOTS_PER_TASK) kept.delete(kept.keys().next().value!);
+    this.screenshots.delete(taskId);
     this.screenshots.set(taskId, kept);
+    while (this.screenshots.size > MAX_TASKS_WITH_SCREENSHOTS) {
+      this.screenshots.delete(this.screenshots.keys().next().value!);
+    }
+  }
+
+  private pruneScreenshots(now: number): void {
+    for (const [taskId, kept] of this.screenshots) {
+      for (const [msgId, entry] of kept) {
+        if (now - entry.keptAt >= SCREENSHOT_TTL_MS) kept.delete(msgId);
+      }
+      if (kept.size === 0) this.screenshots.delete(taskId);
+    }
+  }
+
+  /** How many tasks hold screenshots in memory. For tests. */
+  get tasksWithScreenshots(): number {
+    return this.screenshots.size;
   }
 
   private schedule(taskId: string): void {
@@ -249,7 +303,7 @@ export class TaskRunner {
   }
 
   private async cancel(task: TaskRecord, cancelSeq: number): Promise<void> {
-    this.running.get(task.id)?.abort(new Error("cancelled"));
+    this.running.get(task.id)?.controller.abort(new Error("cancelled"));
     await this.endWith(task, cancelSeq, [], {
       status: "cancelled",
       summary: "Stopped.",
@@ -276,7 +330,7 @@ export class TaskRunner {
     }
 
     const controller = new AbortController();
-    this.running.set(taskId, controller);
+    this.running.set(taskId, { controller, accountId: task.accountId });
     let result: TurnResult;
     try {
       result = await this.deps.agentFor(task).turn(this.contextFor(task, transcript, controller.signal));
@@ -367,12 +421,13 @@ export class TaskRunner {
   private contextFor(task: TaskRecord, transcript: StoredMessage[], signal: AbortSignal): TurnContext {
     const { store, ledger, rates, now, log } = this.deps;
     const budgets = this.budgets;
+    const deadlineMs = this.deps.modelCallDeadlineMs ?? MODEL_CALL_DEADLINE_MS;
     const kept = this.screenshots.get(task.id);
     return {
       task,
       transcript,
       signal,
-      screenshot: (msgId) => kept?.get(msgId),
+      screenshot: (msgId) => kept?.get(msgId)?.data,
       async modelCall<T>(
         spec: ModelCallSpec,
         invoke: (signal: AbortSignal) => Promise<ModelInvocation<T>>,
@@ -393,8 +448,21 @@ export class TaskRunner {
         });
         if (hold.kind !== "held") throw new CreditsExhausted();
         let invocation: ModelInvocation<T>;
+        const call = new AbortController();
+        const onTurnAbort = (): void => call.abort(signal.reason);
+        signal.addEventListener("abort", onTurnAbort, { once: true });
+        let deadline: NodeJS.Timeout | undefined;
         try {
-          invocation = await invoke(signal);
+          invocation = await Promise.race([
+            invoke(call.signal),
+            new Promise<never>((_resolve, reject) => {
+              deadline = setTimeout(() => {
+                const late = new ModelUnavailable("the model call took longer than its deadline");
+                call.abort(late);
+                reject(late);
+              }, deadlineMs);
+            }),
+          ]);
         } catch (error) {
           await ledger
             .settle({
@@ -411,6 +479,9 @@ export class TaskRunner {
               log.error({ err: settleError, stepId }, "a failed model call's hold could not be released"),
             );
           throw error;
+        } finally {
+          clearTimeout(deadline);
+          signal.removeEventListener("abort", onTurnAbort);
         }
         await ledger
           .settle({
@@ -424,7 +495,10 @@ export class TaskRunner {
             now: now(),
           })
           .catch((settleError: unknown) =>
-            log.error({ err: settleError, stepId }, "a model call could not be settled; its hold stands"),
+            log.error(
+              { err: settleError, stepId },
+              "a model call could not be settled; the retention sweep releases its hold uncharged",
+            ),
           );
         return invocation.value;
       },

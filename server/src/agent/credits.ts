@@ -108,6 +108,14 @@ export function postgresModelCallLedger(input: {
   return {
     hold: (request) =>
       withConnection(async (client): Promise<HoldOutcome> => {
+        // A closed account spends nothing more, whatever its balance says.
+        const account = await client.query<{ deleted_at: Date | null }>(
+          "SELECT deleted_at FROM sonny.account WHERE id = $1",
+          [request.accountId],
+        );
+        if (account.rows[0] === undefined || account.rows[0].deleted_at !== null) {
+          return { kind: "insufficient", remaining: 0 };
+        }
         const entitlement = await readEntitlement(client, request.accountId);
         const reservation = await reserve(client, {
           accountId: request.accountId,
