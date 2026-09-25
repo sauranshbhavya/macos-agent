@@ -25,6 +25,7 @@
         "Click Add New User, then click Done."
       ],
       "stops": [
+        "pressing Add New User, which creates the account and raises the monthly payment on a Flexible Plan",
         "changing the subscription or adding licences to make room for a new user"
       ],
       "source": "https://knowledge.workspace.google.com/admin/users/add-an-account-for-a-new-user"

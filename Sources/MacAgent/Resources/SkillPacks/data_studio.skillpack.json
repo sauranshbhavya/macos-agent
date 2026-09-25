@@ -5,7 +5,7 @@
   "domain": "datastudio.google.com",
   "category": "analytics_monitoring",
   "summary": "Google's reports and dashboards.",
-  "signInURL": "https://datastudio.google.com?requirelogin=1",
+  "signInURL": "https://datastudio.google.com/?requirelogin=1",
   "triggers": [
     "datastudio.google.com"
   ],
