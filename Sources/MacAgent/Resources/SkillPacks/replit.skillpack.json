@@ -6,8 +6,34 @@
   "category": "code_hosting",
   "summary": "Browser-based coding and app building platform.",
   "signInURL": "https://replit.com/login",
-  "triggers": ["replit", "replit.com"],
+  "triggers": [
+    "replit",
+    "replit.com"
+  ],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Start a new chat",
+      "startURL": "https://replit.com/login",
+      "steps": [
+        "Every task in Replit starts with a chat.",
+        "Select New in the Replit sidebar.",
+        "Use the prompt box to write your request, for example asking Replit to summarise this week's Slack activity and flag the messages that need a reply.",
+        "Chats are private: only you reach them in your Workspace.",
+        "When the work becomes substantial, ask Replit to turn the chat into a Project, and the context and files gathered so far carry forward."
+      ],
+      "source": "https://docs.replit.com/chat/conversations"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://replit.com/login",
+      "landedURL": "https://replit.com/login",
+      "title": "Log In - Replit",
+      "heading": "Log in to your account",
+      "offers": "sign-in",
+      "read": "2026-09-25"
+    }
+  ]
 }
