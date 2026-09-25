@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sonny.app/contracts/v2/operations/open_url.v1.schema.json",
+  "title": "open_url v1",
+  "description": "Open a web page. Never ask which browser to use. Floor effect: navigate.",
+  "type": "object",
+  "properties": {
+    "url": {
+      "description": "An http or https URL.",
+      "type": "string",
+      "maxLength": 2048,
+      "pattern": "^https?:\\/\\/"
+    },
+    "browser": {
+      "description": "Only when the user named a browser; URLs open in the default browser otherwise.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100
+    }
+  },
+  "required": [
+    "url"
+  ],
+  "additionalProperties": false
+}

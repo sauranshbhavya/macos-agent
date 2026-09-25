@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sonny.app/contracts/v2/operations/start_watching.v1.schema.json",
+  "title": "start_watching v1",
+  "description": "Watch one public web page and tell the user when it changes. Sonny only notifies; it never acts on the change. Floor effect: create.",
+  "type": "object",
+  "properties": {
+    "url": {
+      "description": "An http or https URL.",
+      "type": "string",
+      "maxLength": 2048,
+      "pattern": "^https?:\\/\\/"
+    },
+    "subject": {
+      "description": "What the user asked to be told about, in their words.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500
+    }
+  },
+  "required": [
+    "url",
+    "subject"
+  ],
+  "additionalProperties": false
+}

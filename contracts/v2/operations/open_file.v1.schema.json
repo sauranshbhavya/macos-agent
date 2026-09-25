@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sonny.app/contracts/v2/operations/open_file.v1.schema.json",
+  "title": "open_file v1",
+  "description": "Open a file or folder on the Mac in its default app, for example a file an earlier step made. Floor effect: navigate.",
+  "type": "object",
+  "properties": {
+    "path": {
+      "description": "A path on the Mac, as the user said it or as an earlier step reported it.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024
+    }
+  },
+  "required": [
+    "path"
+  ],
+  "additionalProperties": false
+}

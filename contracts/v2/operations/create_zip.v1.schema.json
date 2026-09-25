@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sonny.app/contracts/v2/operations/create_zip.v1.schema.json",
+  "title": "create_zip v1",
+  "description": "Make a zip archive of the given files. The evidence names the archive. Floor effect: create.",
+  "type": "object",
+  "properties": {
+    "paths": {
+      "minItems": 1,
+      "maxItems": 200,
+      "type": "array",
+      "items": {
+        "description": "A path on the Mac, as the user said it or as an earlier step reported it.",
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 1024
+      }
+    },
+    "output_path": {
+      "description": "Where to save the archive; a timestamped name when omitted.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024
+    }
+  },
+  "required": [
+    "paths"
+  ],
+  "additionalProperties": false
+}

@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sonny.app/contracts/v2/operations/convert_docx_to_pdf.v1.schema.json",
+  "title": "convert_docx_to_pdf v1",
+  "description": "Convert .docx files to PDFs with Microsoft Word. The evidence lists the PDFs. Floor effect: create.",
+  "type": "object",
+  "properties": {
+    "paths": {
+      "minItems": 1,
+      "maxItems": 200,
+      "type": "array",
+      "items": {
+        "description": "A path on the Mac, as the user said it or as an earlier step reported it.",
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 1024
+      }
+    },
+    "output_folder": {
+      "description": "A path on the Mac, as the user said it or as an earlier step reported it.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024
+    }
+  },
+  "required": [
+    "paths"
+  ],
+  "additionalProperties": false
+}

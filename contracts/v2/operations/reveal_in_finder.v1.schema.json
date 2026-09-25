@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sonny.app/contracts/v2/operations/reveal_in_finder.v1.schema.json",
+  "title": "reveal_in_finder v1",
+  "description": "Show a file or folder in Finder. Floor effect: navigate.",
+  "type": "object",
+  "properties": {
+    "path": {
+      "description": "A path on the Mac, as the user said it or as an earlier step reported it.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024
+    }
+  },
+  "required": [
+    "path"
+  ],
+  "additionalProperties": false
+}

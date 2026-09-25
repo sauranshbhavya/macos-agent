@@ -7,11 +7,13 @@
  * is the whole truth; more than one process would add Postgres LISTEN/NOTIFY (plan section 5).
  */
 import type { GoodbyeReason } from "./close.js";
-import type { ServerTaskMessage } from "../protocol.js";
+import type { Manifest, ServerTaskMessage } from "../protocol.js";
 
 export interface SessionPeer {
   readonly accountId: string;
   readonly deviceId: string | undefined;
+  /** What the device declared in its hello. */
+  readonly manifest: Manifest | undefined;
   readonly providerSessionId: string | undefined;
   sendTask(messages: readonly ServerTaskMessage[]): void;
   goodbye(reason: GoodbyeReason): void;

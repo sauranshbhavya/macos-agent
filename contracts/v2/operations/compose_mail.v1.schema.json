@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sonny.app/contracts/v2/operations/compose_mail.v1.schema.json",
+  "title": "compose_mail v1",
+  "description": "Open a new message in Mail with the recipients, subject and body set, and leave it unsent. The evidence gives the draft's id for send_mail. Floor effect: create.",
+  "type": "object",
+  "properties": {
+    "to": {
+      "minItems": 1,
+      "maxItems": 20,
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 3,
+        "maxLength": 320
+      }
+    },
+    "cc": {
+      "maxItems": 20,
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 3,
+        "maxLength": 320
+      }
+    },
+    "subject": {
+      "type": "string",
+      "maxLength": 500
+    },
+    "body": {
+      "type": "string",
+      "maxLength": 100000
+    }
+  },
+  "required": [
+    "to",
+    "subject",
+    "body"
+  ],
+  "additionalProperties": false
+}

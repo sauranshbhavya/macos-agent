@@ -1,0 +1,9 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sonny.app/contracts/v2/operations/get_finder_selection.v1.schema.json",
+  "title": "get_finder_selection v1",
+  "description": "Read which files and folders are selected in Finder. The outcome's evidence lists their paths. Use it when the user says \"these\", \"the selected files\" or \"this folder\". Floor effect: observe.",
+  "type": "object",
+  "properties": {},
+  "additionalProperties": false
+}

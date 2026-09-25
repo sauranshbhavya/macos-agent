@@ -9,7 +9,10 @@ import { PromptBoundary } from "../src/agent/prompts/boundary.js";
 import type { ObservationBody, ServerTaskMessage } from "../src/agent/protocol.js";
 import { SCREEN_DECISION_SCHEMA_NAME } from "../src/agent/screen/prompt.js";
 import { PLANNER_DECISION_SCHEMA_NAME } from "../src/agent/planner/planner.js";
-import { taskAgentFactory } from "../src/agent/task-agent.js";
+import { RESEARCH_SCHEMA_NAME } from "../src/agent/tools/research.js";
+import { taskAgentFactory, type ServerTools } from "../src/agent/task-agent.js";
+import { PageRefused } from "../src/agent/tools/read-page.js";
+import type { Manifest } from "../src/agent/protocol.js";
 import { TaskRunner } from "../src/agent/tasks/runner.js";
 import { memoryTaskStore } from "../src/agent/tasks/store.js";
 import { ProviderTimedOut, ProviderUnavailable } from "../src/model/upstream.js";
@@ -26,14 +29,21 @@ interface RouterCall {
 }
 
 /** A model that answers from a script, one queue per agent, and records what it was asked. */
-function scriptedRouter(script: { planner?: object[]; screen?: object[] }): ModelRouter & { calls: RouterCall[] } {
+function scriptedRouter(script: { planner?: object[]; screen?: object[] }): ModelRouter & { calls: RouterCall[]; research: object[] } {
   const queues: Record<string, object[]> = {
     [PLANNER_DECISION_SCHEMA_NAME]: [...(script.planner ?? [])],
     [SCREEN_DECISION_SCHEMA_NAME]: [...(script.screen ?? [])],
   };
+  const research: object[] = [];
   const calls: RouterCall[] = [];
   return {
     calls,
+    get research() {
+      return research;
+    },
+    set research(answers: object[]) {
+      queues[RESEARCH_SCHEMA_NAME] = [...answers];
+    },
     run(tier: Tier, request: AgentModelRequest) {
       calls.push({ tier, schemaName: request.schemaName, user: request.user, images: request.images.length });
       const next = queues[request.schemaName]?.shift();
@@ -49,7 +59,8 @@ function scriptedRouter(script: { planner?: object[]; screen?: object[] }): Mode
 }
 
 const plan = (fields: object) => ({
-  kind: "finish", app: null, objective: null, done_when: null, question: null, status: null, summary: null, ...fields,
+  kind: "finish", operations: null, final: null, app: null, objective: null, done_when: null, query: null, url: null,
+  sources: null, question: null, status: null, summary: null, ...fields,
 });
 const step = (fields: object) => ({
   kind: "act", tool: null, ref: null, text: null, keys: null, menu_path: null, direction: null,
@@ -71,15 +82,32 @@ function notesWindow(generation: number, extra: ObservationBody["ax"] = undefine
   };
 }
 
-function harness(router: ModelRouter) {
-  const store = memoryTaskStore();
+interface HarnessOptions {
+  readonly search?: ServerTools["search"];
+  readonly pages?: Record<string, string>;
+  readonly store?: ReturnType<typeof memoryTaskStore>;
+  readonly manifest?: Manifest;
+}
+
+function harness(router: ModelRouter, options: HarnessOptions = {}) {
+  const store = options.store ?? memoryTaskStore();
   const ledger = memoryModelCallLedger(10_000);
   const delivered: ServerTaskMessage[] = [];
   const runner = new TaskRunner({
     store,
     ledger,
     rates: TEST_TOKEN_RATES,
-    agentFor: taskAgentFactory(router),
+    agentFor: taskAgentFactory({
+      router,
+      tools: {
+        search: options.search,
+        readPage: (url) => {
+          const text = options.pages?.[url];
+          return text === undefined ? Promise.reject(new PageRefused(url, "not a public host")) : Promise.resolve({ url, title: null, text, truncated: false });
+        },
+      },
+    }),
+    manifestFor: () => options.manifest,
     deliver: (_task, messages) => delivered.push(...messages),
     now: () => new Date(),
     log: { info: () => {}, error: () => {} },
@@ -97,14 +125,14 @@ function harness(router: ModelRouter) {
     store,
     ledger,
     task,
-    async start(goal: string) {
+    async start(goal: string, priorTask?: string) {
       await runner.start(ACCOUNT, DEVICE, {
         v: 1,
         type: "task.start",
         id: randomUUID(),
         task,
         seq: 1,
-        body: { goal, origin: "composer", private: false, unattended: false, mode: "normal", context: {} },
+        body: { goal, origin: "composer", private: false, unattended: false, mode: "normal", context: {}, ...(priorTask ? { prior_task: priorTask } : {}) },
       });
       return next();
     },
@@ -113,7 +141,7 @@ function harness(router: ModelRouter) {
       await runner.receive(ACCOUNT, { v: 1, type: "observation", id: randomUUID(), task, seq, re, body });
       return next();
     },
-    async outcome(propose: ServerTaskMessage, status: "done" | "outcome_unknown" | "declined" = "done") {
+    async outcome(propose: ServerTaskMessage, status: "done" | "outcome_unknown" | "declined" | "failed" = "done", evidence?: string) {
       if (propose.type !== "propose") throw new Error(`expected propose, got ${propose.type}`);
       seq += 1;
       await runner.receive(ACCOUNT, {
@@ -123,7 +151,7 @@ function harness(router: ModelRouter) {
         task,
         seq,
         re: propose.seq,
-        body: { results: propose.body.actions.map((a) => ({ action_id: a.action_id, status, effect: a.effect })) },
+        body: { results: propose.body.actions.map((a) => ({ action_id: a.action_id, status, effect: a.effect, ...(evidence ? { evidence } : {}) })) },
       });
       return next();
     },
@@ -228,7 +256,7 @@ describe("the planner and its screen subagent", () => {
     expect(ask).toMatchObject({ type: "ask", body: { question: "Which note do you mean?" } });
     const finish = await h.answer(ask, "Never mind");
     expect(finish).toMatchObject({ type: "finish", body: { status: "failed" } });
-    expect(router.calls.at(-1)!.user).toContain("The person answered: Never mind");
+    expect(router.calls.at(-1)!.user).toContain(`You asked "Which note do you mean?" and the person answered: Never mind`);
   });
 
   it("looks again after an action whose end was unknown and the person chose to continue", async () => {
@@ -347,5 +375,154 @@ describe("the prompt boundary", () => {
     const segment = boundary.observed(hostile, "screen", "accessibility");
     expect(segment.split("\n").filter((line) => line.startsWith("TRUSTED_USER_INSTRUCTION_BEGIN_ABCDEFGHIJKLMNOPQRST"))).toHaveLength(0);
     expect(segment).toContain("[escaped delimiter: trusted_user_instruction_begin]");
+  });
+});
+
+describe("the planner's typed operations and server tools", () => {
+  const op = (name: string, args: object, effect = "navigate", expect: string | null = null) => ({
+    name,
+    args_json: JSON.stringify(args),
+    effect,
+    expect,
+  });
+
+  it("sends a batch of typed operations and ends a final batch without another model call", async () => {
+    const router = scriptedRouter({
+      planner: [
+        plan({
+          kind: "operations",
+          operations: [op("find_largest_files", { folder: "~/Downloads", count: 3 }, "observe")],
+          final: false,
+        }),
+        plan({
+          kind: "operations",
+          operations: [op("create_zip", { paths: ["~/Downloads/a.mov", "~/Downloads/b.iso"] }, "create", "an archive exists")],
+          final: true,
+          summary: "Zipped your three largest downloads.",
+        }),
+      ],
+    });
+    const h = harness(router);
+    const scan = await h.start("Zip my three largest downloads");
+    expect(scan).toMatchObject({
+      type: "propose",
+      body: { agent: "planner", final: false, actions: [{ effect: "observe", operation: { name: "find_largest_files", version: 1, args: { folder: "~/Downloads", count: 3 } } }] },
+    });
+    const zip = await h.outcome(scan, "done", "~/Downloads/a.mov (2 GB), ~/Downloads/b.iso (1 GB)");
+    expect(zip).toMatchObject({ type: "propose", body: { final: true, actions: [{ effect: "create", operation: { name: "create_zip" } }] } });
+    expect(router.calls.at(-1)!.user).toContain("You ran find_largest_files");
+    expect(router.calls.at(-1)!.user).toContain("~/Downloads/a.mov (2 GB)");
+
+    const finish = await h.outcome(zip);
+    expect(finish).toMatchObject({ type: "finish", body: { status: "completed", summary: "Zipped your three largest downloads." } });
+    expect(router.calls).toHaveLength(2);
+  });
+
+  it("raises a declared effect to the operation's floor and stops a batch after its first consequential action", async () => {
+    const router = scriptedRouter({
+      planner: [
+        plan({
+          kind: "operations",
+          operations: [op("rename", { path: "~/a.pdf", new_name: "b.pdf" }, "navigate"), op("reveal_in_finder", { path: "~/b.pdf" })],
+          final: true,
+          summary: "Renamed it.",
+        }),
+      ],
+    });
+    const h = harness(router);
+    const propose = await h.start("Rename a.pdf to b.pdf and show it");
+    expect(propose).toMatchObject({ type: "propose", body: { final: false, actions: [{ effect: "destructive", operation: { name: "rename" } }] } });
+    if (propose.type !== "propose") throw new Error("not a propose");
+    expect(propose.body.actions).toHaveLength(1);
+  });
+
+  it("offers only the operations the Mac declared, and asks again when the model names another", async () => {
+    const router = scriptedRouter({
+      planner: [
+        plan({ kind: "operations", operations: [op("send_mail", { draft: "1" }, "external")], final: true }),
+        plan({ kind: "finish", status: "failed", summary: "This Mac can't send mail." }),
+      ],
+    });
+    const manifest: Manifest = {
+      operations: [{ name: "open_app", version: 1 }],
+      screen: { tools: [] },
+      permissions: { accessibility: "granted", screen_recording: "granted", automation: [] },
+    };
+    const h = harness(router, { manifest });
+    const finish = await h.start("Send the draft");
+    expect(finish).toMatchObject({ type: "finish", body: { status: "failed" } });
+    expect(router.calls[0]!.user).toContain("- open_app {");
+    expect(router.calls[0]!.user).not.toContain("- send_mail {");
+    expect(router.calls[1]!.user).toContain("send_mail is not an operation on this Mac.");
+  });
+
+  it("refuses arguments that don't match the operation, with the reason", async () => {
+    const router = scriptedRouter({
+      planner: [
+        plan({ kind: "operations", operations: [op("rename", { path: "~/a.pdf" }, "destructive")], final: false }),
+        plan({ kind: "ask", question: "What should I call it?" }),
+      ],
+    });
+    const h = harness(router);
+    const ask = await h.start("Rename a.pdf");
+    expect(ask.type).toBe("ask");
+    expect(router.calls[1]!.user).toContain("rename's arguments are wrong");
+  });
+
+  it("searches, reads a page and writes a research note on the gateway, then saves it by reference", async () => {
+    const pageURL = "https://example.com/solar";
+    const router = scriptedRouter({
+      planner: [
+        plan({ kind: "web_search", query: "home solar payback" }),
+        plan({ kind: "read_page", url: pageURL }),
+        plan({ kind: "research_note", query: "How long solar takes to pay back", sources: [pageURL] }),
+        plan({
+          kind: "operations",
+          operations: [op("write_file", { content: "@note:3", title: "Solar payback" }, "create")],
+          final: true,
+          summary: "Saved a note on solar payback.",
+        }),
+      ],
+    });
+    router.research = [{ title: "Solar payback", summary: "About eight years.", key_points: ["Depends on sun"], citations: [{ url: pageURL, title: "Solar" }] }];
+    const h = harness(router, {
+      search: () => Promise.resolve({ items: [{ title: "Solar", url: pageURL, snippet: "payback" }], served: { provider: "tavily", failedOver: [] } }),
+      pages: { [pageURL]: "Solar panels pay for themselves in about eight years." },
+    });
+    const write = await h.start("Research how long home solar takes to pay back and save a note");
+    expect(write).toMatchObject({ type: "propose", body: { actions: [{ operation: { name: "write_file" } }] } });
+    if (write.type !== "propose") throw new Error("not a propose");
+    const action = write.body.actions[0]!;
+    if (!("operation" in action)) throw new Error("not an operation");
+    expect(action.operation.args["content"]).toContain("# Solar payback");
+    expect(action.operation.args["content"]).toContain(`[Solar](${pageURL})`);
+    expect(router.calls.at(-1)!.user).toContain("Solar panels pay for themselves");
+  });
+
+  it("reports a page it would not read, without fetching it", async () => {
+    const router = scriptedRouter({
+      planner: [plan({ kind: "read_page", url: "http://10.0.0.1/admin" }), plan({ kind: "finish", status: "failed", summary: "Couldn't read it." })],
+    });
+    const h = harness(router);
+    await h.start("Read my router's admin page");
+    expect(router.calls[1]!.user).toContain("Not read: not a public host.");
+  });
+
+  it("shows a follow-up what the task it continues did", async () => {
+    const store = memoryTaskStore();
+    const first = scriptedRouter({
+      planner: [plan({ kind: "operations", operations: [op("find_largest_files", { folder: "~/Downloads" }, "observe")], final: true, summary: "Found them." })],
+    });
+    const before = harness(first, { store });
+    const scan = await before.start("Find my largest downloads");
+    await before.outcome(scan);
+
+    const second = scriptedRouter({ planner: [plan({ kind: "finish", status: "completed", summary: "ok" })] });
+    const after = harness(second, { store });
+    await after.start("use ~/Documents instead", before.task);
+    const prompt = second.calls[0]!.user;
+    expect(prompt).toContain("Earlier request: Find my largest downloads");
+    expect(prompt).toContain('Ran find_largest_files {"folder":"~/Downloads"}');
+    expect(prompt).toContain("It ended completed: Found them.");
   });
 });

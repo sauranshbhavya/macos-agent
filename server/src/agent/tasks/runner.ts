@@ -25,6 +25,7 @@ import {
   serverMessageSchema,
   type ClientTaskMessage,
   type FinishBody,
+  type Manifest,
   type ServerTaskMessage,
 } from "../protocol.js";
 import type { EndedStatus, StoredMessage, TaskRecord, TaskStore, TurnEntry } from "./store.js";
@@ -75,7 +76,12 @@ export interface RunnerDeps {
   readonly budgets?: TaskBudgets;
   /** Overrides `MODEL_CALL_DEADLINE_MS`, for tests. */
   readonly modelCallDeadlineMs?: number;
+  /** What a device declared in its hello, while it is connected. */
+  readonly manifestFor?: (accountId: string, deviceId: string) => Manifest | undefined;
 }
+
+/** How much of a prior task a follow-up sees. */
+const PRIOR_TASK_LINES = 12;
 
 export type StartOutcome = "created" | "duplicate" | "conflict";
 export type ReceiveOutcome = "appended" | "duplicate" | "gap" | "ended" | "unknown";
@@ -422,6 +428,31 @@ export class TaskRunner {
     if (stored !== undefined) this.deps.deliver(task, stored.map((message) => wireMessageOf(task.id, message)));
   }
 
+  /**
+   * The follow-up's view of the task it continues: its goal, what was done and how it ended. Only a
+   * task of the same account that still exists counts; a private one is gone by design.
+   */
+  private async priorTaskSummary(task: TaskRecord): Promise<string | undefined> {
+    if (task.priorTask === null) return undefined;
+    const prior = await this.deps.store.task(task.priorTask);
+    if (prior === undefined || prior.accountId !== task.accountId) return undefined;
+    const lines = [`Earlier request: ${prior.goal}`];
+    for (const message of await this.deps.store.transcript(prior.id)) {
+      if (message.direction === "note" && message.type === "planner.decision") {
+        const decision = message.body as { kind: string; actions?: { operation?: { name: string; args: unknown } }[] };
+        for (const action of decision.actions ?? []) {
+          if (action.operation) lines.push(`Ran ${action.operation.name} ${JSON.stringify(action.operation.args).slice(0, 200)}`);
+        }
+      } else if (message.direction === "note" && message.type === "screen.start") {
+        lines.push(`Worked in ${(message.body as { app: string }).app}: ${(message.body as { objective: string }).objective}`);
+      } else if (message.direction === "out" && message.type === "finish") {
+        const finish = message.body as FinishBody;
+        lines.push(`It ended ${finish.status}: ${finish.summary}`);
+      }
+    }
+    return lines.slice(0, PRIOR_TASK_LINES).join("\n");
+  }
+
   private contextFor(task: TaskRecord, transcript: StoredMessage[], signal: AbortSignal): TurnContext {
     const { store, ledger, rates, now, log } = this.deps;
     const budgets = this.budgets;
@@ -432,6 +463,8 @@ export class TaskRunner {
       transcript,
       signal,
       screenshot: (msgId) => kept?.get(msgId)?.data,
+      manifest: () => this.deps.manifestFor?.(task.accountId, task.deviceId),
+      priorTask: () => this.priorTaskSummary(task),
       async modelCall<T>(
         spec: ModelCallSpec,
         invoke: (signal: AbortSignal) => Promise<ModelInvocation<T>>,

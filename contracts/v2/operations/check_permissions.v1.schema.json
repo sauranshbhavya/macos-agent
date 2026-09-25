@@ -1,0 +1,9 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sonny.app/contracts/v2/operations/check_permissions.v1.schema.json",
+  "title": "check_permissions v1",
+  "description": "Show whether Sonny has what it needs on this Mac: the account, microphone, hotkey, automation, file access, Accessibility, Screen Recording, Calendars and Reminders. Floor effect: observe.",
+  "type": "object",
+  "properties": {},
+  "additionalProperties": false
+}

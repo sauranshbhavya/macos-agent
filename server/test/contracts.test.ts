@@ -1,9 +1,9 @@
-import { readFileSync, readdirSync } from "node:fs";
+import { readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Ajv2020 } from "ajv/dist/2020.js";
 import { describe, expect, it } from "vitest";
-import { operationSpec, OPERATIONS } from "../src/agent/operations.js";
+import { operationJSONSchema, operationSpec, OPERATIONS } from "../src/agent/operations.js";
 import { clientMessageSchema, serverMessageSchema } from "../src/agent/protocol.js";
 
 // The shared V2 contract at the repository root. The Swift suite reads the same files
@@ -62,6 +62,17 @@ describe.each(directions)("$side messages", ({ side, zod, json }) => {
 
 describe("operation argument schemas", () => {
   const dirs = readdirSync(join(FIXTURES, "operations")).sort();
+
+  // The Zod catalogue is the source; the contract files are its JSON Schema, checked in for the Mac.
+  it.each(OPERATIONS.map((spec) => [`${spec.name}.v${spec.version}`, spec] as const))(
+    "%s's contract file is the catalogue's schema",
+    (file, spec) => {
+      const target = join(CONTRACTS, "operations", `${file}.schema.json`);
+      const expected = `${JSON.stringify(operationJSONSchema(spec), null, 2)}\n`;
+      if (process.env["WRITE_OPERATION_SCHEMAS"] === "1") writeFileSync(target, expected);
+      expect(readFileSync(target, "utf8"), "run WRITE_OPERATION_SCHEMAS=1 npx vitest run test/contracts.test.ts").toBe(expected);
+    },
+  );
 
   it("every operation the gateway knows has a contract schema and fixtures", () => {
     const known = OPERATIONS.map((spec) => `${spec.name}.v${spec.version}`).sort();

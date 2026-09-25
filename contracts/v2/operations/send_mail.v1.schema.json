@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sonny.app/contracts/v2/operations/send_mail.v1.schema.json",
+  "title": "send_mail v1",
+  "description": "Send a draft compose_mail made. The user approves the exact recipients and message first, and any change to the draft after that means asking again. Floor effect: external.",
+  "type": "object",
+  "properties": {
+    "draft": {
+      "description": "The id compose_mail reported.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100
+    }
+  },
+  "required": [
+    "draft"
+  ],
+  "additionalProperties": false
+}

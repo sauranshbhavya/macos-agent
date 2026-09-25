@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sonny.app/contracts/v2/operations/run_shortcut.v1.schema.json",
+  "title": "run_shortcut v1",
+  "description": "Run one of the user's existing Apple Shortcuts by name, with simple text input only when they supplied it. A shortcut can do anything, so this always asks first. Floor effect: unknown.",
+  "type": "object",
+  "properties": {
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "input": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 10000
+    }
+  },
+  "required": [
+    "name"
+  ],
+  "additionalProperties": false
+}

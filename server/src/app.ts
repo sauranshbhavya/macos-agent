@@ -45,7 +45,7 @@ import { unavailableAgent, type AgentFactory } from "./agent/agent.js";
 import { agentModelChainsFrom } from "./agent/model/adapter.js";
 import { modelRouter } from "./agent/model/router.js";
 import { tiersConfigured } from "./agent/model/tiers.js";
-import { taskAgentFactory } from "./agent/task-agent.js";
+import { serverTools, taskAgentFactory } from "./agent/task-agent.js";
 import { postgresModelCallLedger, type ModelCallLedger } from "./agent/credits.js";
 import { DEFAULT_SESSION_TIMING, type SessionTiming } from "./agent/session/connection.js";
 import { SessionRegistry, type MessageRate } from "./agent/session/registry.js";
@@ -324,7 +324,7 @@ export interface AppOverrides {
 function configuredAgent(config: Config): AgentFactory {
   const chains = agentModelChainsFrom(config, config.agentTiers);
   return tiersConfigured(config.agentTiers) && Object.values(chains).every((chain) => chain.length > 0)
-    ? taskAgentFactory(modelRouter(chains))
+    ? taskAgentFactory({ router: modelRouter(chains), tools: serverTools(modelProvidersFrom(config).search) })
     : unavailableAgent;
 }
 
@@ -781,6 +781,7 @@ export function buildApp(
       rates: tokenRates,
       agentFor: overrides.agentFactory ?? configuredAgent(config),
       deliver: (task, messages) => agentSessions.peerFor(task.accountId, task.deviceId)?.sendTask(messages),
+      manifestFor: (accountId, deviceId) => agentSessions.peerFor(accountId, deviceId)?.manifest,
       now,
       log: app.log,
       ...(overrides.agentBudgets === undefined ? {} : { budgets: overrides.agentBudgets }),
