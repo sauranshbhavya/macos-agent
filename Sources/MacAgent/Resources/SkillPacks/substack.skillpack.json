@@ -8,6 +8,39 @@
   "signInURL": "https://substack.com/sign-in",
   "triggers": ["substack", "substack.com"],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Add alt text to an image in a post",
+      "startURL": "https://substack.com/sign-in",
+      "steps": [
+        "Create a new article, video or podcast post.",
+        "Upload an image from your device into the post draft.",
+        "Click the three dots in the upper right corner of the image and select Edit alt text.",
+        "Type a clear, concise description of the image.",
+        "Select Ok."
+      ],
+      "source": "https://support.substack.com/hc/en-us/articles/48404618511508-How-do-I-add-alt-text-to-an-image-on-a-Substack-post"
+    },
+    {
+      "title": "Add a callout block to a post",
+      "startURL": "https://substack.com/sign-in",
+      "steps": [
+        "Create a new article, video or podcast post.",
+        "In the editor toolbar, select the quotes icon.",
+        "Click Callout block and enter the text inside it. A callout block is a container that sets a passage apart from the rest of the writing."
+      ],
+      "source": "https://support.substack.com/hc/en-us/articles/48404956012820-How-do-I-add-a-callout-block-on-a-Substack-post"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://substack.com/sign-in",
+      "landedURL": "https://substack.com/sign-in",
+      "title": "Sign in to Substack",
+      "heading": "Sign in to Substack",
+      "offers": "sign-in",
+      "read": "2026-09-25"
+    }
+  ]
 }
