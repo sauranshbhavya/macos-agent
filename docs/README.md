@@ -6,6 +6,8 @@ The documents below answer narrower questions:
 
 - [Current and V2 architecture diagrams](sonny-architecture-diagrams.md): code-derived map of `main`
   and an implementation-status view of the V2 target against the active Milestone A feature branch.
+- [V2 implementation plan](sonny-v2-implementation-plan.md): the ordered work from today's code to the
+  gateway/microkernel end state, with the 2026-09-25 decisions it rests on.
 - [Design system reference](sonny-design-system-reference.md): visual tokens and surface language for affected UI.
 - [Backend API contract](sonny-backend-api-contract.md) and [server/README.md](../server/README.md): hosted behavior and operations; confirm against current code before changing a contract.
 - [Founder design decisions](sonny-founder-design-decisions.md) and [v1 major-release spec](sonny-major-release-spec.md): historical product reasoning. Their workspace and former workflow requirements do not override the current V2 plan.

@@ -8,6 +8,14 @@ See [the comparison](docs/archive/sonny_v2_architecture_comparison.md) and [orig
 
 The sections after this one are the detailed design. This section is what holds right now.
 
+**Superseded in part (Sauransh, 2026-09-25).** The ordered work now lives in the [V2 implementation plan](docs/sonny-v2-implementation-plan.md), and it wins where the two differ:
+
+- Backwards compatibility and the earlier privacy promises are dropped. Rules 7 and 9 below no longer bind, and rule 8 binds only for the private-mode toggle. The retention, deletion and minimization parts of §8 and §13, the saved-data readers of §5, and the workspace migration and export of §18 also no longer bind. What remains is a security floor: secure fields and detected secrets never leave the Mac. A private task is kept out of local history, and the gateway deletes it when it ends; other gateway task transcripts are kept 30 days.
+- The planner owns each task, and the screen agent (§7's Visual Action Agent) is its subagent with its own prompt and context. Billing is token credits. Routines are saved goals.
+- Skill packs move to the gateway and are matched per task. The "no app-specific recipe" rule in §7 applies to Mac code only.
+- The local gate raises the model's declared effect and never lowers it; §9's "unknown stops" becomes "unknown asks".
+- PR #289 closes, and its generic cua pieces are carried into the first slice.
+
 **Phase.** New features are frozen until Milestone A lands. No features, capabilities or improvements go onto the current execution path; the only exception is a fix for a defect that loses data, breaks security or blocks everyday use, approved by a founder each time.
 
 **Milestone A's workflow.** WhatsApp (the native Mac app, `net.whatsapp.WhatsApp`) with a draft-only goal: open the chat the user names and leave the message they asked for in its composer, never sent. Notes stays available as the controlled fixture if WhatsApp's Accessibility tree turns out to be poor. What that choice means for the first slice is under Milestone A in §15.
