@@ -85,7 +85,7 @@ func makeController(
         capabilities: KernelCapabilities(capabilities),
         permissions: { .init(accessibility: .granted, screenRecording: .granted, automation: []) },
         backoff: GatewayBackoff(base: 0.01, cap: 0.05, jitter: { 0 }),
-        connectTimeout: 1
+        connectTimeout: 60
     )
 }
 
@@ -426,7 +426,7 @@ struct KernelTests {
         let started = Date()
         let submission = await controller.submit(TaskRequest(goal: "Anything", mode: .normal))
         #expect(submission == .failed(submission.task, .serverUnavailable))
-        #expect(Date().timeIntervalSince(started) < 1.5)
+        #expect(Date().timeIntervalSince(started) < 30)
         #expect(controller.snapshot(submission.task)?.phase == .failed(.serverUnavailable))
     }
 

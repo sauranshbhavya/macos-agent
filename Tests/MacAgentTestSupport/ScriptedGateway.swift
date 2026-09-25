@@ -110,8 +110,9 @@ public actor ScriptedGateway: GatewayTransport {
         }
     }
 
-    /// The next message of this type the Mac sends, or one it already sent and nobody read.
-    public func next(_ type: String, timeout: TimeInterval = 3) async throws -> ClientMessage {
+    /// The next message of this type the Mac sends, or one it already sent and nobody read. The
+    /// deadline is long for the reason `eventually`'s is.
+    public func next(_ type: String, timeout: TimeInterval = 120) async throws -> ClientMessage {
         if let index = received.firstIndex(where: { $0.payload.type == type }) {
             return received.remove(at: index)
         }
@@ -180,8 +181,10 @@ public struct FixedAppResolver: InstalledAppResolving {
 }
 
 /// Polls until a condition holds, for state that settles through actor hops.
+/// The deadline is long because the full suite can hold the main actor for a minute and more; it
+/// only costs time when the condition never comes true.
 public func eventually(
-    timeout: TimeInterval = 3,
+    timeout: TimeInterval = 120,
     _ condition: @escaping @MainActor () async -> Bool
 ) async -> Bool {
     let deadline = Date().addingTimeInterval(timeout)
