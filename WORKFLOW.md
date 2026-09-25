@@ -12,9 +12,10 @@ One session owns a change from start to PR, and a founder works with it directly
 
 The normal loop is build, run focused behavioral tests for changed behavior, inspect the result, and review the diff. Stop optional verification once there is enough evidence for the change. A feature touching several files does not by itself require the full suite or a second person rerunning the same tests. Run the full relevant suite when a shared execution or safety change affects many features, before a major cutover or release, or to resolve a concrete remaining risk. There is no CI, so nothing reruns tests after a push; whoever makes the change runs what the change needs. Do not make a test count or warning count a product acceptance criterion.
 
-The app and server have separate checks:
+The app and server have separate checks. The app links cua-driver's library, which is fetched rather than committed, so run `scripts/fetch-cua-driver.sh` once before the first build of a checkout (it does nothing when the pinned version is already there):
 
 ```sh
+scripts/fetch-cua-driver.sh
 swift build
 env CLANG_MODULE_CACHE_PATH="$PWD/.build/clang-module-cache" swift test --disable-sandbox \
   -Xswiftc -F -Xswiftc /Library/Developer/CommandLineTools/Library/Developer/Frameworks \

@@ -179,10 +179,13 @@ struct ClientNamesNoProviderScanTests {
     @Test
     func noShippingSourceReachesTheEnvironmentThroughTheCLibrary() throws {
         let forbidden = ["getenv", "setenv", "unsetenv", "environ"]
+        // The one write that is allowed: `CuaEnvironment` clears cua-driver's own policy variables
+        // at launch (V2 plan section 12). It reads nothing and names no provider.
+        let allowed: [String: Set<String>] = ["MacAgentCore/Kernel/Screen/ScreenSupport.swift": ["unsetenv"]]
         let sources = try shippingSources()
         #expect(sources.count > 50)
         for source in sources {
-            for symbol in forbidden {
+            for symbol in forbidden where !(allowed[source.path]?.contains(symbol) ?? false) {
                 // Word-bounded, so `environment` does not read as `environ` and
                 // `SonnyBackendEnvironment` does not read as either.
                 let pattern = try NSRegularExpression(pattern: "\\b\(symbol)\\b")

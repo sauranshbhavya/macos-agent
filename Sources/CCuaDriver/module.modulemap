@@ -1,0 +1,7 @@
+// cua-driver's C ABI, from the library scripts/fetch-cua-driver.sh puts in Vendor/cua-driver.
+// The header is cua's own, generated from its Rust source; nothing here is written by Sonny.
+module CCuaDriver [system] {
+    header "../../Vendor/cua-driver/cua_driver_abi.h"
+    link "cua_driver_sdk"
+    export *
+}

@@ -74,7 +74,7 @@ public final class TaskController: ObservableObject {
     private let ledgers: any TaskLedgerStoring
     private let capabilities: KernelCapabilities
     private let screenTools: Set<ScreenToolName>
-    private let observer: any TaskObserver
+    private let screenFactory: @Sendable () -> (any ScreenControlling)?
     private let broker: ApprovalBroker
     private let permissions: @Sendable () -> Manifest.Permissions
     private let connectTimeout: TimeInterval
@@ -88,7 +88,7 @@ public final class TaskController: ObservableObject {
         ledgers: any TaskLedgerStoring,
         capabilities: KernelCapabilities,
         screenTools: Set<ScreenToolName> = [],
-        observer: any TaskObserver = UnavailableObserver(),
+        screenFactory: @escaping @Sendable () -> (any ScreenControlling)? = { nil },
         permissions: @escaping @Sendable () -> Manifest.Permissions,
         backoff: GatewayBackoff = GatewayBackoff(),
         connectTimeout: TimeInterval = 8,
@@ -97,7 +97,7 @@ public final class TaskController: ObservableObject {
         self.ledgers = ledgers
         self.capabilities = capabilities
         self.screenTools = screenTools
-        self.observer = observer
+        self.screenFactory = screenFactory
         self.broker = ApprovalBroker(now: now)
         self.permissions = permissions
         self.connectTimeout = connectTimeout
@@ -193,8 +193,7 @@ public final class TaskController: ObservableObject {
             send: { message in await connection.send(message) },
             ledgers: ledgers,
             capabilities: capabilities,
-            screenTools: screenTools,
-            observer: observer,
+            screen: screenFactory(),
             broker: broker,
             publish: { [weak self] snapshot in await self?.apply(snapshot) },
             now: now

@@ -259,6 +259,11 @@ PASSTHROUGH_SETTINGS=(
   MODEL_ROUTE_SYNTHESIZE
   MODEL_ROUTE_TRANSCRIPTIONS
   MODEL_ROUTE_SEARCH
+  # The V2 agents' model tiers (docs/sonny-v2-implementation-plan.md section 5): which provider:model
+  # chain serves each tier. Not credentials; unset means V2 tasks end at once with "not available yet".
+  AGENT_MODEL_FAST
+  AGENT_MODEL_STANDARD
+  AGENT_MODEL_STRONG
   OPENAI_DATA_RETENTION
   OPENAI_TRAINING
   ANTHROPIC_DATA_RETENTION

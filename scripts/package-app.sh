@@ -65,6 +65,11 @@ EOF
   exit 1
 fi
 
+# cua-driver's library, which Sonny drives other apps through (founders, 2026-09-24). Pinned by
+# SHA-256 and fetched once; see the script.
+"$ROOT_DIR/scripts/fetch-cua-driver.sh"
+CUA_DRIVER_DIR="$ROOT_DIR/Vendor/cua-driver"
+
 echo "==> Building MacAgent ($CONFIGURATION)"
 swift build --configuration "$CONFIGURATION"
 
@@ -124,8 +129,15 @@ RESOURCES_DIR="$CONTENTS_DIR/Resources"
 echo "==> Assembling $APP_DIR"
 # Remove the old bundle too: launching it would keep showing the retired MacAgent Dock label.
 rm -rf "$APP_DIR" "$LEGACY_APP_DIR"
-mkdir -p "$MACOS_DIR" "$RESOURCES_DIR"
+mkdir -p "$MACOS_DIR" "$RESOURCES_DIR" "$CONTENTS_DIR/Frameworks"
 cp "$EXECUTABLE" "$MACOS_DIR/MacAgent"
+# The library goes in the bundle, where the executable's @executable_path/../Frameworks run path
+# finds it, and the run path to the developer's Vendor/cua-driver comes out: a packaged app loads
+# only the copy sealed inside it, never one from a checkout. cua is MIT, so its license travels too.
+cp "$CUA_DRIVER_DIR/libcua_driver_sdk.dylib" "$CONTENTS_DIR/Frameworks/libcua_driver_sdk.dylib"
+install_name_tool -delete_rpath "$CUA_DRIVER_DIR" "$MACOS_DIR/MacAgent"
+mkdir -p "$RESOURCES_DIR/ThirdParty"
+cp "$CUA_DRIVER_DIR/LICENSE" "$RESOURCES_DIR/ThirdParty/cua-driver-LICENSE.txt"
 cp "$ROOT_DIR/Packaging/Info.plist" "$CONTENTS_DIR/Info.plist"
 cp "$ROOT_DIR/Packaging/SonnyAppIcon.icns" "$RESOURCES_DIR/SonnyAppIcon.icns"
 
@@ -180,6 +192,11 @@ done
 
 echo "==> Verifying signature"
 codesign --verify --verbose "$APP_DIR"
+codesign --verify "$CONTENTS_DIR/Frameworks/libcua_driver_sdk.dylib"
+if otool -l "$MACOS_DIR/MacAgent" | grep -q "$CUA_DRIVER_DIR"; then
+  echo "error: the packaged executable still looks for cua-driver in $CUA_DRIVER_DIR" >&2
+  exit 1
+fi
 
 # What the bundle is actually sealed with, read back off the signature rather than inferred from
 # what was passed in (SONNY-156). `codesign -d --entitlements` prints `Executable=...` on stderr and

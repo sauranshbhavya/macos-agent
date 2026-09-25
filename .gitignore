@@ -1,5 +1,7 @@
 # ── Swift half ───────────────────────────────────────────────────────────────
 .build/
+# cua-driver's in-process library, fetched by scripts/fetch-cua-driver.sh (54 MB, pinned by SHA-256).
+Vendor/cua-driver/
 .DS_Store
 DerivedData/
 *.xcuserdata/
