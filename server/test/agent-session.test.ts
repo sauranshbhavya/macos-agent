@@ -240,8 +240,10 @@ describe("a V2 session", () => {
     const h = await harness({ agentMessageRate: { burst: 3, perSecond: 0.001 } });
     const m = await mac(h.url);
     m.hello(DEVICE);
+    // Malformed frames: each is answered with an error and never closes the session by itself, so
+    // the only close can be the rate limit's.
     for (let index = 0; index < 5; index += 1) {
-      m.send({ v: 1, type: "reauth", id: randomUUID(), body: { access_token: "x" } });
+      m.send({ v: 1, type: "nonsense", id: randomUUID(), body: {} });
     }
     expect((await m.closed).code).toBe(CLOSE_CODE.rate_limited);
   });
