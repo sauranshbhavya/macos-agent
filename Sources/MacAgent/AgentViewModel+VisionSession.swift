@@ -151,13 +151,27 @@ extension AgentViewModel: VisionSessionInteracting {
     /// `FloatingWidgetView`, `CommandCenterAttentionPanel`'s in `CommandCenterView`, and the run
     /// pill's in `RunPillView`. Hotkey plus four controls is the five. Every one ends in
     /// `cancelCurrentRun`, which is the point of the paragraph below.
+    ///
+    /// **Since SONNY-456 the closure below calls `stopEveryRun()` and no longer names that method**,
+    /// so the same command answers 4 over `Sources`, the four controls, and 0 over this file — both
+    /// at `3da866ba`, against 5 and 1 at `856bb7ee`, the commit this branch was cut from and the
+    /// control that the command still finds what this paragraph says it found. There are still five
+    /// ways to stop and they still end in `cancelCurrentRun`; what changed is that the key names no
+    /// run, and `stopEveryRun`'s own doc says why it may not.
+    ///
+    /// **The stamp read `49a245f7` and that commit is not in this history** (PR #287's F4). It was
+    /// this branch's own head before it was rebased onto the process reset, so it still resolves in
+    /// the clone that wrote it and `git merge-base --is-ancestor 49a245f7 HEAD` exits 1 — a stamp
+    /// that reads as checkable while describing a tree outside this branch. The figures were right
+    /// and were re-measured rather than re-stamped: the command above was re-run at `3da866ba`,
+    /// which is an ancestor, and answers what it answered before.
     func registerEmergencyStopHotKey() {
         guard visionEmergencyStopHotKey == nil else {
             return
         }
         do {
             visionEmergencyStopHotKey = try visionEmergencyStopHotKeyFactory { [weak self] in
-                self?.emergencyStopVisionSession()
+                self?.stopEveryRun()
             }
             logStore.append(.observe, "vision: \(EmergencyStopHotKey.displayName) stops this session")
         } catch {
@@ -186,7 +200,9 @@ extension AgentViewModel: VisionSessionInteracting {
         visionUserPauseMonitor?.pause()
     }
 
-    /// The emergency stop, from the hotkey or from any of the four Stop controls that call it.
+    /// The emergency stop, from any of the four Stop controls that call it. **The hotkey called it
+    /// too until SONNY-456**; it calls `stopEveryRun()` now, because a key press is outside any run
+    /// and this reads the run in scope.
     ///
     /// **Four, and this line has undercounted twice** — it named one of them until PR #132's review
     /// (F5), and said three until PR #237's delta review (N8). They are the HUD's Stop, the widget's
@@ -215,6 +231,41 @@ extension AgentViewModel: VisionSessionInteracting {
         cancelCurrentRun()
     }
 
+    /// `⌃⌥⎋`: every run stops (SONNY-456, the founders' feature text).
+    ///
+    /// **The key used to call `emergencyStopVisionSession()`, which reads the run in scope** — and a
+    /// key press is outside any run, so that is the run the widget is showing. With one run that is
+    /// the run holding the session. With two it need not be: the session can be on a run in the
+    /// background, and the press would have found no session on the run on screen and done nothing,
+    /// while Sonny went on moving the cursor. So the key names no run. It walks every slot and
+    /// stops, in that slot's own scope, whatever is in flight there — the same `cancelCurrentRun`
+    /// every other stop ends in, so there is still one stop path and not two.
+    ///
+    /// A slot with nothing in flight is left alone rather than handed to `cancelCurrentRun`, whose
+    /// last branch is `currentTask?.cancel()` and would be harmless, because "nothing was running
+    /// there" should not depend on reading that function to its end.
+    /// **The line is written only when something was stopped** (PR #287's F3). It sat above the
+    /// loop and so was written on every press, including one that found every slot idle — a log
+    /// claiming a user stop that did not happen. `emergencyStopVisionSession`, the handler this
+    /// replaced, logs after its own `guard isVisionSessionLive`, and this keeps that: one line per
+    /// press that stopped something, and none for a press that stopped nothing.
+    func stopEveryRun() {
+        var stopped = 0
+        for id in runSlots.map(\.id) {
+            RunScope.$current.withValue(id) {
+                guard isTaskInFlight || isVisionSessionLive else {
+                    return
+                }
+                stopped += 1
+                cancelCurrentRun()
+            }
+        }
+        guard stopped > 0 else {
+            return
+        }
+        logStore.append(.summarize, "vision: user_stopped - emergency stop")
+    }
+
     /// Whether a screen-control session is live in any of its states — running, paused, or holding
     /// one of its three questions.
     ///
@@ -225,6 +276,28 @@ extension AgentViewModel: VisionSessionInteracting {
             || visionSessionPause != nil
             || visionCapturePreview != nil
             || visionDelegationRequest != nil
+    }
+
+    /// The hop a parked question's `onCancel` makes back onto the main actor, bound to the run the
+    /// question was parked on (SONNY-456).
+    ///
+    /// **`onCancel` runs in the context of whoever cancelled, not of the run that parked**, so a bare
+    /// `Task { @MainActor in … }` there inherits the canceller's `RunScope` — outside any run, the
+    /// run the widget is showing. With one run that was the right run. With two, stopping run B
+    /// while the widget shows A read A's continuation: B's was never resumed, so B never ended and
+    /// held its slot against the cap for good; or, when A had a question of its own parked, A was
+    /// declined instead (PR #279's review). Each of the four questions captures its run before it
+    /// parks and hops through here, so the hop reads the continuation of the run that parked it
+    /// whoever cancelled and whatever is on screen.
+    nonisolated func afterCancellation(
+        ofAQuestionParkedOn runID: RunID,
+        _ resume: @escaping @MainActor @Sendable () -> Void
+    ) {
+        Task { @MainActor in
+            RunScope.$current.withValue(runID) {
+                resume()
+            }
+        }
     }
 
     /// A mid-loop approval, on the same surface every other approval uses.
@@ -252,6 +325,7 @@ extension AgentViewModel: VisionSessionInteracting {
     /// than defensive: the guard is what makes a cancellation racing a real answer a no-op instead of
     /// a double resume.
     func requestVisionActionApproval(_ request: RiskApprovalRequest) async throws -> RiskApprovalDecision? {
+        let parkedOn = runIDInScope
         approvalRequest = request
         finalSummary = "Sonny needs your approval before this step."
         logStore.append(
@@ -264,7 +338,7 @@ extension AgentViewModel: VisionSessionInteracting {
                 visionApprovalContinuation = continuation
             }
         } onCancel: {
-            Task { @MainActor in
+            self.afterCancellation(ofAQuestionParkedOn: parkedOn) {
                 guard let continuation = self.visionApprovalContinuation else { return }
                 self.visionApprovalContinuation = nil
                 self.approvalRequest = nil
@@ -289,6 +363,7 @@ extension AgentViewModel: VisionSessionInteracting {
     /// questions per iteration in Safe mode, and they are genuinely two moments — this one happens
     /// before the model has seen anything, so it cannot name the action it will produce.
     func confirmVisionCaptureBeforeSending(_ preview: VisionCapturePreview) async throws -> Bool {
+        let parkedOn = runIDInScope
         visionCapturePreview = preview
         finalSummary = "Sonny wants to send this screenshot of \(preview.appDisplayName)."
 
@@ -297,7 +372,7 @@ extension AgentViewModel: VisionSessionInteracting {
                 visionCaptureContinuation = continuation
             }
         } onCancel: {
-            Task { @MainActor in
+            self.afterCancellation(ofAQuestionParkedOn: parkedOn) {
                 guard let continuation = self.visionCaptureContinuation else { return }
                 self.visionCaptureContinuation = nil
                 self.visionCapturePreview = nil
@@ -317,6 +392,7 @@ extension AgentViewModel: VisionSessionInteracting {
     /// that resumed itself the moment a Mac woke would be a program moving the cursor of someone who
     /// has not yet looked at the screen.
     func awaitVisionResume(_ pause: VisionSessionPause) async throws -> Bool {
+        let parkedOn = runIDInScope
         visionSessionPause = pause
         finalSummary = "Sonny paused: \(pause.reason.userFacingReason)."
 
@@ -325,7 +401,7 @@ extension AgentViewModel: VisionSessionInteracting {
                 visionResumeContinuation = continuation
             }
         } onCancel: {
-            Task { @MainActor in
+            self.afterCancellation(ofAQuestionParkedOn: parkedOn) {
                 guard let continuation = self.visionResumeContinuation else { return }
                 self.visionResumeContinuation = nil
                 self.visionSessionPause = nil
@@ -358,6 +434,7 @@ extension AgentViewModel: VisionSessionInteracting {
     /// whatever the delegated plan turns out to *do*. This one asks whether Sonny should use its own
     /// tools at all instead of clicking, and a Safe-mode user answering it is choosing a method.
     func confirmVisionDelegation(_ request: VisionDelegationRequest) async throws -> Bool {
+        let parkedOn = runIDInScope
         visionDelegationRequest = request
         finalSummary = "Sonny wants to use its own tools for one step."
 
@@ -366,7 +443,7 @@ extension AgentViewModel: VisionSessionInteracting {
                 visionDelegationContinuation = continuation
             }
         } onCancel: {
-            Task { @MainActor in
+            self.afterCancellation(ofAQuestionParkedOn: parkedOn) {
                 guard let continuation = self.visionDelegationContinuation else { return }
                 self.visionDelegationContinuation = nil
                 self.visionDelegationRequest = nil

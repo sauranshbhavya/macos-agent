@@ -8,6 +8,42 @@
   "signInURL": "https://login.us.bill.com/neo/login",
   "triggers": ["bill.com"],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Add a contact to a customer",
+      "startURL": "https://login.us.bill.com/neo/login",
+      "steps": [
+        "Select Customers in the navigation menu.",
+        "Select the name of the customer you are adding the contact to.",
+        "Select Contacts.",
+        "Select Add Contact.",
+        "Fill out the required fields for the contact.",
+        "Select Save."
+      ],
+      "source": "https://help.bill.com/direct/s/article/360000022283"
+    },
+    {
+      "title": "Export the list of customers",
+      "startURL": "https://login.us.bill.com/neo/login",
+      "steps": [
+        "Select Customers in the navigation menu.",
+        "To choose which columns the list shows, select the Customize columns icon in the upper right corner, select the view icon beside each column to show or hide it, then select Done.",
+        "Apply any filters you want the export to keep.",
+        "Select the Download icon in the upper right corner.",
+        "Select Export to .CSV or Export to Excel. The file appears in your browser's Downloads, named export, then export-2 and so on."
+      ],
+      "source": "https://help.bill.com/direct/s/article/000004785"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://login.us.bill.com/neo/login",
+      "landedURL": "https://login.us.bill.com/neo/login",
+      "title": "",
+      "heading": "",
+      "offers": "sign-in",
+      "read": "2026-09-19"
+    }
+  ]
 }

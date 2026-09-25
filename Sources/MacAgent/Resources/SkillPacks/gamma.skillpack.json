@@ -8,6 +8,41 @@
   "signInURL": "https://gamma.app/signin",
   "triggers": ["gamma.app"],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Create a presentation, document or webpage with AI",
+      "startURL": "https://gamma.app/signin",
+      "steps": [
+        "Open your Gamma dashboard.",
+        "Click Create New AI.",
+        "Choose the creation mode you need: Generate drafts from a topic you type, Paste formats text you already have, and Import converts a file, a deck or a web page you give it.",
+        "For Generate, enter the topic and use Advanced Mode if you want to shape the draft further. For Paste, paste the text in. For Import, upload the file or enter the URL.",
+        "To set the visuals from the start, choose Don't add images for a text-only result, or Image placeholders to leave space to fill in later."
+      ],
+      "source": "https://help.gamma.app/en/articles/7838093-how-do-i-create-a-new-presentation-document-or-webpage-in-gamma"
+    },
+    {
+      "title": "Refine a gamma after it is created",
+      "startURL": "https://gamma.app/signin",
+      "steps": [
+        "Open the gamma you want to change.",
+        "Click the sparkle icon in the top-left of a slide to edit that slide with AI, which suggests layout and content improvements.",
+        "Adjust text, images and layouts by hand where you would rather do it yourself.",
+        "To see the prompt a gamma was generated from, click the three-dot menu in the upper-right corner and select View Source Prompt.",
+        "To change how it looks, select Theme in the upper right and choose another one."
+      ],
+      "source": "https://help.gamma.app/en/articles/7838093-how-do-i-create-a-new-presentation-document-or-webpage-in-gamma"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://gamma.app/signin",
+      "landedURL": "https://gamma.app/signin",
+      "title": "Gamma",
+      "heading": "Sign in",
+      "offers": "sign-in",
+      "read": "2026-09-25"
+    }
+  ]
 }
