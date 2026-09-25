@@ -14,15 +14,15 @@
   "depth": "deep",
   "flows": [
     {
-      "title": "Create a model repository",
+      "title": "Add a file to a repository through the web interface",
       "startURL": "https://huggingface.co/login",
       "steps": [
-        "To create a new repository, visit huggingface.co/new.",
-        "Specify the owner of the repository: yourself, or any of the organizations you are affiliated with.",
-        "Enter the model's name. This is also the name of the repository, and the Hub uses it in the repository's address.",
-        "Specify whether the model is public or private.",
-        "Specify the license. The License field may be left blank for now.",
-        "After the repository is created, the Hub prompts you to create a Model Card."
+        "Open the repository and select the Files tab.",
+        "Navigate to the directory the file belongs in, then click Add file.",
+        "Choose to create a new file, which opens the editor screen.",
+        "Choose a name for the file and add its content.",
+        "Instead of committing straight to the repository's main branch, Open as a pull request may be selected to create a Pull Request.",
+        "Save the file with a message that summarises the changes."
       ],
       "source": "https://huggingface.co/docs/hub/repositories-getting-started"
     }

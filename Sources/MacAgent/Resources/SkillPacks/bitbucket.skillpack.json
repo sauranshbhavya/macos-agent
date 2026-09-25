@@ -17,12 +17,16 @@
       "title": "Create a repository",
       "startURL": "https://bitbucket.org/account/signin/",
       "steps": [
-        "From Bitbucket, select the Create button and then select Repository. Bitbucket shows the Create a new repository page.",
-        "Enter a name in the Name field. Bitbucket uses this name in the repository's address.",
-        "Everything on this page except the Repository type can be changed later.",
-        "The repository starts empty. It is the central repository for the files, and other people reach it only if they are given permission."
+        "Select Create, then select Repository from the dropdown menu.",
+        "Select the Workspace the repository belongs in, and select a project from the Project dropdown menu. If no project exists, select Create new project at the bottom of that menu.",
+        "Enter a Repository name that describes the repository and appears in its address.",
+        "Keep access to the repository set to Private unless it should be public, so that anyone can see it.",
+        "If there are already files to put in it, select No from Include a README; otherwise keep the default or choose one of the included README options.",
+        "Select the Version control system, keeping Git as the default if the difference is unfamiliar.",
+        "Select Create.",
+        "Clone the repository once it is created."
       ],
-      "source": "https://support.atlassian.com/bitbucket-cloud/docs/create-a-git-repository/"
+      "source": "https://support.atlassian.com/bitbucket-cloud/docs/create-a-repository-in-bitbucket-cloud/"
     }
   ],
   "startPages": [
