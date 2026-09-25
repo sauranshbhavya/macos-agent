@@ -640,3 +640,62 @@ Still open, and not blocking before phase 4:
 
 1. **Credit rates per tier and the price of a credit.** The code reads them from configuration, so
    this is a pricing decision, not an engineering one.
+
+## 12. Phase 0 findings (2026-09-25)
+
+### cua-driver 0.28.3 SDK source
+
+Read at tag `cua-driver-rs-v0.28.3` (commit `e1824be1`). The dylib is the `cua-driver-sdk` cdylib.
+Paths are under `libs/cua-driver/rust/crates/`.
+
+1. **Telemetry: none in the library.** The PostHog sender is only in the CLI crate
+   (`cua-driver/src/telemetry.rs:25`, using `ureq`). The SDK has no HTTP client, and the vendored
+   dylib contains neither `posthog` nor `ureq`. The `CUA_TELEMETRY_EN…` string is an allowlist of
+   variables handed to a child daemon that only the UniFFI host can start
+   (`cua-driver-sdk/src/embedded.rs:835-865`); no C ABI function reaches it. The only network code
+   is loopback-only browser debugging (`core/src/browser/cdp_ws.rs:87-100`), used by browser tools
+   Sonny doesn't allow.
+2. **The environment cannot widen the ceiling.** Every `CUA_DRIVER_*` policy variable is read once
+   at create (`cua-driver-sdk/src/abi.rs:209-312`). Each one can only make create fail or narrow
+   what is allowed. The context Sonny's `invoke_v1` calls run under is built from the explicit
+   mode and manifest, "without consulting compatibility environment variables"
+   (`core/src/session_authorization.rs:529-566`). Every call is checked against the manifest,
+   including its expiry and idle timeout (`core/src/authorization.rs:1126-1172`).
+3. **A session is not pinned to an app.** Create takes no pid or bundle id. The only app
+   restriction is the manifest's `resources.apps`; for input and observation tools cua resolves
+   the target pid's bundle id itself and matches it, so a caller can't claim a false one.
+4. **Gap: `invoke_menu` is not app-checked.** It is classed as metadata-only
+   (`core/src/authorization.rs:895`), so any app's menu, including Sonny's own, passes the
+   manifest, and it activates the target app (`platform-macos/src/tools/invoke_menu.rs:307-314`).
+5. **Off-Space windows.** Background input to a window on another Space is refused
+   (`core/src/background_input.rs:228-241`). With `delivery_mode: "foreground"` cua raises the
+   app and then gives focus back. The manifest's delivery-mode ceiling is recorded but not
+   enforced.
+6. **Other effects.** A screenshot can fall back to `/usr/sbin/screencapture` with a temp file;
+   `set_value` on Safari runs `osascript`. The SDK has no event taps, no clipboard use outside the
+   clipboard tools, and no file writes outside temp unless a tool asks for an output file.
+
+**What phase 4 does about it:**
+
+- Build the cua manifest per task, with `resources.apps` holding only the resolved target app.
+- The Swift wrapper refuses a menu action unless the target pid's bundle id is the task's app and
+  the pid is not Sonny's own.
+- The wrapper sets `delivery_mode` itself and never passes the model's choice through. Screen
+  actions run under the `ForegroundLease`, so the app is already in front.
+- At launch, before any other thread starts, clear the nine managed variables
+  (`CUA_DRIVER_PERMISSION_MODE`, `CUA_DRIVER_DANGEROUSLY_BYPASS_APPROVALS`,
+  `CUA_DRIVER_DISABLE_UNRESTRICTED`, `CUA_DRIVER_POLICY_FILE`,
+  `CUA_DRIVER_MANAGED_POLICY_FILE`, `CUA_DRIVER_CAPABILITY_MANIFEST_FILE`,
+  `CUA_DRIVER_CAPABILITY_MANIFEST_APPROVED`, `CUA_DRIVER_SESSION_POLICY_FILE`,
+  `CUA_DRIVER_SESSION_POLICY_APPROVED`), so a stray shell setting can't stop create from working.
+- Keep the telemetry tripwire in the fetch script, and read the source again before any version
+  bump.
+
+### First host
+
+Oracle Cloud, on a VM, as recorded in `docs/sonny-row-12-host-decision.md` §12.4; Supabase keeps
+auth and Postgres. The proxy in front of the gateway is **Caddy** on the same VM. It terminates TLS
+with automatic certificates, passes WebSocket upgrades with no extra configuration, and reloads
+without dropping connections. The gateway's own drain (`goodbye`, close code 1012) covers
+restarts of the gateway process itself. This is a recommendation for phase H and doesn't block
+phases 1 to 7, which run against the local Docker gateway.

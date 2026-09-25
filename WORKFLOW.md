@@ -4,7 +4,7 @@ This is the current contributor workflow. [AGENTS.md](AGENTS.md) holds the few s
 
 ## Start with the outcome
 
-For a small change, use the request or PR description to state the problem and expected result. For substantial, coordinated, or risky work, use a Plane issue with the outcome, constraints, and acceptance checks. Do not require a ticket, preapproved file list, or separate planning branch for an ordinary edit. Resolve genuinely unclear product behavior with the user before implementing the dependent part. Before starting feature work, check the current phase in [AGENTS.md](AGENTS.md): new features are frozen until Milestone A of the V2 plan lands.
+For a small change, use the request or PR description to state the problem and expected result. For substantial, coordinated, or risky work, use a Plane issue with the outcome, constraints, and acceptance checks. Do not require a ticket, preapproved file list, or separate planning branch for an ordinary edit. Resolve genuinely unclear product behavior with the user before implementing the dependent part. Before starting feature work, check the current phase in [AGENTS.md](AGENTS.md): new work goes into the V2 plan's phases, not the current execution path.
 
 One session owns a change from start to PR, and a founder works with it directly; there is no coordinator session relaying between sessions. Work on a branch cut from `main`. Use a separate worktree when parallel changes might collide. The implementer may commit, push their branch, and open a PR. Founders decide when to merge.
 
