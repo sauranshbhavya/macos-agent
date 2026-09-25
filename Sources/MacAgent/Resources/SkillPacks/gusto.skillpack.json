@@ -8,6 +8,28 @@
   "signInURL": "https://gusto.com/login",
   "triggers": ["gusto.com"],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Edit the company's trade name",
+      "startURL": "https://gusto.com/login",
+      "steps": [
+        "In the left menu, click your company's name.",
+        "Under Information, click Details.",
+        "Next to the company name, click Edit.",
+        "Under Trade name, enter the name the company does business as, then click Save."
+      ],
+      "source": "https://support.gusto.com/article/106622257100000/edit-company-details-for-admins"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://gusto.com/login",
+      "landedURL": "https://login.gusto.com/realms/zenpayroll/protocol/openid-connect/auth",
+      "title": "Gusto Login - Payroll, Benefits, HR | Gusto",
+      "heading": "Sign In",
+      "offers": "sign-in",
+      "read": "2026-09-25"
+    }
+  ]
 }
