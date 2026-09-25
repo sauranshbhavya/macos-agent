@@ -278,112 +278,143 @@ export function registerAuthGate(app: FastifyInstance, deps?: GateDeps): void {
       );
     }
 
-    const verdict = verifyAccessToken(presented, deps.policy, now());
-    if (!verdict.ok) {
-      // **The reason is logged and never returned.** A caller learns that the token was refused and
-      // whether refreshing would help; it does not learn *which* check refused it. Answering
-      // "wrong audience" to one forgery and "bad signature" to another turns this endpoint into a
-      // tool for tuning the next attempt — the same reasoning §3.6 applies to the sign-in routes'
-      // uniform answers, one layer up.
-      request.log.info(
-        { refusal: verdict.refusal, route: `${request.method} ${routeUrl}` },
-        "access token refused",
-      );
-      const code = REFUSAL_CODE[verdict.refusal];
-      return reply.status(401).send(
-        errorBody(
-          code,
-          verdict.refusal === "expired" ? "Access token has expired." : "Access token is not valid.",
-          request.id,
-          // §9.3: `auth.token_expired` is the one 401 that is retryable, after exactly one refresh.
-          { retryable: verdict.refusal === "expired" },
-        ),
-      );
-    }
-
-    // **One connection, two questions, and the denylist is asked first** (SONNY-237). Both reads sit
-    // inside a single `withConnection` so a protected request still checks a connection out once —
-    // the property the docstring above claims about the pool. The consult is skipped entirely for a
-    // token carrying no session claim, because there is nothing to look it up by.
-    const consultDenylist = !DENYLIST_EXEMPT_ROUTES.has(`${request.method} ${routeUrl}`);
-    const owner = await deps.withConnection(async (client) => {
-      const session = verdict.token.providerSessionId;
-      if (consultDenylist && session !== undefined && (await isProviderSessionRevoked(client, session))) {
-        return "session_revoked" as const;
-      }
-      const attributed = await accountForSupabaseUser(client, verdict.token.supabaseUserId);
-      if (!("accountId" in attributed)) return attributed;
-      // **The third question, and the one that makes the first two sufficient** (SONNY-129). A token
-      // the project signed, naming a user some live account holds, used to be that account's. But
-      // Supabase joins sign-ins with the same verified address into one user and will mint a session
-      // for that user to anyone who asks it directly, so a valid token is not evidence that this
-      // gateway's sign-in rules ever ran for it. Only a session one of this gateway's own sign-in
-      // routes started is honoured — migration 0023's header has the case. A token with no session
-      // claim is refused here too: there is nothing to look it up by, and before this check that
-      // shape was merely one the denylist could not reach.
-      if (
-        session === undefined ||
-        !(await isGatewaySession(client, session, verdict.token.supabaseUserId, attributed.accountId))
-      ) {
-        return "session_not_started_here" as const;
-      }
-      return attributed;
+    const verdict = await authenticateAccessToken(presented, deps, now(), {
+      consultDenylist: !DENYLIST_EXEMPT_ROUTES.has(`${request.method} ${routeUrl}`),
     });
-    if (owner === "session_not_started_here") {
-      // `auth.token_revoked`, for §7.2's reason: "clears the Keychain entry, opens sign-in" is exactly
-      // the recovery — a sign-in through this gateway starts a session it will honour — and
-      // refreshing would not help, because the refresh route asks the same question.
-      request.log.info(
-        { route: `${request.method} ${routeUrl}` },
-        "verified token belongs to a session this gateway did not start",
-      );
+    if (!verdict.ok) {
+      request.log.info({ ...verdict.logData, route: `${request.method} ${routeUrl}` }, verdict.logMessage);
       return reply.status(401).send(
-        errorBody("auth.token_revoked", "This session was not started by this gateway.", request.id),
+        errorBody(verdict.code, verdict.message, request.id, { retryable: verdict.retryable }),
       );
     }
-    if (owner === "session_revoked") {
-      // **`auth.token_revoked`, the same code a closed account gets, and for the same client
-      // behaviour**: §7.2 makes it "clears the Keychain entry, opens sign-in", which is exactly
-      // right for a token whose session was signed out. Refreshing would not help — the refresh
-      // family went with the sign-out — so `auth.token_expired`, the one retryable 401, would put
-      // the client into a loop against a session that is over.
-      request.log.info(
-        { route: `${request.method} ${routeUrl}` },
-        "access token presented for a signed-out session",
-      );
-      return reply.status(401).send(
-        errorBody("auth.token_revoked", "This session has been signed out.", request.id),
-      );
-    }
-    if (!("accountId" in owner)) {
-      // **`auth.token_revoked`, matching what `POST /v1/auth/refresh` already answers for the same
-      // two states**, so the two surfaces cannot disagree about what a closed or ambiguous account
-      // means. §7.2 makes that code "clears the Keychain entry, opens sign-in", which is the correct
-      // recovery: refreshing would fail identically, because the refresh route refuses these too.
-      request.log.info(
-        { ambiguous: owner.ambiguous, route: `${request.method} ${routeUrl}` },
-        "verified token could not be attributed to a live account",
-      );
-      return reply.status(401).send(
-        errorBody(
-          "auth.token_revoked",
-          owner.ambiguous
-            ? "This session cannot be attributed to a single account."
-            : "This session no longer belongs to an active account.",
-          request.id,
-        ),
-      );
-    }
+    request.auth = verdict.caller;
+    return undefined;
+  });
+}
 
-    request.auth = {
+
+export type AuthVerdict =
+  | { readonly ok: true; readonly caller: AuthenticatedCaller }
+  | {
+      readonly ok: false;
+      readonly code: string;
+      readonly message: string;
+      readonly retryable: boolean;
+      readonly logMessage: string;
+      readonly logData: object;
+    };
+
+/**
+ * Everything the gate checks about a presented access token, as a function the V2 session layer
+ * also calls when a socket re-authenticates mid-session (`agent/session`), so both doors refuse
+ * exactly the same tokens.
+ */
+export async function authenticateAccessToken(
+  presented: string,
+  deps: GateDeps,
+  now: Date,
+  options: { readonly consultDenylist: boolean },
+): Promise<AuthVerdict> {
+  const verdict = verifyAccessToken(presented, deps.policy, now);
+  if (!verdict.ok) {
+    // **The reason is logged and never returned.** A caller learns that the token was refused and
+    // whether refreshing would help; it does not learn *which* check refused it. Answering
+    // "wrong audience" to one forgery and "bad signature" to another turns this endpoint into a
+    // tool for tuning the next attempt — the same reasoning §3.6 applies to the sign-in routes'
+    // uniform answers, one layer up.
+    return {
+      ok: false,
+      code: REFUSAL_CODE[verdict.refusal],
+      message: verdict.refusal === "expired" ? "Access token has expired." : "Access token is not valid.",
+      // §9.3: `auth.token_expired` is the one 401 that is retryable, after exactly one refresh.
+      retryable: verdict.refusal === "expired",
+      logMessage: "access token refused",
+      logData: { refusal: verdict.refusal },
+    };
+  }
+
+  // **One connection, two questions, and the denylist is asked first** (SONNY-237). Both reads sit
+  // inside a single `withConnection` so a protected request still checks a connection out once —
+  // the property the docstring above claims about the pool. The consult is skipped entirely for a
+  // token carrying no session claim, because there is nothing to look it up by.
+  const owner = await deps.withConnection(async (client) => {
+    const session = verdict.token.providerSessionId;
+    if (options.consultDenylist && session !== undefined && (await isProviderSessionRevoked(client, session))) {
+      return "session_revoked" as const;
+    }
+    const attributed = await accountForSupabaseUser(client, verdict.token.supabaseUserId);
+    if (!("accountId" in attributed)) return attributed;
+    // **The third question, and the one that makes the first two sufficient** (SONNY-129). A token
+    // the project signed, naming a user some live account holds, used to be that account's. But
+    // Supabase joins sign-ins with the same verified address into one user and will mint a session
+    // for that user to anyone who asks it directly, so a valid token is not evidence that this
+    // gateway's sign-in rules ever ran for it. Only a session one of this gateway's own sign-in
+    // routes started is honoured — migration 0023's header has the case. A token with no session
+    // claim is refused here too: there is nothing to look it up by, and before this check that
+    // shape was merely one the denylist could not reach.
+    if (
+      session === undefined ||
+      !(await isGatewaySession(client, session, verdict.token.supabaseUserId, attributed.accountId))
+    ) {
+      return "session_not_started_here" as const;
+    }
+    return attributed;
+  });
+  if (owner === "session_not_started_here") {
+    // `auth.token_revoked`, for §7.2's reason: "clears the Keychain entry, opens sign-in" is exactly
+    // the recovery — a sign-in through this gateway starts a session it will honour — and
+    // refreshing would not help, because the refresh route asks the same question.
+    return {
+      ok: false,
+      code: "auth.token_revoked",
+      message: "This session was not started by this gateway.",
+      retryable: false,
+      logMessage: "verified token belongs to a session this gateway did not start",
+      logData: {},
+    };
+  }
+  if (owner === "session_revoked") {
+    // **`auth.token_revoked`, the same code a closed account gets, and for the same client
+    // behaviour**: §7.2 makes it "clears the Keychain entry, opens sign-in", which is exactly
+    // right for a token whose session was signed out. Refreshing would not help — the refresh
+    // family went with the sign-out — so `auth.token_expired`, the one retryable 401, would put
+    // the client into a loop against a session that is over.
+    return {
+      ok: false,
+      code: "auth.token_revoked",
+      message: "This session has been signed out.",
+      retryable: false,
+      logMessage: "access token presented for a signed-out session",
+      logData: {},
+    };
+  }
+  if (!("accountId" in owner)) {
+    // **`auth.token_revoked`, matching what `POST /v1/auth/refresh` already answers for the same
+    // two states**, so the two surfaces cannot disagree about what a closed or ambiguous account
+    // means. §7.2 makes that code "clears the Keychain entry, opens sign-in", which is the correct
+    // recovery: refreshing would fail identically, because the refresh route refuses these too.
+    return {
+      ok: false,
+      code: "auth.token_revoked",
+      message: owner.ambiguous
+        ? "This session cannot be attributed to a single account."
+        : "This session no longer belongs to an active account.",
+      retryable: false,
+      logMessage: "verified token could not be attributed to a live account",
+      logData: { ambiguous: owner.ambiguous },
+    };
+  }
+
+  return {
+    ok: true,
+    caller: {
       accountId: owner.accountId,
       supabaseUserId: verdict.token.supabaseUserId,
       accessToken: presented,
       providerSessionId: verdict.token.providerSessionId,
       accessTokenExpiresAt: verdict.token.expiresAt,
-    };
-    return undefined;
-  });
+    },
+  };
 }
 
 /**
