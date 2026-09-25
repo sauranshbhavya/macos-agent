@@ -6,8 +6,35 @@
   "category": "ai_assistants",
   "summary": "Google's tool for prototyping with Gemini models.",
   "signInURL": "https://aistudio.google.com/login",
-  "triggers": ["google ai studio", "aistudio.google.com"],
+  "triggers": [
+    "google ai studio",
+    "aistudio.google.com"
+  ],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Create a chat prompt with system instructions",
+      "startURL": "https://aistudio.google.com/login",
+      "steps": [
+        "Open Google AI Studio. The Playground opens by default with a new chat prompt.",
+        "Click Run settings in the top right corner to expand the panel, and find the System Instructions input field.",
+        "Paste the instructions the model should follow into the System Instructions field.",
+        "In the text input box labelled Type something, enter a question a user might ask.",
+        "Click Run to get a response from the model.",
+        "To adjust the model's tone or the length of its answers, edit the System Instructions and run the question again. System instructions can be modified after the chat has started."
+      ],
+      "source": "https://ai.google.dev/gemini-api/docs/ai-studio-quickstart"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://aistudio.google.com/login",
+      "landedURL": "https://accounts.google.com/v3/signin/identifier",
+      "title": "Sign in - Google Accounts",
+      "heading": "Sign in",
+      "offers": "sign-in",
+      "read": "2026-09-25"
+    }
+  ]
 }

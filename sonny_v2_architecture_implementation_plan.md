@@ -24,7 +24,7 @@ WhatsApp was the first pick and did not survive its first live run. Each app bel
 
 **On hold.**
 
-- Skill-pack work (the site catalogue and pack features) resumes only after the core rewrite, that is after Milestone C's core cutover.
+- Skill-pack work is off hold (founders, 2026-09-24, reversing the 2026-09-23 decision): the packs are finished before this plan resumes from Milestone A. The work is the pack groups SONNY-545 to SONNY-552, plus the sites SONNY-537 already has in flight. Only sites in the Chrome UX Report top 10,000 get deep packs; niche sites stay shallow.
 - The Jev local decision model. The original draft's Laya/Jev section stays in the [archive](docs/archive/sonny_v2_architecture_implementation_plan_1.md) for when it comes back.
 - Two small UX fixes found in the 2026-09-23 review wait for the freeze to lift: `AgentViewModel.copySummary()` exists but no control calls it, and the floating widget's result text is not selectable although Command Center's and the receipt's are.
 
@@ -423,7 +423,7 @@ Retire workspace UI and execution binding in a separate data-compatible slice. I
 
 Evidence: each migrated feature has a user-outcome check; old data still loads or offers a clear repair/export path; no retained entry point depends on UI focus for execution; duplicate authority and temporary bridges are removed at final cutover.
 
-Skill-pack work resumes after this milestone's core cutover.
+Skill-pack work no longer waits for this cutover: the packs are finished before the plan resumes (the current-phase section at the top, 2026-09-24).
 
 ### Milestone D — Add independent concurrent tasks when valuable
 

@@ -11,7 +11,7 @@
   "depth": "deep",
   "flows": [
     {
-      "title": "Create a dashboard",
+      "title": "Start a new dashboard",
       "startURL": "https://app.datadoghq.com/",
       "steps": [
         "Click +New Dashboard on the Dashboard List page, or New Dashboard from the navigation menu.",
@@ -20,7 +20,7 @@
       "source": "https://docs.datadoghq.com/dashboards/"
     },
     {
-      "title": "Create a metric monitor",
+      "title": "Start a new metric monitor",
       "startURL": "https://app.datadoghq.com/",
       "steps": [
         "Navigate to Monitors > New Monitor and select Metric. Threshold Alert is already selected as the detection method.",

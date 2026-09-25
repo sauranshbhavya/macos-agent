@@ -260,7 +260,9 @@ struct ConsequenceRuleDispatchTests {
 // MARK: - Fixture
 
 @MainActor
-private struct DispatchFixture {
+/// Not `private`: `RunAttributedRetryTests` drives the same real dispatch path (SONNY-533), and a
+/// second copy of this fixture would be a second list of stores to keep hermetic.
+struct DispatchFixture {
     let viewModel: AgentViewModel
     let root: URL
     let projectFolder: URL
@@ -281,7 +283,7 @@ private struct DispatchFixture {
 /// attribution suite below hands in a planner whose output depends on the command, so two runs park
 /// two different approvals over two different files (SONNY-456).
 @MainActor
-private func makeDispatchFixture(
+func makeDispatchFixture(
     planner: @escaping @MainActor @Sendable (_ projectFolder: URL) -> any Planning = {
         DraftPlanner(output: $0.appendingPathComponent("notes.md"))
     }
@@ -549,8 +551,8 @@ struct RunAttributedApprovalTests {
         let fixture = try makeDispatchFixture()
         defer { fixture.tearDown() }
         let viewModel = fixture.viewModel
-        var raised: [(RunID, String)] = []
-        let subscription = viewModel.errorMessageRaised.sink { raised.append(($0, $1)) }
+        var raised: [RaisedFailure] = []
+        let subscription = viewModel.errorMessageRaised.sink { raised.append($0) }
         defer { subscription.cancel() }
 
         let first = viewModel.focusedRunID
@@ -563,8 +565,8 @@ struct RunAttributedApprovalTests {
         }
 
         #expect(raised.count == 1)
-        #expect(raised.first?.0 == second, "the failure was announced as the run on screen's")
-        #expect(raised.first?.1 == "Enter a natural-language command first.")
+        #expect(raised.first?.runID == second, "the failure was announced as the run on screen's")
+        #expect(raised.first?.message == "Enter a natural-language command first.")
         #expect(slot(second, in: viewModel)?.errorMessage == "Enter a natural-language command first.")
         #expect(slot(first, in: viewModel)?.errorMessage == nil, "the failure landed on the run on screen")
 
@@ -573,14 +575,13 @@ struct RunAttributedApprovalTests {
         #expect(slot(first, in: viewModel)?.outcomeWasNotified == false, "the hold landed on the run on screen")
     }
 
-    /// The banner's Allow answers the run and the approval it was posted for — read off the wiring,
-    /// because `SonnyNotificationService.init?` returns nil without bundle identity and neither the
-    /// subscription nor the response handler exists in a test process. The encoding and decoding
-    /// themselves are `ApprovalTarget`'s, held by `ApprovalNotificationRoundTripTests`; this pins
-    /// that the notification uses exactly those two members on each side. Before SONNY-456 the
-    /// Allow closure was `viewModel.start()`, which approves whatever the focused run has parked
-    /// when the banner is pressed; that is why the absence of `start()` is asserted beside the new
-    /// door.
+    /// The banner's Allow answers the run and the approval it was posted for — the delegate's half,
+    /// read off the wiring because `AppDelegate`'s closures cannot be built in a test process
+    /// (`SonnyNotificationService.init?` returns nil without bundle identity). Everything between
+    /// the two ends — what the notification carries and where a press on it lands — is driven for
+    /// real by `NotificationRoundTripTests`. Before SONNY-456 the Allow closure was
+    /// `viewModel.start()`, which approves whatever the focused run has parked when the banner is
+    /// pressed; that is why the absence of `start()` is asserted beside the new door.
     @Test
     func theBannersAllowAnswersTheRunAndApprovalItWasPostedFor() throws {
         let delegate = try MacAgentSource.read("AppDelegate.swift")
@@ -592,20 +593,19 @@ struct RunAttributedApprovalTests {
         let posting = try MacAgentSource.region(of: delegate, from: "viewModel.approvalParked", to: ".store(in: &cancellables)")
         #expect(MacAgentSource.count(of: "target: target", inText: posting) == 1)
 
+        // The service delivers the content the round-trip suite builds, and lands a press where
+        // that suite's response says — it spells neither half itself.
         let service = try MacAgentSource.read("SonnyNotificationService.swift")
         let post = try MacAgentSource.braceBlock(
             of: service,
             openedBy: "func postPermissionNotification(resource: String, target: ApprovalTarget) {"
         )
-        #expect(MacAgentSource.count(of: "target.notificationUserInfo", inText: post) == 1)
-        let received = try MacAgentSource.region(of: service, from: "didReceive response", to: "case SonnyNotificationAction.retry:")
-        #expect(
-            MacAgentSource.count(
-                of: "ApprovalTarget(notificationUserInfo: response.notification.request.content.userInfo)",
-                inText: received
-            ) == 1
-        )
-        #expect(MacAgentSource.count(of: "self?.onAllow(approvalTarget)", inText: received) == 1)
+        #expect(MacAgentSource.count(of: "deliver(SonnyNotificationContent.approvalNeeded(resource: resource, target: target))", inText: post) == 1)
+        let received = try MacAgentSource.region(of: service, from: "didReceive response", to: "completionHandler()")
+        #expect(MacAgentSource.count(of: "let landing = SonnyNotificationResponse(", inText: received) == 1)
+        #expect(MacAgentSource.count(of: "self?.land(landing)", inText: received) == 1)
+        let land = try MacAgentSource.braceBlock(of: service, openedBy: "private func land(_ response: SonnyNotificationResponse) {")
+        #expect(MacAgentSource.count(of: "case .allow(let target):\n            onAllow(target)", inText: land) == 1)
     }
 }
 
@@ -665,7 +665,7 @@ struct ApprovalNotificationRoundTripTests {
 }
 
 @MainActor
-private func slot(_ id: RunID, in viewModel: AgentViewModel) -> RunSlot? {
+func slot(_ id: RunID, in viewModel: AgentViewModel) -> RunSlot? {
     viewModel.runSlots.first { $0.id == id }
 }
 

@@ -8,6 +8,40 @@
   "signInURL": "https://wetransfer.com/signin",
   "triggers": ["wetransfer", "wetransfer.com"],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Send files by email",
+      "startURL": "https://wetransfer.com/signin",
+      "steps": [
+        "Click + to add your files.",
+        "Enter your own email address and the address you are sending to.",
+        "Give the transfer a title and a message if you want one.",
+        "Click Transfer and wait for the upload to finish.",
+        "WeTransfer emails a download link to each person separately, so no one sees anyone else's address, and emails you again once the files have been downloaded."
+      ],
+      "source": "https://wetransfer.com/help-center/how-to/send-a-transfer"
+    },
+    {
+      "title": "Share files with a link instead of email",
+      "startURL": "https://wetransfer.com/signin",
+      "steps": [
+        "Click + to add your files.",
+        "Click the ellipsis icon in the bottom-left corner of the transfer window and choose the link option.",
+        "Click Transfer and wait for the upload to finish.",
+        "Copy the link and share it however you like. WeTransfer sends no email for you here, so passing the link on is yours to do."
+      ],
+      "source": "https://wetransfer.com/help-center/how-to/send-a-transfer"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://wetransfer.com/signin",
+      "landedURL": "https://auth.wetransfer.com/login",
+      "title": "WeTransfer | Sign in",
+      "heading": "",
+      "offers": "sign-in",
+      "read": "2026-09-25"
+    }
+  ]
 }

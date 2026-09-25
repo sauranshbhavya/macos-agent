@@ -5,9 +5,46 @@
   "domain": "datastudio.google.com",
   "category": "analytics_monitoring",
   "summary": "Google's reports and dashboards.",
-  "signInURL": "https://datastudio.google.com?requirelogin=1",
-  "triggers": ["datastudio.google.com"],
+  "signInURL": "https://datastudio.google.com/?requirelogin=1",
+  "triggers": [
+    "datastudio.google.com"
+  ],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Create a new blank report",
+      "startURL": "https://datastudio.google.com/?requirelogin=1",
+      "steps": [
+        "Sign in to Data Studio.",
+        "Click Create, then select Report.",
+        "The report editor opens with the Add data to report panel showing two tabs, Connect to data and My data sources.",
+        "In the Connect to data tab, select the type of data to visualize, give the details it asks for, and in the bottom right click Add.",
+        "To use a data source that already exists, open My data sources, locate it, and in the bottom right click Add. A table appears with fields from that data source."
+      ],
+      "source": "https://docs.cloud.google.com/data-studio/tutorial-create-a-new-report"
+    },
+    {
+      "title": "Add a time series chart to a report",
+      "startURL": "https://datastudio.google.com/?requirelogin=1",
+      "steps": [
+        "In the toolbar, click Add a chart.",
+        "Select a Time series chart.",
+        "Click the canvas where the chart should appear. Data Studio fills in the Date dimension and the Views metric for an Analytics data source.",
+        "To move the chart, drag it, or select it and use the arrow keys. To resize it, select it and drag a corner or a mid-line point.",
+        "To break the chart down by Device Category, select the chart, use the search tool in the Data panel on the right to find the Device Category dimension, and drag it onto the Breakdown Dimension target."
+      ],
+      "source": "https://docs.cloud.google.com/data-studio/tutorial-create-a-new-report"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://datastudio.google.com/?requirelogin=1",
+      "landedURL": "https://accounts.google.com/v3/signin/identifier",
+      "title": "Easily Build Custom Reports and Dashboards - Data Studio",
+      "heading": "Sign in",
+      "offers": "sign-in",
+      "read": "2026-09-25"
+    }
+  ]
 }

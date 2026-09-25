@@ -1704,11 +1704,14 @@ private struct CommandCenterAttentionPanel: View {
 
             Spacer(minLength: SonnySpacing.md)
 
-            // `errorMessage` also carries pre-flight errors (empty-command validation, voice
-            // transcription failures) that never reached a real submission, and `retryLastCommand`
-            // silently no-ops for those — so gate on `hasRetryableCommand` rather than shipping a
-            // dead button, same as the widget's failure panel.
-            if viewModel.hasRetryableCommand {
+            // `errorMessage` also carries failures that are not this run's task — a microphone
+            // that would not open, a transcription that failed, a control that could not do what it
+            // was pressed for. Retry re-runs the run's last *task*, so offering it for those either
+            // shipped a dead button or re-ran something the user never asked to repeat (PR #287's
+            // F2). Gate on `canRetryFailedTask`, the same predicate the widget's failure panel uses
+            // and the same answer the notification gives by carrying no button at all. This panel
+            // still reads the focused run, which is SONNY-540's to change.
+            if viewModel.canRetryFailedTask {
                 Button("Retry") {
                     viewModel.retryLastCommand(origin: .commandCenter)
                 }

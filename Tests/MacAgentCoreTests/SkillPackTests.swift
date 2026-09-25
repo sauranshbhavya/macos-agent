@@ -87,15 +87,19 @@ struct SkillPackTests {
             #expect(ids.contains(added), "\(added) was added by founder decision")
         }
         // Two of the column's three values are in use: the flows rest on re-openable documentation on
-        // 424 rows and on the running product on the other 49, and no row says `shallow` any more
+        // some rows and on the running product on the rest, and no row says `shallow` any more
         // (`awk -F'\t' 'NR > 1 {c[$8]++} END {for (k in c) print k, c[k]}' docs/sonny-skill-sites.tsv`).
-        // No SHA beside those numbers deliberately: this assertion re-counts them on every run, so
-        // unlike a stamped figure they cannot describe a tree that has since moved. It is also the
+        // **The counts live in the assertion below and nowhere else, this sentence included.** They
+        // used to be written here too, and the prose was left behind by a numeral change twice in one
+        // day — reading 426 and 47 above an assertion saying 427 and 46, and again at 429 and 44 — so
+        // a reader checking the comment against the tree was told something false by the one line
+        // whose job was to explain it. The assertion re-counts on every run, which is why it needs no
+        // SHA: unlike a stamped figure it cannot describe a tree that has since moved. It is also the
         // whole vocabulary check — a fourth word, or a near-miss spelling of one of these two, cannot
         // make this dictionary equal, so a separate set-membership assertion added only a message
         // (review-260's F3).
         let evidence = rows.map { $0["task_flow_docs"]! }
-        #expect(Dictionary(evidence.map { ($0, 1) }, uniquingKeysWith: +) == ["deep": 424, "site": 49])
+        #expect(Dictionary(evidence.map { ($0, 1) }, uniquingKeysWith: +) == ["deep": 431, "site": 42])
         #expect(rows.filter { $0["why_in_list"]!.hasPrefix("founder-named") }.count == 100)
         for row in rows {
             #expect(!row["domain"]!.isEmpty, "\(row["id"]!) has no domain")
@@ -937,6 +941,36 @@ struct SkillPackTests {
             #expect(unit.joinedToPrevious.count == unit.words.count, "\(text)")
             #expect(unit.words == SkillWords.cut(SearchText.normalized(text)), "\(text)")
         }
+    }
+
+    /// **The minting test refuses no shipped text, measured over a population shown to hold the words it
+    /// reads and with an instrument shown able to refuse** (SONNY-534; the rule's own tables are
+    /// `SkillPackMintingTests`, and this one is here because only this file may read the shipped folder).
+    ///
+    /// `everyShippedPackLoadsAndEveryOneIsARowOfTheCommittedCatalogue` already fails on a refused pack.
+    /// What it cannot say is whether a clean result means anything, and a rule about `key` and `token`
+    /// run over texts that never say either would be clean by construction. So this counts the texts
+    /// that do, requires some, and plants a minting line among the same texts to show the same call
+    /// refuses it. **The population is thin and the doc comment says so rather than hiding it**: 12 of
+    /// 4826 texts at `856bb7ee`, because every lane so far has left credential flows out by hand —
+    /// `python3 -c "import json,glob,re; t=[x for f in glob.glob('Sources/MacAgent/Resources/SkillPacks/' + '*.skillpack.json') for p in [json.load(open(f))] for x in [p['name'],p['domain'],p['summary']]+p['triggers']+p['sections']+[y for fl in p['flows'] for y in [fl['title']]+fl['steps']]]; print(len(t), sum(1 for x in t if re.search(r'(^|[^a-z0-9])(keys?|tokens?)([^a-z0-9]|$)', x.lower())))"`
+    /// → `4826 12`. So this measures that the widening breaks nothing shipped; how often it will refuse
+    /// a future pack's honest wording is `knownRefusalsOfTheMintingTestAreHeld`'s to record, not this
+    /// count's to predict. No figure is asserted, because the pack lanes change the population weekly.
+    @Test
+    func theMintingTestIsMeasuredOverTheShippedTextsThatNameAKeyOrAToken() throws {
+        let catalogue = SkillPackCatalog.load(fileURLs: SkillPackCatalog.packFileURLs(in: Self.shippedPacksDirectory))
+        try #require(catalogue.packs.count > 100, "the walk loaded \(catalogue.packs.count) packs")
+        let texts = catalogue.packs.flatMap { pack in
+            [pack.name, pack.domain, pack.summary] + pack.triggers + pack.sections
+                + pack.flows.flatMap { [$0.title] + $0.steps }
+        }
+        let namingOne = texts.filter { !Set(SkillWords($0).words).isDisjoint(with: SkillPackCredentialRule.mintedObjects) }
+        #expect(namingOne.count >= 5, "only \(namingOne.count) shipped texts name a key or a token, so a clean result says little")
+        #expect(texts.compactMap(SkillPackCredentialRule.violation(in:)) == [])
+
+        let planted = texts.prefix(1_000) + ["Click the Add key drop-down menu, then select Create new key."] + texts.dropFirst(1_000)
+        #expect(planted.compactMap(SkillPackCredentialRule.violation(in:)) == ["add + key"])
     }
 
     @Test

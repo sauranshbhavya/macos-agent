@@ -51,8 +51,12 @@ final class AgentViewModel: ObservableObject {
 
     /// Every failure a run publishes, named with the run it belongs to. `AppDelegate` posts the
     /// failure notification off this rather than off one property, because a run in the background
-    /// fails exactly as loudly as the one on screen.
-    let errorMessageRaised = PassthroughSubject<(RunID, String), Never>()
+    /// fails exactly as loudly as the one on screen. A failed task also carries the address its
+    /// notification's Retry answers to (SONNY-533).
+    ///
+    /// **A `PassthroughSubject`, which does not replay, by the founders' ruling of 2026-09-19**: an
+    /// error already set when a subscriber arrives is not a task failing, and must not post one.
+    let errorMessageRaised = PassthroughSubject<RaisedFailure, Never>()
 
     /// Every approval a run parks, with its address — the run and the token it was minted with —
     /// so the notification's Allow answers that approval and nothing else.
@@ -87,11 +91,21 @@ final class AgentViewModel: ObservableObject {
     var errorMessage: String? {
         get { runSlotInScope.errorMessage }
         set {
-            updateRunSlotInScope { $0.errorMessage = newValue }
-            if let newValue {
-                errorMessageRaised.send((runIDInScope, newValue))
-            }
+            publishFailure(newValue, ofTheRunsOwnTask: false)
         }
+    }
+
+    /// The one writer of a run's failure, and the one place it is announced (SONNY-533). Only
+    /// `setRunFailure(_:)` passes `true`, so a failure that is nobody's task — and every clear —
+    /// leaves the run with no retry token, and its notification with no Retry.
+    private func publishFailure(_ message: String?, ofTheRunsOwnTask: Bool) {
+        updateRunSlotInScope { _ = $0.setErrorMessage(message, ofTheRunsOwnTask: ofTheRunsOwnTask) }
+        guard let message else {
+            return
+        }
+        errorMessageRaised.send(
+            RaisedFailure(runID: runIDInScope, message: message, retry: runSlotInScope.failedTask)
+        )
     }
     /// Whether the current `errorMessage` is a persistent configuration problem (missing API key,
     /// denied mic permission, unavailable hotkey) that will keep being true until the user actually
@@ -131,6 +145,21 @@ final class AgentViewModel: ObservableObject {
             updateRunSlotInScope { $0.stepStatuses = newValue }
         }
     }
+    /// The run a voice recording belongs to: the run in scope when it started, which for every real
+    /// caller is the run the widget was showing (SONNY-456).
+    ///
+    /// **Captured once, beside `voiceRecordingOrigin` and `voiceRecordingPurpose`, and for their
+    /// reason.** The recording's three tasks — asking for the microphone, the auto-stop, the
+    /// transcription — run outside any run, so each read "the run the widget shows" at the moment
+    /// each line ran. That is the same run only while focus cannot move. Once it can, a transcript
+    /// that lands after the user has clicked a different pill would put its task id, its usage, its
+    /// error or its answer on that other run, and start its task there. Everything the pipeline
+    /// writes now lands on the run the user was looking at when they started speaking.
+    ///
+    /// Internal rather than private for the reason `deliverTranscript` is: the only code that sets
+    /// it goes on to `AVCaptureDevice.requestAccess`, which a test process cannot survive, so a
+    /// test names the recording's run itself and drives the stop.
+    var voiceRecordingRunID: RunID?
     @Published var isPreparingVoiceRecording: Bool = false
     @Published var isRecordingVoice: Bool = false
     @Published var isTranscribingVoice: Bool = false
@@ -577,6 +606,38 @@ final class AgentViewModel: ObservableObject {
             approvePendingRun()
         }
         return true
+    }
+
+    /// Retries the task that failed on `runID`, and only if its failure is still the one raised
+    /// with `token` (SONNY-533). Returns whether that task was dispatched: `false` when the run and
+    /// the token name no failed task that is showing now, and `false` again when `retryLastCommand`
+    /// declines — while that run has anything in flight, or while the cap is full. A declined retry
+    /// writes nothing, so the banner it was pressed on stays live for the next press (PR #287's F1).
+    ///
+    /// **The one door by which a Retry reaches a named run**, and `approveParkedRun`'s twin. The
+    /// notification's Retry used to call `retryLastCommand()` bare, which re-runs the last command
+    /// of the run on screen when the banner is pressed: task X fails while the user is elsewhere,
+    /// they come back and run Y, then press Retry on X's banner, and Y runs again. A stale Allow
+    /// lands nowhere; a stale Retry starts something. The token is cleared by everything that
+    /// retires the failure — a clear, a newer failure, and a new submission on the run — so a press
+    /// that arrives after any of them finds nothing.
+    @discardableResult
+    func retryFailedRun(_ runID: RunID, token: UUID) -> Bool {
+        // The token alone: `RunSlot` holds one only beside the failure it was minted for, so a
+        // second condition here would be one no test could tell from its absence.
+        guard let slot = runSlots.first(where: { $0.id == runID }),
+              slot.retryToken == token
+        else {
+            logStore.append(.observe, "Not retried: that failure is no longer showing.")
+            return false
+        }
+        let started = RunScope.$current.withValue(runID) {
+            retryLastCommand()
+        }
+        if !started {
+            logStore.append(.observe, "Not retried: Sonny was not ready to begin that task again.")
+        }
+        return started
     }
 
     /// Adds an empty slot and returns its id. **A test seam, and until the rest of SONNY-456 lands
@@ -1197,7 +1258,7 @@ final class AgentViewModel: ObservableObject {
     private(set) var lastCommand: String {
         get { runSlotInScope.lastCommand }
         set {
-            updateRunSlotInScope { $0.lastCommand = newValue }
+            updateRunSlotInScope { $0.setLastCommand(newValue) }
         }
     }
     /// Not `private`, for the reason `scheduleVoiceRecordingAutoStop` gives its own visibility: the
@@ -1858,6 +1919,48 @@ final class AgentViewModel: ObservableObject {
     /// widget's copy onto this property is that file's owner's call, and the two agree today.
     var isTaskInFlight: Bool {
         isRunning || isAwaitingApproval || clarificationQuestion != nil
+    }
+
+    /// How many runs may be in flight at once (SONNY-456, founder decision 2026-09-18). Screen
+    /// control stays one session at a time whatever this says, because there is one cursor.
+    static let maximumConcurrentRuns = 3
+
+    /// What a fourth command is told. Short, and it says what to do. The number is spelled from the
+    /// cap, in English like the sentence around it, so the two cannot drift.
+    static let tooManyRunsMessage: String = {
+        let formatter = NumberFormatter()
+        formatter.locale = Locale(identifier: "en_US")
+        formatter.numberStyle = .spellOut
+        let cap = formatter.string(from: NSNumber(value: maximumConcurrentRuns)) ?? "\(maximumConcurrentRuns)"
+        return "Sonny is already working on \(cap) tasks. Try again when one finishes."
+    }()
+
+    /// Runs that are running or parked on a question, across every slot — what the cap counts.
+    var runsInFlight: Int {
+        runSlots.filter(\.isInFlight).count
+    }
+
+    /// Whether another run may begin now. The cap's one rule, so the two doors that have to obey it
+    /// cannot drift: `start()`, which refuses at the door, and `retryLastCommand`, which declines
+    /// before it writes anything (PR #287's F1).
+    var canStartAnotherRun: Bool {
+        runsInFlight < Self.maximumConcurrentRuns
+    }
+
+    /// Whether any run is running, whichever one the widget shows (SONNY-456).
+    ///
+    /// **What a control that deletes reads, and `isRunning` is not it.** The whole wipe, the
+    /// set-aside files, a Memory row, a routine and a workspace are each pressed outside any run, so
+    /// `isRunning` there is the focused run's. With a second run possible that lets a delete land
+    /// under a task running in another slot, which is the case each of those guards was written to
+    /// refuse. With one run the two read the same slot.
+    var isAnyRunRunning: Bool {
+        runSlots.contains(where: \.isRunning)
+    }
+
+    /// The same for a run parked on its approval, which three of those five guards also refuse.
+    var isAnyRunAwaitingApproval: Bool {
+        runSlots.contains { $0.approvalRequest != nil }
     }
 
     /// A "Don't save this task" run that is running or parked — the one state in which the
@@ -2754,6 +2857,17 @@ final class AgentViewModel: ObservableObject {
             logStore.append(.observe, "Not started: Sonny is deleting your data.")
             return
         }
+        // **The cap** (SONNY-456, founder decision 2026-09-18): three runs at once, and a fourth is
+        // refused rather than queued. Here rather than in `dispatch`, for the reason the wipe's
+        // claim above is: this is where `isRunning` is set, so it is the door every caller passes
+        // through. `canSubmit` has already said this run has nothing in flight, so the count is of
+        // the *other* runs. The typed command is left in the composer, so it can be sent again the
+        // moment one finishes; `dispatch` clears it for a programmatic caller, as it does for every
+        // refusal. `setError`, not a run's own failure: nothing ran, so there is nothing to retry.
+        guard canStartAnotherRun else {
+            setError(Self.tooManyRunsMessage)
+            return
+        }
 
         // Set here, synchronously, not inside `performStart` — `CommandCenterRunningIndicator`
         // needs a correct "what's actually running" label the instant `isRunning` flips true, not
@@ -3182,7 +3296,7 @@ final class AgentViewModel: ObservableObject {
                 // and Command Center both surface errors, but neither renders a `.prepared`
                 // prior-task-context status.
                 markAllSteps(.complete)
-                setError("The current approval policy limits this action to a preview, so Sonny did not run it.")
+                setRunFailure("The current approval policy limits this action to a preview, so Sonny did not run it.")
                 logStore.append(.summarize, "Preview-only approval policy")
                 recordPriorTaskContext(
                     command: submittedCommand,
@@ -3194,7 +3308,7 @@ final class AgentViewModel: ObservableObject {
                 return
             case .refuse:
                 markAllSteps(.failed)
-                setError("Sonny refused this action under the current approval policy.")
+                setRunFailure("Sonny refused this action under the current approval policy.")
                 logStore.append(.summarize, "Refused by approval policy")
                 recordPriorTaskContext(
                     command: submittedCommand,
@@ -3311,7 +3425,7 @@ final class AgentViewModel: ObservableObject {
                 }
             } else {
                 markAllSteps(.failed)
-                setError(Self.failureMessage(for: error))
+                setRunFailure(Self.failureMessage(for: error))
                 logStore.append(.summarize, "Stopped: \(error.localizedDescription)")
                 if let preparedRun {
                     recordPriorTaskContext(
@@ -3510,14 +3624,39 @@ final class AgentViewModel: ObservableObject {
         currentTask?.cancel()
     }
 
-    /// Whether `retryLastCommand()` would actually do anything. `errorMessage` also carries
-    /// pre-flight errors that never reached a real submission (an empty-command validation
-    /// message, a voice-transcription failure) — those leave `lastCommand` empty, so a UI that
-    /// shows a Retry button for *any* `errorMessage` would show one that's silently a no-op for
-    /// exactly those cases. Exposed as a bool here since retry-eligibility callers only need the
-    /// yes/no, not the text — see `runningCommandDisplayText` below for the text itself.
-    var hasRetryableCommand: Bool {
-        !lastCommand.isEmpty
+    /// Whether a Retry drawn on this run's failure would re-run **the task that failed** — the one
+    /// question both in-app Retry controls gate on (PR #287's F2).
+    ///
+    /// **It reads the failed task, not the last command, and the difference is the defect
+    /// SONNY-533 is about.** This was `!lastCommand.isEmpty`, which asks whether a command was ever
+    /// run on this slot. `errorMessage` carries two kinds of failure, and only one of them is a
+    /// task: a microphone that would not open, a transcription that failed, a control that could
+    /// not do what it was pressed for. After one of those the run still holds the last command it
+    /// really did run, so the old gate showed a live Retry that re-ran an unrelated task — the same
+    /// press the notification refuses, three inches away, because its banner carries no button at
+    /// all. `RunSlot.failedTask` is `nil` for exactly those failures, so both surfaces now agree.
+    ///
+    /// **And it asks the cap, because a Retry the cap would refuse is a button that does nothing**
+    /// (PR #287's re-check, N1). `retryLastCommand` declines while three runs are in flight, and it
+    /// declines *silently* — it writes nothing by design, both views discard its result, and only
+    /// the notification's door logs the refusal. So the failed-task half alone would have drawn a
+    /// live Retry that answered a press with nothing at all: no run, no message, no change on
+    /// screen. The term is `canStartAnotherRun`, the same predicate `start()` and
+    /// `retryLastCommand` refuse at, read here rather than spelled a third and fourth time at the
+    /// two call sites. The button now disappears while the cap is full and comes back when a run
+    /// finishes, which is a reason the user cannot see — chosen over the alternative on 2026-09-24,
+    /// because the sentence they used to get was the thing that spent their banner (F1).
+    ///
+    /// **What this does and does not guarantee, stated because the sentence it replaces
+    /// over-claimed.** It guarantees the two terms of `retryLastCommand`'s guard that a surface
+    /// cannot otherwise know: that the run holds a command to resubmit — a run's own task can only
+    /// have failed after `start()` wrote one, so a non-nil `failedTask` implies a non-empty
+    /// `lastCommand` — and that the cap would let it start. The third term, `!isTaskInFlight`, is
+    /// left to the surfaces: both draw a failure only when nothing is running or parked on this
+    /// run, because a permission and a clarification each outrank a failure in the one precedence
+    /// they share. A surface that drew a failure panel over a live run would need that term too.
+    var canRetryFailedTask: Bool {
+        runSlotInScope.failedTask != nil && canStartAnotherRun
     }
 
     /// The real command driving the current/last run — `command` itself is cleared the instant
@@ -3576,6 +3715,17 @@ final class AgentViewModel: ObservableObject {
         errorIsPersistent = persistent
     }
 
+    /// The failure of the task the run in scope was running — the only kind a Retry can re-run
+    /// (SONNY-533). `setError` is every other failure: a control that could not do what it was
+    /// pressed for, a recording that would not start, a command that was never submitted. Those
+    /// share the channel and the widget's panel, and none of them is a task, so none mints a retry
+    /// token and none posts a notification that offers to retry. Never persistent: a task failing
+    /// is an outcome, not a problem with the user's setup.
+    private func setRunFailure(_ message: String) {
+        publishFailure(message, ofTheRunsOwnTask: true)
+        errorIsPersistent = false
+    }
+
     /// The failure a run shows for a thrown error (SONNY-449). Almost always the error's own
     /// sentence; for an unreadable local file it adds the way out the storage banner already
     /// names, because the widget's failure panel is the surface the user is actually looking at,
@@ -3610,7 +3760,16 @@ final class AgentViewModel: ObservableObject {
 
     /// Resubmits the last real command as-is. Used by the floating widget's task-level-failure
     /// retry button (§3.3.6), the error notification's "Retry" action, and Command Center's own
-    /// failure row.
+    /// failure row. Returns whether the retry was dispatched.
+    ///
+    /// **What a new caller owes** (PR #287's re-check): this resubmits the run's last command and
+    /// never asks whether the failure on screen is that command's. A door that offers it as a
+    /// *Retry* has to ask, or it re-runs a task the user never asked to repeat after a failure that
+    /// was nobody's task — SONNY-533's own defect, reached through a fourth door. The three that
+    /// exist each ask in their own way: the notification carries a token minted for one failed task
+    /// (`retryFailedRun`), and the two in-app controls are drawn only when `canRetryFailedTask`
+    /// says a failed task is on screen. A caller that means "run this again" rather than "retry
+    /// what failed" wants `runTaskAgain` instead.
     ///
     /// - Parameter origin: Which surface's retry control this is. Defaults to `.widget` so the
     ///   two pre-existing call sites keep their original behavior. This used to be hardcoded
@@ -3618,13 +3777,23 @@ final class AgentViewModel: ObservableObject {
     ///   10 checkpoint 1 gave it one. The retry action is a fresh interaction on whichever surface
     ///   the user pressed it, not an inheritance of the failed task's origin, so the caller states
     ///   it rather than it being inferred — same convention as `toggleVoiceRecording(origin:)`.
-    func retryLastCommand(origin: TaskOrigin = .widget) {
+    /// **The cap is tested here and not left to `start()`** (PR #287's F1). Every refusal on this
+    /// path declines before writing anything, except the cap's, which publishes
+    /// `tooManyRunsMessage` through `setError` — and publishing a failure is what retires a run's
+    /// retry token. So a Retry refused by the cap used to spend the banner it was pressed on: the
+    /// user was told to try again once a run finishes, and the banner they pressed answered nothing
+    /// ever after. Declining here leaves the token's three retirement rules the ones the user
+    /// caused — a clear, a newer failure, a new submission — and a refusal is none of the three.
+    /// It is the same rule `start()` refuses at, read from `canStartAnotherRun` rather than spelled
+    /// twice. Inert while one run exists: `!isTaskInFlight` already covers the only slot.
+    @discardableResult
+    func retryLastCommand(origin: TaskOrigin = .widget) -> Bool {
         // `clarificationQuestion == nil` for the same reason every other in-flight term here exists:
         // a pause is a task the user has not finished answering, and retry is a *new* dispatch.
         // Without it, the notification's Retry — which fires from outside SwiftUI, so no view gate
         // can cover it — wrote the old command straight into a live pause.
-        guard !lastCommand.isEmpty, !isTaskInFlight else {
-            return
+        guard !lastCommand.isEmpty, !isTaskInFlight, canStartAnotherRun else {
+            return false
         }
         // Carries the original run's workspace. `lastAssessedScope` is the post-terminal record of
         // what the last task was assessed under and is deliberately never cleared, which is exactly
@@ -3646,7 +3815,7 @@ final class AgentViewModel: ObservableObject {
         // failed attempt behind as a live offer even after the retry succeeded. Continuing it keeps
         // one record for one task, which is the same invariant the other two doors hold.
         armRestartOfTaskInFlight()
-        dispatch(command: lastCommand, origin: origin, workspaceBinding: retryBinding)
+        return dispatch(command: lastCommand, origin: origin, workspaceBinding: retryBinding)
     }
 
     /// Runs a past task again by **re-asking Sonny with the same words**, never by replaying the
@@ -4924,7 +5093,7 @@ final class AgentViewModel: ObservableObject {
     /// standing decision it must, because it is promising something the network is the only way to
     /// keep. What it must not do is fail *silently*, which is what step 5 exists for.
     func deleteLocalData() {
-        guard !isRunning else {
+        guard !isAnyRunRunning else {
             setError("Stop the current run before deleting local data.")
             return
         }
@@ -5098,7 +5267,7 @@ final class AgentViewModel: ObservableObject {
     /// control sits. A failure also goes to `errorMessage`, as the whole wipe's does: this is a
     /// write the user pressed a control for, and the thing they asked for did not happen.
     func deleteSetAsideFiles() {
-        guard !isRunning else {
+        guard !isAnyRunRunning else {
             setError(MemoryDeletionCopy.setAsideFilesRunGuard)
             return
         }
@@ -5484,7 +5653,7 @@ final class AgentViewModel: ObservableObject {
         // the file it is about to write into. `deleteLocalData`'s narrower guard is not the
         // precedent to copy here — it is the whole-wipe path, which the user reaches from Settings
         // rather than from beside a live task.
-        guard !isRunning, !isAwaitingApproval else {
+        guard !isAnyRunRunning, !isAnyRunAwaitingApproval else {
             setError("Finish or stop the current task before deleting memory.")
             return
         }
@@ -6340,7 +6509,7 @@ final class AgentViewModel: ObservableObject {
     /// `deleteLocalData`'s narrower `isRunning`-only guard predates even this convention and is left
     /// as it is here. `deleteWorkspace` points at this comment rather than repeating it.
     func deleteRoutine(_ routine: StoredRoutine) {
-        guard !isRunning, !isAwaitingApproval else {
+        guard !isAnyRunRunning, !isAnyRunAwaitingApproval else {
             setError("Finish or stop the current task before deleting this routine.")
             return
         }
@@ -6355,7 +6524,7 @@ final class AgentViewModel: ObservableObject {
     /// Permanently deletes a saved workspace. See `deleteRoutine` for the in-flight guard's
     /// rationale.
     func deleteWorkspace(_ workspace: StoredWorkspace) {
-        guard !isRunning, !isAwaitingApproval else {
+        guard !isAnyRunRunning, !isAnyRunAwaitingApproval else {
             setError("Finish or stop the current task before deleting this workspace.")
             return
         }
@@ -7008,74 +7177,84 @@ final class AgentViewModel: ObservableObject {
         // the state at the transcript's arrival is the wrong thing to route on. The question's own
         // text goes with it, so delivery can tell "the question is still open" from "a question is".
         voiceRecordingPurpose = .forRecordingStarted(clarificationQuestion: clarificationQuestion)
+        // The run goes with them, for the same reason (SONNY-456): see `voiceRecordingRunID`.
+        let recordingRun = runIDInScope
+        voiceRecordingRunID = recordingRun
         isPreparingVoiceRecording = true
 
         Task {
-            let granted = await AudioCommandRecorder.requestMicrophonePermission()
-            guard granted else {
-                isPreparingVoiceRecording = false
-                setError("Microphone permission was denied. Allow microphone access for the launching app, then try again.", persistent: true)
-                return
+            await RunScope.$current.withValue(recordingRun) {
+                await beginRecordingOncePermitted(trigger: trigger)
             }
+        }
+    }
 
+    /// `startVoiceRecording`'s work, run inside the recording's own run (SONNY-456).
+    private func beginRecordingOncePermitted(trigger: VoiceRecordingTrigger) async {
+        let granted = await AudioCommandRecorder.requestMicrophonePermission()
+        guard granted else {
+            isPreparingVoiceRecording = false
+            setError("Microphone permission was denied. Allow microphone access for the launching app, then try again.", persistent: true)
+            return
+        }
+
+        if trigger == .hotKey && !isPushToTalkHotKeyDown {
+            isPreparingVoiceRecording = false
+            return
+        }
+
+        do {
+            try audioRecorder.start()
             if trigger == .hotKey && !isPushToTalkHotKeyDown {
+                audioRecorder.cancel()
                 isPreparingVoiceRecording = false
                 return
             }
 
-            do {
-                try audioRecorder.start()
-                if trigger == .hotKey && !isPushToTalkHotKeyDown {
-                    audioRecorder.cancel()
-                    isPreparingVoiceRecording = false
-                    return
-                }
-
-                isPreparingVoiceRecording = false
-                isRecordingVoice = true
-                let recordingStartedAt = Date()
-                voiceRecordingStartedAt = recordingStartedAt
-                scheduleVoiceRecordingAutoStop(startedAt: recordingStartedAt)
-                errorMessage = nil
-                switch voiceRecordingPurpose {
-                case .command:
-                    // A fresh recording is a fresh interaction — clear the *previous* task's
-                    // leftovers now, not only once a real submission reaches `performStart`.
-                    // Otherwise, if this new attempt fails before ever getting that far (e.g.
-                    // transcription comes back with no text), the failure panel reuses
-                    // `WidgetExistingStepRows` and renders the old, unrelated task's step rows
-                    // above the new error — a real, reported bug.
-                    finalSummary = ""
-                    plan = nil
-                    stepStatuses = [:]
-                    suggestions = []
-                case .clarificationAnswer:
-                    // **Nothing is cleared, because nothing here is a leftover** (SONNY-283). The
-                    // plan and its step statuses are the paused task's own, and the clarification
-                    // panel is drawing them above the question this recording answers — wiping
-                    // them would blank the panel the user is speaking into. The summary is that
-                    // pause's "Clarification needed" line, and neither this nor
-                    // `stopVoiceRecordingAndTranscribe` touches it, or the paused task's usage,
-                    // while the question is open (PR #119 review, F4).
-                    break
-                }
-                let recordingMessage: String
-                switch (voiceRecordingPurpose, trigger) {
-                case (.command, .hotKey):
-                    recordingMessage = "Recording voice command from hotkey"
-                case (.command, .button):
-                    recordingMessage = "Recording voice command"
-                case (.clarificationAnswer, .hotKey):
-                    recordingMessage = "Recording voice answer from hotkey"
-                case (.clarificationAnswer, .button):
-                    recordingMessage = "Recording voice answer"
-                }
-                logStore.append(.observe, recordingMessage)
-            } catch {
-                isPreparingVoiceRecording = false
-                setError(error.localizedDescription)
-                logStore.append(.summarize, "Voice recording failed: \(error.localizedDescription)")
+            isPreparingVoiceRecording = false
+            isRecordingVoice = true
+            let recordingStartedAt = Date()
+            voiceRecordingStartedAt = recordingStartedAt
+            scheduleVoiceRecordingAutoStop(startedAt: recordingStartedAt)
+            errorMessage = nil
+            switch voiceRecordingPurpose {
+            case .command:
+                // A fresh recording is a fresh interaction — clear the *previous* task's
+                // leftovers now, not only once a real submission reaches `performStart`.
+                // Otherwise, if this new attempt fails before ever getting that far (e.g.
+                // transcription comes back with no text), the failure panel reuses
+                // `WidgetExistingStepRows` and renders the old, unrelated task's step rows
+                // above the new error — a real, reported bug.
+                finalSummary = ""
+                plan = nil
+                stepStatuses = [:]
+                suggestions = []
+            case .clarificationAnswer:
+                // **Nothing is cleared, because nothing here is a leftover** (SONNY-283). The
+                // plan and its step statuses are the paused task's own, and the clarification
+                // panel is drawing them above the question this recording answers — wiping
+                // them would blank the panel the user is speaking into. The summary is that
+                // pause's "Clarification needed" line, and neither this nor
+                // `stopVoiceRecordingAndTranscribe` touches it, or the paused task's usage,
+                // while the question is open (PR #119 review, F4).
+                break
             }
+            let recordingMessage: String
+            switch (voiceRecordingPurpose, trigger) {
+            case (.command, .hotKey):
+                recordingMessage = "Recording voice command from hotkey"
+            case (.command, .button):
+                recordingMessage = "Recording voice command"
+            case (.clarificationAnswer, .hotKey):
+                recordingMessage = "Recording voice answer from hotkey"
+            case (.clarificationAnswer, .button):
+                recordingMessage = "Recording voice answer"
+            }
+            logStore.append(.observe, recordingMessage)
+        } catch {
+            isPreparingVoiceRecording = false
+            setError(error.localizedDescription)
+            logStore.append(.summarize, "Voice recording failed: \(error.localizedDescription)")
         }
     }
 
@@ -7105,96 +7284,108 @@ final class AgentViewModel: ObservableObject {
         }
     }
 
+    /// Every caller is outside any run — the mic's Stop, the hotkey's release, the auto-stop — so
+    /// the run the widget shows *now* need not be the run this recording started on (SONNY-456).
+    /// The whole stop, and the transcription it starts, run inside `voiceRecordingRunID`.
     private func stopVoiceRecordingAndTranscribe() {
-        // Cancelled unconditionally and first, whatever called this — the mic's own Stop, the
-        // hotkey release, or the auto-stop task above firing on itself. A `Task` cancelling itself
-        // mid-body is a harmless no-op, and clearing the property here (rather than leaving it for
-        // whichever branch below runs) is what makes "cancel it on every stop" true of every caller
-        // rather than of most of them.
-        voiceRecordingAutoStopTask?.cancel()
-        voiceRecordingAutoStopTask = nil
+        let recordingRun = voiceRecordingRunID ?? runIDInScope
+        RunScope.$current.withValue(recordingRun) {
+            // Cancelled unconditionally and first, whatever called this — the mic's own Stop, the
+            // hotkey release, or the auto-stop task above firing on itself. A `Task` cancelling itself
+            // mid-body is a harmless no-op, and clearing the property here (rather than leaving it for
+            // whichever branch below runs) is what makes "cancel it on every stop" true of every caller
+            // rather than of most of them.
+            voiceRecordingAutoStopTask?.cancel()
+            voiceRecordingAutoStopTask = nil
 
-        let recording: FinishedRecording
-        do {
-            recording = try audioRecorder.stop()
-            isRecordingVoice = false
-            voiceRecordingStartedAt = nil
-        } catch {
-            isRecordingVoice = false
-            voiceRecordingStartedAt = nil
-            isPushToTalkHotKeyDown = false
-            setError(error.localizedDescription)
-            return
-        }
-
-        Task {
-            switch voiceRecordingPurpose {
-            case .command:
-                // A command is a fresh task, and its transcription is the first cost of it: the
-                // recorder starts over here so the summary the run ends with is this task's alone.
-                // **And the `task_id` starts over with it** (SONNY-130) — the transcription is the
-                // first request this task makes, so it must already carry the id the run will use,
-                // or the voice half of a task is filed under the previous task's key.
-                // `performStart` sees `preserveUsageForNextStart` and keeps both.
-                beginNewTaskIdentity()
-                logStore.append(.act, "Transcribing voice command")
-            case .clarificationAnswer:
-                // **An answer belongs to the task that is paused, so nothing of that task's is
-                // reset** (PR #119 review, F4). The recorder keeps the pause's own cost and the
-                // transcription is added to it; `preserveUsageForNextStart` below then carries the
-                // whole of it into the answer's `start()`, so the continuation's usage line is the
-                // cost of the task the user asked for — the pause, the words, and the re-plan.
-                // (A *typed* answer's `start()` resets instead, which predates this branch and is
-                // left as it is.)
-                logStore.append(.act, "Transcribing voice answer")
-            }
-            isTranscribingVoice = true
-            errorMessage = nil
-            defer {
-                publishTaskUsageSummary()
-                try? FileManager.default.removeItem(at: recording.url)
-            }
-
+            let recording: FinishedRecording
             do {
-                let transcriber = OpenAITranscriber(
-                    client: backendClient,
-                    // A transcription belongs to the task it begins, so it carries that task's
-                    // retention answer too: a run the user started with "Don't save this task" on
-                    // sends `retention: "none"` for their voice, which is the most personally
-                    // sensitive of the four content types this branch moved.
-                    taskContext: backendTaskContext(recordingPolicy: taskRecordingPolicy),
-                    usageRecorder: taskUsageRecorder
-                )
-                let result = try await transcriber.transcribe(
-                    audioFileURL: recording.url,
-                    // How long the user held the key, not how long the file is — `FinishedRecording`
-                    // says why the two differ once the recorder bounds itself.
-                    recordedDuration: recording.heldFor
-                )
-                // Deliberately does *not* write `command` here. `dispatchTranscribedCommand` routes
-                // through `dispatch`, which assigns it and clears it again if the dispatch is
-                // refused — writing it first would reinstate exactly the residue this round removes,
-                // for a transcription that completed into a clarification pause.
-                if case .command = voiceRecordingPurpose {
-                    // The previous task's summary, cleared for a new one. An answer's paused task
-                    // keeps its "Clarification needed" line until the question is answered or
-                    // cancelled (F4 again).
-                    finalSummary = ""
-                }
-                isTranscribingVoice = false
-                preserveUsageForNextStart = true
-                // States only what is known here. "Sonny will act now" was written *before* the
-                // dispatch and was contradicted by it whenever the dispatch was refused — a
-                // transcription that completed into a pending approval left the spoken words gone,
-                // no error set, and this sentence as the last thing said about them. What happens
-                // next is `dispatch`'s to record, and it now does, on every door. (PR #40 review, F5.)
-                logStore.append(.observe, "Transcript ready.")
-                deliverTranscript(result.text, recordedFor: voiceRecordingPurpose, origin: voiceRecordingOrigin)
+                recording = try audioRecorder.stop()
+                isRecordingVoice = false
+                voiceRecordingStartedAt = nil
             } catch {
-                deliverTranscriptionError(error)
+                isRecordingVoice = false
+                voiceRecordingStartedAt = nil
+                isPushToTalkHotKeyDown = false
+                setError(error.localizedDescription)
+                return
             }
+
+            // Bound explicitly, as `start()` binds its own `Task`, rather than left to inheritance.
+            Task {
+                await RunScope.$current.withValue(recordingRun) {
+                    switch voiceRecordingPurpose {
+                    case .command:
+                        // A command is a fresh task, and its transcription is the first cost of it: the
+                        // recorder starts over here so the summary the run ends with is this task's alone.
+                        // **And the `task_id` starts over with it** (SONNY-130) — the transcription is the
+                        // first request this task makes, so it must already carry the id the run will use,
+                        // or the voice half of a task is filed under the previous task's key.
+                        // `performStart` sees `preserveUsageForNextStart` and keeps both.
+                        beginNewTaskIdentity()
+                        logStore.append(.act, "Transcribing voice command")
+                    case .clarificationAnswer:
+                        // **An answer belongs to the task that is paused, so nothing of that task's is
+                        // reset** (PR #119 review, F4). The recorder keeps the pause's own cost and the
+                        // transcription is added to it; `preserveUsageForNextStart` below then carries the
+                        // whole of it into the answer's `start()`, so the continuation's usage line is the
+                        // cost of the task the user asked for — the pause, the words, and the re-plan.
+                        // (A *typed* answer's `start()` resets instead, which predates this branch and is
+                        // left as it is.)
+                        logStore.append(.act, "Transcribing voice answer")
+                    }
+                    isTranscribingVoice = true
+                    errorMessage = nil
+                    defer {
+                        publishTaskUsageSummary()
+                        try? FileManager.default.removeItem(at: recording.url)
+                    }
+
+                    do {
+                        let transcriber = OpenAITranscriber(
+                            client: backendClient,
+                            // A transcription belongs to the task it begins, so it carries that task's
+                            // retention answer too: a run the user started with "Don't save this task" on
+                            // sends `retention: "none"` for their voice, which is the most personally
+                            // sensitive of the four content types this branch moved.
+                            taskContext: backendTaskContext(recordingPolicy: taskRecordingPolicy),
+                            usageRecorder: taskUsageRecorder
+                        )
+                        let result = try await transcriber.transcribe(
+                            audioFileURL: recording.url,
+                            // How long the user held the key, not how long the file is — `FinishedRecording`
+                            // says why the two differ once the recorder bounds itself.
+                            recordedDuration: recording.heldFor
+                        )
+                        // Deliberately does *not* write `command` here. `dispatchTranscribedCommand` routes
+                        // through `dispatch`, which assigns it and clears it again if the dispatch is
+                        // refused — writing it first would reinstate exactly the residue this round removes,
+                        // for a transcription that completed into a clarification pause.
+                        if case .command = voiceRecordingPurpose {
+                            // The previous task's summary, cleared for a new one. An answer's paused task
+                            // keeps its "Clarification needed" line until the question is answered or
+                            // cancelled (F4 again).
+                            finalSummary = ""
+                        }
+                        isTranscribingVoice = false
+                        preserveUsageForNextStart = true
+                        // States only what is known here. "Sonny will act now" was written *before* the
+                        // dispatch and was contradicted by it whenever the dispatch was refused — a
+                        // transcription that completed into a pending approval left the spoken words gone,
+                        // no error set, and this sentence as the last thing said about them. What happens
+                        // next is `dispatch`'s to record, and it now does, on every door. (PR #40 review, F5.)
+                        logStore.append(.observe, "Transcript ready.")
+                        deliverTranscript(result.text, recordedFor: voiceRecordingPurpose, origin: voiceRecordingOrigin)
+                    } catch {
+                        deliverTranscriptionError(error)
+                    }
+    
+                }
+            }
+    
         }
     }
+
 
     /// Where a transcription that produced no transcript ends — the one seam, called by the real
     /// catch above and driven directly by tests, for the same reason `deliverTranscript` below is.
@@ -7238,7 +7429,7 @@ final class AgentViewModel: ObservableObject {
         }
         // This is the bug that made the auto-clear timer feel broken: a failed
         // transcription (e.g. no speech captured) never calls `start()`, so it never
-        // touches `lastCommand` — the old `hasRetryableCommand`-based gate treated that
+        // touches `lastCommand` — the old `!lastCommand.isEmpty` gate treated that
         // exactly like a persistent config problem and refused to time it out. It isn't
         // one: try again and it's just as likely to work fine.
         setError(error.localizedDescription)
@@ -7865,7 +8056,7 @@ final class AgentViewModel: ObservableObject {
             }
         } catch {
             markAllSteps(.failed)
-            setError(Self.failureMessage(for: error))
+            setRunFailure(Self.failureMessage(for: error))
             logStore.append(.summarize, "Stopped: \(error.localizedDescription)")
             if let pendingCommandForPriorTaskContext {
                 recordPriorTaskContext(
@@ -8776,7 +8967,17 @@ final class AgentViewModel: ObservableObject {
         // **The unattended door, and the one the review named as needing no user action to enter**
         // (PR #207's F3): a scheduled routine sets `isRunning` from a timer, so the window the wipe
         // opens is one a routine can walk into with nobody watching.
-        guard !isRunning, !isDeletingLocalData, !isAwaitingApproval, clarificationQuestion == nil else {
+        //
+        // **Every run, not the one the widget shows** (SONNY-456). The timer that gets here is
+        // outside any run, so the four terms used to read the focused run alone: with a second run
+        // possible, a routine would have started in a free focused slot on top of a user's task in
+        // another. The founders' rule above is "a task already in flight, whoever started it", so
+        // each term is asked of every slot. It also leaves the focused slot free whenever a routine
+        // does fire, which is the slot it starts in.
+        let everyRunIsIdle = runSlots.allSatisfy {
+            !$0.isRunning && $0.approvalRequest == nil && $0.clarificationQuestion == nil
+        }
+        guard everyRunIsIdle, !isDeletingLocalData else {
             return
         }
 
@@ -8828,7 +9029,7 @@ final class AgentViewModel: ObservableObject {
             let previousOrigin = activeTaskOrigin
             activeTaskOrigin = .scheduled
             // Deliberately does not touch `lastCommand`. That property is the user's own last
-            // submission: it feeds `hasRetryableCommand` and `retryLastCommand()`, so overwriting
+            // submission: it feeds `retryLastCommand()` and the widget's Retry, so overwriting
             // it here would point the widget's Retry button at a routine the user never ran.
             // `runningCommandDisplayText` reads the scheduled label separately while this runs.
             // Bound to the slot it started in, like every run (SONNY-456): the timer that got here

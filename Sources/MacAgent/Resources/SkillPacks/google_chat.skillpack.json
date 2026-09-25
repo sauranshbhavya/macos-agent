@@ -8,6 +8,53 @@
   "signInURL": "https://accounts.google.com/ServiceLogin?continue=https%3A%2F%2Fchat.google.com%2F",
   "triggers": ["google chat", "chat.google.com"],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Create a space",
+      "startURL": "https://chat.google.com/u/0/",
+      "steps": [
+        "On your computer, open Google Chat.",
+        "Click New chat, then Create a space.",
+        "Enter a space name.",
+        "Optional: to give the space a picture, click Choose an emoji and select one.",
+        "Click Create."
+      ],
+      "source": "https://support.google.com/chat/answer/12176488?hl=en"
+    },
+    {
+      "title": "Send a direct message",
+      "startURL": "https://chat.google.com/u/0/",
+      "steps": [
+        "On your computer, open Google Chat. The first time you write to someone, they have to accept the request before you can chat.",
+        "Click New chat.",
+        "Enter a name or an email address. To start a group message, add more names or email addresses.",
+        "Click Start chat.",
+        "In the reply area, enter a message and click Send."
+      ],
+      "source": "https://support.google.com/chat/answer/7652736?hl=en"
+    },
+    {
+      "title": "Turn a direct message into a space",
+      "startURL": "https://chat.google.com/u/0/",
+      "steps": [
+        "This works when two or more people are in the direct message.",
+        "On your computer, open Google Chat.",
+        "Open a direct message.",
+        "At the top, click the conversation name.",
+        "Click Turn this chat into a space."
+      ],
+      "source": "https://support.google.com/chat/answer/7652736?hl=en"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://chat.google.com/u/0/",
+      "landedURL": "https://accounts.google.com/v3/signin/identifier",
+      "title": "Sign in - Google Accounts",
+      "heading": "Sign in",
+      "offers": "sign-in",
+      "read": "2026-09-25"
+    }
+  ]
 }
