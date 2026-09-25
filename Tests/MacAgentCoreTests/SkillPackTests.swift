@@ -939,6 +939,36 @@ struct SkillPackTests {
         }
     }
 
+    /// **The minting test refuses no shipped text, measured over a population shown to hold the words it
+    /// reads and with an instrument shown able to refuse** (SONNY-534; the rule's own tables are
+    /// `SkillPackMintingTests`, and this one is here because only this file may read the shipped folder).
+    ///
+    /// `everyShippedPackLoadsAndEveryOneIsARowOfTheCommittedCatalogue` already fails on a refused pack.
+    /// What it cannot say is whether a clean result means anything, and a rule about `key` and `token`
+    /// run over texts that never say either would be clean by construction. So this counts the texts
+    /// that do, requires some, and plants a minting line among the same texts to show the same call
+    /// refuses it. **The population is thin and the doc comment says so rather than hiding it**: 12 of
+    /// 4826 texts at `856bb7ee`, because every lane so far has left credential flows out by hand —
+    /// `python3 -c "import json,glob,re; t=[x for f in glob.glob('Sources/MacAgent/Resources/SkillPacks/' + '*.skillpack.json') for p in [json.load(open(f))] for x in [p['name'],p['domain'],p['summary']]+p['triggers']+p['sections']+[y for fl in p['flows'] for y in [fl['title']]+fl['steps']]]; print(len(t), sum(1 for x in t if re.search(r'(^|[^a-z0-9])(keys?|tokens?)([^a-z0-9]|$)', x.lower())))"`
+    /// → `4826 12`. So this measures that the widening breaks nothing shipped; how often it will refuse
+    /// a future pack's honest wording is `knownRefusalsOfTheMintingTestAreHeld`'s to record, not this
+    /// count's to predict. No figure is asserted, because the pack lanes change the population weekly.
+    @Test
+    func theMintingTestIsMeasuredOverTheShippedTextsThatNameAKeyOrAToken() throws {
+        let catalogue = SkillPackCatalog.load(fileURLs: SkillPackCatalog.packFileURLs(in: Self.shippedPacksDirectory))
+        try #require(catalogue.packs.count > 100, "the walk loaded \(catalogue.packs.count) packs")
+        let texts = catalogue.packs.flatMap { pack in
+            [pack.name, pack.domain, pack.summary] + pack.triggers + pack.sections
+                + pack.flows.flatMap { [$0.title] + $0.steps }
+        }
+        let namingOne = texts.filter { !Set(SkillWords($0).words).isDisjoint(with: SkillPackCredentialRule.mintedObjects) }
+        #expect(namingOne.count >= 5, "only \(namingOne.count) shipped texts name a key or a token, so a clean result says little")
+        #expect(texts.compactMap(SkillPackCredentialRule.violation(in:)) == [])
+
+        let planted = texts.prefix(1_000) + ["Click the Add key drop-down menu, then select Create new key."] + texts.dropFirst(1_000)
+        #expect(planted.compactMap(SkillPackCredentialRule.violation(in:)) == ["add + key"])
+    }
+
     @Test
     func aURLCarryingACredentialDoesNotLoad() throws {
         var object = SkillPackFixtures.object()
