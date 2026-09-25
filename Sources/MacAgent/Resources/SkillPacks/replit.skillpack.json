@@ -8,6 +8,27 @@
   "signInURL": "https://replit.com/login",
   "triggers": ["replit", "replit.com"],
   "sections": [],
-  "depth": "shallow",
-  "flows": []
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Start a new chat",
+      "startURL": "https://replit.com/login",
+      "steps": [
+        "Select New in the Replit sidebar.",
+        "Open the mode selector below the prompt box and make sure the mode is set to Free.",
+        "Use the prompt box to write your request. For example, ask Replit to summarize our Slack activity from this week and flag messages that need my reply."
+      ],
+      "source": "https://docs.replit.com/chat/conversations"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://replit.com/login",
+      "landedURL": "https://replit.com/login",
+      "title": "Log In - Replit",
+      "heading": "Log in to your account",
+      "offers": "sign-in",
+      "read": "2026-09-25"
+    }
+  ]
 }
