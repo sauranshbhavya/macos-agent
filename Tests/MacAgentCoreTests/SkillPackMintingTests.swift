@@ -57,6 +57,14 @@ struct SkillPackMintingTests {
             ("Click Add key, then pick JSON.", "add + key"),
             ("Adding a key takes a moment.", "adding + key"),
             ("Click New token.", "new + token"),
+            // review-285's F6: the three of its verbs that joined, base and "-ing" form each.
+            ("Click Reset key.", "reset + key"),
+            ("Resetting the key signs every client out.", "resetting + key"),
+            ("Click Reissue token.", "reissue + token"),
+            // No article, because "a token" is an older phrase and the older refusal keeps its word.
+            ("Reissuing tokens invalidates the old ones.", "reissuing + tokens"),
+            ("Recreate the key after the rotation.", "recreate + key"),
+            ("Recreating a key takes a minute.", "recreating + key"),
             // The other two pages review-278 measured loading: AWS's, which is a phrase now, and
             // DigitalOcean's, where the nearest minting word to the object is the one named.
             ("In the Access keys section, choose Create access key.", "access key"),
@@ -136,7 +144,9 @@ struct SkillPackMintingTests {
             ("linking word: by", "Create a view sorted by key."),
             ("linking word: from", "Create a chart from the key metrics."),
             ("linking word: then", "Click Create then enter a key for the flag."),
-            ("an ordinary token with no minting word", "Use the design token for spacing.")
+            ("an ordinary token with no minting word", "Use the design token for spacing."),
+            // Why `issue` is not a minting word (review-285's F6): Jira's every issue carries one.
+            ("Jira's issue key", "Enter the issue key, such as PROJ-12.")
         ]
         for step in shipped + conditions.map(\.step) {
             var object = SkillPackFixtures.object()
@@ -213,7 +223,18 @@ struct SkillPackMintingTests {
             // word, and a hyphen, which ends a clause between the minting word and its object.
             "Open Account Settings, then Tokens, and click Create.",
             "Click Rotate key1.",
-            "Run the create-key command."
+            "Run the create-key command.",
+            // review-285's F6: the minting verbs that stay off the list, and why. `issue`, because
+            // Jira's every issue carries an "issue key" — the row that loads for that reason is in
+            // `aKeyThatIsNotACredentialStillLoads`; `set up`, because its first word is the verb every
+            // settings step uses; the rest because they are the class "Make a key." stands for. And a
+            // purpose clause behind a linking word, which `to` frees on purpose.
+            "Click Issue token.",
+            "Set up a signing key.",
+            "Refresh the key.",
+            "Provision a key.",
+            "Register a security key.",
+            "Click Create to get your key."
         ] {
             #expect(SkillPackCredentialRule.violation(in: step) == nil, "the rule has grown: \(step)")
         }

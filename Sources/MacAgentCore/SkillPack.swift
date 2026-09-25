@@ -256,7 +256,7 @@ public enum SkillPackStopProblem: Error, Equatable, Sendable {
     /// Its first word is not an "-ing" word, so "Stop before …" would not read as a sentence.
     case doesNotOpenWithAnAct
     /// It holds a character a stop is not written in: anything but ASCII letters and digits, spaces
-    /// and `, ' " ( ) + &`, or a full stop or hyphen that is not inside a word.
+    /// and `, ' " ( ) + &`, a full stop anywhere but the start of a word, or a hyphen not inside one.
     case holdsACharacterOutsideItsAlphabet(String)
     /// It is longer than `SkillPackStopRule.maximumWords`, and a stop names one act.
     case isLongerThanOneAct(words: Int)
