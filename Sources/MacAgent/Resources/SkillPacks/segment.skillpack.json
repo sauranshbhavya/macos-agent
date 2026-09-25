@@ -30,6 +30,9 @@
         "Choose which source sends data to it, and click Confirm source.",
         "In the Connection Settings that appear, enter any required fields. Segment's page says these might be a key or token issued by the destination tool, an account ID, or a prompt to log in to that tool. If needed, click the toggle to enable the destination so it starts receiving data."
       ],
+      "stops": [
+        "typing, pasting or reading a key, a token or any other credential in the Connection Settings"
+      ],
       "source": "https://www.twilio.com/docs/segment/getting-started/05-data-to-destinations"
     },
     {

@@ -19,6 +19,9 @@
         "For more detail, click Advanced Options: select the client the project belongs to, set its start and end dates, and choose which workspace it belongs to. Leave the project Public: private projects are not part of the Free plan, so if the person wants one and Private is missing, locked or leads to another page, stop and tell them, and never change the plan.",
         "Click Create Project to save it."
       ],
+      "stops": [
+        "upgrading the plan to make Private available"
+      ],
       "source": "https://support.toggl.com/en-us/article/creating-projects-jrbd27/"
     },
     {

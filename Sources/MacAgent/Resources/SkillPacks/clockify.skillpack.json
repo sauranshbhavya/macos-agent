@@ -39,6 +39,9 @@
         "Choose a project color from the Custom section or the color picker, and choose its visibility. On the Free plan only Public can be set; if the person wants the project Private and Private is missing, locked or leads to another page, stop and tell them, and never change the plan.",
         "Click Create."
       ],
+      "stops": [
+        "upgrading the plan to make Private available"
+      ],
       "source": "https://clockify.me/help/projects/creating-projects"
     }
   ],
