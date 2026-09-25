@@ -19,6 +19,9 @@
         "Select Create a statement, and choose the currencies or jars, the time period, the file format and the language. One statement covers at most 365 days; for longer, create one per period. For accounting statements, tick the box to show fees separately.",
         "Hand the confirmation to the person. Once they have confirmed it, statements made this way appear in the Custom tab."
       ],
+      "stops": [
+        "typing the person's password or any other credential into the box Wise shows for a download"
+      ],
       "source": "https://wise.com/help/articles/2736049/how-do-i-download-a-statement"
     },
     {

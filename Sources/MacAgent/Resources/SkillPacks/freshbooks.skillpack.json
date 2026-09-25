@@ -20,6 +20,10 @@
         "If needed, enter the Email Address and Phone Number, and select Add Address to choose a Country and enter the street, city, state and zip code.",
         "Leave the Client Settings below those fields as they are, and select Save."
       ],
+      "stops": [
+        "turning on Charge Late Fees",
+        "upgrading the plan to make room for more clients"
+      ],
       "source": "https://support.freshbooks.com/hc/en-us/articles/217181797-What-are-clients"
     },
     {
@@ -31,6 +35,9 @@
         "Go to the Clients section, select the More Actions button, then Import Clients.",
         "Select Choose File and pick the CSV, match the First Name and other fields to the file's columns using the dropdowns, and select Continue.",
         "Match any optional address fields, then select Import Clients. Every row is imported, duplicates included, so check the file for clients already in FreshBooks first."
+      ],
+      "stops": [
+        "upgrading the plan to make room for the clients in the file"
       ],
       "source": "https://support.freshbooks.com/hc/en-us/articles/360003248452-How-do-I-import-clients-from-a-file"
     }

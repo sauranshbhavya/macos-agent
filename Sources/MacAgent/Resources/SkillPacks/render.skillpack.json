@@ -31,6 +31,9 @@
         "Provide a Key and Value for each new environment variable.",
         "Save the changes with one of the dropdown's three options: Save, rebuild, and deploy; Save and deploy; or Save only, which leaves the service on its old variables until its next deploy."
       ],
+      "stops": [
+        "typing, pasting or reading a secret, an API key or any other credential in a variable's value"
+      ],
       "source": "https://render.com/docs/configure-environment-variables"
     }
   ],

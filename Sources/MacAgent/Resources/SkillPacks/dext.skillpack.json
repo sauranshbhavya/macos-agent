@@ -20,6 +20,9 @@
         "Review and add any additional permissions if needed, and choose whether to send the invitation by email or by text message.",
         "Select Add to send the invitation."
       ],
+      "stops": [
+        "pressing \"Purchase additional users\""
+      ],
       "source": "https://help.dext.com/en/articles/105778-how-to-add-users-to-your-business-account"
     }
   ],
