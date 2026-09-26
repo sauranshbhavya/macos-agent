@@ -53,13 +53,14 @@ final class SonnyAppModel: ObservableObject {
     private let defaults: UserDefaults
     private var pulse: Timer?
     private var clipboardTimer: Timer?
+    /// Whether a private task was running at the clipboard's last poll.
+    private var privateRanAtLastPoll = false
     private var voiceLimit: Task<Void, Never>?
     /// The private setting when listening began; the transcription and the task both keep it.
     private var voicePrivate = false
     private var forwarding: Set<AnyCancellable> = []
     /// The private task the toggle is on for; the toggle resets when it ends.
     private var privateTask: TaskID?
-    private var privateRanAtLastPoll = false
 
     static let modeKey = "SonnyV2InteractionMode"
     /// How often schedules and watchers are checked.
