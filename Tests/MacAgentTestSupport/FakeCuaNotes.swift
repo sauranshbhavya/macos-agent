@@ -27,6 +27,11 @@ public struct FakeCuaNotesState: Sendable, Equatable {
     public var newNoteKeepsOpenNote = false
     /// Off models an editor that takes no whole value, so cua's `type_text` has to insert it.
     public var editorTakesValue = true
+    /// On models a locked note asking for its password: a secure field stands in the editor's place
+    /// and holds the keyboard focus, so text typed at the focus lands in it.
+    public var noteLocked = false
+    /// What reached the locked note's password field.
+    public var passwordTyped = ""
     public var accessibilityGranted = true
     /// Readings that come back degraded, as a window on another Space or still animating does.
     public var degradedReadings = 0
@@ -136,9 +141,15 @@ public actor FakeCuaNotes: CuaToolInvoking {
         }
         switch tool {
         case "set_value", "type_text":
-            guard let target, target.role == "AXTextArea", state.editorOpen else { return Self.error("\(tool): not a text input") }
-            if tool == "set_value", !state.editorTakesValue { return Self.error("set_value: AXValue is not settable") }
             let text = (arguments["value"] ?? arguments["text"]) as? String ?? ""
+            // type_text naming no element goes to the focus: a locked note's password field, or the editor.
+            let atFocus = tool == "type_text" && target == nil
+            if atFocus, state.noteLocked {
+                state.passwordTyped += text
+                return Self.result(["effect": "confirmed"])
+            }
+            guard atFocus || target?.role == "AXTextArea", state.editorOpen, !state.noteLocked else { return Self.error("\(tool): not a text input") }
+            if tool == "set_value", !state.editorTakesValue { return Self.error("set_value: AXValue is not settable") }
             state.notes[state.notes.count - 1] = tool == "set_value" ? text : state.notes[state.notes.count - 1] + text
         case "press_key":
             state.keysPressed.append(arguments["key"] as? String ?? "")
@@ -208,7 +219,9 @@ public actor FakeCuaNotes: CuaToolInvoking {
         }
         // The date line over the note, pressable, holding text of the person's.
         _ = add("AXStaticText", label: "24 September 2026 at 17:50", value: "24 September 2026 at 17:50", actions: ["AXPress"], at: (600, 60, 200, 20))
-        if state.editorOpen {
+        if state.noteLocked {
+            _ = add("AXSecureTextField", label: "Password", actions: ["AXConfirm"], at: (1000, 400, 300, 30))
+        } else if state.editorOpen {
             _ = add("AXTextArea", label: "Note Body", value: state.notes.last ?? "", actions: ["AXShowMenu"], at: (600, 90, 1300, 900))
         }
         let toolbar = add("AXToolbar", actions: ["AXShowMenu"], at: (0, 0, 1920, 52))

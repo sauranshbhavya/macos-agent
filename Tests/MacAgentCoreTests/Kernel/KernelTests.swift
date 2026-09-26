@@ -608,6 +608,7 @@ struct ActionGateTests {
     @Test
     func localRulesOnlyRaise() {
         #expect(EffectRaiser.raise(declared: .navigate, floor: .navigate, facts: RaiseFacts(keyChord: ["cmd", "return"], focusedTakesText: true)) == .external)
+        #expect(EffectRaiser.raise(declared: .navigate, floor: .navigate, facts: RaiseFacts(keyChord: ["return", "cmd"], focusedTakesText: true)) == .external)
         #expect(EffectRaiser.raise(declared: .navigate, floor: .navigate, facts: RaiseFacts(keyChord: ["return"], focusedTakesText: false)) == .navigate)
         #expect(EffectRaiser.raise(declared: .navigate, floor: .navigate, facts: RaiseFacts(targetWords: ["Send Now"])) == .external)
         #expect(EffectRaiser.raise(declared: .navigate, floor: .navigate, facts: RaiseFacts(targetWords: ["File", "Unsubscribe"])) == .navigate)
