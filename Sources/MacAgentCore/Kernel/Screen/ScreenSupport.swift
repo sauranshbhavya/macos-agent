@@ -90,6 +90,12 @@ public actor ForegroundLease {
     }
 }
 
+/// Why a picture of a window was not taken.
+public enum ScreenshotRefusal: Error, Equatable {
+    /// The window shows a shell. Sonny doesn't work in shells, so none of it is sent.
+    case shellOnScreen
+}
+
 /// A redacted picture of an app's window, ready to send.
 public protocol WindowScreenshotting: Sendable {
     func screenshot(bundleID: String) async throws -> ObservationBody.Screenshot
@@ -110,6 +116,7 @@ public struct RedactedWindowScreenshots: WindowScreenshotting {
     public func screenshot(bundleID: String) async throws -> ObservationBody.Screenshot {
         let image = try await capture.captureFrontmostWindow(ofBundleIdentifier: bundleID)
         let payload = try await redaction.redactCapture(image)
+        if payload.shellSurface.showsShell { throw ScreenshotRefusal.shellOnScreen }
         guard let data = payload.redactedImageData,
               let width = payload.imagePixelWidth,
               let height = payload.imagePixelHeight

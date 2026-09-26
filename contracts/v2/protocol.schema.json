@@ -488,7 +488,7 @@
               "additionalProperties": false,
               "required": ["code"],
               "properties": {
-                "code": { "enum": ["permission_denied", "app_not_running", "no_window", "unreadable", "foreground_unavailable"] },
+                "code": { "enum": ["permission_denied", "app_not_running", "no_window", "unreadable", "foreground_unavailable", "app_refused"] },
                 "message": { "type": "string", "maxLength": 1000 }
               }
             }

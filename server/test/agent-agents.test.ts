@@ -248,6 +248,25 @@ describe("the planner and its screen subagent", () => {
     expect(router.calls.filter((c) => c.schemaName === SCREEN_DECISION_SCHEMA_NAME)).toHaveLength(0);
   });
 
+  it("tells the planner the Mac refused the app, and doesn't look again", async () => {
+    const router = scriptedRouter({
+      planner: [
+        plan({ kind: "screen_task", app: "Terminal", objective: "Run the build" }),
+        plan({ kind: "finish", status: "failed", summary: "Sonny doesn't work in Terminal." }),
+      ],
+    });
+    const h = harness(router);
+    const look = await h.start("Run the build in Terminal");
+    const finish = await h.observe(look.seq, {
+      generation: 1,
+      error: { code: "app_refused", message: "Sonny doesn't work in Terminal." },
+    });
+    expect(finish).toMatchObject({ type: "finish", body: { status: "failed" } });
+    const lastPlannerCall = router.calls.filter((c) => c.schemaName === PLANNER_DECISION_SCHEMA_NAME).at(-1)!;
+    expect(lastPlannerCall.user).toContain("Sonny doesn't work in Terminal.");
+    expect(router.calls.filter((c) => c.schemaName === SCREEN_DECISION_SCHEMA_NAME)).toHaveLength(0);
+  });
+
   it("retries an unusable step once on a stronger tier, telling the model why", async () => {
     const router = scriptedRouter({
       planner: [plan({ kind: "screen_task", app: "Notes", objective: "Press New Note" })],

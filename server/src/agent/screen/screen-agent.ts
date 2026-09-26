@@ -167,6 +167,13 @@ export class ScreenAgent {
         case "unreadable":
           if (!notes.some((note) => note.screenshot)) return look(spec.app, true);
           return returned({ status: "failed", summary: "Sonny could not read this app's window." });
+        case "app_refused":
+          // A terminal, a script editor or a shell on screen: the Mac read nothing, and looking
+          // again won't change that.
+          return returned({
+            status: "failed",
+            summary: observation.error.message?.slice(0, 300) ?? `Sonny doesn't work in ${spec.app}.`,
+          });
         case "foreground_unavailable":
           // The Mac says why when it knows, for example that another task is working in the app.
           return returned({
