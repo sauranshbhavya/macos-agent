@@ -22,6 +22,8 @@ import { noteMarkdown, RESEARCH_SCHEMA, RESEARCH_SCHEMA_NAME, researchPrompt } f
 /** How many agent hand-offs and server tools one turn may use before it must answer the Mac. */
 const MAX_HOPS = 12;
 const SEARCH_RESULTS = 6;
+/** The longest one web search may take, as the page reader has its own (`read-page.ts`). */
+export const SEARCH_DEADLINE_MS = 15_000;
 const RESEARCH_MAX_OUTPUT_TOKENS = 3000;
 
 export interface ServerTools {
@@ -35,6 +37,8 @@ export interface TaskAgentDeps {
   readonly tools: ServerTools;
   /** Skill-pack guidance for this goal, when a pack matches (`skills/`). */
   readonly skillGuidance?: (goal: string, context: { frontmostBundleID: string | undefined }) => string | undefined;
+  /** Overrides `SEARCH_DEADLINE_MS`, for tests. */
+  readonly searchDeadlineMs?: number;
 }
 
 function asNote(note: AgentNote): StoredMessage {
@@ -183,11 +187,21 @@ export class TaskAgent implements Agent {
         if (!search) {
           return { tool: "web_search", index, label: `web search "${decision.query}"`, content: "Web search isn't available on this server." };
         }
-        const found = await search({ query: decision.query, maxResults: SEARCH_RESULTS, signal: context.signal });
+        const label = `web search "${decision.query}"`;
+        let found: Awaited<ReturnType<typeof search>>;
+        try {
+          const signal = AbortSignal.any([context.signal, AbortSignal.timeout(this.deps.searchDeadlineMs ?? SEARCH_DEADLINE_MS)]);
+          found = await search({ query: decision.query, maxResults: SEARCH_RESULTS, signal });
+        } catch (error) {
+          // A stopped task stops here. Anything else (a provider's 429 or 5xx, a timeout) is one
+          // failed search the planner can work around, as it does with a page it couldn't read.
+          if (context.signal.aborted) throw error;
+          return { tool: "web_search", index, label, content: "The search failed, so there are no results." };
+        }
         const content = found.items.length === 0
           ? "No results."
           : found.items.map((item) => `${item.title} — ${item.url}${item.snippet ? `\n${item.snippet.slice(0, 400)}` : ""}`).join("\n\n");
-        return { tool: "web_search", index, label: `web search "${decision.query}"`, content };
+        return { tool: "web_search", index, label, content };
       }
       case "read_page": {
         try {
