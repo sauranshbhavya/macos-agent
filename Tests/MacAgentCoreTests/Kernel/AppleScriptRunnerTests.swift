@@ -146,7 +146,7 @@ struct AppleScriptRunnerTests {
 
     private func send(over runner: ScriptedSend) async -> CapabilityOutcome {
         // As if compose_mail had written draft 42 in this run.
-        let written = WrittenDrafts()
+        let written = WrittenDrafts(mail: { 900 })
         written.add("42")
         let capability = SendMailCapability(runner: runner, written: written)
         guard let prepared = try? await capability.prepare(actionID: ActionID(), args: ["draft": .string("42")]) else {

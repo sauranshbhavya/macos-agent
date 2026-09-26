@@ -18,6 +18,8 @@ final class FakeMail: AppleScriptRunning, @unchecked Sendable {
     private var nextID = 41
     private(set) var sent: [Int] = []
     var sendHangs = false
+    /// Mail's process id; a restart gives it a new one and starts its message numbers over.
+    private(set) var process: Int32 = 900
     /// What the send script answers, as Mail's `send` result reaches it.
     var sendReply = MailCapabilities.sentReply
 
@@ -25,6 +27,15 @@ final class FakeMail: AppleScriptRunning, @unchecked Sendable {
 
     func edit(_ id: Int, _ change: (inout Draft) -> Void) {
         lock.withLock { change(&drafts[id]!) }
+    }
+
+    /// Mail quits and opens again: its unsent messages are gone and it numbers new ones from the start.
+    func restart() {
+        lock.withLock {
+            process += 1
+            drafts = [:]
+            nextID = 41
+        }
     }
 
     /// A message the person started in Mail themselves.
@@ -88,7 +99,8 @@ struct CapabilityFixture {
             context: { context },
             finderRevealer: { _ in },
             routines: routines,
-            appleScript: mail
+            appleScript: mail,
+            mailProcess: { [mail] in mail.process }
         )
     }
 
@@ -301,6 +313,20 @@ struct MailKernelTests {
         await tasks.decide(task: task, action: action, commit: commit.commitID, approved: true)
         let outcome = try await gateway.next("outcome")
         #expect(results(of: outcome).map(\.status) == [.stale])
+        #expect(fixture.mail.sent.isEmpty)
+    }
+
+    @Test
+    func afterMailRestartsADraftNumberSonnyUsedIsNotTrustedForTheMessageThatNowHasIt() async throws {
+        let fixture = try CapabilityFixture()
+        let ours = try await draft(fixture)
+        fixture.mail.restart()
+        let theirs = fixture.mail.personWrites(.init(to: ["ex@example.com"], cc: [], subject: "Unsent thoughts", body: "Not ready."))
+        #expect(theirs == ours)
+        let send = try fixture.capability("send_mail")
+        await #expect(throws: CapabilityPrepareError.self) {
+            _ = try await send.prepare(actionID: ActionID(), args: ["draft": .string(String(theirs))])
+        }
         #expect(fixture.mail.sent.isEmpty)
     }
 

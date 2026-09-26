@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 
 /// Milestone B's workflow (V2 plan phase 5): a Mail message composed from typed arguments and sent
@@ -72,8 +73,11 @@ public enum MailCapabilities {
     """
     static let sentReply = "sent"
 
-    public static func all(runner: any AppleScriptRunning = OsascriptRunner()) -> [any Capability] {
-        let written = WrittenDrafts()
+    public static func all(
+        runner: any AppleScriptRunning = OsascriptRunner(),
+        mailProcess: @escaping WrittenDrafts.MailProcess = WrittenDrafts.runningMail
+    ) -> [any Capability] {
+        let written = WrittenDrafts(mail: mailProcess)
         return [ComposeMailCapability(runner: runner, written: written), SendMailCapability(runner: runner, written: written)]
     }
 
@@ -128,20 +132,38 @@ public enum MailCapabilities {
 
 /// The drafts `compose_mail` wrote while Sonny has been running. `send_mail` sends only these, never
 /// a message the person was writing themselves.
-final class WrittenDrafts: @unchecked Sendable {
+///
+/// Mail numbers its outgoing messages afresh when it restarts, so an id is trusted only while the
+/// Mail that made it is still the one running: after a restart the same number can belong to a
+/// message the person started.
+public final class WrittenDrafts: @unchecked Sendable {
+    /// The running Mail's process id, or nil when Mail isn't running.
+    public typealias MailProcess = @Sendable () -> Int32?
+
+    public static let runningMail: MailProcess = {
+        NSRunningApplication.runningApplications(withBundleIdentifier: MailCapabilities.bundleIdentifier).first?.processIdentifier
+    }
+
     private let lock = NSLock()
-    private var ids: Set<String> = []
+    private var ids: [String: Int32] = [:]
+    private let mail: MailProcess
+
+    init(mail: @escaping MailProcess = WrittenDrafts.runningMail) {
+        self.mail = mail
+    }
 
     func add(_ id: String) {
-        lock.withLock { _ = ids.insert(id) }
+        guard let process = mail() else { return }
+        lock.withLock { ids[id] = process }
     }
 
     func contains(_ id: String) -> Bool {
-        lock.withLock { ids.contains(id) }
+        guard let process = mail() else { return false }
+        return lock.withLock { ids[id] == process }
     }
 
     func remove(_ id: String) {
-        lock.withLock { _ = ids.remove(id) }
+        lock.withLock { _ = ids.removeValue(forKey: id) }
     }
 }
 

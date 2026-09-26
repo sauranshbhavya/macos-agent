@@ -344,12 +344,13 @@ public enum StandardCapabilities {
         finderRevealer: @escaping RevealInFinderCapabilityAdapter.Reveal,
         routines: RoutineGoalStore,
         appleScript: any AppleScriptRunning = OsascriptRunner(),
+        mailProcess: @escaping WrittenDrafts.MailProcess = WrittenDrafts.runningMail,
         now: @escaping @Sendable () -> Date = { Date() }
     ) -> KernelCapabilities {
         KernelCapabilities(
             [OpenAppCapability(focus: { context().focusRestorer }), SaveRoutineCapability(store: routines, now: now)]
                 + AdapterCapabilities.all(context: context, finderRevealer: finderRevealer)
-                + MailCapabilities.all(runner: appleScript)
+                + MailCapabilities.all(runner: appleScript, mailProcess: mailProcess)
         )
     }
 }
