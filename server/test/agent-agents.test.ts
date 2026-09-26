@@ -88,6 +88,7 @@ interface HarnessOptions {
   readonly pages?: Record<string, string>;
   readonly store?: ReturnType<typeof memoryTaskStore>;
   readonly manifest?: Manifest;
+  readonly searchDeadlineMs?: number;
 }
 
 function harness(router: ModelRouter, options: HarnessOptions = {}) {
@@ -100,6 +101,7 @@ function harness(router: ModelRouter, options: HarnessOptions = {}) {
     rates: TEST_TOKEN_RATES,
     agentFor: taskAgentFactory({
       router,
+      ...(options.searchDeadlineMs === undefined ? {} : { searchDeadlineMs: options.searchDeadlineMs }),
       ...(options.skillGuidance ? { skillGuidance: (goal: string) => options.skillGuidance!(goal) } : {}),
       tools: {
         search: options.search,
@@ -533,6 +535,29 @@ describe("the planner's typed operations and server tools", () => {
     const h = harness(router);
     await h.start("Read my router's admin page");
     expect(router.calls[1]!.user).toContain("Not read: not a public host.");
+  });
+
+  it("tells the planner a search failed, rather than ending the task", async () => {
+    const router = scriptedRouter({
+      planner: [plan({ kind: "web_search", query: "flights to Lisbon" }), plan({ kind: "finish", status: "failed", summary: "Search is down." })],
+    });
+    const h = harness(router, { search: () => Promise.reject(new Error("tavily answered 429")) });
+    const finish = await h.start("Find flights to Lisbon");
+    expect(finish).toMatchObject({ type: "finish", body: { status: "failed", summary: "Search is down." } });
+    expect(router.calls[1]!.user).toContain("The search failed, so there are no results.");
+  });
+
+  it("gives up on a search that runs past its deadline, and says so to the planner", async () => {
+    const router = scriptedRouter({
+      planner: [plan({ kind: "web_search", query: "flights to Lisbon" }), plan({ kind: "finish", status: "failed", summary: "Search is slow." })],
+    });
+    const h = harness(router, {
+      searchDeadlineMs: 20,
+      search: ({ signal }) => new Promise((_resolve, reject) => signal?.addEventListener("abort", () => reject(signal.reason))),
+    });
+    const finish = await h.start("Find flights to Lisbon");
+    expect(finish).toMatchObject({ type: "finish", body: { summary: "Search is slow." } });
+    expect(router.calls[1]!.user).toContain("The search failed, so there are no results.");
   });
 
   it("shows a follow-up what the task it continues did", async () => {
