@@ -4,7 +4,7 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { rateLimitEmailKey } from "../src/auth/identity.js";
-import { down, loadMigrations, up } from "../src/db/migrate.js";
+import { down, loadMigrations, pendingMigrations, up } from "../src/db/migrate.js";
 import { dropSchema } from "./support/schema.js";
 import { afterAllUnderHangBackstop, afterEachUnderHangBackstop, beforeAllUnderHangBackstop, itUnderHangBackstop } from "./support/backstop.js";
 import { settling } from "./support/settling.js";
@@ -392,5 +392,17 @@ describeDb("migrations against a real Postgres", () => {
       );
       expect(rows.map((r: { schemaname: string }) => r.schemaname)).toEqual(["sonny_meta"]);
     });
+  });
+
+  itUnderHangBackstop("lists what a database hasn't applied without writing anything, the check a gateway starts with", async () => {
+    await dropSchema(client);
+    const all = (await loadMigrations()).map((migration) => migration.id);
+    expect(await pendingMigrations(client)).toEqual(all);
+    // Reading changed nothing: there is still no ledger.
+    const { rows } = await client.query<{ ledger: string | null }>("SELECT to_regclass('sonny_meta.schema_migration')::text AS ledger");
+    expect(rows[0]?.ledger).toBeNull();
+
+    await up(client);
+    expect(await pendingMigrations(client)).toEqual([]);
   });
 });

@@ -374,6 +374,25 @@ async function runHalf(
   if (!ran) throw new Error(`observer returned without running ${migration.id}'s ${half} half`);
 }
 
+/**
+ * The migrations this database has not applied, oldest first, read without writing anything.
+ *
+ * `status` and `up` go through `applied`, which creates the ledger when it is missing. A gateway
+ * checking at startup must not change the database it is about to refuse, so this only reads: a
+ * database with no ledger at all has applied nothing.
+ */
+export async function pendingMigrations(client: pg.Client, dir: string = migrationsDir): Promise<readonly string[]> {
+  const { rows: ledger } = await client.query<{ ledger: string | null }>(
+    "SELECT to_regclass('sonny_meta.schema_migration')::text AS ledger",
+  );
+  const recorded = new Set<string>();
+  if (ledger[0]?.ledger != null) {
+    const { rows } = await client.query<{ id: string }>("SELECT id FROM sonny_meta.schema_migration");
+    for (const row of rows) recorded.add(row.id);
+  }
+  return (await loadMigrations(dir)).map((migration) => migration.id).filter((id) => !recorded.has(id));
+}
+
 /** Applies every migration not yet recorded, oldest first. Returns the ids it applied. */
 export async function up(
   client: pg.Client,
