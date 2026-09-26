@@ -45,8 +45,9 @@ public enum MailCapabilities {
         set AppleScript's text item delimiters to linefeed
         set toList to (address of every to recipient of theMessage) as string
         set ccList to (address of every cc recipient of theMessage) as string
+        set bccList to (address of every bcc recipient of theMessage) as string
         set AppleScript's text item delimiters to ""
-        return (subject of theMessage) & separator & (content of theMessage as string) & separator & toList & separator & ccList
+        return (subject of theMessage) & separator & (content of theMessage as string) & separator & toList & separator & ccList & separator & bccList
       end tell
     end run
     """
@@ -62,7 +63,8 @@ public enum MailCapabilities {
     """
 
     public static func all(runner: any AppleScriptRunning = OsascriptRunner()) -> [any Capability] {
-        [ComposeMailCapability(runner: runner), SendMailCapability(runner: runner)]
+        let written = WrittenDrafts()
+        return [ComposeMailCapability(runner: runner, written: written), SendMailCapability(runner: runner, written: written)]
     }
 
     static func addresses(_ value: JSONValue?, required: Bool) throws -> [String] {
@@ -114,10 +116,30 @@ public enum MailCapabilities {
     }
 }
 
+/// The drafts `compose_mail` wrote while Sonny has been running. `send_mail` sends only these, never
+/// a message the person was writing themselves.
+final class WrittenDrafts: @unchecked Sendable {
+    private let lock = NSLock()
+    private var ids: Set<String> = []
+
+    func add(_ id: String) {
+        lock.withLock { _ = ids.insert(id) }
+    }
+
+    func contains(_ id: String) -> Bool {
+        lock.withLock { ids.contains(id) }
+    }
+
+    func remove(_ id: String) {
+        lock.withLock { _ = ids.remove(id) }
+    }
+}
+
 struct ComposeMailCapability: Capability {
     let name = "compose_mail"
     let version = 1
     let runner: any AppleScriptRunning
+    let written: WrittenDrafts
 
     struct Draft: Sendable {
         let to: [String]
@@ -156,6 +178,7 @@ struct ComposeMailCapability: Capability {
                 timeout: MailCapabilities.timeout
             )
             guard Int(id) != nil else { return .failed(.executionError, "Mail made the draft but didn't say which it is.") }
+            written.add(id)
             return .done("Draft \(id) is open in Mail, unsent. send_mail with draft \"\(id)\" sends it.")
         } catch {
             return MailCapabilities.outcome(for: error, sending: false)
@@ -167,6 +190,7 @@ struct SendMailCapability: Capability {
     let name = "send_mail"
     let version = 1
     let runner: any AppleScriptRunning
+    let written: WrittenDrafts
 
     struct Planned: Sendable {
         let draft: String
@@ -178,6 +202,9 @@ struct SendMailCapability: Capability {
         guard case .string(let draft)? = args["draft"], Int(draft) != nil else {
             throw CapabilityPrepareError.invalidArguments("send_mail needs the draft id compose_mail reported.")
         }
+        guard written.contains(draft) else {
+            throw CapabilityPrepareError.invalidArguments("Sonny only sends a draft it wrote with compose_mail.")
+        }
         let reading: String
         do {
             reading = try await runner.run(MailCapabilities.readScript, arguments: [draft], timeout: MailCapabilities.timeout)
@@ -187,20 +214,26 @@ struct SendMailCapability: Capability {
             throw CapabilityPrepareError.targetNotFound("That draft isn't open in Mail any more.")
         }
         let fields = reading.components(separatedBy: MailCapabilities.separator)
-        guard fields.count == 4 else { throw CapabilityPrepareError.targetNotFound("Mail's draft couldn't be read.") }
+        guard fields.count == 5 else { throw CapabilityPrepareError.targetNotFound("Mail's draft couldn't be read.") }
         let subject = fields[0]
         let body = fields[1]
-        let to = fields[2].split(separator: "\n").map(String.init).filter { !$0.isEmpty }
-        let cc = fields[3].split(separator: "\n").map(String.init).filter { !$0.isEmpty }
+        let addresses = { (field: String) in field.split(separator: "\n").map(String.init).filter { !$0.isEmpty } }
+        let to = addresses(fields[2])
+        let cc = addresses(fields[3])
+        // Sonny never adds a Bcc, but the person may have; the approval shows every recipient.
+        let bcc = addresses(fields[4])
         guard !to.isEmpty else { throw CapabilityPrepareError.invalidArguments("The draft has no recipient.") }
         return PreparedAction(
             actionID: actionID,
             effect: .external,
             targetIdentity: "mail:draft:\(draft)",
-            content: [to.joined(separator: ","), cc.joined(separator: ","), subject, body].joined(separator: MailCapabilities.separator),
+            content: [to, cc, bcc].map { $0.joined(separator: ",") }.joined(separator: MailCapabilities.separator)
+                + MailCapabilities.separator + subject + MailCapabilities.separator + body,
             preview: ApprovalPreview(
                 title: "Send this email",
-                details: ["To: \(to.joined(separator: ", "))"] + (cc.isEmpty ? [] : ["Cc: \(cc.joined(separator: ", "))"])
+                details: ["To: \(to.joined(separator: ", "))"]
+                    + (cc.isEmpty ? [] : ["Cc: \(cc.joined(separator: ", "))"])
+                    + (bcc.isEmpty ? [] : ["Bcc: \(bcc.joined(separator: ", "))"])
                     + ["Subject: \(subject)", String(body.prefix(1000))]
             ),
             retry: .never,
@@ -212,6 +245,7 @@ struct SendMailCapability: Capability {
         guard let planned = prepared.payload as? Planned else { return .failed(.executionError, "send_mail was prepared elsewhere.") }
         do {
             _ = try await runner.run(MailCapabilities.sendScript, arguments: [planned.draft], timeout: MailCapabilities.timeout)
+            written.remove(planned.draft)
             return .done("Mail sent draft \(planned.draft).")
         } catch {
             return MailCapabilities.outcome(for: error, sending: true)
