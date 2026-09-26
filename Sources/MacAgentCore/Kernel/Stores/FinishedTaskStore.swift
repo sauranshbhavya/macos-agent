@@ -49,30 +49,26 @@ public actor FinishedTaskStore {
     /// History is for finding and following up recent work, not an archive.
     public static let limit = 500
 
-    private let fileURL: URL?
-    private let encryption: LocalStorageEncryption
+    private let file: EncryptedListFile<FinishedTask>
     private var cached: [FinishedTask]?
 
     /// `fileURL` nil keeps history in memory, for tests.
     public init(fileURL: URL?, encryption: LocalStorageEncryption = .shared) {
-        self.fileURL = fileURL
-        self.encryption = encryption
+        file = EncryptedListFile(url: fileURL, encryption: encryption, name: "task history")
     }
 
-    public func all() -> [FinishedTask] {
+    /// Every finished task, newest first. Throws when the file is there but can't be read; then
+    /// `record` and `delete` refuse too, and the next call reads the file again.
+    public func all() throws -> [FinishedTask] {
         if let cached { return cached }
-        var loaded: [FinishedTask] = []
-        if let fileURL, let data = try? Data(contentsOf: fileURL),
-           case .encrypted(let records)? = try? encryption.decode([FinishedTask].self, from: data) {
-            loaded = records
-        }
+        let loaded = try file.read()
         cached = loaded
         return loaded
     }
 
     public func record(_ snapshot: TaskSnapshot, finishedAt: Date) throws {
         guard !snapshot.isPrivate, snapshot.phase.isTerminal else { return }
-        var records = all().filter { $0.id != snapshot.id }
+        var records = try all().filter { $0.id != snapshot.id }
         records.insert(FinishedTask(snapshot: snapshot, finishedAt: finishedAt), at: 0)
         try write(Array(records.prefix(Self.limit)))
     }
@@ -81,15 +77,13 @@ public actor FinishedTaskStore {
         try write(all().filter { $0.id != id })
     }
 
+    /// The person deleting all of it, so this replaces even a file that couldn't be read.
     public func deleteAll() throws {
         try write([])
     }
 
     private func write(_ records: [FinishedTask]) throws {
-        if let fileURL {
-            try FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try encryption.encode(records).write(to: fileURL, options: [.atomic, .completeFileProtection])
-        }
+        try file.write(records)
         cached = records
     }
 }

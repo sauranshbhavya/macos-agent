@@ -19,13 +19,20 @@ private struct DeskFixture {
     let gateway = ScriptedGateway()
     let controller: TaskController
     let desk: TaskDesk
-    let routines = RoutineGoalStore(fileURL: nil)
-    let history = FinishedTaskStore(fileURL: nil)
+    let routines: RoutineGoalStore
+    let history: FinishedTaskStore
     let watchers: ResumableTaskStore
     let page = FixedPage("before")
     let clock = Shared(Date())
 
-    init(capabilities: [any Capability] = [], instant: @escaping (String) -> [WireAction]? = { _ in nil }) throws {
+    init(
+        capabilities: [any Capability] = [],
+        history: FinishedTaskStore = FinishedTaskStore(fileURL: nil),
+        routines: RoutineGoalStore = RoutineGoalStore(fileURL: nil),
+        instant: @escaping (String) -> [WireAction]? = { _ in nil }
+    ) throws {
+        self.history = history
+        self.routines = routines
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent("desk-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         watchers = ResumableTaskStore(fileURL: folder.appendingPathComponent("watchers.json"))
@@ -129,7 +136,7 @@ struct TaskDeskTests {
         await fixture.finish(ordinary, .completed, "Did the errand.")
 
         #expect(await eventually { fixture.desk.history.map(\.id) == [ordinary] })
-        #expect(await fixture.history.all().map(\.id) == [ordinary])
+        #expect(try await fixture.history.all().map(\.id) == [ordinary])
         #expect(fixture.desk.history.first?.summary == "Did the errand.")
     }
 
@@ -181,6 +188,31 @@ struct TaskDeskTests {
         let notice = try #require(fixture.desk.notices.first { $0.task == task })
         #expect(notice.kind == .unattendedRun)
         #expect(notice.message.contains("\"Weekly report\" stopped where it needed you"))
+    }
+
+    @Test
+    func aRoutineWhoseRunCantBeRecordedDoesntRunAgainAtEveryCheck() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("unmarkable-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.path)
+            try? FileManager.default.removeItem(at: folder)
+        }
+        let routines = RoutineGoalStore(fileURL: folder.appendingPathComponent("routines.json"), encryption: keyedEncryption(0x42))
+        let fixture = try DeskFixture(routines: routines)
+        await fixture.start()
+        let now = fixture.clock.value
+        let time = Calendar.autoupdatingCurrent.dateComponents([.hour, .minute], from: now.addingTimeInterval(-3600))
+        let timing = RoutineSchedule.newlyCreated(cadence: .daily, hour: time.hour!, minute: time.minute!, now: now.addingTimeInterval(-7200))
+        try await routines.save(RoutineGoal(name: "Standup", goal: "Post my standup", schedule: nil, timing: timing, savedAt: now))
+
+        // The file still reads, but nothing more can be written beside it.
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: folder.path)
+        await fixture.desk.runDueRoutines()
+        await fixture.desk.runDueRoutines()
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(await fixture.gateway.unread("task.start").isEmpty)
+        #expect(fixture.desk.notices.filter { $0.message.contains("\"Standup\" didn't run") }.count == 1)
     }
 
     @Test
@@ -264,6 +296,52 @@ struct TaskDeskTests {
         let fixture = try DeskFixture()
         #expect(await fixture.desk.ask("   \n") == nil)
         #expect(fixture.controller.tasks.isEmpty)
+    }
+
+    /// History and routines Sonny can't read show as unreadable, not as empty lists, and nothing
+    /// the desk does afterwards saves over them.
+    @Test
+    func historyAndRoutinesThatCantBeReadAreShownAsSuchAndKept() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("desk-unreadable-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let historyURL = folder.appendingPathComponent("history.json")
+        let routinesURL = folder.appendingPathComponent("routines.json")
+        let earlier = finishedTaskSnapshot("Book the dentist")
+        let routine = RoutineGoal(name: "Morning", goal: "Open my calendar", schedule: nil, savedAt: Date())
+        try await FinishedTaskStore(fileURL: historyURL, encryption: keyedEncryption(0x42)).record(earlier, finishedAt: Date())
+        try await RoutineGoalStore(fileURL: routinesURL, encryption: keyedEncryption(0x42)).save(routine)
+        let originals = try [Data(contentsOf: historyURL), Data(contentsOf: routinesURL)]
+
+        let step = TestCapability(name: "step")
+        let fixture = try DeskFixture(
+            capabilities: [step],
+            history: FinishedTaskStore(fileURL: historyURL, encryption: keyedEncryption(0x99)),
+            routines: RoutineGoalStore(fileURL: routinesURL, encryption: keyedEncryption(0x99))
+        ) { $0 == "open notes" ? [call("step")] : nil }
+
+        // A task that ends tries to record itself, and finds the history unreadable.
+        _ = await fixture.desk.ask("open notes")
+        #expect(await eventually { fixture.desk.unreadable == [.history, .routines] })
+        #expect(step.executed.value.count == 1)
+
+        await fixture.desk.load()
+        #expect(fixture.desk.unreadable == [.history, .routines])
+        #expect(fixture.desk.history.isEmpty && fixture.desk.routines.isEmpty)
+        #expect(fixture.desk.hasHistoryToDelete)
+
+        let now = fixture.clock.value
+        await fixture.desk.setTiming(.newlyCreated(cadence: .daily, hour: 9, minute: 0, now: now), for: routine)
+        await fixture.desk.deleteRoutine(routine)
+        await fixture.desk.deleteHistory(earlier.id)
+        await fixture.desk.runDueRoutines()
+
+        #expect(try [Data(contentsOf: historyURL), Data(contentsOf: routinesURL)] == originals)
+        #expect(fixture.desk.unreadable == [.history, .routines])
+
+        // Deleting all history is the person's own choice, so it does replace the file.
+        await fixture.desk.deleteAllHistory()
+        #expect(fixture.desk.unreadable == [.routines])
+        #expect(try await FinishedTaskStore(fileURL: historyURL, encryption: keyedEncryption(0x99)).all().isEmpty)
     }
 
     @Test

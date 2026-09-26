@@ -38,10 +38,24 @@ public struct DeskNotice: Sendable, Equatable, Identifiable {
 /// unless it was private (decision 10).
 @MainActor
 public final class TaskDesk: ObservableObject {
+    /// A saved list whose file is on this Mac but couldn't be read.
+    public enum SavedList: Sendable, Hashable {
+        case history
+        case routines
+    }
+
     @Published public private(set) var history: [FinishedTask] = []
     @Published public private(set) var routines: [RoutineGoal] = []
     @Published public private(set) var watchers: [StandingWatcher] = []
     @Published public private(set) var notices: [DeskNotice] = []
+    /// Lists whose file couldn't be read the last time the desk read it. Each shows as empty here
+    /// but isn't: nothing is saved over the file, and the next read tries it again.
+    @Published public private(set) var unreadable: Set<SavedList> = []
+
+    /// Whether there's history the person could delete, including a file that couldn't be read.
+    public var hasHistoryToDelete: Bool {
+        !history.isEmpty || unreadable.contains(.history)
+    }
 
     public let controller: TaskController
     private let historyStore: FinishedTaskStore
@@ -57,6 +71,8 @@ public final class TaskDesk: ObservableObject {
     private var recorded: Set<TaskID> = []
     /// Tasks nobody started at the Mac, with the name the notice about each one uses.
     private var unattended: [TaskID: String] = [:]
+    /// Routines whose run couldn't be recorded, so the person is told once rather than every check.
+    private var couldNotMark: Set<UUID> = []
     private var watcherCheck: Task<Void, Never>?
     private var scheduleCheck: Task<Void, Never>?
     private var watching: AnyCancellable?
@@ -94,9 +110,9 @@ public final class TaskDesk: ObservableObject {
 
     /// Reads history, routines and watchers from disk.
     public func load() async {
-        history = await historyStore.all()
+        await reloadHistory()
         recorded.formUnion(history.map(\.id))
-        routines = await routineStore.all()
+        await reloadRoutines()
         watchers = (try? watcherStore.loadWatchers()) ?? []
     }
 
@@ -150,7 +166,8 @@ public final class TaskDesk: ObservableObject {
     }
 
     private func startDueRoutines() async {
-        for routine in await routineStore.all() {
+        guard let saved = await reloadRoutines() else { return }
+        for routine in saved {
             guard var timing = routine.timing else { continue }
             let decision = RoutineScheduler.decision(for: timing, now: now(), calendar: calendar)
             let occurrence: Date
@@ -160,11 +177,24 @@ public final class TaskDesk: ObservableObject {
             case .due(let at), .missed(let at):
                 occurrence = at
             }
-            // Marked before starting, so a slow start can't run the same occurrence twice.
+            // Marked before starting, so a slow start can't run the same occurrence twice. A mark
+            // that can't be saved means the routine doesn't run: unmarked, it would run again at
+            // every check.
             timing.lastRunAt = occurrence
             var updated = routine
             updated.timing = timing
-            try? await routineStore.save(updated)
+            do {
+                try await routineStore.save(updated)
+                couldNotMark.remove(routine.id)
+            } catch {
+                if couldNotMark.insert(routine.id).inserted {
+                    notices.append(DeskNotice(
+                        kind: .missedSchedule,
+                        message: "\"\(routine.name)\" didn't run because Sonny couldn't save that it had."
+                    ))
+                }
+                continue
+            }
             if case .missed = decision {
                 notices.append(DeskNotice(
                     kind: .missedSchedule,
@@ -184,7 +214,7 @@ public final class TaskDesk: ObservableObject {
                 recordNotice(for: task, name: routine.name, origin: .schedule, failure: failure.message)
             }
         }
-        routines = await routineStore.all()
+        await reloadRoutines()
     }
 
     /// Checks the watchers that are due, one page at a time. When a page has changed, the watcher
@@ -202,26 +232,28 @@ public final class TaskDesk: ObservableObject {
 
     // MARK: Changing what's saved
 
+    // A failed change is logged by the store, and an unreadable file shows through `unreadable`.
+
     public func deleteHistory(_ id: TaskID) async {
         try? await historyStore.delete(id)
-        history = await historyStore.all()
+        await reloadHistory()
     }
 
     public func deleteAllHistory() async {
         try? await historyStore.deleteAll()
-        history = []
+        await reloadHistory()
     }
 
     public func setTiming(_ timing: RoutineSchedule?, for routine: RoutineGoal) async {
         var updated = routine
         updated.timing = timing
         try? await routineStore.save(updated)
-        routines = await routineStore.all()
+        await reloadRoutines()
     }
 
     public func deleteRoutine(_ routine: RoutineGoal) async {
         try? await routineStore.delete(routine.id)
-        routines = await routineStore.all()
+        await reloadRoutines()
     }
 
     public func stopWatching(_ watcher: StandingWatcher) {
@@ -236,8 +268,33 @@ public final class TaskDesk: ObservableObject {
     /// Re-reads routines and watchers after a task may have changed them (`save_routine`,
     /// `start_watching`).
     public func refreshSaved() async {
-        routines = await routineStore.all()
+        await reloadRoutines()
         watchers = (try? watcherStore.loadWatchers()) ?? []
+    }
+
+    // MARK: Reading what's saved
+
+    private func reloadHistory() async {
+        history = await read(.history) { try await self.historyStore.all() } ?? []
+    }
+
+    /// The saved routines, or nil when their file couldn't be read.
+    @discardableResult
+    private func reloadRoutines() async -> [RoutineGoal]? {
+        let saved = await read(.routines) { try await self.routineStore.all() }
+        routines = saved ?? []
+        return saved
+    }
+
+    private func read<Value>(_ list: SavedList, _ load: () async throws -> [Value]) async -> [Value]? {
+        do {
+            let values = try await load()
+            unreadable.remove(list)
+            return values
+        } catch {
+            unreadable.insert(list)
+            return nil
+        }
     }
 
     // MARK: Finished tasks
@@ -255,7 +312,7 @@ public final class TaskDesk: ObservableObject {
                 notices.append(Self.notice(for: task, name: name))
             }
         }
-        history = await historyStore.all()
+        await reloadHistory()
         await refreshSaved()
     }
 

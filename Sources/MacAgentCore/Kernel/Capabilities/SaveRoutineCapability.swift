@@ -24,29 +24,25 @@ public struct RoutineGoal: Codable, Sendable, Equatable, Identifiable {
 
 /// Where routines live: one encrypted file under V2's own folder, nothing read from V1's stores.
 public actor RoutineGoalStore {
-    private let fileURL: URL?
-    private let encryption: LocalStorageEncryption
+    private let file: EncryptedListFile<RoutineGoal>
     private var cached: [RoutineGoal]?
 
     /// `fileURL` nil keeps routines in memory, for tests.
     public init(fileURL: URL?, encryption: LocalStorageEncryption = .shared) {
-        self.fileURL = fileURL
-        self.encryption = encryption
+        file = EncryptedListFile(url: fileURL, encryption: encryption, name: "routines")
     }
 
-    public func all() -> [RoutineGoal] {
+    /// Every routine, by name. Throws when the file is there but can't be read; then `save` and
+    /// `delete` refuse too, and the next call reads the file again.
+    public func all() throws -> [RoutineGoal] {
         if let cached { return cached }
-        var loaded: [RoutineGoal] = []
-        if let fileURL, let data = try? Data(contentsOf: fileURL),
-           case .encrypted(let routines)? = try? encryption.decode([RoutineGoal].self, from: data) {
-            loaded = routines
-        }
+        let loaded = try file.read()
         cached = loaded
         return loaded
     }
 
-    public func routine(named name: String) -> RoutineGoal? {
-        all().first { $0.name.caseInsensitiveCompare(name) == .orderedSame }
+    public func routine(named name: String) throws -> RoutineGoal? {
+        try all().first { $0.name.caseInsensitiveCompare(name) == .orderedSame }
     }
 
     public func delete(_ id: UUID) throws {
@@ -55,17 +51,14 @@ public actor RoutineGoalStore {
 
     /// Saves a routine, replacing one with the same name.
     public func save(_ routine: RoutineGoal) throws {
-        var routines = all().filter { $0.name.caseInsensitiveCompare(routine.name) != .orderedSame }
+        var routines = try all().filter { $0.name.caseInsensitiveCompare(routine.name) != .orderedSame }
         routines.append(routine)
         routines.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
         try write(routines)
     }
 
     private func write(_ routines: [RoutineGoal]) throws {
-        if let fileURL {
-            try FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try encryption.encode(routines).write(to: fileURL, options: [.atomic, .completeFileProtection])
-        }
+        try file.write(routines)
         cached = routines
     }
 }
@@ -82,7 +75,7 @@ struct SaveRoutineCapability: Capability {
         let name = try values.text("name").trimmingCharacters(in: .whitespacesAndNewlines)
         let goal = try values.text("goal").trimmingCharacters(in: .whitespacesAndNewlines)
         let schedule = try values.optionalText("schedule")
-        let existing = await store.routine(named: name)
+        let existing = try await store.routine(named: name)
         return PreparedAction(
             actionID: actionID,
             effect: existing == nil ? .create : .destructive,
