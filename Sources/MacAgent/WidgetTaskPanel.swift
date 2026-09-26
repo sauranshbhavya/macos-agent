@@ -30,7 +30,7 @@ struct WidgetTaskPanel: View {
     private var content: some View {
         switch task.phase {
         case .queued:
-            working("Waiting for the task before it to finish.")
+            working("Waiting for another task to finish.")
         case .connecting:
             working("Connecting to Sonny's server…")
         case .running, .observing, .acting, .reconciling:

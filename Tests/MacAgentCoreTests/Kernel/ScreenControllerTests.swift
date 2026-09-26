@@ -29,7 +29,8 @@ func screenController(
     _ fake: FakeCuaNotes,
     apps: FakeScreenApps = FakeScreenApps(),
     ownPID: pid_t = 1,
-    manifests: Shared<[CuaCapabilityManifest]> = Shared([])
+    manifests: Shared<[CuaCapabilityManifest]> = Shared([]),
+    claims: ScreenAppClaims = ScreenAppClaims()
 ) -> ScreenController {
     ScreenController(dependencies: .init(
         driver: { manifest in
@@ -39,6 +40,7 @@ func screenController(
         apps: apps,
         screenshots: FakeScreenshots(),
         lease: ForegroundLease(),
+        claims: claims,
         ownPID: ownPID
     ))
 }
@@ -207,6 +209,25 @@ struct ScreenControllerTests {
     }
 
     @Test
+    func anAppIsWorkedInByOneTaskAtATimeUntilThatTaskEndsOrMovesOn() async throws {
+        let claims = ScreenAppClaims()
+        let first = screenController(FakeCuaNotes(), claims: claims)
+        let second = screenController(FakeCuaNotes(), claims: claims)
+        #expect(await look(first, generation: 1).error == nil)
+
+        let refused = await look(second, generation: 1)
+        #expect(refused.error?.code == .foregroundUnavailable)
+        #expect(refused.error?.message == "Another Sonny task is working in Notes. Try again when it has finished.")
+
+        await first.taskEnded()
+        #expect(await look(second, generation: 1).error == nil)
+
+        // The second task moves on to Mail, and Notes is free again.
+        _ = await second.observe(ObserveBody(app: "Mail", ax: true, screenshot: false), generation: 2)
+        #expect(await look(first, generation: 2).error == nil)
+    }
+
+    @Test
     func aPointInTheScreenshotClicksTheElementUnderIt() async throws {
         let fake = FakeCuaNotes()
         let controller = screenController(fake)
@@ -222,7 +243,7 @@ struct ScreenControllerTests {
 @Suite(.serialized)
 @MainActor
 struct ScreenKernelTests {
-    func controller(_ gateway: ScriptedGateway, fake: FakeCuaNotes) -> TaskController {
+    func controller(_ gateway: ScriptedGateway, fake: FakeCuaNotes, claims: ScreenAppClaims = ScreenAppClaims()) -> TaskController {
         TaskController(
             url: URL(string: "ws://gateway.test/v2/session")!,
             transport: gateway,
@@ -231,7 +252,7 @@ struct ScreenKernelTests {
             ledgers: MemoryTaskLedgerStore(),
             capabilities: KernelCapabilities([]),
             screenTools: Set(ScreenToolName.allCases),
-            screenFactory: { screenController(fake) },
+            screenFactory: { screenController(fake, claims: claims) },
             permissions: { .init(accessibility: .granted, screenRecording: .granted, automation: []) },
             backoff: GatewayBackoff(base: 0.01, cap: 0.05, jitter: { 0 }),
             connectTimeout: 60
@@ -283,5 +304,27 @@ struct ScreenKernelTests {
             return false
         })
         #expect(await fake.state.keysPressed.isEmpty)
+    }
+
+    @Test
+    func aSecondTaskIsToldTheAppIsBusyUntilTheFirstTaskEnds() async throws {
+        let gateway = ScriptedGateway()
+        let tasks = controller(gateway, fake: FakeCuaNotes(), claims: ScreenAppClaims())
+        await tasks.launch()
+        let first = try await startedTask(tasks, TaskRequest(goal: "Tidy a note", mode: .normal))
+        _ = try await gateway.next("task.start")
+        let second = try await startedTask(tasks, TaskRequest(goal: "Start a note", mode: .normal))
+        _ = try await gateway.next("task.start")
+
+        func observation(_ message: ClientMessage) throws -> ObservationBody {
+            guard case .observation(let body) = message.payload else { throw KernelTestFailure("not an observation") }
+            return body
+        }
+        #expect(try observation(await observed(gateway, first, re: 1)).error == nil)
+        #expect(try observation(await observed(gateway, second, re: 1)).error?.code == .foregroundUnavailable)
+
+        await gateway.send(first, .finish(FinishBody(status: .completed, summary: "Tidied.")), re: 2)
+        #expect(await eventually { tasks.snapshot(first)?.phase.isTerminal == true })
+        #expect(try observation(await observed(gateway, second, re: 2)).error == nil)
     }
 }

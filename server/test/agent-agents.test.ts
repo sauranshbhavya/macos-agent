@@ -229,6 +229,25 @@ describe("the planner and its screen subagent", () => {
     expect(router.calls.filter((c) => c.schemaName === SCREEN_DECISION_SCHEMA_NAME)).toHaveLength(0);
   });
 
+  it("tells the planner the Mac's own reason when another task is working in the app", async () => {
+    const router = scriptedRouter({
+      planner: [
+        plan({ kind: "screen_task", app: "Notes", objective: "Tidy the note" }),
+        plan({ kind: "finish", status: "failed", summary: "Notes is busy with another task." }),
+      ],
+    });
+    const h = harness(router);
+    const look = await h.start("Tidy my note");
+    const finish = await h.observe(look.seq, {
+      generation: 1,
+      error: { code: "foreground_unavailable", message: "Another Sonny task is working in Notes. Try again when it has finished." },
+    });
+    expect(finish).toMatchObject({ type: "finish", body: { status: "failed" } });
+    const lastPlannerCall = router.calls.filter((c) => c.schemaName === PLANNER_DECISION_SCHEMA_NAME).at(-1)!;
+    expect(lastPlannerCall.user).toContain("Another Sonny task is working in Notes.");
+    expect(router.calls.filter((c) => c.schemaName === SCREEN_DECISION_SCHEMA_NAME)).toHaveLength(0);
+  });
+
   it("retries an unusable step once on a stronger tier, telling the model why", async () => {
     const router = scriptedRouter({
       planner: [plan({ kind: "screen_task", app: "Notes", objective: "Press New Note" })],

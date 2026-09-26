@@ -621,6 +621,18 @@ territory.
 More than one `TaskRuntime` at a time, a queue on the foreground lease, and per-task stop. The
 protocol already names the task in every message, so this is Mac-side work.
 
+Built on 2026-09-26:
+
+- Up to three model-backed tasks run at once (`TaskController.defaultMaxLiveTasks`). More wait
+  their turn, oldest first. The number is a starting point, not a measured limit.
+- Screen actions, and typed operations that bring an app forward, share one foreground lease, so no
+  task pulls another app to the front in the middle of another task's click.
+- An app's screen work belongs to one task at a time, until that task ends or moves to another
+  app. A second task is told the app is busy (`foreground_unavailable` with the Mac's reason), and
+  the planner hears that reason.
+- The composer, Run again and a routine's Run now start a new task while others run. Stop and the
+  emergency-stop hotkey still stop every task, and each task's own Stop stops only that one.
+
 ## 10. Testing approach
 
 - **Contracts:** shared fixtures, decoded on both sides (phase 1).

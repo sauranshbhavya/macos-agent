@@ -29,6 +29,7 @@ struct TestCapability: Capability {
     /// While false, execute waits (and honours cancellation).
     var released = Shared(true)
     var raiseFacts: RaiseFacts = .none
+    var bringsAppForward = false
     var onExecute: (@Sendable (ActionID) -> Void)?
 
     func prepare(actionID: ActionID, args: [String: JSONValue]) async throws -> PreparedAction {
@@ -74,7 +75,8 @@ func results(of message: ClientMessage) -> [ActionResult] {
 func makeController(
     _ gateway: ScriptedGateway,
     ledgers: MemoryTaskLedgerStore = MemoryTaskLedgerStore(),
-    capabilities: [any Capability]
+    capabilities: [any Capability],
+    lease: ForegroundLease = ForegroundLease()
 ) -> TaskController {
     TaskController(
         url: URL(string: "ws://gateway.test/v2/session")!,
@@ -85,7 +87,8 @@ func makeController(
         capabilities: KernelCapabilities(capabilities),
         permissions: { .init(accessibility: .granted, screenRecording: .granted, automation: []) },
         backoff: GatewayBackoff(base: 0.01, cap: 0.05, jitter: { 0 }),
-        connectTimeout: 60
+        connectTimeout: 60,
+        lease: lease
     )
 }
 
@@ -659,6 +662,76 @@ struct InstantPathTests {
             return false
         })
         #expect(make.executed.value.count == 1)
+    }
+
+    @Test
+    func threeTasksRunAtOnceAndAFourthWaitsForASlot() async throws {
+        let gateway = ScriptedGateway()
+        let controller = makeController(gateway, capabilities: [])
+        await controller.launch()
+
+        var running: [TaskID] = []
+        for goal in ["one", "two", "three"] {
+            running.append(try await startedTask(controller, TaskRequest(goal: goal, mode: .normal)))
+            _ = try await gateway.next("task.start")
+        }
+        #expect(TaskController.defaultMaxLiveTasks == 3)
+
+        let fourth = await controller.submit(TaskRequest(goal: "four", mode: .normal))
+        guard case .queued(let waiting) = fourth else { throw KernelTestFailure("the fourth task did not wait: \(fourth)") }
+        #expect(controller.snapshot(waiting)?.phase == .queued)
+
+        await gateway.send(running[1], .finish(FinishBody(status: .completed, summary: "Done.")), re: 1)
+        let start = try await gateway.next("task.start")
+        #expect(start.address?.task == waiting)
+        #expect(await eventually { controller.snapshot(waiting)?.phase == .running })
+    }
+
+    @Test
+    func anOperationThatBringsAnAppForwardWaitsForTheForegroundLease() async throws {
+        let gateway = ScriptedGateway()
+        let lease = ForegroundLease()
+        var open = TestCapability(name: "open_it")
+        open.bringsAppForward = true
+        let controller = makeController(gateway, capabilities: [open], lease: lease)
+        await controller.launch()
+        let task = try await startedTask(controller, TaskRequest(goal: "Open it", mode: .normal))
+        _ = try await gateway.next("task.start")
+
+        // Another task's screen action is in the middle of its click.
+        let clicking = Shared(true)
+        let holder = Task { await lease.hold { while clicking.value { try? await Task.sleep(for: .milliseconds(5)) } } }
+        try await Task.sleep(for: .milliseconds(50))
+
+        await gateway.send(task, propose([call("open_it")], final: true), re: 1)
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(!open.started.value)
+
+        clicking.value = false
+        await holder.value
+        let outcome = try await gateway.next("outcome")
+        #expect(results(of: outcome).map(\.status) == [.done])
+    }
+
+    @Test
+    func anOperationThatDoesNotBringAnAppForwardRunsWhileTheLeaseIsHeld() async throws {
+        let gateway = ScriptedGateway()
+        let lease = ForegroundLease()
+        let save = TestCapability(name: "save_it")
+        let controller = makeController(gateway, capabilities: [save], lease: lease)
+        await controller.launch()
+        let task = try await startedTask(controller, TaskRequest(goal: "Save it", mode: .normal))
+        _ = try await gateway.next("task.start")
+
+        let clicking = Shared(true)
+        let holder = Task { await lease.hold { while clicking.value { try? await Task.sleep(for: .milliseconds(5)) } } }
+        try await Task.sleep(for: .milliseconds(50))
+
+        await gateway.send(task, propose([call("save_it")], final: true), re: 1)
+        let outcome = try await gateway.next("outcome")
+        #expect(results(of: outcome).map(\.status) == [.done])
+        clicking.value = false
+        await holder.value
     }
 
     @Test
