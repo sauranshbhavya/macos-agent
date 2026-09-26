@@ -52,15 +52,25 @@ public enum MailCapabilities {
     end run
     """
 
+    /// Finding the draft and sending it are kept apart: an error finding it means nothing was sent,
+    /// while once `send` has started, anything but Mail's own "true" leaves it unknown whether the
+    /// message went out. Mail keeps a message it couldn't send in its Outbox and may try again.
     static let sendScript = """
     on run argv
       set theID to (item 2 of argv) as integer
       tell application "Mail"
-        send (first outgoing message whose id is theID)
+        set theMessage to first outgoing message whose id is theID
       end tell
-      return "sent"
+      try
+        tell application "Mail" to set wentOut to send theMessage
+      on error errorMessage number errorNumber
+        return "unsure " & errorNumber & ": " & errorMessage
+      end try
+      if wentOut is true then return "sent"
+      return "unsure: Mail said it couldn't send it"
     end run
     """
+    static let sentReply = "sent"
 
     public static func all(runner: any AppleScriptRunning = OsascriptRunner()) -> [any Capability] {
         let written = WrittenDrafts()
@@ -244,7 +254,13 @@ struct SendMailCapability: Capability {
     func execute(_ prepared: PreparedAction) async -> CapabilityOutcome {
         guard let planned = prepared.payload as? Planned else { return .failed(.executionError, "send_mail was prepared elsewhere.") }
         do {
-            _ = try await runner.run(MailCapabilities.sendScript, arguments: [planned.draft], timeout: MailCapabilities.timeout)
+            let reply = try await runner.run(MailCapabilities.sendScript, arguments: [planned.draft], timeout: MailCapabilities.timeout)
+            guard reply == MailCapabilities.sentReply else {
+                return CapabilityOutcome(
+                    status: .outcomeUnknown,
+                    error: OutcomeError(code: .executionError, message: "Mail didn't confirm it sent the message, so check its Outbox before trying again.")
+                )
+            }
             written.remove(planned.draft)
             return .done("Mail sent draft \(planned.draft).")
         } catch {
