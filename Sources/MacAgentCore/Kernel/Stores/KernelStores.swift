@@ -42,6 +42,27 @@ public final class KernelStores {
         return base.appendingPathComponent("Sonny/V2", isDirectory: true)
     }
 
+    /// Removes what V1 kept beside the V2 folder (its history, routines, workspaces, memory and
+    /// settings files), once. Nothing is migrated (V2 plan decision 1). The Keychain items V1 used
+    /// are all still V2's own: the storage key, the account and the entitlement claim.
+    ///
+    /// Returns the names it removed.
+    @discardableResult
+    public static func removeV1Data(v2Folder: URL, fileManager: FileManager = .default) -> [String] {
+        let done = v2Folder.appendingPathComponent(".v1-data-removed")
+        guard !fileManager.fileExists(atPath: done.path) else { return [] }
+        let sonnyFolder = v2Folder.deletingLastPathComponent()
+        let items = (try? fileManager.contentsOfDirectory(atPath: sonnyFolder.path)) ?? []
+        var removed: [String] = []
+        for item in items.sorted() where item != v2Folder.lastPathComponent {
+            if (try? fileManager.removeItem(at: sonnyFolder.appendingPathComponent(item))) != nil {
+                removed.append(item)
+            }
+        }
+        try? fileManager.createDirectory(at: v2Folder, withIntermediateDirectories: true)
+        fileManager.createFile(atPath: done.path, contents: Data())
+        return removed
+    }
 
     /// An app's standing for screen control, asked from the screen controller's own actor: an
     /// app the person allowed is allowed, and everything else keeps the built-in standing.

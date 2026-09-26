@@ -265,4 +265,24 @@ struct TaskDeskTests {
         #expect(await fixture.desk.ask("   \n") == nil)
         #expect(fixture.controller.tasks.isEmpty)
     }
+
+    @Test
+    func theFirstV2LaunchRemovesV1DataOnceAndLeavesV2Alone() throws {
+        let sonny = FileManager.default.temporaryDirectory.appendingPathComponent("sonny-\(UUID().uuidString)/Sonny")
+        let v2 = sonny.appendingPathComponent("V2")
+        try FileManager.default.createDirectory(at: v2, withIntermediateDirectories: true)
+        for old in ["task-history.json", "workspaces.json", "routines.json"] {
+            FileManager.default.createFile(atPath: sonny.appendingPathComponent(old).path, contents: Data("v1".utf8))
+        }
+        FileManager.default.createFile(atPath: v2.appendingPathComponent("history.json").path, contents: Data("v2".utf8))
+
+        #expect(KernelStores.removeV1Data(v2Folder: v2) == ["routines.json", "task-history.json", "workspaces.json"])
+        #expect(try FileManager.default.contentsOfDirectory(atPath: sonny.path) == ["V2"])
+        #expect(FileManager.default.fileExists(atPath: v2.appendingPathComponent("history.json").path))
+
+        // Once only: a file that appears later is not V1's, and stays.
+        FileManager.default.createFile(atPath: sonny.appendingPathComponent("later.json").path, contents: Data())
+        #expect(KernelStores.removeV1Data(v2Folder: v2).isEmpty)
+        #expect(FileManager.default.fileExists(atPath: sonny.appendingPathComponent("later.json").path))
+    }
 }

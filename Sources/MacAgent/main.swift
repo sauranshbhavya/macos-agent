@@ -14,7 +14,9 @@ let accountModel = SonnyAccountModel.atItsRealKeychainLocation()
 let screenAccessModel = ScreenAccessOnboardingModel()
 let kernelStores: KernelStores
 do {
-    kernelStores = KernelStores(folder: try KernelStores.applicationSupportFolder())
+    let folder = try KernelStores.applicationSupportFolder()
+    KernelStores.removeV1Data(v2Folder: folder)
+    kernelStores = KernelStores(folder: folder)
 } catch {
     // Keeps Sonny usable this launch; what it saves goes to a folder macOS may clear.
     print("Sonny could not open Application Support (\(error.localizedDescription)); keeping its data in a temporary folder this launch.")
