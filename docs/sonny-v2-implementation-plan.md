@@ -394,7 +394,7 @@ These are deterministic and local, and can only raise an effect:
 | … contains pay, buy, purchase, order, subscribe, transfer or checkout | `financial` |
 | … contains delete, remove, trash, discard, overwrite, erase or reset | `destructive` |
 | The target is a secure text field, or the text to type matches `SecretTextDetector` | `credential` |
-| The typed operation's own floor (for example `rename` → `edit_local`, a Mail send template → `external`) | that floor |
+| The typed operation's own floor (for example `rename` → `destructive`, a Mail send template → `external`) | that floor |
 | The model declared `unknown` or declared nothing | `unknown` |
 | The target app is refused: terminals, script editors, a shell on screen, or an app outside its standing | refuse |
 

@@ -3,10 +3,15 @@
  *
  * Public means public: an address that resolves to a private, loopback, link-local or otherwise
  * internal network is refused before anything is fetched, and every redirect is checked the same
- * way. The body is capped, and only its readable text is kept.
+ * way. The connection is made to the addresses that were checked, never to a second lookup, so a
+ * host can't pass the check and then point somewhere internal. The body is capped, and only its
+ * readable text is kept.
  */
 import { lookup } from "node:dns/promises";
-import { isIP } from "node:net";
+import { request as httpRequest, type IncomingMessage } from "node:http";
+import { request as httpsRequest } from "node:https";
+import { isIP, type LookupFunction } from "node:net";
+import { Readable } from "node:stream";
 
 export const PAGE_BYTE_LIMIT = 2_000_000;
 export const PAGE_TEXT_LIMIT = 30_000;
@@ -51,7 +56,49 @@ export function isInternalAddress(address: string): boolean {
   return true;
 }
 
-async function checkURL(raw: string, resolve: AddressResolver): Promise<URL> {
+interface CheckedURL {
+  readonly url: URL;
+  /** The public addresses the host resolved to when it was checked; the only ones dialled. */
+  readonly addresses: readonly string[];
+}
+
+/** Fetches one URL, connecting only to `addresses`. Redirects are returned, not followed. */
+export type PinnedFetcher = (url: URL, addresses: readonly string[], init: { signal: AbortSignal; headers: Record<string, string> }) => Promise<Response>;
+
+/** A DNS lookup that answers every question with the addresses already checked. */
+export function pinnedLookup(addresses: readonly string[]): LookupFunction {
+  const entries = addresses.map((address) => ({ address, family: isIP(address) }));
+  return (_hostname, options, callback) => {
+    if (options.all) {
+      (callback as (error: null, addresses: typeof entries) => void)(null, entries);
+    } else {
+      callback(null, entries[0]!.address, entries[0]!.family);
+    }
+  };
+}
+
+const NULL_BODY_STATUSES = new Set([204, 205, 304]);
+
+/** The default fetcher: Node's own HTTP client with the lookup pinned, so TLS still checks the host's name. */
+export const pinnedFetch: PinnedFetcher = (url, addresses, init) =>
+  new Promise((resolve, reject) => {
+    const send = url.protocol === "https:" ? httpsRequest : httpRequest;
+    const outgoing = send(url, { method: "GET", headers: init.headers, lookup: pinnedLookup(addresses), signal: init.signal }, (incoming: IncomingMessage) => {
+      const headers = new Headers();
+      for (const [name, value] of Object.entries(incoming.headers)) {
+        if (value === undefined) continue;
+        for (const item of Array.isArray(value) ? value : [value]) headers.append(name, item);
+      }
+      const status = incoming.statusCode ?? 502;
+      const body = NULL_BODY_STATUSES.has(status) ? null : (Readable.toWeb(incoming) as ReadableStream<Uint8Array>);
+      if (body === null) incoming.resume();
+      resolve(new Response(body, { status: status < 200 || status > 599 ? 502 : status, headers }));
+    });
+    outgoing.on("error", reject);
+    outgoing.end();
+  });
+
+async function checkURL(raw: string, resolve: AddressResolver): Promise<CheckedURL> {
   let url: URL;
   try {
     url = new URL(raw);
@@ -67,7 +114,7 @@ async function checkURL(raw: string, resolve: AddressResolver): Promise<URL> {
   const addresses = isIP(host) ? [host] : await resolve(host).catch(() => []);
   if (addresses.length === 0) throw new PageRefused(raw, "the host doesn't resolve");
   if (addresses.some(isInternalAddress)) throw new PageRefused(raw, "not a public host");
-  return url;
+  return { url, addresses };
 }
 
 const ENTITIES: Readonly<Record<string, string>> = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " " };
@@ -99,22 +146,23 @@ export function readableText(html: string): { title: string | null; text: string
 
 export async function readPublicPage(
   raw: string,
-  options: { signal: AbortSignal; resolve?: AddressResolver; fetcher?: typeof fetch } = { signal: new AbortController().signal },
+  options: { signal: AbortSignal; resolve?: AddressResolver; fetcher?: PinnedFetcher } = { signal: new AbortController().signal },
 ): Promise<ReadPage> {
   const resolve = options.resolve ?? systemResolver;
-  const fetcher = options.fetcher ?? fetch;
+  const fetcher = options.fetcher ?? pinnedFetch;
   const deadline = AbortSignal.any([options.signal, AbortSignal.timeout(PAGE_DEADLINE_MS)]);
-  let url = await checkURL(raw, resolve);
+  let checked = await checkURL(raw, resolve);
   for (let hop = 0; ; hop += 1) {
-    const response = await fetcher(url, {
-      redirect: "manual",
+    const { url } = checked;
+    const response = await fetcher(url, checked.addresses, {
       signal: deadline,
       headers: { accept: "text/html,text/plain;q=0.9,*/*;q=0.1", "user-agent": "SonnyResearch/2" },
     });
     if (response.status >= 300 && response.status < 400) {
       const location = response.headers.get("location");
+      await response.body?.cancel().catch(() => {});
       if (!location || hop >= MAX_REDIRECTS) throw new PageRefused(url.href, "too many redirects");
-      url = await checkURL(new URL(location, url).href, resolve);
+      checked = await checkURL(new URL(location, url).href, resolve);
       continue;
     }
     if (!response.ok) throw new PageRefused(url.href, `the page answered ${response.status}`);

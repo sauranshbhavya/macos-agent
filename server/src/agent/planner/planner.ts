@@ -267,18 +267,33 @@ export class Planner {
   }
 }
 
-/** Replaces `@note:<n>` in an argument with the note's text, so the model never retypes a note. */
-function withNotes(value: unknown, notes: readonly ToolNote[]): unknown {
-  if (typeof value === "string") {
-    const match = /^@note:(\d+)$/.exec(value.trim());
-    if (match) return notes.find((note) => note.index === Number(match[1]))?.content ?? value;
-    return value;
-  }
-  if (Array.isArray(value)) return value.map((item) => withNotes(item, notes));
-  if (value !== null && typeof value === "object") {
-    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, withNotes(item, notes)]));
-  }
-  return value;
+/**
+ * Where a note may stand in for text. A note is web content, so it goes only where the planner was
+ * told it may: saved as a file's content. Anywhere else the marker is refused, so a page can't steer
+ * its own text into a reminder, a snippet, a file name or an email without it being retyped.
+ */
+const NOTE_ARGUMENTS: Readonly<Record<string, readonly string[]>> = { write_file: ["content"] };
+const NOTE_MARKER = /^@note:(\d+)$/;
+
+/** Replaces `@note:<n>` with the note's text where a note is allowed; a reason string anywhere else. */
+function withNotes(operation: string, args: unknown, notes: readonly ToolNote[]): unknown {
+  if (args === null || typeof args !== "object" || Array.isArray(args)) return args;
+  const allowed = NOTE_ARGUMENTS[operation] ?? [];
+  const entries = Object.entries(args).map(([key, value]) => {
+    if (!allowed.includes(key) || typeof value !== "string") return [key, value] as const;
+    const match = NOTE_MARKER.exec(value.trim());
+    const note = match ? notes.find((candidate) => candidate.index === Number(match[1])) : undefined;
+    return [key, note?.content ?? value] as const;
+  });
+  return Object.fromEntries(entries);
+}
+
+/** True when a note marker sits anywhere a note may not be used. */
+function misplacedNote(value: unknown): boolean {
+  if (typeof value === "string") return NOTE_MARKER.test(value.trim());
+  if (Array.isArray(value)) return value.some(misplacedNote);
+  if (value !== null && typeof value === "object") return Object.values(value).some(misplacedNote);
+  return false;
 }
 
 function interpret(text: string, operations: readonly OperationSpec[], notes: readonly ToolNote[]): PlannerDecision | string {
@@ -301,10 +316,11 @@ function interpret(text: string, operations: readonly OperationSpec[], notes: re
         if (!spec) return `${operation.name} is not an operation on this Mac.`;
         let args: unknown;
         try {
-          args = withNotes(JSON.parse(operation.args_json), notes);
+          args = withNotes(spec.name, JSON.parse(operation.args_json), notes);
         } catch {
           return `${operation.name}'s args_json is not a JSON object.`;
         }
+        if (misplacedNote(args)) return "@note:<n> can only be write_file's content.";
         const checked = spec.args.safeParse(args);
         if (!checked.success) return `${operation.name}'s arguments are wrong: ${z.prettifyError(checked.error).slice(0, 400)}`;
         // The declaration is honest at least to the operation's floor; the Mac raises it further.
