@@ -28,13 +28,15 @@ struct TestCapability: Capability {
     var started = Shared(false)
     /// While false, execute waits (and honours cancellation).
     var released = Shared(true)
+    /// When set, what the live Mac now makes the action: its floor from then on.
+    var escalated = Shared<Effect?>(nil)
     var raiseFacts: RaiseFacts = .none
     var onExecute: (@Sendable (ActionID) -> Void)?
 
     func prepare(actionID: ActionID, args: [String: JSONValue]) async throws -> PreparedAction {
         PreparedAction(
             actionID: actionID,
-            effect: floor,
+            effect: escalated.value ?? floor,
             targetIdentity: "\(name)-target",
             content: content.value,
             preview: ApprovalPreview(title: name, details: [content.value]),
@@ -388,6 +390,33 @@ struct KernelTests {
         let ran = try await gateway.next("outcome")
         #expect(results(of: ran).map(\.status) == [.done])
         #expect(send.executed.value == [second])
+    }
+
+    @Test
+    func anApprovedActionThatBecameMoreSeriousBeforeItRanDoesNotRun() async throws {
+        let gateway = ScriptedGateway()
+        let save = TestCapability(name: "save", floor: .create)
+        let controller = makeController(gateway, capabilities: [save])
+        await controller.launch()
+        let task = try await startedTask(controller, TaskRequest(goal: "Save", mode: .safe))
+        _ = try await gateway.next("task.start")
+
+        let action = ActionID()
+        await gateway.send(task, propose([call("save", action, effect: .create)]), re: 1)
+        var commit: PreparedCommit?
+        #expect(await eventually {
+            if case .awaitingApproval(let pending) = controller.snapshot(task)?.phase { commit = pending; return true }
+            return false
+        })
+        #expect(commit?.effect == .create)
+
+        // The file it would create appears while the person decides: the same target and content,
+        // but now it would replace something.
+        save.escalated.value = .destructive
+        await controller.decide(task: task, action: action, commit: try #require(commit).commitID, approved: true)
+        let outcome = try await gateway.next("outcome")
+        #expect(results(of: outcome).map(\.status) == [.stale])
+        #expect(save.executed.value.isEmpty)
     }
 
     @Test

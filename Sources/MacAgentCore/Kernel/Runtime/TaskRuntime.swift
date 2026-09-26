@@ -516,6 +516,12 @@ public actor TaskRuntime {
             do {
                 let reprepared = try await prepareAgain()
                 try await deps.broker.consume(commitID: commit.commitID, task: id, action: action.actionID, reprepared: reprepared)
+                // The approval was for the effect the person was shown. If the live Mac now makes the
+                // action more serious (the file it would create has appeared, say), it's a different
+                // action.
+                guard EffectRaiser.raise(declared: action.effect, floor: reprepared.effect, facts: reprepared.raiseFacts) <= judged else {
+                    throw CommitRefusal.changed
+                }
                 prepared = reprepared
             } catch {
                 return answered(action, ActionResult(actionID: action.actionID, status: .stale, effect: judged, error: OutcomeError(code: .staleReference, message: "What was approved changed before it could run, so it didn't run.")), title: title, agent: agent)

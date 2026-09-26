@@ -35,10 +35,9 @@ public struct LargestFilesZipCapabilityAdapter: CapabilityAdapter {
             return resolvedPlan
         }
 
-        let outputPath = resolvedPlan.steps[zipIndex].outputPath?.trimmingCharacters(in: .whitespacesAndNewlines)
-        if outputPath?.isEmpty != false {
-            resolvedPlan.steps[zipIndex].outputPath = try spec(in: resolvedPlan, context: context).outputURL.path
-        }
+        // Always the concrete file, so the path the person approves is the one that is written, and a
+        // name made from the time is made once.
+        resolvedPlan.steps[zipIndex].outputPath = try spec(in: resolvedPlan, context: context).outputURL.path
         return resolvedPlan
     }
 
@@ -126,7 +125,18 @@ public struct LargestFilesZipCapabilityAdapter: CapabilityAdapter {
         let count = max(scanStep?.count ?? zipStep?.count ?? 3, 1)
         let outputURL: URL
         if let rawOutput = zipStep?.outputPath, !rawOutput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            outputURL = try context.whitelist.validateOutputPath(rawOutput)
+            // A folder gets a timestamped archive inside it, the way write_file treats a folder.
+            let resolved = try context.whitelist.resolveOutputPath(
+                rawPath: rawOutput,
+                defaultName: "largest-files-\(Timestamp.fileSafe(context.now()))",
+                extension: "zip",
+                fileManager: context.fileManager
+            )
+            // zip adds ".zip" to a name with no extension, so Sonny names the file zip will write,
+            // checked like any other output.
+            outputURL = resolved.pathExtension.isEmpty
+                ? try context.whitelist.validateOutputPath(resolved.appendingPathExtension("zip").path)
+                : resolved
         } else {
             // Through the whitelist, not appended straight onto `folder` (SONNY-264). The folder was
             // validated; the leaf was not, and this destination's writer is the one in the tree that

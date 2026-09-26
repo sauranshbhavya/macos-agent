@@ -166,6 +166,77 @@ struct AdapterOperationTests {
     }
 
     @Test
+    func aZipWithADefaultNameKeepsItsPathWhenItIsPreparedAgainBeforeRunning() async throws {
+        let clock = Shared(Date(timeIntervalSince1970: 1_800_000_000))
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent("zip-\(UUID().uuidString)", isDirectory: true)
+            .resolvingSymlinksInPath()
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        try Data(count: 4000).write(to: folder.appendingPathComponent("big.bin"))
+        let context = CapabilityTestContext.make(installed: [], whitelist: PathWhitelist(roots: [folder]), now: { clock.value })
+        let zip = try #require(capabilities(context).capability(name: "zip_largest_files", version: 1))
+
+        // No name at all, and a folder to put it in: both make a name from the time.
+        for args: [String: JSONValue] in [
+            ["folder": .string(folder.path)],
+            ["folder": .string(folder.path), "output_path": .string(folder.path)],
+        ] {
+            let action = ActionID()
+            let first = try await zip.prepare(actionID: action, args: args)
+            // The approval sits open for a while; the kernel prepares the action again to run it.
+            clock.value = clock.value.addingTimeInterval(5)
+            let again = try await zip.prepare(actionID: action, args: args)
+            #expect(again.contentDigest == first.contentDigest)
+            #expect(again.targetIdentity == first.targetIdentity)
+
+            // A new action is named fresh, and the name is a file inside the folder.
+            let later = try await zip.prepare(actionID: ActionID(), args: args)
+            #expect(later.targetIdentity != first.targetIdentity)
+            #expect(first.targetIdentity.hasSuffix(".zip"))
+        }
+
+        // The same action id with different arguments is a different request: nothing pinned
+        // carries over to it.
+        let reused = ActionID()
+        let other = folder.appendingPathComponent("other", isDirectory: true)
+        try FileManager.default.createDirectory(at: other, withIntermediateDirectories: true)
+        try Data(count: 4000).write(to: other.appendingPathComponent("big.bin"))
+        let pinnedHere = try await zip.prepare(actionID: reused, args: ["folder": .string(folder.path)])
+        clock.value = clock.value.addingTimeInterval(5)
+        let elsewhere = try await zip.prepare(actionID: reused, args: ["folder": .string(other.path)])
+        #expect(elsewhere.targetIdentity != pinnedHere.targetIdentity)
+        #expect(elsewhere.targetIdentity.contains("/other/"))
+    }
+
+    @Test
+    func aZipGivenAFolderWritesAnArchiveInsideIt() async throws {
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent("zip-into-\(UUID().uuidString)", isDirectory: true)
+            .resolvingSymlinksInPath()
+        let archives = folder.appendingPathComponent("archives", isDirectory: true)
+        try FileManager.default.createDirectory(at: archives, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        try Data(count: 4000).write(to: folder.appendingPathComponent("big.bin"))
+        let context = CapabilityTestContext.make(installed: [], whitelist: PathWhitelist(roots: [folder]))
+        let zip = try #require(capabilities(context).capability(name: "zip_largest_files", version: 1))
+
+        let (_, outcome) = try await run(zip, ["folder": .string(folder.path), "output_path": .string(archives.path)])
+        #expect(outcome.status == .done)
+        let made = try FileManager.default.contentsOfDirectory(atPath: archives.path)
+        #expect(made.count == 1)
+        #expect(made.first?.hasPrefix("largest-files-") == true)
+        #expect(made.first?.hasSuffix(".zip") == true)
+
+        // A name with no extension: zip adds ".zip", and Sonny names that same file.
+        let bare = archives.appendingPathComponent("backup").path
+        let (prepared, named) = try await run(zip, ["folder": .string(folder.path), "output_path": .string(bare)])
+        #expect(named.status == .done)
+        #expect(prepared.targetIdentity.hasSuffix("/archives/backup.zip"))
+        #expect(FileManager.default.fileExists(atPath: bare + ".zip"))
+    }
+
+    @Test
     func aReminderInFiveMinutesKeepsItsTimeWhenItIsPreparedAgainBeforeRunning() async throws {
         let clock = Shared(Date(timeIntervalSince1970: 1_800_000_000))
         let context = CapabilityTestContext.make(installed: [], now: { clock.value })
