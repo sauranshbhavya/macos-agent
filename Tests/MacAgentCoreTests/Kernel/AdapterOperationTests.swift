@@ -74,6 +74,17 @@ struct AdapterOperationTests {
     }
 
     @Test
+    func anApprovalSaysWhyTheActionIsMoreSeriousFirst() async throws {
+        let stores = CapabilityTestStores()
+        let save = try #require(capabilities(CapabilityTestContext.make(installed: [], stores: stores)).capability(name: "save_snippet", version: 1))
+        _ = try await run(save, ["trigger": .string(";sig"), "text": .string("Best, Sam")])
+
+        let replacing = try await save.prepare(actionID: ActionID(), args: ["trigger": .string(";sig"), "text": .string("Cheers, Sam")])
+        #expect(replacing.effect == .destructive)
+        #expect(replacing.preview.details.first == "Snippet trigger ;sig already exists and would be replaced.")
+    }
+
+    @Test
     func aSavedSnippetExpandsOnTheInstantPath() async throws {
         let stores = CapabilityTestStores()
         try stores.snippets.save(StoredSnippet(trigger: ";addr", expansion: "1 Main St", updatedAt: Date()))
