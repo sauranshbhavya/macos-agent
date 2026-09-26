@@ -169,12 +169,12 @@ enum SonnyType {
 /// text, hairlines and fills are the foreground colour at an opacity, so they compose the same on
 /// every level. Every token is an `NSColor` with a dynamic provider, so it resolves against the
 /// appearance of the window it is drawn in: `SonnyAppearanceModel` sets that at the application,
-/// and the floating widget pins its own panel dark. The brand accent is the one saturated colour;
-/// its light reading is a step darker so white text on it keeps its contrast on paper.
+/// and the floating widget pins its own panel dark. The sidebar alone carries the green brand tint;
+/// the main content keeps its neutral surfaces and blue accent.
 enum SonnyTheme {
     // Surfaces, level 0 to 4.
     /// Sidebar and the Settings dialog's own sidebar.
-    static let sidebar = dynamic(dark: 0x0F1012, light: 0xECEDF0)
+    static let sidebar = dynamic(dark: 0x0B2F28, light: 0xDDE8E3)
     /// The window canvas.
     static let ink = dynamic(dark: 0x141518, light: 0xF5F6F8)
     /// The bordered content panel inside each page.
@@ -206,6 +206,11 @@ enum SonnyTheme {
     static let accent = dynamic(dark: 0x5C84FE, light: 0x3B67E9)
     static let accentSubtle = accent.opacity(0.14)
     static let accentBorder = accent.opacity(0.40)
+    static let sidebarAccent = dynamic(dark: 0x2A6B5C, light: 0x1F594C)
+    static let sidebarAccentSubtle = dynamic(dark: 0xE8DCC4, light: 0x123F36).opacity(0.14)
+    static let sidebarBrandGold = dynamic(dark: 0xC49A45, light: 0x9B742C)
+    static let sidebarBrandGoldSubtle = sidebarBrandGold.opacity(0.16)
+    static let sidebarTextOnAccent = Color(nsColor: NSColor(sonnyHex: 0x123F36))
     static let success = dynamic(dark: 0x4CC38A, light: 0x1E9E5F)
     static let warning = dynamic(dark: 0xE8B84A, light: 0xA8760A)
     static let danger = dynamic(dark: 0xE5484D, light: 0xD2353B)
@@ -752,6 +757,8 @@ struct SonnyButtonStyle: ButtonStyle {
     enum Tone {
         /// The one action a surface is for. Accent fill.
         case primary
+        /// The Command Center sidebar's primary action, isolated from the main content accent.
+        case sidebarPrimary
         /// Everything else that has a border: row actions, toolbar actions, sheet buttons.
         case secondary
         /// A quiet action that only shows a fill under the pointer: "Clear", a header's "+".
@@ -826,6 +833,7 @@ struct SonnyButtonStyle: ButtonStyle {
     private var foreground: Color {
         switch tone {
         case .primary: return SonnyTheme.textOnAccent
+        case .sidebarPrimary: return SonnyTheme.sidebarTextOnAccent
         case .secondary, .tertiary: return SonnyTheme.text
         case .danger: return SonnyTheme.danger
         }
@@ -834,6 +842,7 @@ struct SonnyButtonStyle: ButtonStyle {
     private var background: Color {
         switch tone {
         case .primary: return SonnyTheme.accent
+        case .sidebarPrimary: return SonnyTheme.sidebarBrandGold
         case .secondary: return SonnyTheme.surfaceRaised
         case .tertiary: return .clear
         case .danger: return SonnyTheme.danger.opacity(0.12)
@@ -842,7 +851,7 @@ struct SonnyButtonStyle: ButtonStyle {
 
     private var border: Color {
         switch tone {
-        case .primary: return .clear
+        case .primary, .sidebarPrimary: return .clear
         case .secondary: return SonnyTheme.cardBorder
         case .tertiary: return .clear
         case .danger: return SonnyTheme.danger.opacity(0.35)
@@ -851,7 +860,7 @@ struct SonnyButtonStyle: ButtonStyle {
 
     private var pressedOverlay: Color {
         switch tone {
-        case .primary: return Color.black.opacity(0.18)
+        case .primary, .sidebarPrimary: return Color.black.opacity(0.18)
         case .secondary, .tertiary: return SonnyTheme.fillPressed
         case .danger: return SonnyTheme.danger.opacity(0.12)
         }
