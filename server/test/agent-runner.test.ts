@@ -169,6 +169,15 @@ describe("TaskRunner", () => {
       expect(h.ledger.calls.size).toBe(0);
     });
 
+    it("stops waiting for a purchase as soon as the task is stopped", async () => {
+      const h = runnerWith(oneCall, { balance: 0, topUp: () => new Promise<boolean>(() => {}) });
+      const task = await start(h.runner);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      await h.runner.stopAccount(ACCOUNT);
+      await h.runner.idle();
+      expect((await h.store.task(task))?.status).toBe("failed");
+    });
+
     it("ends the task out of credits when the deployment sells no top-up", async () => {
       const h = runnerWith(oneCall, { balance: 0 });
       await start(h.runner);

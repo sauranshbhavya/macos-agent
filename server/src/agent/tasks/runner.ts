@@ -490,9 +490,9 @@ export class TaskRunner {
           credits: held,
         };
         let hold = await ledger.hold({ ...request, now: now() });
-        // Out of credits, and the account asked to be topped up: buy once, then try once more.
-        if (hold.kind === "insufficient" && topUp !== undefined && (await topUp(task.accountId, held))) {
-          signal.throwIfAborted();
+        // Out of credits, and the account asked to be topped up: buy once, then try once more. A
+        // task stopped meanwhile stops waiting at once; the purchase itself runs on and settles.
+        if (hold.kind === "insufficient" && topUp !== undefined && (await untilAborted(topUp(task.accountId, held), signal))) {
           hold = await ledger.hold({ ...request, now: now() });
         }
         if (hold.kind !== "held") throw new CreditsExhausted();
@@ -555,6 +555,16 @@ export class TaskRunner {
       },
     };
   }
+}
+
+/** `work`'s answer, or the signal's reason as soon as it aborts. `work` itself is not stopped. */
+function untilAborted<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
+  signal.throwIfAborted();
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = (): void => reject(signal.reason);
+    signal.addEventListener("abort", onAbort, { once: true });
+    work.then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort));
+  });
 }
 
 export type { OutboundMessage };
