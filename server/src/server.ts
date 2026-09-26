@@ -4,6 +4,7 @@ import { ConfigError, loadConfig, requireCreditCatalogue, requireSpendCapUnits }
 import { postgresModelCallLedger } from "./agent/credits.js";
 import { postgresTaskStore } from "./agent/tasks/postgres-store.js";
 import { startTaskRetentionSweeper } from "./agent/tasks/retention.js";
+import { pendingMigrations } from "./db/migrate.js";
 import { pruneAllExpiredResponses } from "./idempotency/store.js";
 
 /**
@@ -72,6 +73,27 @@ async function main(): Promise<void> {
     if (!(error instanceof ConfigError)) throw error;
     process.stderr.write(`${error.message}\n`);
     process.exit(78); // EX_CONFIG
+  }
+
+  // **A database missing migrations is refused at startup, like a missing variable.** Without this
+  // the gateway listened, answered health, and failed every sign-in and task with a 500 naming a
+  // missing table, which the app can only report as "couldn't reach its server". A database that
+  // can't be reached at all is not refused: that can be a passing outage, and the pool recovers.
+  if (wiring) {
+    let pending: readonly string[] | undefined;
+    try {
+      pending = await wiring.deps.withConnection((client) => pendingMigrations(client));
+    } catch (error) {
+      app.log.warn({ err_name: (error as Error)?.name }, "could not check the database's migrations at startup; starting anyway");
+    }
+    if (pending !== undefined && pending.length > 0) {
+      process.stderr.write(
+        `The database is missing ${pending.length} migration${pending.length === 1 ? "" : "s"}: ${pending.join(", ")}. ` +
+          "Run `npm run migrate -- up` against it, then start the gateway again.\n",
+      );
+      await shutdown(app, wiring);
+      process.exit(78); // EX_CONFIG
+    }
   }
 
   const stopTaskSweeper =
