@@ -7,8 +7,8 @@ import Foundation
 /// templates. `compose_mail` leaves a visible, unsent draft. `send_mail` reads that draft back as it
 /// is now — the person may have edited it — and that reading is what the approval covers: the
 /// runtime prepares again just before sending, and any change since the approval voids it. A send
-/// that runs past its deadline may or may not have gone out, so it ends outcome_unknown and is never
-/// tried again.
+/// that runs past its deadline, that Mail doesn't answer in time, or that is stopped midway may or
+/// may not have gone out, so it ends outcome_unknown and is never tried again.
 public enum MailCapabilities {
     public static let bundleIdentifier = "com.apple.mail"
     static let timeout: TimeInterval = 30
@@ -103,6 +103,13 @@ public enum MailCapabilities {
             return .failed(.timeout, "Mail didn't answer in time.")
         case .failed(let message)?:
             return .failed(.executionError, "Mail refused: \(message.prefix(300))")
+        case nil where error is CancellationError && sending:
+            return CapabilityOutcome(
+                status: .outcomeUnknown,
+                error: OutcomeError(code: .cancelled, message: "Sonny stopped while Mail was sending, so it can't tell whether the message went out.")
+            )
+        case nil where error is CancellationError:
+            return .failed(.cancelled, "Stopped while Mail was writing the draft.")
         case nil:
             return .failed(.executionError, "Mail couldn't be reached.")
         }
