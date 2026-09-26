@@ -453,6 +453,22 @@ struct KernelTests {
     }
 
     @Test
+    func aRequestMadeWhileConnectingSendsItsStartOnce() async throws {
+        let gateway = ScriptedGateway()
+        let controller = makeController(gateway, capabilities: [])
+        // Not launched: this request is what opens the socket, so it is waiting when the welcome
+        // arrives.
+        let task = try await startedTask(controller, TaskRequest(goal: "Once", mode: .normal))
+        let hello = try await gateway.next("hello")
+        guard case .hello(let body) = hello.payload else { throw KernelTestFailure("not a hello") }
+        #expect(body.resume.isEmpty)
+        let start = try await gateway.next("task.start")
+        #expect(start.address?.task == task)
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(await gateway.unread("task.start").isEmpty)
+    }
+
+    @Test
     func withNoGatewayAModelBackedTaskFailsAtOnceWithAServerError() async throws {
         let gateway = ScriptedGateway()
         await gateway.refuseNext(1000, status: 503)

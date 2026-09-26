@@ -218,6 +218,8 @@ public actor TaskRuntime {
 
     /// The connection is up and the gateway has said what it knows about this task.
     public func welcomed(_ state: WelcomeBody.TaskState?, generation: UInt64) async {
+        // A task that already sent on this connection has nothing to send again.
+        let alreadyHere = connectionGeneration == generation
         connectionGeneration = generation
         if phase == .reconciling { await reconcile() }
         switch state?.state {
@@ -238,7 +240,9 @@ public actor TaskRuntime {
         case nil:
             break
         }
-        for message in record.outbox { _ = await deps.send(message) }
+        if !alreadyHere {
+            for message in record.outbox { _ = await deps.send(message) }
+        }
         if case .paused = phase { return }
         if let held = heldOutcome {
             heldOutcome = nil
@@ -349,8 +353,11 @@ public actor TaskRuntime {
         }
     }
 
+    /// What hello tells the gateway about this task: nothing for a task the gateway has never
+    /// heard from, or one that ended with nothing left to deliver.
     public func resumeEntry() -> HelloBody.ResumeEntry? {
-        phase.isTerminal && record.outbox.isEmpty ? nil : record.resumeEntry
+        if record.lastSeqOut == 0 { return nil }
+        return phase.isTerminal && record.outbox.isEmpty ? nil : record.resumeEntry
     }
 
     public func snapshot() -> TaskSnapshot {
