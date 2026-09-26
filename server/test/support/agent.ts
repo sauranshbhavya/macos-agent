@@ -11,7 +11,7 @@ import type { AuthProvider, VerifiedSession } from "../../src/auth/provider.js";
 import type { Agent, AgentFactory, OutboundMessage, TurnContext, TurnResult } from "../../src/agent/agent.js";
 import { memoryModelCallLedger } from "../../src/agent/credits.js";
 import type { ClientMessage, ServerMessage } from "../../src/agent/protocol.js";
-import { memoryTaskStore } from "../../src/agent/tasks/store.js";
+import { memoryTaskStore, type TaskStore } from "../../src/agent/tasks/store.js";
 import { testConfig } from "./config.js";
 import { signedInConnectionTo } from "./connection.js";
 import { creditPlansDocument } from "./credit.js";
@@ -292,6 +292,27 @@ export class TestMac {
   close(): void {
     this.socket.close();
   }
+}
+
+/**
+ * A memory store whose `method` throws for its first `times` calls, the way a database connection
+ * that drops for a moment does.
+ */
+export function flakyStore(
+  method: keyof TaskStore,
+  times = 1,
+  store: ReturnType<typeof memoryTaskStore> = memoryTaskStore(),
+): ReturnType<typeof memoryTaskStore> {
+  let failures = times;
+  const original = (store[method] as (...args: unknown[]) => Promise<unknown>).bind(store);
+  (store as unknown as Record<string, unknown>)[method] = (...args: unknown[]) => {
+    if (failures > 0) {
+      failures -= 1;
+      return Promise.reject(new Error("Connection terminated unexpectedly"));
+    }
+    return original(...args);
+  };
+  return store;
 }
 
 export function wait(ms: number): Promise<void> {

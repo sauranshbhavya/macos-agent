@@ -17,7 +17,22 @@ export const CLOSE_CODE = {
   protocol: 4400,
   /** The account sent messages faster than its rate. Reconnect with backoff. */
   rate_limited: 4429,
+  /**
+   * The gateway could not handle a message, or a message before it never arrived. The Mac ignores
+   * error frames, so closing is how it hears this: it reconnects, the welcome says what the gateway
+   * has, and the Mac sends everything after that again.
+   */
+  internal: 1011,
 } as const;
 
-/** How long a Mac should wait before reconnecting to a draining gateway. */
+/** The shortest a Mac waits before reconnecting to a draining gateway. */
 export const DRAIN_RECONNECT_AFTER_MS = 1000;
+/**
+ * How far past that each Mac's wait is spread, so a deploy doesn't bring every Mac back in the same
+ * second, all of them wanting a database connection for hello at once.
+ */
+export const DRAIN_RECONNECT_SPREAD_MS = 4000;
+
+export function drainReconnectAfterMs(random: () => number = Math.random): number {
+  return DRAIN_RECONNECT_AFTER_MS + Math.floor(random() * DRAIN_RECONNECT_SPREAD_MS);
+}
