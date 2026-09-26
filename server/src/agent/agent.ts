@@ -47,6 +47,8 @@ export interface ModelCallSpec {
   /** The most tokens this call can use, which is what the credit hold covers. */
   readonly maxInputTokens: number;
   readonly maxOutputTokens: number;
+  /** Why the router went above the purpose's own tier, if it did. The runner logs it. */
+  readonly escalatedBecause?: readonly string[];
 }
 
 export interface TurnContext {

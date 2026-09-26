@@ -470,6 +470,9 @@ export class TaskRunner {
         invoke: (signal: AbortSignal) => Promise<ModelInvocation<T>>,
       ): Promise<T> {
         signal.throwIfAborted();
+        if (spec.escalatedBecause !== undefined && spec.escalatedBecause.length > 0) {
+          log.info({ task: task.id, agent: spec.agent, tier: spec.tier, reasons: spec.escalatedBecause }, "a model call went up a tier");
+        }
         const count = await store.countModelCall(task.id);
         if (count > budgets.maxModelCalls) throw new BudgetExhausted("model_calls");
         const rate = rates[spec.tier];

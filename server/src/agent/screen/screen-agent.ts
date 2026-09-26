@@ -213,10 +213,16 @@ export class ScreenAgent {
       screenshot !== undefined && observation.screenshot
         ? [{ mediaType: observation.screenshot.media_type, base64: screenshot }]
         : [];
-    const { tier } = chooseTier({ purpose: "screen_step", ...signals });
+    const { tier, reasons } = chooseTier({ purpose: "screen_step", ...signals });
     const request = { ...prompt, images };
     const text = await context.modelCall(
-      { agent: "screen", tier, maxInputTokens: estimateRequestTokens(request) + 200, maxOutputTokens: MAX_OUTPUT_TOKENS },
+      {
+        agent: "screen",
+        tier,
+        maxInputTokens: estimateRequestTokens(request) + 200,
+        maxOutputTokens: MAX_OUTPUT_TOKENS,
+        escalatedBecause: reasons,
+      },
       (signal) =>
         this.router.run(tier, {
           ...request,

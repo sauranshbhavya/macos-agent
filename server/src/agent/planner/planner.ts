@@ -164,6 +164,27 @@ export function toolNotes(transcript: readonly StoredMessage[]): ToolNote[] {
     .map((m) => m.body as ToolNote);
 }
 
+/**
+ * How many of the planner's latest steps in a row achieved nothing: a batch of operations none of
+ * which ended done, or screen work that failed. Anything done, or screen work that finished or ended
+ * uncertain, starts the count again.
+ */
+export function plannerStepsWithoutProgress(transcript: readonly StoredMessage[]): number {
+  const proposals = new Set<number>();
+  let streak = 0;
+  for (const message of transcript) {
+    if (message.direction === "out" && message.type === "propose") {
+      if ((message.body as { agent: string }).agent === "planner") proposals.add(message.seq);
+    } else if (message.direction === "in" && message.type === "outcome" && message.re !== null && proposals.has(message.re)) {
+      const done = (message.body as { results: ActionResult[] }).results.some((result) => result.status === "done");
+      streak = done ? 0 : streak + 1;
+    } else if (message.direction === "note" && message.type === "screen.result") {
+      streak = (message.body as { status: string }).status === "failed" ? streak + 1 : 0;
+    }
+  }
+  return streak;
+}
+
 /** What the planner has done and learned so far, oldest first. */
 export function plannerHistory(transcript: readonly StoredMessage[]): string[] {
   const lines: string[] = [];
@@ -232,6 +253,7 @@ export class Planner {
       extra.priorTask ? `The task this follows up:\n${extra.priorTask}` : null,
     ].filter((line): line is string => line !== null);
 
+    const withoutProgress = plannerStepsWithoutProgress(transcript);
     let feedback: string | null = null;
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const user = [
@@ -247,9 +269,21 @@ export class Planner {
         ...(feedback ? [`Your last answer could not be used: ${feedback} Answer again.`] : []),
       ].join("\n\n");
       const request = { system: `${PLANNER_RULES}\n\n${boundary.rule}`, user, images: [] };
-      const { tier } = chooseTier({ purpose: "plan", invalidOutputRetries: attempt, stepsWithoutProgress: 0, ambiguityFlagged: false });
+      // The planner has no "unsure" flag: when a request is ambiguous it asks the person instead.
+      const { tier, reasons } = chooseTier({
+        purpose: "plan",
+        invalidOutputRetries: attempt,
+        stepsWithoutProgress: withoutProgress,
+        ambiguityFlagged: false,
+      });
       const text = await context.modelCall(
-        { agent: "planner", tier, maxInputTokens: estimateRequestTokens(request) + 200, maxOutputTokens: PLANNER_MAX_OUTPUT_TOKENS },
+        {
+          agent: "planner",
+          tier,
+          maxInputTokens: estimateRequestTokens(request) + 200,
+          maxOutputTokens: PLANNER_MAX_OUTPUT_TOKENS,
+          escalatedBecause: reasons,
+        },
         (signal) =>
           this.router.run(tier, {
             ...request,
