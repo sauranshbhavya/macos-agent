@@ -87,6 +87,7 @@ interface HarnessOptions {
   readonly search?: ServerTools["search"];
   readonly pages?: Record<string, string>;
   readonly store?: ReturnType<typeof memoryTaskStore>;
+  readonly logged?: Array<{ data: object; message: string }>;
   readonly manifest?: Manifest;
   readonly searchDeadlineMs?: number;
 }
@@ -114,7 +115,7 @@ function harness(router: ModelRouter, options: HarnessOptions = {}) {
     manifestFor: () => options.manifest,
     deliver: (_task, messages) => delivered.push(...messages),
     now: () => new Date(),
-    log: { info: () => {}, error: () => {} },
+    log: { info: (data, message) => options.logged?.push({ data, message }), error: () => {} },
   });
   const task = randomUUID();
   let seq = 1;
@@ -388,6 +389,42 @@ describe("the planner's typed operations and server tools", () => {
     args_json: JSON.stringify(args),
     effect,
     expect,
+  });
+
+  it("goes up a tier after two batches in a row did nothing, and logs why", async () => {
+    const router = scriptedRouter({
+      planner: [
+        plan({ kind: "operations", operations: [op("open_app", { app: "Notes" })], final: false }),
+        plan({ kind: "operations", operations: [op("open_app", { app: "Notes" })], final: false }),
+        plan({ kind: "finish", status: "failed", summary: "Notes won't open." }),
+      ],
+    });
+    const logged: Array<{ data: object; message: string }> = [];
+    const h = harness(router, { logged });
+    const first = await h.start("Open Notes");
+    const second = await h.outcome(first, "failed");
+    await h.outcome(second, "failed");
+    expect(router.calls.map((call) => call.tier)).toEqual(["standard", "standard", "strong"]);
+    expect(logged).toEqual([
+      { data: expect.objectContaining({ agent: "planner", tier: "strong", reasons: ["two steps changed nothing"] }), message: "a model call went up a tier" },
+    ]);
+  });
+
+  it("starts counting again after a step that got something done", async () => {
+    const router = scriptedRouter({
+      planner: [
+        plan({ kind: "operations", operations: [op("open_app", { app: "Notes" })], final: false }),
+        plan({ kind: "operations", operations: [op("open_app", { app: "Notes" })], final: false }),
+        plan({ kind: "operations", operations: [op("open_app", { app: "Notes" })], final: false }),
+        plan({ kind: "finish", status: "failed", summary: "Stopped." }),
+      ],
+    });
+    const h = harness(router);
+    const first = await h.start("Open Notes");
+    const second = await h.outcome(first, "failed");
+    const third = await h.outcome(second, "done");
+    await h.outcome(third, "failed");
+    expect(router.calls.map((call) => call.tier)).toEqual(["standard", "standard", "standard", "standard"]);
   });
 
   it("sends a batch of typed operations and ends a final batch without another model call", async () => {
