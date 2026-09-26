@@ -139,6 +139,33 @@ struct AdapterOperationTests {
     }
 
     @Test
+    func aFileSonnyWritesIsListedInRecentFilesAndALookupAddsNothing() async throws {
+        let stores = CapabilityTestStores()
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent("made-\(UUID().uuidString)", isDirectory: true)
+            .resolvingSymlinksInPath()
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let context = CapabilityTestContext.make(installed: [], whitelist: PathWhitelist(roots: [folder]), stores: stores)
+        let all = capabilities(context)
+
+        try Data(count: 4000).write(to: folder.appendingPathComponent("big.bin"))
+        let find = try #require(all.capability(name: "find_largest_files", version: 1))
+        _ = try await run(find, ["folder": .string(folder.path)])
+        #expect(try stores.recentFiles.recent().isEmpty)
+
+        let path = folder.appendingPathComponent("plan.md").path
+        let write = try #require(all.capability(name: "write_file", version: 1))
+        let (_, written) = try await run(write, ["content": .string("buy milk"), "path": .string(path)])
+        #expect(written.status == .done)
+
+        let recent = try #require(all.capability(name: "recent_files", version: 1))
+        let (_, listed) = try await run(recent, [:])
+        #expect(listed.evidence?.contains("plan.md") == true)
+        #expect(try stores.recentFiles.recent().map(\.path) == [path])
+    }
+
+    @Test
     func aReminderInFiveMinutesKeepsItsTimeWhenItIsPreparedAgainBeforeRunning() async throws {
         let clock = Shared(Date(timeIntervalSince1970: 1_800_000_000))
         let context = CapabilityTestContext.make(installed: [], now: { clock.value })

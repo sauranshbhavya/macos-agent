@@ -94,8 +94,12 @@ public struct AdapterCapability: Capability {
 
     @MainActor
     private func executeOnMain(_ resolved: Resolved) async -> CapabilityOutcome {
+        let context = self.context()
         do {
-            let result = try await adapter.execute(plan: resolved.plan, context: context(), log: { _, _ in })
+            let result = try await adapter.execute(plan: resolved.plan, context: context, log: { _, _ in })
+            // The files Sonny made (a zip, converted PDFs, a written file) are what "recent files"
+            // lists. The action already happened, so a list that can't be updated doesn't fail it.
+            _ = try? context.recentArtifactStore.recordGeneratedArtifacts(from: result)
             return .done(Self.evidence(summary: result.summary, previews: result.previews))
         } catch {
             return .failed(.executionError, Self.userMessage(error))
