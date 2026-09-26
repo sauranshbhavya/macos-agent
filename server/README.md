@@ -32,6 +32,22 @@ Run from `server/`.
 | `./scripts/deploy.sh local` | Build the image, run it, verify `/v1/health` serves that build. |
 | `./scripts/deploy.sh staging\|production` | **Stubbed** — see "Deploying" below. |
 
+### Settings from `server/.env`
+
+For a local gateway, put its settings in `server/.env` instead of exporting them in every shell.
+Copy `.env.example` to `.env` and fill it in. The file is git-ignored and left out of the Docker
+build context.
+
+- **`./scripts/deploy.sh local`** takes from the file every name it forwards into the container
+  (the two lists in the script), and reads the file as data rather than running it, so JSON values
+  such as `CREDIT_PLANS` arrive intact. A name the shell has exported wins over the file. Anything
+  else in the file stays out of the container, and the script names what it left out.
+  `DEPLOY_ENV_FILE` points it at another file.
+- **`npm run dev`, `migrate`, `entitlements`, `usage`, `revocations` and `billing-debts`** load the
+  file through Node's `--env-file-if-exists`, again with the shell's exports winning.
+- **`npm test` does not read it.** A dev `DATABASE_URL` in the file would point the database tests,
+  which drop and rebuild the schema, at that database.
+
 ### Owed revocations
 
 Closing an account revokes its provider-side sessions. When the provider is unreachable at that

@@ -1,5 +1,7 @@
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { BILLING_REQUIREMENT_NAMES, BILLING_TRIGGER } from "../src/billing/deps.js";
@@ -217,5 +219,87 @@ describe("billing reaches the container", () => {
     // with no billing name in its environment and mounts no billing route.
     const nothingSet = forwardingWith({});
     expect(nothingSet.forwarded.filter((name) => name.startsWith("BILLING_"))).toEqual([]);
+  });
+});
+
+/**
+ * Runs the real script's file loading and collection with the given `.env` contents and shell
+ * environment, and reports what would be forwarded plus the values of `show` as the container
+ * would receive them. Every value here is fake, so printing them is fine in this test and only here.
+ */
+function fromEnvFile(contents: string, environment: Record<string, string>, show: readonly string[]) {
+  const dir = mkdtempSync(join(tmpdir(), "deploy-env-"));
+  const file = join(dir, "local.env");
+  writeFileSync(file, contents);
+  const probe = [
+    "( trap 'load_env_file; collect_passthrough",
+    'for a in ${PASSTHROUGH_ARGS[@]+"${PASSTHROUGH_ARGS[@]}"}; do printf "ARG %s\\n" "$a"; done',
+    'for n in ${ENV_FILE_SKIPPED[@]+"${ENV_FILE_SKIPPED[@]}"}; do printf "SKIPPED %s\\n" "$n"; done',
+    ...show.map((name) => `printf "VALUE ${name}=%s\\n" "\${${name}:-}"`),
+    "printf \"PROBE_OK\\n\"' EXIT",
+    `source ./${SCRIPT} __unrecognised_target__ )`,
+    "exit 0",
+  ].join("\n");
+  try {
+    const stdout = execFileSync("bash", ["-c", probe, SCRIPT], {
+      cwd: SERVER_DIR,
+      env: { PATH: process.env.PATH ?? "/usr/bin:/bin", DEPLOY_ENV_FILE: file, ...environment },
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    const lines = stdout.split("\n");
+    expect(lines).toContain("PROBE_OK");
+    const tagged = (tag: string): string[] =>
+      lines.filter((line) => line.startsWith(`${tag} `)).map((line) => line.slice(tag.length + 1));
+    const values = new Map(tagged("VALUE").map((line) => [line.slice(0, line.indexOf("=")), line.slice(line.indexOf("=") + 1)]));
+    return { forwarded: tagged("ARG").filter((argument) => argument !== "-e"), skipped: tagged("SKIPPED"), values };
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+describe("settings the deploy script takes from a .env file", () => {
+  const json = '{"defaultPlan":"free","plans":[{"key":"free","monthlyCredits":500}]}';
+  const file = [
+    "# a comment, and a blank line",
+    "",
+    `${LONG_STANDING_CREDENTIAL}=${NOT_A_SECRET}`,
+    `export ${LONG_STANDING_SETTING}="openai"`,
+    `CREDIT_PLANS=${json}`,
+    `${DELIBERATELY_NOT_FORWARDED}=${NOT_A_SECRET}`,
+    "SUPABASE_ANON_KEY='single quoted value'",
+    "not a setting line",
+  ].join("\n");
+
+  it("forwards a name on its lists from the file, by name", () => {
+    const result = fromEnvFile(file, {}, []);
+    expect(result.forwarded).toContain(LONG_STANDING_CREDENTIAL);
+    expect(result.forwarded).toContain(LONG_STANDING_SETTING);
+    expect(result.forwarded).toContain("CREDIT_PLANS");
+  });
+
+  it("leaves out a name it doesn't forward, even when the file holds it, and says so by name", () => {
+    const result = fromEnvFile(file, {}, [DELIBERATELY_NOT_FORWARDED]);
+    expect(result.forwarded).not.toContain(DELIBERATELY_NOT_FORWARDED);
+    expect(result.skipped).toEqual([DELIBERATELY_NOT_FORWARDED]);
+    expect(result.values.get(DELIBERATELY_NOT_FORWARDED)).toBe("");
+  });
+
+  it("keeps a JSON value's quotes and drops only a pair of outer quotes", () => {
+    const result = fromEnvFile(file, {}, ["CREDIT_PLANS", LONG_STANDING_SETTING, "SUPABASE_ANON_KEY"]);
+    expect(result.values.get("CREDIT_PLANS")).toBe(json);
+    expect(result.values.get(LONG_STANDING_SETTING)).toBe("openai");
+    expect(result.values.get("SUPABASE_ANON_KEY")).toBe("single quoted value");
+  });
+
+  it("lets a value the shell exported win over the file's", () => {
+    const result = fromEnvFile(file, { [LONG_STANDING_SETTING]: "from the shell" }, [LONG_STANDING_SETTING]);
+    expect(result.values.get(LONG_STANDING_SETTING)).toBe("from the shell");
+  });
+
+  it("changes nothing when there is no file", () => {
+    const result = fromEnvFile("", {}, []);
+    expect(result.forwarded).toEqual([]);
+    expect(result.skipped).toEqual([]);
   });
 });
