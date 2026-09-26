@@ -64,6 +64,18 @@ struct InstalledAppResolverTests {
         #expect(resolver.resolve("notes.app") == nil)
     }
 
+    /// "The browser" is the default browser, where `open_url` put the page. The planner named an app
+    /// "web browser" in the manual pass, and nothing by that name exists.
+    @Test
+    func aGenericBrowserNameIsTheDefaultBrowser() {
+        let resolver = InstalledAppResolver(source: FixedAppSource([Self.chrome, Self.safari], defaultBrowser: "com.google.Chrome"))
+        for name in ["web browser", "Browser", "the browser", "default browser"] {
+            #expect(resolver.resolve(name)?.bundleIdentifier == "com.google.Chrome", "\(name)")
+        }
+        // With no default browser known, the name means nothing, as before.
+        #expect(InstalledAppResolver(source: FixedAppSource([Self.chrome])).resolve("web browser") == nil)
+    }
+
     /// The screen controller's own lookup, which is where the refusal happened: the look named the
     /// app, the action named its bundle identifier, and the two now agree.
     @Test

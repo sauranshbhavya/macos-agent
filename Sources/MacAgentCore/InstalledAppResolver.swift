@@ -63,6 +63,12 @@ public protocol InstalledAppSource: Sendable {
     /// The installed app whose name folds to `normalizedName` under `MacAppCatalog.normalize`, or
     /// `nil`. Callers normalize; a source never re-folds.
     func application(normalizedName: String) -> InstalledApp?
+    /// The bundle identifier of the app that opens web pages here, or `nil` when it can't be told.
+    func defaultBrowserBundleIdentifier() -> String?
+}
+
+extension InstalledAppSource {
+    public func defaultBrowserBundleIdentifier() -> String? { nil }
 }
 
 /// Resolves a human app name against the installed universe, canonicalizing through the alias table
@@ -103,6 +109,13 @@ public struct InstalledAppResolver: InstalledAppResolving {
             return nil
         }
 
+        // "The browser" is whichever app opens web pages here, which is where `open_url` put the page.
+        // The planner can't know which that is, so it names it this way.
+        if Self.genericBrowserNames.contains(MacAppCatalog.normalize(trimmed)),
+           let browser = source.defaultBrowserBundleIdentifier() {
+            return resolve(browser)
+        }
+
         // A bundle identifier names exactly one app, and the screen agent and typed operations pass
         // one ("com.google.Chrome") as often as a name. Tried first, and only for something shaped
         // like one, so an ordinary name never reaches Launch Services this way.
@@ -129,6 +142,11 @@ public struct InstalledAppResolver: InstalledAppResolving {
 
         return source.application(normalizedName: MacAppCatalog.normalize(trimmed))
     }
+
+    /// What a request calls the default browser without naming it, folded as names are.
+    static let genericBrowserNames: Set<String> = Set(
+        ["browser", "web browser", "default browser", "the browser", "my browser", "internet browser"].map(MacAppCatalog.normalize)
+    )
 
     /// Reverse-DNS with at least two dots and no spaces: `com.google.Chrome`, not "Google Chrome" or
     /// "notes.app".
@@ -209,6 +227,12 @@ public struct LaunchServicesAppSource: InstalledAppSource {
         URL(fileURLWithPath: "/System/Library/CoreServices", isDirectory: true),
         FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Applications", isDirectory: true)
     ]
+
+    public func defaultBrowserBundleIdentifier() -> String? {
+        guard let page = URL(string: "https://example.com"),
+              let app = NSWorkspace.shared.urlForApplication(toOpen: page) else { return nil }
+        return Bundle(url: app)?.bundleIdentifier
+    }
 
     public func application(bundleIdentifier: String) -> InstalledApp? {
         guard let url = applicationURL(bundleIdentifier) else {
@@ -336,10 +360,14 @@ private final class InstalledAppNameIndex: @unchecked Sendable {
 /// makes "which apps are installed" a fact a test states rather than a fact a test inherits.
 public struct FixedAppSource: InstalledAppSource {
     private let apps: [InstalledApp]
+    private let defaultBrowser: String?
 
-    public init(_ apps: [InstalledApp]) {
+    public init(_ apps: [InstalledApp], defaultBrowser: String? = nil) {
         self.apps = apps
+        self.defaultBrowser = defaultBrowser
     }
+
+    public func defaultBrowserBundleIdentifier() -> String? { defaultBrowser }
 
     /// Every app in the alias table, as if installed — the pre-dissolution universe exactly.
     ///
