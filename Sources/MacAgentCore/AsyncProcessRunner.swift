@@ -3,10 +3,14 @@ import Foundation
 public struct ProcessResult: Sendable, Equatable {
     public var terminationStatus: Int32
     public var output: String
+    /// Standard error, for a run that kept it apart from `output`. Otherwise it is part of `output`
+    /// and this is empty.
+    public var errorOutput: String
 
-    public init(terminationStatus: Int32, output: String) {
+    public init(terminationStatus: Int32, output: String, errorOutput: String = "") {
         self.terminationStatus = terminationStatus
         self.output = output
+        self.errorOutput = errorOutput
     }
 }
 
@@ -86,12 +90,21 @@ public enum AsyncProcessRunner {
         }
     }
 
+    /// With `separatingErrorOutput`, standard error goes to `errorOutput` instead of `output`, for a
+    /// caller whose child can write diagnostics on success that must not end up in its reply.
     public static func run(
         executablePath: String,
         arguments: [String],
-        currentDirectoryURL: URL? = nil
+        currentDirectoryURL: URL? = nil,
+        separatingErrorOutput: Bool = false
     ) async throws -> ProcessResult {
-        try await run(executablePath: executablePath, arguments: arguments, currentDirectoryURL: currentDirectoryURL, beforeLaunch: {})
+        try await run(
+            executablePath: executablePath,
+            arguments: arguments,
+            currentDirectoryURL: currentDirectoryURL,
+            separatingErrorOutput: separatingErrorOutput,
+            beforeLaunch: {}
+        )
     }
 
     /// `beforeLaunch` runs after the process is registered for cancellation and before it launches.
@@ -101,6 +114,7 @@ public enum AsyncProcessRunner {
         executablePath: String,
         arguments: [String],
         currentDirectoryURL: URL?,
+        separatingErrorOutput: Bool = false,
         beforeLaunch: @escaping @Sendable () -> Void
     ) async throws -> ProcessResult {
         let box = ProcessBox()
@@ -113,8 +127,9 @@ public enum AsyncProcessRunner {
                 process.arguments = arguments
 
                 let pipe = Pipe()
+                let errorPipe = separatingErrorOutput ? Pipe() : pipe
                 process.standardOutput = pipe
-                process.standardError = pipe
+                process.standardError = errorPipe
 
                 guard box.register(process) else {
                     throw CancellationError()
@@ -126,14 +141,21 @@ public enum AsyncProcessRunner {
                     process.terminate()
                 }
 
+                // Standard error drains alongside the output, so neither pipe can fill and block
+                // the child.
+                let errors = separatingErrorOutput ? Task.detached { errorPipe.fileHandleForReading.readDataToEndOfFile() } : nil
                 let output = ProcessOutputCapture.drainThenWait(process: process, pipe: pipe)
                 box.confirmFinished()
+                var errorOutput = ""
+                if let errors {
+                    errorOutput = String(decoding: await errors.value, as: UTF8.self)
+                }
 
                 if box.isCancelled {
                     throw CancellationError()
                 }
 
-                return ProcessResult(terminationStatus: process.terminationStatus, output: output)
+                return ProcessResult(terminationStatus: process.terminationStatus, output: output, errorOutput: errorOutput)
             }.value
         } onCancel: {
             box.cancel()
