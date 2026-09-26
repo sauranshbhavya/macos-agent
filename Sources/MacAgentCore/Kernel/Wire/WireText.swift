@@ -19,4 +19,11 @@ extension String {
         }
         return String(self[..<end])
     }
+
+    /// This text as it may leave the Mac (V2 plan section 7.4): anything `SecretTextDetector` finds is
+    /// masked, then the text is cut to `limit` UTF-16 units. Masking comes first, so a cut can never
+    /// leave the start of a secret unmasked.
+    func maskedAndClipped(toUTF16 limit: Int) -> String {
+        SecretTextDetector.mask(matches: SecretTextDetector().matches(in: self), in: self).clipped(toUTF16: limit)
+    }
 }

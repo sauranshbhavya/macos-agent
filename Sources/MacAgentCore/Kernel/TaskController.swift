@@ -42,7 +42,7 @@ public struct TaskRequest: Sendable, Equatable {
             Array(paths.filter { !$0.isEmpty && $0.utf16.count <= 1024 }.prefix(50))
         }
         return TaskStartBody(
-            goal: goal.clipped(toUTF16: 4000),
+            goal: goal.maskedAndClipped(toUTF16: 4000),
             origin: origin,
             isPrivate: isPrivate,
             unattended: unattended,

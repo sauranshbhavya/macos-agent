@@ -396,7 +396,7 @@ public actor TaskRuntime {
         self.askSeq = nil
         phase = .running
         record.awaiting = nil
-        await sendNew(.answer(AnswerBody(text: text.clipped(toUTF16: 4000))), re: askSeq)
+        await sendNew(.answer(AnswerBody(text: text.maskedAndClipped(toUTF16: 4000))), re: askSeq)
     }
 
     /// Looks at the screen for the gateway's request `re` and sends what it saw.
@@ -510,8 +510,10 @@ public actor TaskRuntime {
     /// screen action or cua error wrote it.
     private func answered(_ action: WireAction, _ result: ActionResult, title: String, agent: ProposingAgent) -> ActionResult {
         var result = result
-        result.evidence = result.evidence?.clipped(toUTF16: 2000)
-        if let message = result.error?.message { result.error?.message = message.clipped(toUTF16: 1000) }
+        // Every operation's evidence and error pass here on their way to the gateway: a shortcut's
+        // output, a calendar event's title, osascript's stderr, cua's error text.
+        result.evidence = result.evidence?.maskedAndClipped(toUTF16: 2000)
+        if let message = result.error?.message { result.error?.message = message.maskedAndClipped(toUTF16: 1000) }
         record.update(action.actionID) {
             $0.state = Self.ledgerState(of: result.status)
             $0.title = title

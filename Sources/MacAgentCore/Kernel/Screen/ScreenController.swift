@@ -351,15 +351,13 @@ public actor ScreenController: ScreenControlling {
 
     /// A look that couldn't be taken, with its reason cut to the contract's length.
     static func failure(_ code: ObservationBody.ErrorCode, _ message: String, generation: Int) -> ObservationBody {
-        ObservationBody(generation: generation, error: .init(code: code, message: message.clipped(toUTF16: 1000)))
+        ObservationBody(generation: generation, error: .init(code: code, message: message.maskedAndClipped(toUTF16: 1000)))
     }
 
     /// Secrets never leave the Mac (V2 plan section 7.4): a detected secret is masked, a secure
     /// field's value is never read out, and every field is cut to the contract's length.
     static func masked(_ text: String, limit: Int) -> String {
-        let detector = SecretTextDetector()
-        let masked = SecretTextDetector.mask(matches: detector.matches(in: text), in: text)
-        return masked.clipped(toUTF16: limit)
+        text.maskedAndClipped(toUTF16: limit)
     }
 
     static func tree(from state: CuaWindowState, maxNodes: Int) -> (tree: ObservationBody.Tree, elements: [String: CuaElement], secureRefs: Set<String>) {
