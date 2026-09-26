@@ -268,12 +268,12 @@ private struct DataPage: View {
                 SettingsAdaptiveControlRow {
                     SettingsControlLabel(
                         title: "Delete task history",
-                        detail: model.desk.history.isEmpty ? "No tasks kept" : "\(model.desk.history.count) finished tasks kept"
+                        detail: historyDetail
                     )
                 } trailing: {
                     Button("Delete", role: .destructive) { isConfirming = true }
                         .buttonStyle(SonnyButtonStyle(tone: .danger, width: 96))
-                        .disabled(model.desk.history.isEmpty)
+                        .disabled(!model.desk.hasHistoryToDelete)
                 }
                 if let done {
                     Label(done, systemImage: "checkmark.circle")
@@ -295,5 +295,10 @@ private struct DataPage: View {
         } message: {
             Text("They're removed from this Mac.")
         }
+    }
+
+    private var historyDetail: String {
+        if model.desk.unreadable.contains(.history) { return "Sonny couldn't read your task history." }
+        return model.desk.history.isEmpty ? "No tasks kept" : "\(model.desk.history.count) finished tasks kept"
     }
 }

@@ -28,7 +28,7 @@ struct TasksPage: View {
                     .accessibilityHidden(true)
                 Button("Delete all", role: .destructive) { isConfirmingDeleteAll = true }
                     .buttonStyle(SonnyButtonStyle(tone: .danger))
-                    .disabled(model.desk.history.isEmpty)
+                    .disabled(!model.desk.hasHistoryToDelete)
             }
 
             HStack(alignment: .top, spacing: SonnySpacing.lg) {
@@ -70,7 +70,13 @@ struct TasksPage: View {
     @ViewBuilder
     private var list: some View {
         if running.isEmpty && finished.isEmpty {
-            if search.isEmpty {
+            if model.desk.unreadable.contains(.history) {
+                CollectionEmptyState(
+                    systemImage: "exclamationmark.triangle",
+                    title: "Task history unavailable",
+                    message: "Sonny couldn't read your task history."
+                )
+            } else if search.isEmpty {
                 CollectionEmptyState(
                     systemImage: "checklist",
                     title: "No tasks yet",

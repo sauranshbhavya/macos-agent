@@ -13,7 +13,13 @@ struct RoutinesPage: View {
             CommandCenterPageHeader(title: "Routines")
             ScrollView {
                 VStack(alignment: .leading, spacing: SonnySpacing.md) {
-                    if model.desk.routines.isEmpty {
+                    if model.desk.unreadable.contains(.routines) {
+                        CollectionEmptyState(
+                            systemImage: "exclamationmark.triangle",
+                            title: "Routines unavailable",
+                            message: "Sonny couldn't read your routines."
+                        )
+                    } else if model.desk.routines.isEmpty {
                         CollectionEmptyState(
                             systemImage: "clock.arrow.circlepath",
                             title: "No routines yet",

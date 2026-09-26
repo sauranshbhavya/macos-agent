@@ -173,7 +173,7 @@ struct KernelCapabilityTests {
         let (first, outcome) = try await fixture.run("save_routine", ["name": .string("Morning"), "goal": .string("Open my calendar and mail")])
         #expect(first.effect == .create)
         #expect(outcome.status == .done)
-        #expect(await fixture.routines.routine(named: "morning")?.goal == "Open my calendar and mail")
+        #expect(try await fixture.routines.routine(named: "morning")?.goal == "Open my calendar and mail")
         let replacing = try await fixture.capability("save_routine").prepare(actionID: ActionID(), args: ["name": .string("Morning"), "goal": .string("x")])
         #expect(replacing.effect == .destructive)
     }
