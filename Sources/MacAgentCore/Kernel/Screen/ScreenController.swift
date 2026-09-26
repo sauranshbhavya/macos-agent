@@ -54,6 +54,7 @@ public actor ScreenController: ScreenControlling {
         public var lease: ForegroundLease
         public var claims: ScreenAppClaims
         public var attention: any SessionAttentionMonitoring
+        public var focusReturn: FocusReturn
         public var ownPID: pid_t
 
         public init(
@@ -64,6 +65,7 @@ public actor ScreenController: ScreenControlling {
             lease: ForegroundLease = .shared,
             claims: ScreenAppClaims = .shared,
             attention: any SessionAttentionMonitoring = SystemSessionAttentionMonitor(),
+            focusReturn: FocusReturn = .shared,
             ownPID: pid_t = getpid()
         ) {
             self.driver = driver
@@ -73,6 +75,7 @@ public actor ScreenController: ScreenControlling {
             self.lease = lease
             self.claims = claims
             self.attention = attention
+            self.focusReturn = focusReturn
             self.ownPID = ownPID
         }
     }
@@ -113,10 +116,8 @@ public actor ScreenController: ScreenControlling {
 
     private let deps: Dependencies
     private var session: Session?
-    /// The app the person was in before this task's screen work first brought another forward, and
-    /// the app it brought forward: the first comes back when the work ends, if the second is still
-    /// in front.
-    private var returnTo: pid_t?
+    /// The app this task's screen work last brought forward. When the work ends, the person's own
+    /// app comes back only if this one is still in front.
     private var workedIn: pid_t?
     private var looks: [Int: Look] = [:]
     private var latest = 0
@@ -163,11 +164,12 @@ public actor ScreenController: ScreenControlling {
             return failure(.permissionDenied, "Sonny couldn't check its Accessibility permission.")
         }
 
-        if let reason = await deps.attention.attention().stopReason {
-            return failure(.foregroundUnavailable, reason)
-        }
-
         return await deps.lease.hold { [deps] in
+            // Checked inside the lease, right before anything moves: a wait for another task's turn
+            // can outlast the moment someone locked the screen.
+            if let reason = await deps.attention.attention().stopReason {
+                return failure(.foregroundUnavailable, reason)
+            }
             await self.noteWhereThePersonWas(beforeActivating: pid)
             guard await deps.apps.activate(pid: pid) else {
                 return failure(.foregroundUnavailable, "\(app.name) couldn't be brought to the front.")
@@ -183,23 +185,22 @@ public actor ScreenController: ScreenControlling {
         await giveThePersonTheirAppBack()
     }
 
-    /// Remembers the app the person was in, the first time this task's screen work brings another
-    /// one forward. Sonny's own window doesn't count.
+    /// Tells the shared record this task's screen work is bringing an app forward; the first such
+    /// work notes the app the person was in. Sonny's own window doesn't count.
     private func noteWhereThePersonWas(beforeActivating pid: pid_t) async {
         workedIn = pid
-        guard returnTo == nil, let front = await deps.apps.frontmostPID(), front != pid, front != deps.ownPID else { return }
-        returnTo = front
+        await deps.focusReturn.begin(ObjectIdentifier(self), front: await deps.apps.frontmostPID(), target: pid, ownPID: deps.ownPID)
     }
 
-    /// When the work is done, the person's app comes back, unless they have already moved on to
-    /// something else themselves.
+    /// When the last task's screen work is done, the person's app comes back, unless they have
+    /// already moved on to something else themselves.
     private func giveThePersonTheirAppBack() async {
-        guard let returnTo, let workedIn else { return }
-        self.returnTo = nil
+        guard let workedIn else { return }
         self.workedIn = nil
+        guard let personApp = await deps.focusReturn.end(ObjectIdentifier(self)) else { return }
         await deps.lease.hold { [deps] in
             guard await deps.apps.frontmostPID() == workedIn else { return }
-            _ = await deps.apps.activate(pid: returnTo)
+            _ = await deps.apps.activate(pid: personApp)
         }
     }
 
@@ -528,10 +529,10 @@ public actor ScreenController: ScreenControlling {
             return .failed(.executionError, "The screen action was prepared for another window.")
         }
         let client = session.client
-        if let reason = await deps.attention.attention().stopReason {
-            return .failed(.foregroundUnavailable, reason)
-        }
         return await deps.lease.hold { [deps] in
+            if let reason = await deps.attention.attention().stopReason {
+                return .failed(.foregroundUnavailable, reason)
+            }
             await self.noteWhereThePersonWas(beforeActivating: planned.pid)
             guard await deps.apps.activate(pid: planned.pid) else {
                 return .failed(.foregroundUnavailable, "The app couldn't be brought to the front.")

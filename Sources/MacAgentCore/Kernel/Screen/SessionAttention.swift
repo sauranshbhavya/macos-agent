@@ -78,3 +78,31 @@ public struct SystemSessionAttentionMonitor: SessionAttentionMonitoring {
         return .attended
     }
 }
+
+/// The app the person was in before any task's screen work brought another forward. With several
+/// tasks working at once, each would otherwise remember the app the task before it brought
+/// forward; this remembers the person's own, once, and hands it back when the last task's screen
+/// work ends.
+public actor FocusReturn {
+    public static let shared = FocusReturn()
+
+    private var personApp: pid_t?
+    private var working: Set<ObjectIdentifier> = []
+
+    public init() {}
+
+    /// A task's screen work is about to bring an app forward. The first one notes what was in
+    /// front, unless that's the app it's about to use or Sonny itself.
+    func begin(_ worker: ObjectIdentifier, front: pid_t?, target: pid_t, ownPID: pid_t) {
+        if working.isEmpty, let front, front != target, front != ownPID { personApp = front }
+        working.insert(worker)
+    }
+
+    /// A task's screen work ended. The last one to end gets the person's app to give back.
+    func end(_ worker: ObjectIdentifier) -> pid_t? {
+        guard working.remove(worker) != nil else { return nil }
+        guard working.isEmpty else { return nil }
+        defer { personApp = nil }
+        return personApp
+    }
+}

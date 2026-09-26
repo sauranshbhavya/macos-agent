@@ -83,7 +83,8 @@ func screenController(
     manifests: Shared<[CuaCapabilityManifest]> = Shared([]),
     claims: ScreenAppClaims = ScreenAppClaims(),
     screenshots: any WindowScreenshotting = FakeScreenshots(),
-    attention: any SessionAttentionMonitoring = FixedAttention()
+    attention: any SessionAttentionMonitoring = FixedAttention(),
+    focusReturn: FocusReturn = FocusReturn()
 ) -> ScreenController {
     ScreenController(dependencies: .init(
         driver: { manifest in
@@ -95,6 +96,7 @@ func screenController(
         lease: ForegroundLease(),
         claims: claims,
         attention: attention,
+        focusReturn: focusReturn,
         ownPID: ownPID
     ))
 }
@@ -359,6 +361,25 @@ struct ScreenControllerTests {
         moved.frontmost = 9999
         await other.taskEnded()
         #expect(moved.frontmost == 9999)
+    }
+
+    @Test
+    func twoTasksWorkingAtOnceGiveBackThePersonsAppNotEachOthers() async throws {
+        // Mail (5151) is in front. Task A brings Notes (4242) forward, then task B looks at Notes
+        // too, with Notes already in front: B must not take Notes for the person's app.
+        let apps = TrackingScreenApps(front: 5151)
+        let shared = FocusReturn()
+        let first = screenController(FakeCuaNotes(), apps: apps, claims: ScreenAppClaims(), focusReturn: shared)
+        let second = screenController(FakeCuaNotes(), apps: apps, claims: ScreenAppClaims(), focusReturn: shared)
+        _ = await look(first, generation: 1)
+        _ = await look(second, generation: 1)
+        #expect(apps.frontmost == 4242)
+
+        // The first to finish leaves the other's work in front; the last gives Mail back.
+        await first.taskEnded()
+        #expect(apps.frontmost == 4242)
+        await second.taskEnded()
+        #expect(apps.frontmost == 5151)
     }
 
     @Test
