@@ -168,7 +168,11 @@ export class ScreenAgent {
           if (!notes.some((note) => note.screenshot)) return look(spec.app, true);
           return returned({ status: "failed", summary: "Sonny could not read this app's window." });
         case "foreground_unavailable":
-          return returned({ status: "failed", summary: `Sonny could not bring ${spec.app} to the front.` });
+          // The Mac says why when it knows, for example that another task is working in the app.
+          return returned({
+            status: "failed",
+            summary: observation.error.message?.slice(0, 300) ?? `Sonny could not bring ${spec.app} to the front.`,
+          });
       }
     }
 

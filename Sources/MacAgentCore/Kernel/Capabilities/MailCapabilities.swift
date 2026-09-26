@@ -110,6 +110,8 @@ public enum MailCapabilities {
 struct ComposeMailCapability: Capability {
     let name = "compose_mail"
     let version = 1
+    // The draft opens in a visible Mail window.
+    let bringsAppForward = true
     let runner: any AppleScriptRunning
 
     struct Draft: Sendable {

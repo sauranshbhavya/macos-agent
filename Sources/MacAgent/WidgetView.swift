@@ -107,10 +107,6 @@ struct WidgetView: View {
 
     // MARK: Composer
 
-    private var composerIsBusy: Bool {
-        model.isFollowedTaskRunning
-    }
-
     private var composerPill: some View {
         VStack(alignment: .leading, spacing: 8) {
             if let followUp = model.followUp {
@@ -139,7 +135,7 @@ struct WidgetView: View {
             composerField
         }
         .padding(.leading, 14)
-        .padding(.trailing, composerIsBusy ? 14 : WidgetTheme.composerEdgeInset)
+        .padding(.trailing, WidgetTheme.composerEdgeInset)
         .frame(width: WidgetTheme.panelWidth)
         .frame(minHeight: WidgetTheme.composerHeight)
         .widgetGlassPill()
@@ -157,14 +153,14 @@ struct WidgetView: View {
         HStack(spacing: 10) {
             // The logo is the private-mode toggle (Bhavya's 336959ca): on, the next task isn't
             // kept on this Mac and the gateway deletes it when it ends.
-            Button { model.isPrivate.toggle() } label: {
+            Button(action: model.togglePrivate) {
                 SonnyBrandMark(size: WidgetTheme.composerMarkSize)
-                    .foregroundStyle(composerIsBusy ? WidgetTheme.textFaint : WidgetTheme.textFull)
+                    .foregroundStyle(WidgetTheme.textFull)
                     .frame(width: WidgetTheme.controlSize, height: WidgetTheme.controlSize)
                     .contentShape(Circle())
             }
             .buttonStyle(.plain)
-            .disabled(composerIsBusy || model.voice != .idle)
+            .disabled(model.voice != .idle)
             .accessibilityLabel("Don't save this task")
             .accessibilityValue(model.isPrivate ? "On" : "Off")
             .accessibilityAddTraits(model.isPrivate ? [.isButton, .isSelected] : .isButton)
@@ -182,29 +178,27 @@ struct WidgetView: View {
                     .textFieldStyle(.plain)
                     .font(WidgetType.pillQuery)
                     .foregroundStyle(WidgetTheme.textFull)
-                    .disabled(composerIsBusy || model.voice != .idle)
+                    .disabled(model.voice != .idle)
                     .focused($composerFocused)
                     .onSubmit(model.submitComposer)
                     .accessibilityLabel(placeholder)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
-            if !composerIsBusy {
-                Button(action: model.submitComposer) {
-                    HStack(spacing: 3) {
-                        Text("Start")
-                        Image(systemName: "chevron.right").font(WidgetType.headlineChip)
-                    }
+            Button(action: model.submitComposer) {
+                HStack(spacing: 3) {
+                    Text("Start")
+                    Image(systemName: "chevron.right").font(WidgetType.headlineChip)
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(WidgetTheme.textStrong)
-                .font(WidgetType.headlineChip)
-                .padding(.horizontal, 12)
-                .frame(height: WidgetTheme.startButtonHeight)
-                .widgetCapsuleBackground(tint: WidgetTheme.primaryAction)
-                .disabled(!model.canSubmit)
-                .opacity(model.canSubmit ? 1 : 0.5)
             }
+            .buttonStyle(.plain)
+            .foregroundStyle(WidgetTheme.textStrong)
+            .font(WidgetType.headlineChip)
+            .padding(.horizontal, 12)
+            .frame(height: WidgetTheme.startButtonHeight)
+            .widgetCapsuleBackground(tint: WidgetTheme.primaryAction)
+            .disabled(!model.canSubmit)
+            .opacity(model.canSubmit ? 1 : 0.5)
         }
         .frame(height: WidgetTheme.composerHeight)
     }
@@ -213,7 +207,7 @@ struct WidgetView: View {
         switch model.voice {
         case .recording: "Listening…"
         case .transcribing: "Working out what you said…"
-        case .idle: composerIsBusy ? "Sonny is on it…" : "Ask Sonny to do something"
+        case .idle: "Ask Sonny to do something"
         }
     }
 
@@ -253,7 +247,7 @@ struct WidgetView: View {
             .buttonStyle(.plain)
             .frame(width: WidgetTheme.satelliteControlSize, height: WidgetTheme.satelliteControlSize)
             .widgetGlassCircle()
-            .disabled(model.voice == .transcribing || composerIsBusy)
+            .disabled(model.voice == .transcribing)
             .accessibilityLabel("Voice input")
             .accessibilityValue(voiceValue(now: now))
         }

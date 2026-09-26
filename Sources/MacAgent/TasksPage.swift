@@ -193,7 +193,6 @@ struct TasksPage: View {
                             .buttonStyle(SonnyButtonStyle(tone: .secondary))
                         Button("Run again") { model.runAgain(task.goal) }
                             .buttonStyle(SonnyButtonStyle(tone: .secondary))
-                            .disabled(model.isFollowedTaskRunning)
                         Spacer()
                         Button("Delete", role: .destructive) {
                             selected = nil

@@ -6,6 +6,37 @@ public protocol ScreenControlling: TaskObserver {
     var tools: Set<ScreenToolName> { get }
     func prepare(_ action: ScreenAction, actionID: ActionID) async throws -> PreparedAction
     func execute(_ prepared: PreparedAction) async -> CapabilityOutcome
+    /// The task is over: whatever it held for its screen work is let go.
+    func taskEnded() async
+}
+
+extension ScreenControlling {
+    public func taskEnded() async {}
+}
+
+/// Which task's screen work is in which app. Two tasks clicking and typing in one app would mix
+/// their edits, so an app belongs to one task's screen work at a time, until that task ends or
+/// moves on to another app.
+public actor ScreenAppClaims {
+    public static let shared = ScreenAppClaims()
+
+    private var holders: [String: ObjectIdentifier] = [:]
+
+    public init() {}
+
+    /// Claims the app for `owner`, letting go of any other app it held. False while another owner
+    /// holds it.
+    func claim(_ bundleID: String, for owner: ObjectIdentifier) -> Bool {
+        let key = bundleID.lowercased()
+        if let holder = holders[key], holder != owner { return false }
+        holders = holders.filter { $0.value != owner }
+        holders[key] = owner
+        return true
+    }
+
+    func release(_ owner: ObjectIdentifier) {
+        holders = holders.filter { $0.value != owner }
+    }
 }
 
 /// One task's screen control (V2 plan section 6, `ScreenCapability`).
@@ -21,6 +52,7 @@ public actor ScreenController: ScreenControlling {
         public var screenshots: any WindowScreenshotting
         public var standing: @Sendable (String) -> AppStanding
         public var lease: ForegroundLease
+        public var claims: ScreenAppClaims
         public var ownPID: pid_t
 
         public init(
@@ -29,6 +61,7 @@ public actor ScreenController: ScreenControlling {
             screenshots: any WindowScreenshotting = RedactedWindowScreenshots(),
             standing: @escaping @Sendable (String) -> AppStanding = ScreenController.defaultStanding,
             lease: ForegroundLease = .shared,
+            claims: ScreenAppClaims = .shared,
             ownPID: pid_t = getpid()
         ) {
             self.driver = driver
@@ -36,6 +69,7 @@ public actor ScreenController: ScreenControlling {
             self.screenshots = screenshots
             self.standing = standing
             self.lease = lease
+            self.claims = claims
             self.ownPID = ownPID
         }
     }
@@ -100,6 +134,9 @@ public actor ScreenController: ScreenControlling {
             return failure(.appNotRunning, "No installed app matches \(request.app).")
         }
         guard let pid = app.pid else { return failure(.appNotRunning, "\(app.name) isn't running.") }
+        guard await deps.claims.claim(app.bundleID, for: ObjectIdentifier(self)) else {
+            return failure(.foregroundUnavailable, "Another Sonny task is working in \(app.name). Try again when it has finished.")
+        }
         let current: Session
         do {
             current = try sessionFor(app, pid: pid)
@@ -120,6 +157,12 @@ public actor ScreenController: ScreenControlling {
             }
             return await self.read(request, app: app, pid: pid, client: current.client, generation: generation)
         }
+    }
+
+    public func taskEnded() async {
+        await deps.claims.release(ObjectIdentifier(self))
+        session = nil
+        looks = [:]
     }
 
     private func sessionFor(_ app: ScreenApp, pid: pid_t) throws -> Session {

@@ -22,7 +22,7 @@ final class SonnyAppModel: ObservableObject {
     // The composer.
     @Published var composerText = ""
     /// "Don't save this task": the next request is private (decision 10). Resets once it's sent.
-    @Published var isPrivate = false
+    @Published private(set) var isPrivate = false
     @Published private(set) var followUp: FollowUp?
     @Published var mode: AgentInteractionMode {
         didSet { defaults.set(mode.rawValue, forKey: Self.modeKey) }
@@ -164,6 +164,13 @@ final class SonnyAppModel: ObservableObject {
         }
     }
 
+    /// The person's own choice for the next request. It takes the toggle over from the private
+    /// task it was left on for, so that task ending doesn't switch it back off.
+    func togglePrivate() {
+        privateTask = nil
+        isPrivate.toggle()
+    }
+
     private func resetPrivateIfSettled() {
         guard let id = privateTask, controller.snapshot(id)?.phase.isTerminal ?? true else { return }
         privateTask = nil
@@ -175,15 +182,9 @@ final class SonnyAppModel: ObservableObject {
         widgetRequests += 1
     }
 
-    /// True while the task the widget follows is still going; the composer and the buttons that
-    /// start another followed task wait for it.
-    var isFollowedTaskRunning: Bool {
-        followedTask.flatMap { controller.snapshot($0) }.map { !$0.phase.isTerminal } ?? false
-    }
-
-    /// Asks for the same thing again, as a new task.
+    /// Asks for the same thing again, as a new task. Tasks run side by side, so it doesn't wait for
+    /// the one the widget follows.
     func runAgain(_ goal: String) {
-        guard !isFollowedTaskRunning else { return }
         widgetRequests += 1
         ask(goal, origin: .composer)
     }
@@ -193,7 +194,6 @@ final class SonnyAppModel: ObservableObject {
     }
 
     func run(_ routine: RoutineGoal) {
-        guard !isFollowedTaskRunning else { return }
         widgetRequests += 1
         Task { followedTask = await desk.run(routine).task }
     }
