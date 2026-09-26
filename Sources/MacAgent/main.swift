@@ -30,6 +30,7 @@ let appModel = SonnyAppModel(
 // The readiness rows follow the session: signing in is a sheet and signing out a menu item, so
 // neither re-fires anything that would refresh them, and the next account must not read the
 // previous one's credit figure.
+appModel.signedInAccount = { [weak accountModel] in accountModel?.identity?.userID }
 accountModel.sessionDidChange = { [weak appModel] in
     appModel?.refreshPermissions()
     appModel?.forgetCredits()

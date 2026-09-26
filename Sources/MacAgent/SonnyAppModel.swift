@@ -94,6 +94,7 @@ final class SonnyAppModel: ObservableObject {
     // MARK: Starting
 
     func start() async {
+        await forgetTasksOfAnotherAccount()
         await controller.launch()
         await desk.load()
         clipboardHistoryOn = (try? stores.clipboardSettings.load().isEnabled) ?? false
@@ -110,9 +111,26 @@ final class SonnyAppModel: ObservableObject {
         Task { await watchClientVersion() }
     }
 
-    /// Signing in or out changes who the gateway connection is for.
+    /// Signing in or out changes who the gateway connection is for. Tasks left from another
+    /// account are ended before the connection opens as the new one.
     func accountChanged() {
-        Task { await controller.reconnect() }
+        Task {
+            await forgetTasksOfAnotherAccount()
+            await controller.reconnect()
+        }
+    }
+
+    /// Who is signed in now, as the account model says. The app sets it.
+    var signedInAccount: @MainActor () -> String? = { nil }
+    static let taskOwnerKey = "SonnyV2TaskOwner"
+
+    /// Unfinished tasks belong to the account that started them. When the Mac is now someone
+    /// else's, or no one's, they end here and go no further.
+    private func forgetTasksOfAnotherAccount() async {
+        let current = signedInAccount()
+        guard defaults.string(forKey: Self.taskOwnerKey) != current else { return }
+        await controller.discardUnfinishedTasks()
+        defaults.set(current, forKey: Self.taskOwnerKey)
     }
 
     func stop() async {

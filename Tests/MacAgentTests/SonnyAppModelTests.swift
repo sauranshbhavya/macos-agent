@@ -37,6 +37,13 @@ private final class CountingCapability: Capability, @unchecked Sendable {
     }
 }
 
+/// Who a test has signed in.
+@MainActor
+private final class SignedInAccount {
+    var value: String?
+    init(value: String?) { self.value = value }
+}
+
 @MainActor
 private struct AppFixture {
     let gateway = ScriptedGateway()
@@ -163,6 +170,29 @@ struct SonnyAppModelTests {
         #expect(body.isPrivate)
         #expect(await eventually { fixture.model.followedTask == task })
         #expect(!fixture.model.isPrivate)
+    }
+
+    @Test
+    func anotherAccountSigningInEndsTheLastOnesTasksAndTheSameOneKeepsThem() async throws {
+        let fixture = try AppFixture()
+        let account = SignedInAccount(value: "user-a")
+        fixture.model.signedInAccount = { account.value }
+        fixture.model.accountChanged()
+
+        fixture.model.composerText = "Summarise my inbox"
+        fixture.model.submitComposer()
+        let (task, _) = try await fixture.start()
+        #expect(await eventually { fixture.model.controller.snapshot(task) != nil })
+
+        // The same account signing in again keeps its task.
+        fixture.model.accountChanged()
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(fixture.model.controller.snapshot(task) != nil)
+
+        // Someone else signs in: the task is gone before the new connection opens.
+        account.value = "user-b"
+        fixture.model.accountChanged()
+        #expect(await eventually { fixture.model.controller.snapshot(task) == nil })
     }
 
     @Test

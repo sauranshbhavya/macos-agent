@@ -718,6 +718,35 @@ struct InstantPathTests {
     }
 
     @Test
+    func anotherAccountsTasksEndWithoutAWordToTheGatewayAndLeaveNothingBehind() async throws {
+        let gateway = ScriptedGateway()
+        let ledgers = MemoryTaskLedgerStore()
+        let send = TestCapability(name: "send_it", floor: .external)
+        let controller = makeController(gateway, ledgers: ledgers, capabilities: [send])
+        await controller.launch()
+        let task = try await startedTask(controller, TaskRequest(goal: "Send the report", mode: .normal))
+        _ = try await gateway.next("task.start")
+        let action = ActionID()
+        await gateway.send(task, propose([call("send_it", action, effect: .external)]), re: 1)
+        var commit: PreparedCommit?
+        #expect(await eventually {
+            if case .awaitingApproval(let pending) = controller.snapshot(task)?.phase { commit = pending; return true }
+            return false
+        })
+
+        // Signed out, or someone else signed in: the task is gone, here and on disk.
+        await controller.discardUnfinishedTasks()
+        #expect(controller.tasks.isEmpty)
+        #expect(ledgers.record(task) == nil)
+
+        // A late yes counts for nothing, and nothing more reaches the gateway.
+        await controller.decide(task: task, action: action, commit: try #require(commit).commitID, approved: true)
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(send.executed.value.isEmpty)
+        #expect(await gateway.unread("outcome").isEmpty)
+    }
+
+    @Test
     func aVersionTheGatewayRefusedSaysToUpdate() async throws {
         let gateway = ScriptedGateway()
         await gateway.refuseNext(1, status: 410)

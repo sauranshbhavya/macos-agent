@@ -158,6 +158,19 @@ public final class TaskController: ObservableObject {
         await connection.start()
     }
 
+    /// Ends every unfinished task, here and on disk, without telling the gateway: they belonged to
+    /// an account that is no longer signed in, and none of them may be offered to the next one's
+    /// session or shown to whoever signs in next. Callable before `launch()`, when only ledgers exist.
+    public func discardUnfinishedTasks() async {
+        for runtime in runtimes.values { await runtime.discard() }
+        for record in (try? ledgers.unfinished()) ?? [] { try? ledgers.delete(record.task) }
+        runtimes.removeAll()
+        localTasks.removeAll()
+        liveTasks.removeAll()
+        waiting.removeAll()
+        tasks.removeAll()
+    }
+
     /// Starts a model-backed task. With no gateway connection it fails at once with a plain server
     /// error (V2 plan decision 13).
     @discardableResult
