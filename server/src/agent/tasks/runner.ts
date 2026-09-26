@@ -58,6 +58,16 @@ const MAX_TASKS_WITH_SCREENSHOTS = 1000;
  * reclaimed by the operator's sweep first.
  */
 export const MODEL_CALL_DEADLINE_MS = 180_000;
+/**
+ * When a turn fails outside the agent (the store, almost always), how long the runner waits before
+ * each try again. Nothing else would schedule the task until its Mac reconnects.
+ */
+export const TURN_RETRY_DELAYS_MS: readonly number[] = [1_000, 5_000, 30_000];
+/**
+ * How long an answer the store refused stays in memory for a retry. As long as a live task can go
+ * quiet before the sweep abandons it (`TASK_ABANDON_AFTER_MS`), after which nothing retries it.
+ */
+const UNSTORED_TURN_TTL_MS = 24 * 60 * 60 * 1000;
 
 export interface RunnerLog {
   info(data: object, message: string): void;
@@ -76,6 +86,8 @@ export interface RunnerDeps {
   readonly budgets?: TaskBudgets;
   /** Overrides `MODEL_CALL_DEADLINE_MS`, for tests. */
   readonly modelCallDeadlineMs?: number;
+  /** Overrides `TURN_RETRY_DELAYS_MS`, for tests. */
+  readonly turnRetryDelaysMs?: readonly number[];
   /** What a device declared in its hello, while it is connected. */
   readonly manifestFor?: (accountId: string, deviceId: string) => Manifest | undefined;
 }
@@ -154,10 +166,20 @@ function lastExchanged(transcript: readonly StoredMessage[]): StoredMessage | un
   return undefined;
 }
 
+/** A turn's answer the store refused, kept so a retry stores it rather than paying for it again. */
+interface UnstoredTurn {
+  readonly re: number;
+  readonly entries: readonly TurnEntry[];
+  readonly end: EndedStatus | undefined;
+  readonly keptAt: number;
+}
+
 export class TaskRunner {
   private readonly chains = new Map<string, Promise<void>>();
   private readonly running = new Map<string, { controller: AbortController; accountId: string }>();
   private readonly screenshots = new Map<string, Map<string, { data: string; keptAt: number }>>();
+  private readonly unstored = new Map<string, UnstoredTurn>();
+  private readonly retries = new Set<NodeJS.Timeout>();
   private readonly budgets: TaskBudgets;
   private stopped = false;
 
@@ -241,6 +263,8 @@ export class TaskRunner {
   /** Stops every running turn without ending its task, for a shutdown; resume runs it again. */
   async stop(): Promise<void> {
     this.stopped = true;
+    for (const timer of this.retries) clearTimeout(timer);
+    this.retries.clear();
     for (const { controller } of this.running.values()) controller.abort(new Error("shutting down"));
     await Promise.allSettled([...this.chains.values()]);
   }
@@ -295,18 +319,33 @@ export class TaskRunner {
     return this.screenshots.size;
   }
 
-  private schedule(taskId: string): void {
+  private schedule(taskId: string, attempt = 0): void {
     if (this.stopped) return;
     const previous = this.chains.get(taskId) ?? Promise.resolve();
     const next = previous
       .then(() => this.runTurnIfDue(taskId))
       .catch((error: unknown) => {
-        this.deps.log.error({ err: error, task: taskId }, "a task turn failed outside the agent");
+        const delay = (this.deps.turnRetryDelaysMs ?? TURN_RETRY_DELAYS_MS)[attempt];
+        this.deps.log.error(
+          { err: error, task: taskId, retryInMs: delay ?? null },
+          "a task turn failed outside the agent",
+        );
+        if (delay !== undefined) this.retryLater(taskId, attempt + 1, delay);
       })
       .finally(() => {
         if (this.chains.get(taskId) === next) this.chains.delete(taskId);
       });
     this.chains.set(taskId, next);
+  }
+
+  private retryLater(taskId: string, attempt: number, delayMs: number): void {
+    if (this.stopped) return;
+    const timer = setTimeout(() => {
+      this.retries.delete(timer);
+      this.schedule(taskId, attempt);
+    }, delayMs);
+    timer.unref();
+    this.retries.add(timer);
   }
 
   private async cancel(task: TaskRecord, cancelSeq: number): Promise<void> {
@@ -323,11 +362,20 @@ export class TaskRunner {
     const task = await store.task(taskId);
     if (task === undefined || task.status !== "live") {
       this.screenshots.delete(taskId);
+      this.unstored.delete(taskId);
       return;
     }
     const transcript = await store.transcript(taskId);
     const trigger = lastExchanged(transcript);
-    if (trigger === undefined || trigger.direction !== "in") return;
+    if (trigger === undefined || trigger.direction !== "in") {
+      this.unstored.delete(taskId);
+      return;
+    }
+    const kept = this.unstored.get(taskId);
+    if (kept !== undefined && kept.re === trigger.seq) {
+      return this.storeTurn(task, kept.re, kept.entries, kept.end);
+    }
+    this.unstored.delete(taskId);
 
     if (task.turns >= this.budgets.maxTurns) {
       return this.endWith(task, trigger.seq, [], FINISH_FOR_ERROR.budget!);
@@ -376,10 +424,30 @@ export class TaskRunner {
         body: message.body,
       })),
     ];
-    const stored = await store.appendTurn(taskId, entries, now(), end);
-    if (stored === undefined) return;
-    this.deps.deliver(task, stored.map((message) => wireMessageOf(taskId, message)));
-    if (end !== undefined) this.screenshots.delete(taskId);
+    await this.storeTurn(task, trigger.seq, entries, end);
+  }
+
+  /**
+   * Stores a turn's answer and delivers it. The answer is kept in memory until the store takes it:
+   * its model calls are already paid for, so a retry after the store failed stores this same answer
+   * instead of running the turn, and paying, again.
+   */
+  private async storeTurn(
+    task: TaskRecord,
+    re: number,
+    entries: readonly TurnEntry[],
+    end: EndedStatus | undefined,
+  ): Promise<void> {
+    const now = this.deps.now();
+    for (const [taskId, turn] of this.unstored) {
+      if (now.getTime() - turn.keptAt >= UNSTORED_TURN_TTL_MS) this.unstored.delete(taskId);
+    }
+    const turn: UnstoredTurn = { re, entries, end, keptAt: now.getTime() };
+    this.unstored.set(task.id, turn);
+    const stored = await this.deps.store.appendTurn(task.id, entries, now, end);
+    if (this.unstored.get(task.id) === turn) this.unstored.delete(task.id);
+    if (end !== undefined) this.screenshots.delete(task.id);
+    if (stored !== undefined) this.deps.deliver(task, stored.map((message) => wireMessageOf(task.id, message)));
   }
 
   /** A turn must end in a message that waits for the Mac or in finish, with finish only last. */
@@ -423,9 +491,7 @@ export class TaskRunner {
       ...notes.map((note) => ({ direction: "note" as const, re: null, msgId: randomUUID(), type: note.type, body: note.body })),
       { direction: "out", re, msgId: randomUUID(), type: "finish", body: finish },
     ];
-    const stored = await this.deps.store.appendTurn(task.id, entries, this.deps.now(), endedStatusOf(finish));
-    this.screenshots.delete(task.id);
-    if (stored !== undefined) this.deps.deliver(task, stored.map((message) => wireMessageOf(task.id, message)));
+    await this.storeTurn(task, re, entries, endedStatusOf(finish));
   }
 
   /**

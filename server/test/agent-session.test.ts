@@ -2,10 +2,11 @@ import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it } from "vitest";
 import type { Agent } from "../src/agent/agent.js";
 import { memoryModelCallLedger } from "../src/agent/credits.js";
-import { CLOSE_CODE } from "../src/agent/session/close.js";
+import { CLOSE_CODE, DRAIN_RECONNECT_AFTER_MS, DRAIN_RECONNECT_SPREAD_MS, drainReconnectAfterMs } from "../src/agent/session/close.js";
 import { memoryTaskStore } from "../src/agent/tasks/store.js";
 import { sweepTasksOnce, TASK_ABANDON_AFTER_MS, TASK_RETENTION_MS } from "../src/agent/tasks/retention.js";
 import {
+  flakyStore,
   proposeOpen,
   scriptedAgent,
   startHarness,
@@ -146,6 +147,43 @@ describe("a V2 session", () => {
     const error = await m.nextOfType("error");
     expect(error).toMatchObject({ body: { code: "sequence_gap" } });
     expect((await h.store.task(task))?.lastSeqIn).toBe(1);
+    // The Mac ignores error frames, so the close is what makes it reconnect and send from welcome.
+    expect((await m.closed).code).toBe(CLOSE_CODE.internal);
+  });
+
+  it("closes the session when a message can't be stored, and takes it when the Mac sends it again", async () => {
+    const store = memoryTaskStore();
+    const h = await harness({ store, agentFactory: scriptedAgent([{ messages: [proposeOpen()] }, { messages: [proposeOpen("Mail", true)] }]) });
+    const first = await mac(h.url);
+    first.hello(DEVICE);
+    await first.nextOfType("welcome");
+    const task = randomUUID();
+    first.startTask(task);
+    const propose = await first.nextOfType("propose");
+
+    flakyStore("appendInbound", 1, store);
+    const outcome = first.outcomeFor(propose);
+    expect((await first.closed).code).toBe(CLOSE_CODE.internal);
+
+    // What the Mac does: reconnect, list the task, and send its unacknowledged outbox again.
+    const second = await mac(h.url);
+    second.hello(DEVICE, [{ task, last_seq_in: 1, last_seq_out: 2 }]);
+    const welcome = await second.nextOfType("welcome");
+    expect(welcome.type === "welcome" && welcome.body.tasks).toEqual([{ task, state: "live", last_seq_in: 1 }]);
+    second.send(outcome);
+    expect(await second.nextOfType("propose")).toMatchObject({ task, seq: 2, re: 2 });
+  });
+
+  it("closes a session whose hello can't be handled, so the Mac tries again", async () => {
+    const h = await harness({ store: flakyStore("touchDevice") });
+    const first = await mac(h.url);
+    first.hello(DEVICE);
+    expect((await first.closed).code).toBe(CLOSE_CODE.internal);
+    expect(first.received.some((message) => message.type === "welcome")).toBe(false);
+
+    const second = await mac(h.url);
+    second.hello(DEVICE);
+    await second.nextOfType("welcome");
   });
 
   it("asks for a fresh token before it expires, keeps the session on reauth, and closes 4401 without one", async () => {
@@ -198,10 +236,19 @@ describe("a V2 session", () => {
     await m.nextOfType("welcome");
     const closing = h.app.close();
     const goodbye = await m.nextOfType("goodbye");
-    expect(goodbye).toMatchObject({ body: { reason: "draining", reconnect_after_ms: 1000 } });
+    expect(goodbye).toMatchObject({ body: { reason: "draining" } });
+    const pause = goodbye.type === "goodbye" ? goodbye.body.reconnect_after_ms : undefined;
+    expect(pause).toBeGreaterThanOrEqual(DRAIN_RECONNECT_AFTER_MS);
+    expect(pause).toBeLessThan(DRAIN_RECONNECT_AFTER_MS + DRAIN_RECONNECT_SPREAD_MS);
     expect((await m.closed).code).toBe(CLOSE_CODE.draining);
     await closing;
     harnesses = harnesses.filter((x) => x !== h);
+  });
+
+  it("spreads the Macs' reconnects after a drain across the spread, not all in one second", () => {
+    expect(drainReconnectAfterMs(() => 0)).toBe(DRAIN_RECONNECT_AFTER_MS);
+    expect(drainReconnectAfterMs(() => 0.5)).toBe(DRAIN_RECONNECT_AFTER_MS + DRAIN_RECONNECT_SPREAD_MS / 2);
+    expect(drainReconnectAfterMs(() => 0.9999)).toBeLessThan(DRAIN_RECONNECT_AFTER_MS + DRAIN_RECONNECT_SPREAD_MS);
   });
 
   it("retires the older session when the same device connects again", async () => {

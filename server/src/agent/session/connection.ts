@@ -20,7 +20,7 @@ import {
 } from "../protocol.js";
 import type { TaskRunner } from "../tasks/runner.js";
 import type { TaskStore } from "../tasks/store.js";
-import { CLOSE_CODE, DRAIN_RECONNECT_AFTER_MS, type GoodbyeReason } from "./close.js";
+import { CLOSE_CODE, drainReconnectAfterMs, type GoodbyeReason } from "./close.js";
 import type { SessionPeer, SessionRegistry } from "./registry.js";
 
 export interface SessionTiming {
@@ -121,7 +121,7 @@ export class SessionConnection implements SessionPeer {
       v: PROTOCOL_VERSION,
       type: "goodbye",
       id: randomUUID(),
-      body: reason === "draining" ? { reason, reconnect_after_ms: DRAIN_RECONNECT_AFTER_MS } : { reason },
+      body: reason === "draining" ? { reason, reconnect_after_ms: drainReconnectAfterMs() } : { reason },
     });
     this.closeWith(CLOSE_CODE[reason], reason);
   }
@@ -233,8 +233,12 @@ export class SessionConnection implements SessionPeer {
     this.queue = this.queue
       .then(() => this.handle(message))
       .catch((error: unknown) => {
+        // Usually the database, for a moment. Staying open would leave this message unhandled for
+        // good, since its id is already seen and the Mac never resends while connected; a new
+        // session starts from what the store actually holds.
         this.deps.log.error({ err: error, type: message.type }, "a session message could not be handled");
         this.sendError("internal", "The gateway could not handle that message.", message.id);
+        this.closeWith(CLOSE_CODE.internal, "internal error");
       });
   }
 
@@ -312,6 +316,7 @@ export class SessionConnection implements SessionPeer {
       this.sendError("unknown_task", "The gateway has no such task.", message.id);
     } else if (outcome === "gap") {
       this.sendError("sequence_gap", "A message before this one never arrived. Resend from welcome.", message.id);
+      this.closeWith(CLOSE_CODE.internal, "sequence gap");
     }
   }
 }
