@@ -225,18 +225,6 @@ describe("the planner and its screen subagent", () => {
     expect(lastPlannerCall.tier).toBe("standard");
   });
 
-  it("opens the app when it isn't running, before asking the model anything", async () => {
-    const router = scriptedRouter({ planner: [plan({ kind: "screen_task", app: "Notes", objective: "Open a note" })] });
-    const h = harness(router);
-    const look = await h.start("Open a note");
-    const open = await h.observe(look.seq, { generation: 1, error: { code: "app_not_running" } });
-    expect(open).toMatchObject({
-      type: "propose",
-      body: { agent: "screen", actions: [{ effect: "navigate", operation: { name: "open_app", version: 1, args: { app: "Notes" } } }] },
-    });
-    expect(router.calls.filter((c) => c.schemaName === SCREEN_DECISION_SCHEMA_NAME)).toHaveLength(0);
-  });
-
   it("ends a scheduled task that would have to ask, instead of waiting for nobody", async () => {
     const router = scriptedRouter({ planner: [plan({ kind: "ask", question: "Which folder should I tidy?" })] });
     const h = harness(router);
@@ -257,6 +245,18 @@ describe("the planner and its screen subagent", () => {
     expect(ask).toMatchObject({ type: "ask", body: { question: "Which folder should I tidy?" } });
     const call = router.calls.find((c) => c.schemaName === PLANNER_DECISION_SCHEMA_NAME)!;
     expect(call.user).not.toContain(UNATTENDED_RULE);
+  });
+
+  it("opens the app when it isn't running, before asking the model anything", async () => {
+    const router = scriptedRouter({ planner: [plan({ kind: "screen_task", app: "Notes", objective: "Open a note" })] });
+    const h = harness(router);
+    const look = await h.start("Open a note");
+    const open = await h.observe(look.seq, { generation: 1, error: { code: "app_not_running" } });
+    expect(open).toMatchObject({
+      type: "propose",
+      body: { agent: "screen", actions: [{ effect: "navigate", operation: { name: "open_app", version: 1, args: { app: "Notes" } } }] },
+    });
+    expect(router.calls.filter((c) => c.schemaName === SCREEN_DECISION_SCHEMA_NAME)).toHaveLength(0);
   });
 
   it("retries an unusable step once on a stronger tier, telling the model why", async () => {
