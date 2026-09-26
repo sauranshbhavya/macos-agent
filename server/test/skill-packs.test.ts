@@ -361,6 +361,7 @@ describe("the committed catalogue", () => {
       ["inbox", "Gmail"], ["app", "Probe"], ["website", "Probe"], ["download", "Probe"],
       ["new docs", "Google Docs"], ["my files", "Dropbox"],
       ["box", "Box"], ["boxes", "Box"], ["expo", "Expo"], ["grok", "Grok"], ["podia", "Podia"], ["luma", "Luma"],
+      ["box.", "Box"], [".box", "Box"], ["notes.", "Apple Notes"], ["post it.", "Slack"],
     ];
     for (const [trigger, site] of refused) expect(triggerProblem(trigger, site, ordinary), trigger).toBeDefined();
     const allowed: Array<[string, string]> = [
@@ -368,6 +369,7 @@ describe("the committed catalogue", () => {
       ["make scenario", "Make"], ["in notion", "Notion"], ["post on x", "X"], ["linear issue", "Linear"],
       ["gmail", "Gmail"], ["google docs", "Google Docs"], ["microsoft teams", "Microsoft Teams"],
       ["basecamp", "Basecamp"], ["homebase", "Homebase"], ["firebase", "Firebase"], ["okta", "Okta"],
+      ["box.com", "Box"], ["app.box.com", "Box"],
     ];
     for (const [trigger, site] of allowed) expect(triggerProblem(trigger, site, ordinary), trigger).toBeUndefined();
   });
@@ -1519,10 +1521,16 @@ function isOrdinary(word: string, ordinary: ReadonlySet<string>): boolean {
   return singularCandidates(word).some((form) => ordinary.has(form) || MODERN_WORDS.has(form) || ORDINARY_WORDS_THE_SYSTEM_LIST_LACKS.has(form));
 }
 
+/**
+ * A host such as `make.com` or `docs.google.com`: labels joined by single dots, none empty. A dot at
+ * either end is punctuation, so `box.` is the word "box" at the end of a sentence, not a domain.
+ */
+const DOMAIN_SHAPE = /^[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)+$/u;
+
 /** Why `trigger` would match ordinary language for a site called `siteName`, or `undefined`. */
 function triggerProblem(trigger: string, siteName: string, ordinary: ReadonlySet<string>): string | undefined {
   const folded = normalized(trigger);
-  if (folded.includes(".") && !folded.includes(" ")) return undefined;
+  if (DOMAIN_SHAPE.test(folded)) return undefined;
   const words = cut(folded);
   const [only] = words;
   if (only === undefined) return "has no words";
