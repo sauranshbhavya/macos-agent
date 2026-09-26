@@ -79,6 +79,9 @@ public struct TaskSnapshot: Sendable, Equatable {
     public var phase: TaskPhase
     public var progress: String?
     public var actions: [ActionSummary]
+    /// Counts up with every snapshot a runtime takes. Snapshots reach the main actor in whatever order
+    /// their tasks run, so a later one can arrive first; this is how the older one is told apart.
+    public var revision: UInt64 = 0
 }
 
 /// Looks at the screen for the gateway. Phase 4 supplies the real one.
@@ -149,6 +152,7 @@ public actor TaskRuntime {
     private var approval: (commit: PreparedCommit, reply: CheckedContinuation<Bool, Never>)?
     private var askSeq: Int?
     private var observationGeneration = 0
+    private var snapshotRevision: UInt64 = 0
     /// A rebuilt outcome waiting for the user to resolve an unknown end, or for the next welcome.
     private var heldOutcome: (re: Int, results: [ActionResult])?
     /// A consequential action in the proposal now running ended unknown.
@@ -487,14 +491,16 @@ public actor TaskRuntime {
     var isWaitingForADecision: Bool { approval != nil }
 
     public func snapshot() -> TaskSnapshot {
-        TaskSnapshot(
+        snapshotRevision += 1
+        return TaskSnapshot(
             id: id,
             goal: record.request.goal,
             origin: record.request.origin,
             isPrivate: record.request.isPrivate,
             phase: phase,
             progress: progress,
-            actions: summaries
+            actions: summaries,
+            revision: snapshotRevision
         )
     }
 

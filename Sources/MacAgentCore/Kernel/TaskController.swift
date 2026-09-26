@@ -334,8 +334,12 @@ public final class TaskController: ObservableObject {
         gateway = state
     }
 
-    private func apply(_ snapshot: TaskSnapshot) {
+    /// Internal for tests, which apply snapshots out of order on purpose.
+    func apply(_ snapshot: TaskSnapshot) {
         if let index = tasks.firstIndex(where: { $0.id == snapshot.id }) {
+            // A snapshot older than the one shown is dropped. In the founders' manual pass a stale
+            // "running" snapshot landed after the final one, and the task showed "Working…" for good.
+            guard snapshot.revision > tasks[index].revision else { return }
             tasks[index] = snapshot
         } else {
             tasks.append(snapshot)

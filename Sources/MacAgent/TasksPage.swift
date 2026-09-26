@@ -56,7 +56,14 @@ struct TasksPage: View {
     // MARK: List
 
     private var running: [TaskSnapshot] {
-        model.controller.tasks.filter { !$0.phase.isTerminal }.reversed()
+        TasksPage.inProgress(model.controller.tasks, history: model.desk.history)
+    }
+
+    /// Unfinished tasks, newest first. A task already in history is finished, whatever its latest
+    /// snapshot still says, so it is never listed twice.
+    static func inProgress(_ tasks: [TaskSnapshot], history: [FinishedTask]) -> [TaskSnapshot] {
+        let finished = Set(history.map(\.id))
+        return tasks.filter { !$0.phase.isTerminal && !finished.contains($0.id) }.reversed()
     }
 
     private var finished: [FinishedTask] {
@@ -83,16 +90,20 @@ struct TasksPage: View {
         } else {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
+                    // Every row's identity is its group's as well as its task's: a lazy stack reuses a
+                    // row by identity, and a task moving between the groups under one id showed the
+                    // wrong heading and a stale row.
                     if !running.isEmpty {
-                        groupHeader("In progress")
+                        groupHeader("In progress").id("heading-in-progress")
                         ForEach(running, id: \.id) { task in
                             row(title: task.goal, detail: task.progress ?? "Working…", icon: "circle.dotted", tint: SonnyTheme.accent, id: task.id) {
                                 model.showWidget()
                             }
+                            .id("in-progress-\(task.id)")
                         }
                     }
                     if !finished.isEmpty {
-                        groupHeader("Finished")
+                        groupHeader("Finished").id("heading-finished")
                         ForEach(finished) { task in
                             row(
                                 title: task.goal,
@@ -101,6 +112,7 @@ struct TasksPage: View {
                                 tint: TasksPage.tint(for: task.outcome),
                                 id: task.id
                             ) { selected = task.id }
+                            .id("finished-\(task.id)")
                         }
                     }
                 }
