@@ -26,6 +26,49 @@ struct FakeScreenshots: WindowScreenshotting {
     }
 }
 
+/// Whether someone is at the Mac, as a test says.
+struct FixedAttention: SessionAttentionMonitoring {
+    var state: SessionAttention = .attended
+    func attention() async -> SessionAttention { state }
+}
+
+/// Attention a test changes mid-run.
+final class ChangingAttention: SessionAttentionMonitoring, @unchecked Sendable {
+    private let lock = NSLock()
+    private var current: SessionAttention = .attended
+    var state: SessionAttention {
+        get { lock.withLock { current } }
+        set { lock.withLock { current = newValue } }
+    }
+    func attention() async -> SessionAttention { state }
+}
+
+/// Apps with a front one a test can see and move, as the person switching would.
+final class TrackingScreenApps: ScreenApps, @unchecked Sendable {
+    private let lock = NSLock()
+    private var front: pid_t
+
+    init(front: pid_t) {
+        self.front = front
+    }
+
+    var frontmost: pid_t {
+        get { lock.withLock { front } }
+        set { lock.withLock { front = newValue } }
+    }
+
+    func resolve(_ nameOrBundleID: String) async -> ScreenApp? {
+        await FakeScreenApps().resolve(nameOrBundleID)
+    }
+
+    func activate(pid: pid_t) async -> Bool {
+        frontmost = pid
+        return true
+    }
+
+    func frontmostPID() async -> pid_t? { frontmost }
+}
+
 /// A capture whose redaction found a shell in the picture.
 struct ShellInThePicture: WindowScreenshotting {
     func screenshot(bundleID: String) async throws -> ObservationBody.Screenshot {
@@ -35,11 +78,12 @@ struct ShellInThePicture: WindowScreenshotting {
 
 func screenController(
     _ fake: FakeCuaNotes,
-    apps: FakeScreenApps = FakeScreenApps(),
+    apps: any ScreenApps = FakeScreenApps(),
     ownPID: pid_t = 1,
     manifests: Shared<[CuaCapabilityManifest]> = Shared([]),
     claims: ScreenAppClaims = ScreenAppClaims(),
-    screenshots: any WindowScreenshotting = FakeScreenshots()
+    screenshots: any WindowScreenshotting = FakeScreenshots(),
+    attention: any SessionAttentionMonitoring = FixedAttention()
 ) -> ScreenController {
     ScreenController(dependencies: .init(
         driver: { manifest in
@@ -50,6 +94,7 @@ func screenController(
         screenshots: screenshots,
         lease: ForegroundLease(),
         claims: claims,
+        attention: attention,
         ownPID: ownPID
     ))
 }
@@ -275,6 +320,60 @@ struct ScreenControllerTests {
         let observation = await look(controller, generation: 1, screenshot: true)
         #expect(observation.error?.code == .appRefused)
         #expect(observation.screenshot == nil && observation.ax == nil)
+    }
+
+    @Test
+    func nobodyAtTheMacStopsScreenWork() async throws {
+        let locked = await look(screenController(FakeCuaNotes(), attention: FixedAttention(state: .screenLocked)), generation: 1)
+        #expect(locked.error?.code == .foregroundUnavailable)
+        #expect(locked.error?.message == "Sonny stopped working in apps because your Mac is locked.")
+        #expect(locked.ax == nil)
+
+        // Someone was there for the look, then went away before the click.
+        let fake = FakeCuaNotes()
+        let attention = ChangingAttention()
+        let controller = screenController(fake, attention: attention)
+        let observation = await look(controller, generation: 1)
+        let prepared = try await controller.prepare(.press(app: "Notes", element: try ref(observation) { $0.label == "New Note" }), actionID: ActionID())
+        attention.state = .userIdle
+        let outcome = await controller.execute(prepared)
+        #expect(outcome.status == .failed)
+        #expect(outcome.error?.message == "Sonny stopped working in apps because nobody has used this Mac for a few minutes.")
+        #expect(await fake.state.clicked.isEmpty)
+    }
+
+    @Test
+    func thePersonsAppComesBackWhenTheScreenWorkEnds() async throws {
+        // Mail (5151) is in front; the task works in Notes (4242).
+        let apps = TrackingScreenApps(front: 5151)
+        let controller = screenController(FakeCuaNotes(), apps: apps)
+        _ = await look(controller, generation: 1)
+        #expect(apps.frontmost == 4242)
+        await controller.taskEnded()
+        #expect(apps.frontmost == 5151)
+
+        // Someone who has already moved on to another app is left there.
+        let moved = TrackingScreenApps(front: 5151)
+        let other = screenController(FakeCuaNotes(), apps: moved)
+        _ = await look(other, generation: 1)
+        moved.frontmost = 9999
+        await other.taskEnded()
+        #expect(moved.frontmost == 9999)
+    }
+
+    @Test
+    func theMonitorReadsLockedThenAsleepThenIdle() async {
+        func monitor(locked: Bool = false, asleep: Bool = false, idle: TimeInterval = 0) -> SystemSessionAttentionMonitor {
+            SystemSessionAttentionMonitor(environment: .init(isScreenLocked: { locked }, isDisplayAsleep: { asleep }, secondsSinceLastInput: { idle }))
+        }
+        #expect(await monitor().attention() == .attended)
+        #expect(await monitor(idle: 179).attention() == .attended)
+        #expect(await monitor(idle: 180).attention() == .userIdle)
+        #expect(await monitor(asleep: true, idle: 500).attention() == .displayAsleep)
+        #expect(await monitor(locked: true, asleep: true).attention() == .screenLocked)
+        // A session dictionary that can't be read counts as locked.
+        #expect(SystemSessionAttentionMonitor.isScreenLocked(sessionDictionary: nil))
+        #expect(!SystemSessionAttentionMonitor.isScreenLocked(sessionDictionary: ["CGSSessionScreenIsLocked": 0]))
     }
 
     @Test
