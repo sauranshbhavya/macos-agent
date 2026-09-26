@@ -109,7 +109,8 @@ public struct InstantCommandResolver: Sendable {
     ///   "run my X routine") is unambiguous and always runs.
     /// - A bare verb ("run X", "start X", "launch X") steps aside when X also names an installed
     ///   app, so "run Slack" is never silently a routine.
-    /// - The routine's exact name on its own runs it.
+    /// - The routine's exact name on its own runs it, and steps aside the same way: "Slack" alone
+    ///   is more likely the app than a routine named after it.
     ///
     /// The prefixed calculator, clipboard and snippet-save doors keep their commands, because they
     /// read before this one in V1.
@@ -133,7 +134,8 @@ public struct InstantCommandResolver: Sendable {
             let namesInstalledApp = candidates.direct.contains { installedAppResolver.resolve($0) != nil }
             return namesInstalledApp ? nil : routine
         }
-        return savedRoutine(matching: [command], in: routines)
+        guard let routine = savedRoutine(matching: [command], in: routines) else { return nil }
+        return installedAppResolver.resolve(command) == nil ? routine : nil
     }
 
     private struct LaunchCandidateSet {

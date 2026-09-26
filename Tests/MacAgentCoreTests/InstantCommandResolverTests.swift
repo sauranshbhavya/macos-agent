@@ -392,9 +392,11 @@ struct InstantCommandResolverTests {
         #expect(resolver.routine(namedBy: "launch discord", in: routines) == nil)
         #expect(resolver.routine(namedBy: "run routine Discord", in: routines)?.name == "Discord")
         #expect(resolver.routine(namedBy: "run Discord routine", in: routines)?.name == "Discord")
-        #expect(resolver.routine(namedBy: "Discord", in: routines)?.name == "Discord")
-        // With no such app installed, the bare verb runs it.
+        // The name alone is more likely the app, so it steps aside too.
+        #expect(resolver.routine(namedBy: "Discord", in: routines) == nil)
+        // With no such app installed, the bare verb and the name alone both run it.
         #expect(Self.hermeticResolver().routine(namedBy: "run Discord", in: routines)?.name == "Discord")
+        #expect(Self.hermeticResolver().routine(namedBy: "Discord", in: routines)?.name == "Discord")
     }
 
     /// No live catalog and no live app lookup: this suite's commands are about the calculator, and
