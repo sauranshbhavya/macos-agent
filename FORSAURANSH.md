@@ -357,6 +357,62 @@ rules for everyone.
 
 **Lesson.** When you change what a match *does*, re-check how loosely you *match*.
 
+### The rewrite quietly dropped things V1 did "on the side"
+
+The night after V2 merged, an audit compared V1's runner and view model, line by line, with V2. It
+asked one question: what did V1 do *as a side effect* that V2 does nowhere? It found a dozen things.
+None of them was a feature anyone had listed. They were chores V1's big central classes did, and V2's
+cleaner split had no obvious home for them:
+
+- **A signed-out launch never connected again**, even after you signed in, and every failure said
+  "check your internet".
+- **A bad Keychain read made history look empty**, and the next save wrote the empty list over the
+  real file.
+- **The screen agent could read a terminal**, and a shell showing in any app, though Sonny refuses to
+  *act* there.
+- **Screen work kept clicking with the Mac locked.** The plan even said "keep the attention monitors",
+  and they were never ported.
+- **A private task left traces:** clipboard copies, recent files, Shortcut runs and notification
+  text.
+- **"Zip my downloads folder" and "run my morning routine" stopped working.**
+
+**Lesson:** when you split a big class, list everything it *did*, not only what it *was*. A god
+class's side effects are features nobody wrote down. The plan document can also say "keep X", and X
+still gets lost, because deletion is fast and porting is slow. Check the plan's "keep" lines against
+the code after the fact.
+
+### When one bug becomes another
+
+Fixing "signing in connects" created a new, worse path. Sign out of account A and into B without
+quitting, and A's unfinished tasks were offered to B's session. The old bug (the connection never
+restarting) had been hiding the flaw (tasks aren't tied to an account). The review of the fix caught
+it. Now the app remembers which account the Mac's tasks belong to, and ends them before a different
+one connects.
+
+**Lesson:** when a fix makes a path reachable that wasn't before, review what lives on that path.
+
+### Tests can go missing too
+
+Phase 7 deleted test files along with the V1 code they were written for. A few of those files also
+held the only tests of code that V2 still uses: the process runner's cancellation, and the routine
+schedule line on the Routines page. Nothing failed. The tests were simply gone.
+
+One restored test told a second story. It was meant to cover a cancel landing mid-launch, and it
+passed even with the protecting line deleted. It never reached the case it was named for. The fix
+was a small seam in the runner that only tests use, so the test can put its cancel exactly in that
+gap.
+
+**Lesson:** a test you haven't seen fail proves nothing. Delete the line it protects, and watch it go
+red.
+
+### A task-local for privacy
+
+"Don't save this task" has to reach code deep inside adapters, such as the recent-files list and the
+Shortcut history, without threading a parameter through every signature. Swift's `@TaskLocal` does
+it: the runtime sets `TaskPrivacy.isPrivate` around each action, and anything that action awaits can
+read it. The catch is that it doesn't cross `Task.detached`. So the review's first job was to walk
+the path and make sure nothing detached sits between the two.
+
 ### Reviews earn their keep
 
 Every PR tonight got an independent, adversarial review, and every review found something real:
