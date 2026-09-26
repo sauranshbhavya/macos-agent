@@ -121,6 +121,16 @@ struct KernelCapabilityTests {
     }
 
     @Test
+    func aReminderWithNoTimeIsRefusedWithTheQuestionThePlannerShouldAsk() async throws {
+        let fixture = try CapabilityFixture()
+        let reminder = try fixture.capability("create_reminder")
+        let thrown = await #expect(throws: CapabilityPrepareError.self) {
+            _ = try await reminder.prepare(actionID: ActionID(), args: ["title": .string("call the bank")])
+        }
+        #expect(thrown == .invalidArguments("When should Sonny remind you?"))
+    }
+
+    @Test
     func renameKeepsTheFolderAndIsDestructive() async throws {
         let fixture = try CapabilityFixture()
         let source = fixture.root.appendingPathComponent("scan1.pdf")

@@ -44,6 +44,11 @@ public struct AdapterCapability: Capability {
         let risk: CapabilityRiskAssessment
         do {
             resolved = try adapter.resolveDefaultOutputs(in: plan, context: context)
+            // An adapter that needs a detail the arguments didn't give turns the step into a
+            // question. Nothing runs; the question goes back as the reason, so the planner can ask it.
+            if let question = resolved.steps.first(where: { $0.operation == .clarify })?.question {
+                throw CapabilityPrepareError.invalidArguments(question)
+            }
             previews = try adapter.preview(plan: resolved, context: context)
             risk = try adapter.assessRisk(plan: resolved, context: context)
         } catch {
@@ -108,6 +113,7 @@ public struct AdapterCapability: Capability {
     }
 
     static func prepareError(_ error: Error) -> CapabilityPrepareError {
+        if let already = error as? CapabilityPrepareError { return already }
         let message = userMessage(error)
         switch error {
         case is PathValidationError:
@@ -303,7 +309,7 @@ public enum StandardCapabilities {
         now: @escaping @Sendable () -> Date = { Date() }
     ) -> KernelCapabilities {
         KernelCapabilities(
-            [OpenAppCapability(), SaveRoutineCapability(store: routines, now: now)]
+            [OpenAppCapability(focus: { context().focusRestorer }), SaveRoutineCapability(store: routines, now: now)]
                 + AdapterCapabilities.all(context: context, finderRevealer: finderRevealer)
                 + MailCapabilities.all(runner: appleScript)
         )

@@ -72,6 +72,26 @@ struct OpenStepsRestoreFocusTests {
     }
 
 
+    @Test
+    @MainActor
+    func anAppOpenBringsThePreviousAppBack() async throws {
+        let screen = Screen(frontmost: Self.xcode)
+        try await openApp("Safari", screen: screen)
+        #expect(screen.events == ["opened com.apple.Safari", "front com.apple.dt.Xcode"])
+        #expect(screen.frontmost?.bundleIdentifier == "com.apple.dt.Xcode")
+    }
+
+    /// The kernel's `open_app`, opening onto the scripted screen.
+    @MainActor
+    private func openApp(_ name: String, screen: Screen, outcome: RunningAppActivationOutcome = .switched) async throws {
+        let capability = OpenAppCapability(
+            resolver: FixedAppResolver([Self.safari, Self.notes]),
+            opener: { app in screen.opened(app.bundleIdentifier) },
+            focus: { ScreenRestorer(screen: screen, outcome: outcome) }
+        )
+        let prepared = try await capability.prepare(actionID: ActionID(), args: ["app": .string(name)])
+        #expect(await capability.execute(prepared).status == .done)
+    }
 
 
     @Test
@@ -125,5 +145,11 @@ struct OpenStepsRestoreFocusTests {
     /// An open whose app was already in front moves nothing, so nothing is brought back.
 
     /// An open whose app was already in front moves nothing, so nothing is brought back.
-
+    @Test
+    @MainActor
+    func anOpenOfTheAppAlreadyInFrontRestoresNothing() async throws {
+        let screen = Screen(frontmost: RunningApp(displayName: "Safari", bundleIdentifier: "com.apple.Safari", processIdentifier: 3))
+        try await openApp("Safari", screen: screen)
+        #expect(screen.events == ["opened com.apple.Safari"])
+    }
 }
