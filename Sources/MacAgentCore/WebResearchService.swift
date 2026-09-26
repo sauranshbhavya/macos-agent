@@ -267,11 +267,16 @@ public struct RobotsTXTPolicy: Equatable, Sendable {
         return best.allows
     }
 
+    /// RFC 9309 §2.2.1 (SONNY-468): the groups that name this agent are obeyed, and the `*` group
+    /// only when none does. A site that writes rules for Sonny means them instead of its general ones.
     private static func parse(text: String, userAgent: String) -> [Rule] {
         let normalizedUserAgent = normalizeAgent(userAgent)
-        var currentApplies = false
+        var groupNamesUs = false
+        var groupIsAnyone = false
+        var sawNamedGroup = false
         var sawRuleInCurrentGroup = false
-        var rules: [Rule] = []
+        var named: [Rule] = []
+        var anyone: [Rule] = []
 
         // **Split on line breaks, not on newline characters** (SONNY-437). `components(separatedBy:
         // .newlines)` splits on CR and LF separately, so a CRLF file yields an empty element between
@@ -310,32 +315,41 @@ public struct RobotsTXTPolicy: Equatable, Sendable {
             switch key {
             case "user-agent":
                 if sawRuleInCurrentGroup {
-                    currentApplies = false
+                    groupNamesUs = false
+                    groupIsAnyone = false
                     sawRuleInCurrentGroup = false
                 }
                 let agent = normalizeAgent(value)
-                if agent == "*" || normalizedUserAgent.contains(agent) {
-                    currentApplies = true
+                if agent == "*" {
+                    groupIsAnyone = true
+                } else if !agent.isEmpty, productToken(agent) == productToken(normalizedUserAgent) {
+                    // The product token alone, versions stripped on both sides: a group naming
+                    // "1.0" or "s" is not a group naming Sonny.
+                    groupNamesUs = true
+                    sawNamedGroup = true
                 }
             case "allow", "disallow":
                 sawRuleInCurrentGroup = true
-                guard currentApplies else {
-                    continue
-                }
                 if key == "disallow", value.isEmpty {
                     continue
                 }
-                rules.append(Rule(allows: key == "allow", path: value))
+                let rule = Rule(allows: key == "allow", path: value)
+                if groupNamesUs { named.append(rule) }
+                if groupIsAnyone { anyone.append(rule) }
             default:
                 continue
             }
         }
 
-        return rules
+        return sawNamedGroup ? named : anyone
     }
 
     private static func normalizeAgent(_ value: String) -> String {
         value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    private static func productToken(_ agent: String) -> Substring {
+        agent.split(separator: "/", maxSplits: 1, omittingEmptySubsequences: false).first ?? ""
     }
 }
 

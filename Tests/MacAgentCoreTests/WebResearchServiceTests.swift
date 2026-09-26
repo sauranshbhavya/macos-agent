@@ -201,6 +201,27 @@ struct WebResearchServiceTests {
         #expect(cr == lf, "the CR-only file holds the same rules as the LF one")
     }
 
+    /// SONNY-468, RFC 9309 §2.2.1: a group naming Sonny is obeyed instead of the `*` group, so the
+    /// `*` group's longer Allow can't loosen the Disallow written for Sonny.
+    @Test
+    func aGroupNamingSonnyReplacesTheStarGroup() {
+        let policy = RobotsTXTPolicy(text: "User-agent: *\nAllow: /private/public\n\nUser-agent: Sonny\nDisallow: /private\n")
+        #expect(policy.allows(URL(string: "https://example.com/private/public/x")!) == false)
+        #expect(policy.allows(URL(string: "https://example.com/other")!) == true)
+
+        let starOnly = RobotsTXTPolicy(text: "User-agent: *\nDisallow: /private\n\nUser-agent: OtherBot\nDisallow: /\n")
+        #expect(starOnly.allows(URL(string: "https://example.com/private/x")!) == false)
+        #expect(starOnly.allows(URL(string: "https://example.com/other")!) == true)
+
+        // Only the product token names Sonny: a group for "1.0" or "s" doesn't replace the * group.
+        for stranger in ["1.0", "s", "ny"] {
+            let policy = RobotsTXTPolicy(text: "User-agent: \(stranger)\nAllow: /\n\nUser-agent: *\nDisallow: /\n")
+            #expect(policy.allows(URL(string: "https://example.com/page")!) == false, "\(stranger) was read as naming Sonny")
+        }
+        let versioned = RobotsTXTPolicy(text: "User-agent: *\nAllow: /\n\nUser-agent: Sonny/2.0\nDisallow: /\n")
+        #expect(versioned.allows(URL(string: "https://example.com/page")!) == false)
+    }
+
     /// Mixed endings inside one file: the group's rule is kept, and the next group's user-agent
     /// line still starts a group that is not ours.
     @Test
