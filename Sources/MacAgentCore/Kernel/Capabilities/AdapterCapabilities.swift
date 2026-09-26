@@ -69,7 +69,11 @@ public struct AdapterCapability: Capability {
             default: break
             }
         }
-        let details = previews.flatMap { $0.details } + previews.flatMap { $0.writes.map { "Writes \($0)" } }
+        // Why it's more serious comes first ("A file is already there…"), so the approval says it
+        // before anything else; the reasons are part of what the approval covers.
+        let details = risk.escalations.map(\.reason)
+            + previews.flatMap { $0.details }
+            + previews.flatMap { $0.writes.map { "Writes \($0)" } }
         return PreparedAction(
             actionID: actionID,
             effect: effect,
