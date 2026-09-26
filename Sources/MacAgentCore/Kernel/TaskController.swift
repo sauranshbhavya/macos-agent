@@ -35,11 +35,13 @@ public struct TaskRequest: Sendable, Equatable {
     var startBody: TaskStartBody {
         var context = context
         context.frontmostApp = context.frontmostApp.map {
-            WireAppRef(bundleID: $0.bundleID.clipped(toUTF16: 255), name: $0.name.clipped(toUTF16: 255))
+            WireAppRef(bundleID: $0.bundleID.clipped(toUTF16: 255), name: $0.name.maskedAndClipped(toUTF16: 255))
         }
-        // A path cut short names another file, so one too long is left out rather than cut.
+        // A path cut short or masked names another file, so one too long, or holding something that
+        // looks like a secret, is left out rather than cut or masked.
+        let detector = SecretTextDetector()
         context.finderSelection = context.finderSelection.map { paths in
-            Array(paths.filter { !$0.isEmpty && $0.utf16.count <= 1024 }.prefix(50))
+            Array(paths.filter { !$0.isEmpty && $0.utf16.count <= 1024 && detector.matches(in: $0).isEmpty }.prefix(50))
         }
         return TaskStartBody(
             goal: goal.maskedAndClipped(toUTF16: 4000),

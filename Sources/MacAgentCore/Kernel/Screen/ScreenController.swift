@@ -290,7 +290,7 @@ public actor ScreenController: ScreenControlling {
 
         return ObservationBody(
             generation: generation,
-            app: .init(bundleID: app.bundleID.clipped(toUTF16: 255), name: app.name.clipped(toUTF16: 255), pid: Int(pid)),
+            app: .init(bundleID: app.bundleID.clipped(toUTF16: 255), name: Self.masked(app.name, limit: 255), pid: Int(pid)),
             window: .init(id: window.windowID, title: state?.windowTitle.map { Self.masked($0, limit: 500) }, frame: frame),
             ax: tree,
             screenshot: screenshot

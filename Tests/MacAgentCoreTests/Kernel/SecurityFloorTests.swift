@@ -89,6 +89,25 @@ struct SecurityFloorTests {
     }
 
     @Test
+    func aSecretInTheFrontAppsNameOrASelectedFilesPathNeverReachesTheGateway() async throws {
+        let gateway = ScriptedGateway()
+        let controller = makeController(gateway, capabilities: [])
+        await controller.launch()
+        let secretPath = "/Users/me/Desktop/\(Self.token).txt"
+        var request = TaskRequest(goal: "Tidy these", mode: .normal)
+        request.context = TaskStartBody.Context(
+            frontmostApp: WireAppRef(bundleID: "com.example.vault", name: "Vault \(Self.token)"),
+            finderSelection: ["/Users/me/Desktop/report.pdf", secretPath]
+        )
+        _ = try await startedTask(controller, request)
+        let start = try await gateway.next("task.start")
+        guard case .taskStart(let body) = start.payload else { throw KernelTestFailure("not a task.start") }
+        #expect(body.context.frontmostApp?.name.contains(Self.token) == false)
+        #expect(body.context.frontmostApp?.bundleID == "com.example.vault")
+        #expect(body.context.finderSelection == ["/Users/me/Desktop/report.pdf"])
+    }
+
+    @Test
     func aSecretThatCrossesTheLengthLimitIsMaskedNotCutInHalf() {
         let text = String(repeating: "x", count: 20) + " " + Self.token
         let cut = text.maskedAndClipped(toUTF16: 30)
