@@ -426,6 +426,74 @@ Every PR tonight got an independent, adversarial review, and every review found 
 But reviews are wrong sometimes too. One called a temporary over-count "forever", and reading the
 code showed it clears as soon as tasks end. **Verify the claim, then fix what's real.**
 
+### "Merges cleanly" is not "works together"
+
+Before calling a batch of PRs independent, every pair was checked with `git merge-tree`: no
+conflicts anywhere. Then all 31 were merged on a throwaway branch and built together. Two pairs
+didn't compile.
+
+- **#313 and #325.** #313 made the private toggle changeable only through `togglePrivate()`. #325's
+  test set it directly. Each branch was fine on its own. Together, the test couldn't compile.
+- **#332 and #338.** #338 added a required argument to the Mail send capability, and a new field to
+  the draft it reads back. #332's new tests built that capability the old way.
+
+Git compares lines, not meaning. Two edits can sit a hundred lines apart and still break each other.
+
+**Lesson:** "no conflicts" is a text check. The only check for "works together" is building and
+testing together. Both pairs are now stacked, so they can only be merged in the order that works.
+
+### The link that ate `node_modules`
+
+To test a fix in a second worktree, I linked its `server/node_modules` to the main checkout's copy,
+to save installing everything again. Then `git add -A` committed the link. The ignore rule said
+`node_modules/`, and the trailing slash matches only a folder. A link is a file.
+
+It got worse when I checked that branch out in the main checkout. Git treats files inside an
+ignored folder as disposable, so it replaced the real `node_modules` folder with the link, which
+now pointed at itself. The tests quietly stopped running. The repair was `npm ci`, a rewritten
+commit, a note on the PR, and a one-character fix to `.gitignore` (#340).
+
+**Lesson:** stage the files you mean (`git add path/to/file`), not everything. And remember that a
+trailing slash in `.gitignore` means "folders only".
+
+### A polite server that let tasks starve
+
+When the gateway failed to store a message (usually the database, for a second), it sent the Mac an
+`error` frame and kept the socket open. That seemed polite. But the Mac ignores error frames. It
+only resends what the gateway hasn't acknowledged after a fresh welcome. So the message was never
+handled, and both sides waited for each other until the 24-hour sweep.
+
+The fix (#329) was to close the socket. The Mac already knows what to do when a socket closes:
+reconnect, hear what the gateway has, and send the rest again.
+
+**Lesson:** a signal the other side ignores is the same as silence. Use the one it already acts on.
+
+### An id is only unique where it was made
+
+`send_mail` was changed to send only drafts Sonny wrote itself, by remembering their ids. The review
+spotted that Mail numbers its drafts from the start again every time Mail restarts. So after a Mail
+restart, "Sonny's draft 42" could be the person's own half-written email. Now each remembered id
+also records which Mail process made it (#338).
+
+**Lesson:** an id from another program is unique only inside the session that issued it.
+
+### Return comes in many shapes
+
+The rule "pressing Return in a text field counts as sending" was checked by asking whether the typed
+text ends in `\n`. Then the list of ways around it kept growing:
+
+- `\r\n`, which in Swift doesn't end in `\n` (it's one character);
+- a line break in the middle of the text;
+- Return held with ⌘ in a key chord listed in the other order;
+- typing that set_value falls back to;
+- the Space key and ⌘V while a password field is showing.
+
+The fix (#333) stopped listing the bad things and listed the safe ones instead: while a password
+field is showing, only a short list of keys that can't type anything is allowed.
+
+**Lesson:** a list of forbidden things leaks, because there's always one more. A list of allowed
+things holds.
+
 ---
 
 ## 8. How good engineers think (what this project models)
@@ -457,6 +525,13 @@ code showed it clears as soon as tasks end. **Verify the claim, then fix what's 
 - **Touching money?** Record before you charge, never retry a charge whose outcome is unknown, and
   keep purchases one at a time per account.
 - **Docker can't read files on your Desktop** (macOS privacy). Copy config to `/tmp` to mount it.
+- **Checked that two branches merge?** Build and test them together too. A clean merge is only a
+  text check.
+- **Working in a second worktree?** Run `npm ci` there. Don't link `node_modules`, and stage files by
+  name.
+- **Remembering an id from another app?** Remember which run of that app issued it.
+- **Sending text to the gateway?** Its limits count UTF-16 units, and Swift counts characters. Cut
+  with `clipped(toUTF16:)`, and mask secrets first with `maskedAndClipped(toUTF16:)`.
 
 ---
 
