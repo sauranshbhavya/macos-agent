@@ -77,10 +77,3 @@ final class TaskNotifier: NSObject, UNUserNotificationCenterDelegate {
         await MainActor.run { self.model.showWidget() }
     }
 }
-
-extension TaskOrigin {
-    /// Started with nobody at the Mac; the desk reports these itself.
-    var isUnattended: Bool {
-        self == .schedule || self == .watcher
-    }
-}
