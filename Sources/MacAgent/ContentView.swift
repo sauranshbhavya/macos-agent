@@ -18,60 +18,6 @@ import SwiftUI
 //    modifiers below rather than hand-rolled per view.
 // 3. Motion reads `accessibilityReduceMotion` through `sonnyAnimation`, never bare `withAnimation`.
 
-/// The one-line result under a delete control, shared by the Command Center surfaces that have
-/// one: Settings' Data page, where it reports the whole wipe and, since SONNY-266, the narrower
-/// control beside it on the same slot, and the Memory page, where it reports a per-row Delete off
-/// its own channel. Success is read off the "Deleted" prefix, so any outcome copy that means
-/// success starts with that word and any that does not, does not. (This comment named
-/// `SettingsSecurityAccessPage` as a second host until SONNY-266; the wipe moved off that page on
-/// 2026-07-18 and the Memory page took the second seat with SONNY-208.)
-struct LocalDataDeletionStatusMessage: View {
-    let message: String?
-
-    var body: some View {
-        if let message {
-            Label(message, systemImage: message.hasPrefix("Deleted") ? "checkmark.circle" : "exclamationmark.triangle")
-                .font(SonnyType.micro)
-                .foregroundStyle(message.hasPrefix("Deleted") ? SonnyTheme.success : SonnyTheme.warning)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-    }
-}
-
-extension View {
-    func localDataDeletionConfirmationDialog(isPresented: Binding<Bool>, viewModel: AgentViewModel) -> some View {
-        confirmationDialog(
-            "Delete Sonny Local Data?",
-            isPresented: isPresented,
-            titleVisibility: .visible
-        ) {
-            Button("Delete Local Data", role: .destructive) {
-                viewModel.deleteLocalData()
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            // **The list is `LocalDataDeletionCopy`'s, shared with Settings' own detail line**
-            // (SONNY-233). This literal named nine of the thirteen the wipe deleted then — one
-            // fewer than the line on the page behind it, so the two surfaces describing one
-            // irreversible press disagreed with each other as well as with the wipe. What stays
-            // written here is the part that is this dialog's alone: what the press does *not* take.
-            // **Two sentences: what the press reaches, and what it leaves alone** (SONNY-404,
-            // founder decision 2026-09-04 restated 2026-09-05). The account is named in the second
-            // because "delete my data" and "delete my account" are two promises and only one of
-            // them is this button. This said "from this Mac" for one round, under a reversal that
-            // was a coordinator's error.
-            //
-            // **A third sentence stood here and is gone** (PR #207's R5): "If Sonny can't reach them
-            // now, it deletes their copy the next time it can." That is how-it-works copy in a
-            // pre-press confirmation, which the standing rule forbids, and the founder's condition
-            // is about what the press says *afterwards* — which `LocalDataDeletionCopy.outcome`
-            // covers in all three of its states, including the signed-out one that tells the user
-            // what to do.
-            Text("This deletes \(LocalDataDeletionCopy.everythingItTakes) from this Mac and from Sonny's servers. Generated files, API keys and your account are not deleted.")
-        }
-    }
-}
-
 struct PermissionReadinessRows: View {
     let items: [PermissionReadinessItem]
 

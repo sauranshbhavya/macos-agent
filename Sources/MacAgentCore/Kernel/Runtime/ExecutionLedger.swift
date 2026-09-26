@@ -102,16 +102,6 @@ public struct FileTaskLedgerStore: TaskLedgerStoring {
         self.encryption = encryption
     }
 
-    public static func inApplicationSupport() throws -> FileTaskLedgerStore {
-        let base = try FileManager.default.url(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask,
-            appropriateFor: nil,
-            create: true
-        )
-        return FileTaskLedgerStore(directory: base.appendingPathComponent("Sonny/V2/Tasks", isDirectory: true))
-    }
-
     public func save(_ record: TaskLedgerRecord) throws {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let data = try encryption.encode(record)

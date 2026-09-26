@@ -59,11 +59,6 @@ public actor FinishedTaskStore {
         self.encryption = encryption
     }
 
-    public static func inApplicationSupport() throws -> FinishedTaskStore {
-        let base = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
-        return FinishedTaskStore(fileURL: base.appendingPathComponent("Sonny/V2/history.json"))
-    }
-
     public func all() -> [FinishedTask] {
         if let cached { return cached }
         var loaded: [FinishedTask] = []

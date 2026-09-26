@@ -635,7 +635,7 @@ struct SignInSurfaceTests {
         let source = try MacAgentSource.read("main.swift")
         let body = try MacAgentSource.braceBlock(
             of: source,
-            openedBy: "agentViewModel.entitlementConfirmation = {"
+            openedBy: "appModel.entitlementConfirmation = {"
         )
         #expect(
             body.contains("claimConfirmation()"),

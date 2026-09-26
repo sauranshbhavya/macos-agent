@@ -9,6 +9,8 @@ import Foundation
 @MainActor
 public final class KernelStores {
     public let folder: URL
+    /// One ledger per unfinished task, for exactly-once after a relaunch.
+    public let ledgers: FileTaskLedgerStore
     public let history: FinishedTaskStore
     public let routines: RoutineGoalStore
     public let snippets: SnippetStore
@@ -27,6 +29,7 @@ public final class KernelStores {
     public init(folder: URL, encryption: LocalStorageEncryption = .shared) {
         func file(_ name: String) -> URL { folder.appendingPathComponent(name) }
         self.folder = folder
+        ledgers = FileTaskLedgerStore(directory: folder.appendingPathComponent("ledgers", isDirectory: true), encryption: encryption)
         history = FinishedTaskStore(fileURL: file("history.json"), encryption: encryption)
         routines = RoutineGoalStore(fileURL: file("routines.json"), encryption: encryption)
         snippets = SnippetStore(fileURL: file("snippets.json"), encryption: encryption)
@@ -45,12 +48,17 @@ public final class KernelStores {
         return base.appendingPathComponent("Sonny/V2", isDirectory: true)
     }
 
-    /// Where an app the person allowed stands; everything else keeps the built-in standing.
-    public func standing(for bundleID: String) -> AppStanding {
-        let builtIn = ScreenController.defaultStanding(bundleID)
-        guard builtIn == .notAllowed else { return builtIn }
-        let allowed = (try? approvedApps.loadAll()) ?? []
-        return allowed.contains { $0.matches(bundleIdentifier: bundleID) } ? .allowed : .notAllowed
+    /// An app's standing for screen control, asked from the screen controller's own actor: an
+    /// app the person allowed is allowed, and everything else keeps the built-in standing.
+    public nonisolated static func standing(
+        approvedApps: ApprovedAppStore
+    ) -> @Sendable (String) -> AppStanding {
+        { bundleID in
+            let builtIn = ScreenController.defaultStanding(bundleID)
+            guard builtIn == .notAllowed else { return builtIn }
+            let allowed = (try? approvedApps.loadAll()) ?? []
+            return allowed.contains { $0.matches(bundleIdentifier: bundleID) } ? .allowed : .notAllowed
+        }
     }
 
     /// Recognises the zero-model commands from the person's own snippets, recent files and

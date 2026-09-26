@@ -1,20 +1,13 @@
 import Foundation
 
-/// The six kinds of native notification `SonnyNotificationService` can post. One case per category
-/// that service owns, in the order Settings › Notifications lists them.
-///
-/// **`title` is not a second copy of the notification's own title — it is read from
-/// `SonnyNotificationService`, where each `post…` method sets `content.title` to exactly this
-/// string.** The two are the same word twice on purpose: the Settings row and the banner it is
-/// switching off have to agree, or a toggle would say "Watcher fired" while the thing it silences is
-/// titled something else.
+/// The kinds of notification `TaskNotifier` posts, in the order Settings › Notifications lists
+/// them. Each `title` is also the notification's own title, so a toggle names what it silences.
 enum SonnyNotificationKind: String, CaseIterable, Identifiable {
     case approvalNeeded
     case taskFinished
     case taskFailed
     case routineRan
     case watcherFired
-    case storageProblem
 
     var id: String { rawValue }
 
@@ -25,7 +18,6 @@ enum SonnyNotificationKind: String, CaseIterable, Identifiable {
         case .taskFailed: return "Task failed"
         case .routineRan: return "Routine ran"
         case .watcherFired: return "Watcher fired"
-        case .storageProblem: return "Storage problem"
         }
     }
 
@@ -38,7 +30,6 @@ enum SonnyNotificationKind: String, CaseIterable, Identifiable {
         case .taskFailed: return "A task stops on an error"
         case .routineRan: return "A scheduled routine runs"
         case .watcherFired: return "A watcher sees a change"
-        case .storageProblem: return "A local file cannot be read or written"
         }
     }
 }

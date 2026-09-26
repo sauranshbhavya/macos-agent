@@ -47,7 +47,7 @@ struct ClientNamesNoProviderScanTests {
     func theScanReadsBothShippingTargetsAndNotAnEmptyList() throws {
         let sources = try shippingSources()
         #expect(sources.count > 50, "the scan read \(sources.count) files, which is too few to be the tree")
-        #expect(sources.contains { $0.path == "MacAgent/AgentViewModel.swift" })
+        #expect(sources.contains { $0.path == "MacAgent/SonnyAppModel.swift" })
         #expect(sources.contains { $0.path == "MacAgentCore/OpenAIPlanner.swift" })
     }
 

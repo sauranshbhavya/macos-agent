@@ -18,12 +18,15 @@ public struct DeskNotice: Sendable, Equatable, Identifiable {
     public let message: String
     /// The task the notice is about, when there is one.
     public let task: TaskID?
+    /// Whether that task came from a schedule or a watcher.
+    public let origin: TaskOrigin?
 
-    public init(id: UUID = UUID(), kind: Kind, message: String, task: TaskID? = nil) {
+    public init(id: UUID = UUID(), kind: Kind, message: String, task: TaskID? = nil, origin: TaskOrigin? = nil) {
         self.id = id
         self.kind = kind
         self.message = message
         self.task = task
+        self.origin = origin
     }
 }
 
@@ -165,7 +168,7 @@ public final class TaskDesk: ObservableObject {
             ))
             unattended[submission.task] = routine.name
             if case .failed(let task, let failure) = submission {
-                recordNotice(for: task, name: routine.name, failure: failure.message)
+                recordNotice(for: task, name: routine.name, origin: .schedule, failure: failure.message)
             }
         }
         routines = await routineStore.all()
@@ -243,9 +246,9 @@ public final class TaskDesk: ObservableObject {
         await refreshSaved()
     }
 
-    private func recordNotice(for task: TaskID, name: String, failure: String) {
+    private func recordNotice(for task: TaskID, name: String, origin: TaskOrigin, failure: String) {
         unattended.removeValue(forKey: task)
-        notices.append(DeskNotice(kind: .unattendedRun, message: "\"\(name)\" didn't run: \(failure)", task: task))
+        notices.append(DeskNotice(kind: .unattendedRun, message: "\"\(name)\" didn't run: \(failure)", task: task, origin: origin))
     }
 
     static func notice(for task: TaskSnapshot, name: String) -> DeskNotice {
@@ -259,7 +262,7 @@ public final class TaskDesk: ObservableObject {
             default: message = "\"\(name)\" stopped."
             }
         }
-        return DeskNotice(kind: .unattendedRun, message: message, task: task.id)
+        return DeskNotice(kind: .unattendedRun, message: message, task: task.id, origin: task.origin)
     }
 
     // MARK: Watchers
@@ -327,7 +330,7 @@ public final class TaskDesk: ObservableObject {
         let submission = await controller.submit(TaskRequest(goal: goal, origin: .watcher, unattended: true, mode: mode()))
         unattended[submission.task] = watcher.subject
         if case .failed(let task, let failure) = submission {
-            recordNotice(for: task, name: watcher.subject, failure: failure.message)
+            recordNotice(for: task, name: watcher.subject, origin: .watcher, failure: failure.message)
         }
     }
 }

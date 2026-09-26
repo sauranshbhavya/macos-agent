@@ -150,7 +150,10 @@ struct UnprivilegedGateTests {
         // which is the branch that decides whether a scheduled routine whose bookkeeping write fails
         // reaches any surface at all. It did not, until that ticket: the enumeration that gave the
         // other bookkeeping writes a channel looked only at the view model's own writes.
-        #expect(lockedAndGated == 16, "expected sixteen gated directory-locking tests, found \(lockedAndGated)")
+        //
+        // Five since V2's phase 6, which replaced `AgentViewModel` with presentation over the
+        // kernel: the eleven gated tests of the view model's own store writes went with it.
+        #expect(lockedAndGated == 5, "expected five gated directory-locking tests, found \(lockedAndGated)")
         #expect(
             mismatches.isEmpty,
             """

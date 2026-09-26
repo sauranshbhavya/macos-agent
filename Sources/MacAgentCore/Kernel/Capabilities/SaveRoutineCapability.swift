@@ -34,11 +34,6 @@ public actor RoutineGoalStore {
         self.encryption = encryption
     }
 
-    public static func inApplicationSupport() throws -> RoutineGoalStore {
-        let base = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
-        return RoutineGoalStore(fileURL: base.appendingPathComponent("Sonny/V2/routines.json"))
-    }
-
     public func all() -> [RoutineGoal] {
         if let cached { return cached }
         var loaded: [RoutineGoal] = []
