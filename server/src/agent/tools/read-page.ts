@@ -6,17 +6,30 @@
  * way. The connection is made to the addresses that were checked, never to a second lookup, so a
  * host can't pass the check and then point somewhere internal. The body is capped, and only its
  * readable text is kept.
+ *
+ * A page the site's robots.txt asks automated tools not to read is refused before it is fetched,
+ * and so is every redirect's target (`robots.ts`).
  */
 import { lookup } from "node:dns/promises";
 import { request as httpRequest, type IncomingMessage } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { isIP, type LookupFunction } from "node:net";
 import { Readable } from "node:stream";
+import { ALLOW_ALL, DISALLOW_ALL, parseRobots, robotsAllow, type RobotsRules } from "./robots.js";
 
 export const PAGE_BYTE_LIMIT = 2_000_000;
 export const PAGE_TEXT_LIMIT = 30_000;
 const MAX_REDIRECTS = 4;
 const PAGE_DEADLINE_MS = 15_000;
+const USER_AGENT = "SonnyResearch/2";
+/** RFC 9309 §2.5: at least 500 KiB of a robots.txt is read. */
+const ROBOTS_BYTE_LIMIT = 512_000;
+/** RFC 9309 §2.4 allows caching up to a day; an hour keeps a changed file from being missed for long. */
+const ROBOTS_TTL_MS = 60 * 60 * 1000;
+/** A site that couldn't be asked is treated as disallowing everything, but only briefly. */
+const ROBOTS_ERROR_TTL_MS = 5 * 60 * 1000;
+const ROBOTS_CACHE_SIZE = 1_000;
+const ROBOTS_MAX_REDIRECTS = 5;
 
 export interface ReadPage {
   readonly url: string;
@@ -144,19 +157,103 @@ export function readableText(html: string): { title: string | null; text: string
   return { title, text };
 }
 
+/** Whether the site's robots.txt lets Sonny read `url`, whose host resolved to `addresses`. */
+export type RobotsCheck = (url: URL, addresses: readonly string[], signal: AbortSignal) => Promise<boolean>;
+
+/**
+ * A robots.txt check with its own cache, one entry per origin. Its robots.txt is fetched the way a
+ * page is: from the addresses already checked, and every redirect checked again.
+ */
+export function robotsChecker(options: { resolve?: AddressResolver; fetcher?: PinnedFetcher; now?: () => number } = {}): RobotsCheck {
+  const resolve = options.resolve ?? systemResolver;
+  const fetcher = options.fetcher ?? pinnedFetch;
+  const now = options.now ?? Date.now;
+  const cache = new Map<string, { rules: RobotsRules; until: number }>();
+  return async (url, addresses, signal) => {
+    let entry = cache.get(url.origin);
+    if (entry === undefined || entry.until <= now()) {
+      const { rules, reachable } = await fetchRobots(url, addresses, signal, resolve, fetcher);
+      entry = { rules, until: now() + (reachable ? ROBOTS_TTL_MS : ROBOTS_ERROR_TTL_MS) };
+      cache.delete(url.origin);
+      cache.set(url.origin, entry);
+      if (cache.size > ROBOTS_CACHE_SIZE) cache.delete(cache.keys().next().value!);
+    }
+    return robotsAllow(entry.rules, url);
+  };
+}
+
+/**
+ * RFC 9309 §2.3.1: a robots.txt that isn't there (4xx) allows everything, and one that can't be
+ * reached (5xx, a network error, a redirect to somewhere no page may live) disallows everything.
+ */
+async function fetchRobots(
+  page: URL,
+  addresses: readonly string[],
+  signal: AbortSignal,
+  resolve: AddressResolver,
+  fetcher: PinnedFetcher,
+): Promise<{ rules: RobotsRules; reachable: boolean }> {
+  let checked: CheckedURL = { url: new URL("/robots.txt", page.origin), addresses };
+  for (let hop = 0; hop <= ROBOTS_MAX_REDIRECTS; hop += 1) {
+    let response: Response;
+    try {
+      response = await fetcher(checked.url, checked.addresses, {
+        signal,
+        headers: { accept: "text/plain", "user-agent": USER_AGENT },
+      });
+    } catch (error) {
+      if (signal.aborted) throw error;
+      return { rules: DISALLOW_ALL, reachable: false };
+    }
+    if (response.status >= 300 && response.status < 400) {
+      const location = response.headers.get("location");
+      await response.body?.cancel().catch(() => {});
+      if (!location) return { rules: DISALLOW_ALL, reachable: false };
+      try {
+        checked = await checkURL(new URL(location, checked.url).href, resolve);
+      } catch {
+        return { rules: DISALLOW_ALL, reachable: false };
+      }
+      continue;
+    }
+    if (response.status >= 400 && response.status < 500) {
+      await response.body?.cancel().catch(() => {});
+      return { rules: ALLOW_ALL, reachable: true };
+    }
+    if (!response.ok) {
+      await response.body?.cancel().catch(() => {});
+      return { rules: DISALLOW_ALL, reachable: false };
+    }
+    return { rules: parseRobots(await readCapped(response, ROBOTS_BYTE_LIMIT)), reachable: true };
+  }
+  // §2.3.1.2: past five redirects the file may be treated as unavailable.
+  return { rules: ALLOW_ALL, reachable: true };
+}
+
+const sharedRobots = robotsChecker();
+
 export async function readPublicPage(
   raw: string,
-  options: { signal: AbortSignal; resolve?: AddressResolver; fetcher?: PinnedFetcher } = { signal: new AbortController().signal },
+  options: { signal: AbortSignal; resolve?: AddressResolver; fetcher?: PinnedFetcher; robots?: RobotsCheck } = {
+    signal: new AbortController().signal,
+  },
 ): Promise<ReadPage> {
   const resolve = options.resolve ?? systemResolver;
   const fetcher = options.fetcher ?? pinnedFetch;
+  // A caller with its own network gets a robots check over that same network.
+  const robots =
+    options.robots ??
+    (options.resolve === undefined && options.fetcher === undefined ? sharedRobots : robotsChecker({ resolve, fetcher }));
   const deadline = AbortSignal.any([options.signal, AbortSignal.timeout(PAGE_DEADLINE_MS)]);
   let checked = await checkURL(raw, resolve);
   for (let hop = 0; ; hop += 1) {
     const { url } = checked;
+    if (!(await robots(url, checked.addresses, deadline))) {
+      throw new PageRefused(url.href, "the site asks automated tools not to read this page (robots.txt)");
+    }
     const response = await fetcher(url, checked.addresses, {
       signal: deadline,
-      headers: { accept: "text/html,text/plain;q=0.9,*/*;q=0.1", "user-agent": "SonnyResearch/2" },
+      headers: { accept: "text/html,text/plain;q=0.9,*/*;q=0.1", "user-agent": USER_AGENT },
     });
     if (response.status >= 300 && response.status < 400) {
       const location = response.headers.get("location");
