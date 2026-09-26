@@ -471,6 +471,20 @@ struct KernelTests {
     }
 
     @Test
+    func aStaleSnapshotArrivingAfterTheFinalOneIsDropped() async throws {
+        let controller = makeController(ScriptedGateway(), capabilities: [])
+        let task = TaskID()
+        func snapshot(_ phase: TaskPhase, revision: UInt64) -> TaskSnapshot {
+            TaskSnapshot(id: task, goal: "Look", origin: .composer, isPrivate: false, phase: phase, progress: nil, actions: [], revision: revision)
+        }
+        controller.apply(snapshot(.running, revision: 1))
+        controller.apply(snapshot(.failed(TaskFailure(reason: nil, message: "Out of credits.")), revision: 3))
+        // Taken before the final one and delivered after it, as happened in the founders' manual pass.
+        controller.apply(snapshot(.running, revision: 2))
+        #expect(controller.snapshot(task)?.phase == .failed(TaskFailure(reason: nil, message: "Out of credits.")))
+    }
+
+    @Test
     func aNavigationWithAnUnknownEndIsReportedWithoutPausing() async throws {
         let gateway = ScriptedGateway()
         let ledgers = MemoryTaskLedgerStore()
