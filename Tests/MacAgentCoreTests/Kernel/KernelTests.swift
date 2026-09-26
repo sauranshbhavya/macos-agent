@@ -574,3 +574,53 @@ struct ActionGateTests {
         #expect(EffectRaiser.raise(declared: .financial, floor: .navigate, facts: .none) == .financial)
     }
 }
+
+@Suite(.serialized)
+@MainActor
+struct InstantPathTests {
+    @Test
+    func anInstantCommandRunsWithoutTheGatewayAndEndsFromItsOwnOutcome() async throws {
+        let gateway = ScriptedGateway()
+        await gateway.refuseNext(1000, status: 503)
+        let opened = Shared<[String]>([])
+        let notes = InstalledApp(displayName: "Notes", bundleIdentifier: "com.apple.Notes", applicationURL: URL(fileURLWithPath: "/System/Applications/Notes.app"))
+        let tasks = makeController(gateway, capabilities: [OpenAppCapability(resolver: FixedAppResolver([notes]), opener: { opened.value.append($0.bundleIdentifier) })])
+        let actions = try #require(InstantPath.actions(for: AgentPlan(
+            summary: "Open Notes",
+            requiresConfirmation: false,
+            steps: [AgentStep(id: "1", operation: .openApp, description: "open", appName: "Notes")]
+        )))
+        let submission = await tasks.submitLocal(TaskRequest(goal: "open notes", mode: .normal), actions: actions)
+        #expect(await eventually { tasks.snapshot(submission.task)?.phase == .completed(summary: "Notes is open.") })
+        #expect(opened.value == ["com.apple.Notes"])
+        #expect(await gateway.connections == 0)
+    }
+
+    @Test
+    func anInstantCommandStillAsksWhereTheGateSaysSo() async throws {
+        let gateway = ScriptedGateway()
+        let make = TestCapability(name: "make", floor: .create)
+        let tasks = makeController(gateway, capabilities: [make])
+        let submission = await tasks.submitLocal(
+            TaskRequest(goal: "make it", mode: .safe),
+            actions: [call("make", effect: .create)]
+        )
+        var commit: PreparedCommit?
+        #expect(await eventually {
+            if case .awaitingApproval(let pending) = tasks.snapshot(submission.task)?.phase { commit = pending; return true }
+            return false
+        })
+        await tasks.decide(task: submission.task, action: try #require(commit).action, commit: try #require(commit).commitID, approved: true)
+        #expect(await eventually {
+            if case .completed = tasks.snapshot(submission.task)?.phase { return true }
+            return false
+        })
+        #expect(make.executed.value.count == 1)
+    }
+
+    @Test
+    func aPlanWithAStepThatHasNoV2FormGoesToTheGateway() {
+        let plan = AgentPlan(summary: "x", requiresConfirmation: false, steps: [AgentStep(id: "1", operation: .openWorkspace, description: "w")])
+        #expect(InstantPath.actions(for: plan) == nil)
+    }
+}
