@@ -137,4 +137,24 @@ struct AdapterOperationTests {
         let older = try #require(evidence.range(of: "older.pdf"))
         #expect(newer.lowerBound < older.lowerBound)
     }
+
+    @Test
+    func aReminderInFiveMinutesKeepsItsTimeWhenItIsPreparedAgainBeforeRunning() async throws {
+        let clock = Shared(Date(timeIntervalSince1970: 1_800_000_000))
+        let context = CapabilityTestContext.make(installed: [], now: { clock.value })
+        let reminder = try #require(capabilities(context).capability(name: "create_reminder", version: 1))
+        let args: [String: JSONValue] = ["title": .string("call the bank"), "minutes_from_now": .number(5)]
+        let action = ActionID()
+
+        let first = try await reminder.prepare(actionID: action, args: args)
+        // The approval sits open for four minutes; the kernel prepares the action again to run it.
+        clock.value = clock.value.addingTimeInterval(4 * 60)
+        let again = try await reminder.prepare(actionID: action, args: args)
+        #expect(again.contentDigest == first.contentDigest)
+        #expect(again.preview == first.preview)
+
+        // A new action is read fresh.
+        let later = try await reminder.prepare(actionID: ActionID(), args: args)
+        #expect(later.contentDigest != first.contentDigest)
+    }
 }
