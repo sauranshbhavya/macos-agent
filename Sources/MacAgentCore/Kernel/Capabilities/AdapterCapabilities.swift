@@ -285,7 +285,8 @@ public enum AdapterCapabilities {
                 let folder = try args.text("folder")
                 return [step(.scanDocx) { $0.inputPath = folder }]
             },
-            capability("convert_docx_to_pdf", .create, DocxConversionCapabilityAdapter()) { args in
+            // Word does the conversion, and opening the document can bring Word forward.
+            capability("convert_docx_to_pdf", .create, DocxConversionCapabilityAdapter(), bringsAppForward: true) { args in
                 let folder = try args.text("folder")
                 let output = try args.optionalText("output_folder")
                 return [step(.scanDocx) { $0.inputPath = folder }, step(.convertDocxToPDF) { $0.outputPath = output }]

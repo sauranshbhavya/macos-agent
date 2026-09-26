@@ -152,6 +152,20 @@ struct SonnyAppModelTests {
     }
 
     @Test
+    func turningThePrivateToggleOffWhileAPrivateRequestIsBeingSentKeepsItOff() async throws {
+        let fixture = try AppFixture()
+        fixture.model.togglePrivate()
+        fixture.model.composerText = "Look up my test results"
+        fixture.model.submitComposer()
+        // Before the submission has come back.
+        fixture.model.togglePrivate()
+        let (task, body) = try await fixture.start()
+        #expect(body.isPrivate)
+        #expect(await eventually { fixture.model.followedTask == task })
+        #expect(!fixture.model.isPrivate)
+    }
+
+    @Test
     func aFollowUpIsUsedByTheNextRequestAndOnlyThatOne() async throws {
         let fixture = try AppFixture()
         let earlier = TaskID()

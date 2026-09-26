@@ -59,6 +59,9 @@ final class SonnyAppModel: ObservableObject {
     private var forwarding: Set<AnyCancellable> = []
     /// The private task the toggle is on for; the toggle resets when it ends.
     private var privateTask: TaskID?
+    /// Counts the person's own toggles, so a submission that finishes later can tell whether they
+    /// changed it meanwhile.
+    private var privateChoices = 0
 
     static let modeKey = "SonnyV2InteractionMode"
     /// How often schedules and watchers are checked.
@@ -152,11 +155,13 @@ final class SonnyAppModel: ObservableObject {
     private func ask(_ text: String, origin: TaskOrigin, isPrivate: Bool? = nil) {
         let isPrivate = isPrivate ?? self.isPrivate
         let prior = followUp?.task
+        let choice = privateChoices
         followUp = nil
         Task {
             guard let submission = await desk.ask(text, origin: origin, isPrivate: isPrivate, followingUp: prior) else { return }
             followedTask = submission.task
-            if isPrivate {
+            // Unless the person turned the toggle while this was being sent: their choice stands.
+            if isPrivate, choice == privateChoices {
                 privateTask = submission.task
                 self.isPrivate = true
             }
@@ -168,6 +173,7 @@ final class SonnyAppModel: ObservableObject {
     /// task it was left on for, so that task ending doesn't switch it back off.
     func togglePrivate() {
         privateTask = nil
+        privateChoices += 1
         isPrivate.toggle()
     }
 
