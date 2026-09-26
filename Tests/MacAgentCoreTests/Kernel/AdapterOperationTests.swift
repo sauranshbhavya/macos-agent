@@ -166,6 +166,42 @@ struct AdapterOperationTests {
     }
 
     @Test
+    func aPrivateTaskLeavesNoRecentFileAndNoShortcutHistory() async throws {
+        let stores = CapabilityTestStores()
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent("private-\(UUID().uuidString)", isDirectory: true)
+            .resolvingSymlinksInPath()
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let shortcuts = FakeShortcuts(["Log Water"])
+        let context = CapabilityTestContext.make(
+            installed: [],
+            whitelist: PathWhitelist(roots: [folder]),
+            stores: stores,
+            shortcutCatalog: shortcuts,
+            shortcutInvoker: shortcuts
+        )
+        let all = capabilities(context)
+        let write = try #require(all.capability(name: "write_file", version: 1))
+        let shortcut = try #require(all.capability(name: "run_shortcut", version: 1))
+
+        try await TaskPrivacy.$isPrivate.withValue(true) {
+            let (_, written) = try await run(write, ["content": .string("my lab results"), "path": .string(folder.appendingPathComponent("private.md").path)])
+            #expect(written.status == .done)
+            let (_, ran) = try await run(shortcut, ["name": .string("Log Water")])
+            #expect(ran.status == .done)
+        }
+        #expect(try stores.recentFiles.recent().isEmpty)
+        #expect(try stores.shortcutRuns.loadAll().isEmpty)
+
+        // The same, not private, is kept.
+        _ = try await run(write, ["content": .string("the shopping list"), "path": .string(folder.appendingPathComponent("list.md").path)])
+        _ = try await run(shortcut, ["name": .string("Log Water")])
+        #expect(try stores.recentFiles.recent().count == 1)
+        #expect(try !stores.shortcutRuns.loadAll().isEmpty)
+    }
+
+    @Test
     func aReminderInFiveMinutesKeepsItsTimeWhenItIsPreparedAgainBeforeRunning() async throws {
         let clock = Shared(Date(timeIntervalSince1970: 1_800_000_000))
         let context = CapabilityTestContext.make(installed: [], now: { clock.value })

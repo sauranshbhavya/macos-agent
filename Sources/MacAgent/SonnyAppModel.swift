@@ -68,14 +68,15 @@ final class SonnyAppModel: ObservableObject {
         desk: TaskDesk,
         stores: KernelStores,
         client: SonnyBackendClient,
-        defaults: UserDefaults = .standard
+        defaults: UserDefaults = .standard,
+        pasteboard: any PasteboardReading = SystemPasteboardReader()
     ) {
         self.desk = desk
         self.stores = stores
         self.client = client
         self.defaults = defaults
         creditService = CreditBalanceService(client: client)
-        clipboardMonitor = ClipboardHistoryMonitor(store: stores.clipboard, settingsStore: stores.clipboardSettings)
+        clipboardMonitor = ClipboardHistoryMonitor(reader: pasteboard, store: stores.clipboard, settingsStore: stores.clipboardSettings)
         mode = defaults.string(forKey: Self.modeKey).flatMap(AgentInteractionMode.init(rawValue:)) ?? .normal
         // The views read the desk and the controller through this model, so their changes are
         // this model's changes.
@@ -101,10 +102,20 @@ final class SonnyAppModel: ObservableObject {
             Task { @MainActor in await self?.checkSchedulesAndWatchers() }
         }
         clipboardTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
-            Task { @MainActor in _ = try? self?.clipboardMonitor.poll() }
+            Task { @MainActor in self?.pollClipboard() }
         }
         Task { await checkSchedulesAndWatchers() }
         Task { await watchClientVersion() }
+    }
+
+    /// Clipboard history keeps what's copied, except while a private task runs: those copies are
+    /// marked as seen and never kept, then and after it ends.
+    func pollClipboard() {
+        if controller.tasks.contains(where: { $0.isPrivate && !$0.phase.isTerminal }) {
+            clipboardMonitor.resynchronize()
+        } else {
+            _ = try? clipboardMonitor.poll()
+        }
     }
 
     func stop() async {
