@@ -253,9 +253,25 @@ export async function readAutoTopUpConsent(
 }
 
 /** What the route needs: a plan key, a draw, what top-ups added, and whether any may be charged. */
+/** Credits the account has spent through V2 agent model calls this period, counting open holds. */
+export async function readAgentCredits(
+  client: pg.Client,
+  input: { readonly accountId: string; readonly periodStart: Date },
+): Promise<number> {
+  const { rows } = await client.query<{ credits: string | number | null }>(
+    `SELECT coalesce(sum(CASE WHEN status = 'held' THEN credits_held ELSE credits_charged END), 0)
+              AS credits
+       FROM sonny.agent_model_call
+      WHERE account_id = $1 AND period_start = $2 AND status <> 'released'`,
+    [input.accountId, input.periodStart],
+  );
+  return count(rows[0]?.credits);
+}
+
 export interface CreditFacts {
   readonly planKey: string | undefined;
   readonly draw: ScreenControlDraw;
+  readonly agentCredits?: number;
   /** Credits this period's granted top-ups added. `0` for an account that has bought none. */
   readonly toppedUpCredits: number;
   /** How many top-up attempts this period has already carried, granted or not. */
@@ -319,6 +335,7 @@ export function postgresCreditStore(withConnection: WithConnection): CreditStore
           since,
           until: periodEnd(now),
         });
+        const agentCredits = await readAgentCredits(client, { accountId, periodStart: since });
         const toppedUpCredits = await readToppedUpCredits(client, { accountId, periodStart: since });
         const topUpAttemptsThisPeriod = await readTopUpAttempts(client, {
           accountId,
@@ -329,6 +346,7 @@ export function postgresCreditStore(withConnection: WithConnection): CreditStore
         return {
           planKey: creditPlanKeyFor(record, now),
           draw,
+          agentCredits,
           toppedUpCredits,
           topUpAttemptsThisPeriod,
           autoTopUpOptedInAt,

@@ -131,6 +131,7 @@ describeDb("migrations 0016 and 0017 over a database that already holds rows", (
       // a step here**, and the failure it produces when one is forgotten is legible: the assertion
       // says the head was some other file. 0018 is SONNY-211's and is rolled back only to get past
       // it; nothing below is about it.
+      expect(await down(client)).toBe("0024_a_task_lives_on_the_gateway");
       expect(await down(client)).toBe("0023_the_gate_honours_only_sessions_the_gateway_started");
       expect(await down(client)).toBe("0022_a_signed_out_session_stops_verifying");
       expect(await down(client)).toBe("0021_a_wipe_leaves_the_account_open");
@@ -160,6 +161,7 @@ describeDb("migrations 0016 and 0017 over a database that already holds rows", (
         "0021_a_wipe_leaves_the_account_open",
         "0022_a_signed_out_session_stops_verifying",
         "0023_the_gate_honours_only_sessions_the_gateway_started",
+        "0024_a_task_lives_on_the_gateway",
       ]);
       // **Pin the MAPPING, not the set** (PR #171 review, F2). This asserted
       // `toEqual([1, 2, 3])` over the whole column, which checks that three numbers came out dense
@@ -212,6 +214,7 @@ describeDb("migrations 0016 and 0017 over a database that already holds rows", (
       // The rows have to predate the column, so this rolls 0017 back, writes them, and rolls
       // forward — the same door a deployment goes through, and the reason `issue_seq` is absent
       // from the INSERT below.
+      expect(await down(client)).toBe("0024_a_task_lives_on_the_gateway");
       expect(await down(client)).toBe("0023_the_gate_honours_only_sessions_the_gateway_started");
       expect(await down(client)).toBe("0022_a_signed_out_session_stops_verifying");
       expect(await down(client)).toBe("0021_a_wipe_leaves_the_account_open");
@@ -236,6 +239,7 @@ describeDb("migrations 0016 and 0017 over a database that already holds rows", (
         "0021_a_wipe_leaves_the_account_open",
         "0022_a_signed_out_session_stops_verifying",
         "0023_the_gate_honours_only_sessions_the_gateway_started",
+        "0024_a_task_lives_on_the_gateway",
       ]);
 
       // All three carry the sentinel, so `issue_seq` separates none of them and only the second key

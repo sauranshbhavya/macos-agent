@@ -172,6 +172,19 @@ const topUpSchema = z.object({
 });
 
 /** One tier. An opaque key and what a month of it includes. */
+const tierRateSchema = z.object({
+  inputPerThousand: z.number().nonnegative(),
+  outputPerThousand: z.number().nonnegative(),
+});
+
+// Credits per thousand tokens at each model tier (V2 plan decision 8). The rates themselves are a
+// pricing decision the founders have not made yet, so they are configuration, never code.
+const tokenRatesSchema = z.object({
+  fast: tierRateSchema,
+  standard: tierRateSchema,
+  strong: tierRateSchema,
+});
+
 const planSchema = z.object({
   /**
    * The value `sonny.entitlement.plan` holds — the same opaque key `BILLING_PLANS` maps a provider
@@ -208,6 +221,7 @@ const catalogueSchema = z.object({
   plans: z.array(planSchema).min(1),
   /** What an automatic top-up buys, or nothing — see `topUpSchema` (SONNY-215). */
   topUp: topUpSchema.optional(),
+  tokenRates: tokenRatesSchema.optional(),
 });
 
 export type CreditWeights = z.infer<typeof weightsSchema>;

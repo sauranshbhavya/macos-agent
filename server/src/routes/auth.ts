@@ -796,6 +796,9 @@ export function registerAuth(app: FastifyInstance, config: Config, deps: AuthDep
       await client.query("ROLLBACK");
       throw error;
     }
+    // The account is closed, so its V2 sessions close with it and its running tasks end.
+    app.agentSessions.accountClosed(accountId);
+    await app.agentRunner?.stopAccount(accountId);
 
     // **After the close, and it CANNOT abort partway** (PR #87 third round, F1).
     //
@@ -1017,7 +1020,8 @@ export function registerAuth(app: FastifyInstance, config: Config, deps: AuthDep
           denylistedUntil(caller.accessTokenExpiresAt),
           now(),
         ),
-      );
+      );      // Any V2 session opened under this sign-in closes now, not when its token next expires.
+      app.agentSessions.signedOut(providerSession);
     }
     try {
       await withDeadlines(AUTH_DEADLINES, (signal) =>

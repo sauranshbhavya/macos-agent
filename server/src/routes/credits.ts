@@ -359,6 +359,7 @@ export function registerCreditRoutes(app: FastifyInstance, deps: CreditRouteDeps
       catalogue: deps.catalogue,
       planKey: facts.planKey,
       draw: facts.draw,
+      ...(facts.agentCredits === undefined ? {} : { agentCredits: facts.agentCredits }),
       toppedUpCredits: facts.toppedUpCredits,
       now: at,
     });
