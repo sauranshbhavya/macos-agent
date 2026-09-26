@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "type": "finish",
+  "id": "00000000-0000-4000-8000-000000000130",
+  "task": "7d9f1c2e-4b3a-4e8f-9a21-0c5d6e7f8a90",
+  "seq": 8,
+  "body": {
+    "status": "failed",
+    "summary": "You've used up this period's allowance.",
+    "reason": "spend_cap"
+  }
+}

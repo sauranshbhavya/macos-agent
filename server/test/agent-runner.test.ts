@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import type { Agent, ModelInvocation } from "../src/agent/agent.js";
-import { memoryModelCallLedger } from "../src/agent/credits.js";
+import { memoryModelCallLedger, SpendCapReached } from "../src/agent/credits.js";
 import type { ServerTaskMessage } from "../src/agent/protocol.js";
 import { SCREENSHOT_TTL_MS, TaskRunner } from "../src/agent/tasks/runner.js";
 import { memoryTaskStore } from "../src/agent/tasks/store.js";
@@ -95,6 +95,26 @@ describe("TaskRunner", () => {
     await runner.idle();
     const transcript = await store.transcript(task);
     expect(JSON.stringify(transcript)).not.toContain("SECRETPIXELS");
+  });
+
+  it("ends a task at the spend cap with the allowance's words, not a call to top up", async () => {
+    const thinking: Agent = {
+      async turn(context) {
+        await context.modelCall(
+          { agent: "planner", tier: "fast", maxInputTokens: 100, maxOutputTokens: 100 },
+          () => Promise.reject(new Error("the model is never reached")),
+        );
+        return { messages: [] };
+      },
+    };
+    const { runner, ledger, delivered } = runnerWith(thinking);
+    (ledger as { hold: typeof ledger.hold }).hold = () => Promise.reject(new SpendCapReached());
+    await start(runner);
+    await runner.idle();
+    expect(delivered.at(-1)).toMatchObject({
+      type: "finish",
+      body: { status: "failed", reason: "spend_cap", summary: "You've used up this period's allowance." },
+    });
   });
 
   it("ends a task model_unavailable when a model call outlives its deadline, and charges nothing", async () => {

@@ -55,8 +55,18 @@ export interface HoldRequest {
 
 export type HoldOutcome =
   | { readonly kind: "held" }
-  | { readonly kind: "insufficient"; readonly remaining: number }
-  | { readonly kind: "over_cap" };
+  | { readonly kind: "insufficient"; readonly remaining: number };
+
+/**
+ * Thrown by `hold` when the account has reached its spend cap for the period. It is not a shortage
+ * of credits: buying more doesn't lift the cap, so the task must not say "top up".
+ */
+export class SpendCapReached extends Error {
+  constructor() {
+    super("the account reached its spend cap for this period");
+    this.name = "SpendCapReached";
+  }
+}
 
 export type CallOutcome = "ok" | "provider_error" | "cancelled";
 
@@ -72,6 +82,7 @@ export interface SettleRequest {
 }
 
 export interface ModelCallLedger {
+  /** Throws `SpendCapReached` when the account is at its spend cap, whatever its balance. */
   hold(request: HoldRequest): Promise<HoldOutcome>;
   settle(request: SettleRequest): Promise<void>;
   /** Releases holds a process never settled because it died mid-call. Nothing is charged. */
@@ -119,7 +130,7 @@ export function postgresModelCallLedger(input: {
           amount: { units: 1 },
           now: request.now,
         });
-        if (reservation.kind === "over_cap") return { kind: "over_cap" };
+        if (reservation.kind === "over_cap") throw new SpendCapReached();
 
         await client.query("BEGIN");
         let remaining: number;

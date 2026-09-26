@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import pg from "pg";
 import { describe, expect } from "vitest";
-import { postgresModelCallLedger } from "../src/agent/credits.js";
+import { postgresModelCallLedger, SpendCapReached } from "../src/agent/credits.js";
 import { postgresTaskStore } from "../src/agent/tasks/postgres-store.js";
 import { sweepTasksOnce, TASK_ABANDON_AFTER_MS, TASK_RETENTION_MS } from "../src/agent/tasks/retention.js";
 import type { NewTask } from "../src/agent/tasks/store.js";
@@ -274,6 +274,6 @@ describeDb("V2 tasks in Postgres", () => {
     });
     const hold = () => ledger.hold({ stepId: randomUUID(), accountId: account, taskId: randomUUID(), agent: "planner", tier: "fast", credits: 1, now: at });
     expect(await hold()).toEqual({ kind: "held" });
-    expect(await hold()).toEqual({ kind: "over_cap" });
+    await expect(hold()).rejects.toBeInstanceOf(SpendCapReached);
   });
 });
