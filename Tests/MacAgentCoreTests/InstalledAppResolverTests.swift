@@ -50,6 +50,31 @@ struct InstalledAppResolverTests {
         #expect(viaAlias?.displayName == "Chrome")
     }
 
+    /// The screen agent and typed operations name an app by its bundle identifier as often as by
+    /// name. Before this, "com.google.Chrome" resolved to nothing, so every screen action in Chrome was
+    /// refused as "not the app it looked at".
+    @Test
+    func aBundleIdentifierResolvesToThatAppUnderTheSameNameAsItsSpellings() {
+        let resolver = InstalledAppResolver(source: FixedAppSource([Self.chrome, Self.figma]))
+
+        #expect(resolver.resolve("com.google.Chrome") == resolver.resolve("Chrome"))
+        #expect(resolver.resolve("com.figma.Desktop")?.displayName == "Figma")
+        #expect(resolver.resolve("com.example.NotInstalled") == nil)
+        // Not shaped like one, so looked up as a name and not found.
+        #expect(resolver.resolve("notes.app") == nil)
+    }
+
+    /// The screen controller's own lookup, which is where the refusal happened: the look named the
+    /// app, the action named its bundle identifier, and the two now agree.
+    @Test
+    func theScreenControllersLookupFindsTheSameAppByNameAndByBundleIdentifier() async {
+        let apps = WorkspaceScreenApps(resolver: InstalledAppResolver(source: FixedAppSource([Self.chrome])))
+        let byName = await apps.resolve("Google Chrome")
+        let byBundle = await apps.resolve("com.google.Chrome")
+        #expect(byName?.bundleID == "com.google.Chrome")
+        #expect(byBundle?.bundleID == byName?.bundleID)
+    }
+
     /// The alias table's other entries, each a real second name a user types. Pinned as a table so a
     /// deleted alias fails here rather than in whichever surface happens to notice first.
     @Test

@@ -103,6 +103,18 @@ public struct InstalledAppResolver: InstalledAppResolving {
             return nil
         }
 
+        // A bundle identifier names exactly one app, and the screen agent and typed operations pass
+        // one ("com.google.Chrome") as often as a name. Tried first, and only for something shaped
+        // like one, so an ordinary name never reaches Launch Services this way.
+        if Self.looksLikeBundleIdentifier(trimmed), let installed = source.application(bundleIdentifier: trimmed) {
+            let canonical = aliases.apps.first { $0.bundleIdentifier.caseInsensitiveCompare(installed.bundleIdentifier) == .orderedSame }
+            return InstalledApp(
+                displayName: canonical?.displayName ?? installed.displayName,
+                bundleIdentifier: installed.bundleIdentifier,
+                applicationURL: installed.applicationURL
+            )
+        }
+
         if let alias = aliases.canonicalApp(named: trimmed),
            let installed = source.application(bundleIdentifier: alias.bundleIdentifier) {
             // The alias table's own display name, not the bundle's file name: "Chrome" has been the
@@ -116,6 +128,14 @@ public struct InstalledAppResolver: InstalledAppResolving {
         }
 
         return source.application(normalizedName: MacAppCatalog.normalize(trimmed))
+    }
+
+    /// Reverse-DNS with at least two dots and no spaces: `com.google.Chrome`, not "Google Chrome" or
+    /// "notes.app".
+    static func looksLikeBundleIdentifier(_ text: String) -> Bool {
+        let parts = text.split(separator: ".", omittingEmptySubsequences: false)
+        return parts.count >= 3
+            && parts.allSatisfy { !$0.isEmpty && $0.allSatisfy { $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" } }
     }
 
     /// The process-appropriate default, used wherever a resolver is not injected.
