@@ -40,7 +40,6 @@ final class V2KernelBridge {
             ledgers: ledgers,
             capabilities: StandardCapabilities.all(
                 context: capabilityContext,
-                finderRevealer: { NSWorkspace.shared.activateFileViewerSelecting($0) },
                 routines: (try? RoutineGoalStore.inApplicationSupport()) ?? RoutineGoalStore(fileURL: nil)
             ),
             screenTools: Set(ScreenToolName.allCases),

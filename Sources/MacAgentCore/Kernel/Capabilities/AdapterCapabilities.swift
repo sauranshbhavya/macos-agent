@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 
 /// A kernel capability that runs one of the V1 adapters' execution bodies behind a V2 typed
@@ -295,7 +296,7 @@ public enum AdapterCapabilities {
 public enum StandardCapabilities {
     public static func all(
         context: @escaping @MainActor @Sendable () -> CapabilityExecutionContext,
-        finderRevealer: @escaping RevealInFinderCapabilityAdapter.Reveal,
+        finderRevealer: @escaping RevealInFinderCapabilityAdapter.Reveal = { NSWorkspace.shared.activateFileViewerSelecting($0) },
         routines: RoutineGoalStore,
         appleScript: any AppleScriptRunning = OsascriptRunner(),
         now: @escaping @Sendable () -> Date = { Date() }
