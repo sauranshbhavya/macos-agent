@@ -59,16 +59,21 @@ function activeScreenSession(transcript: readonly StoredMessage[]): { spec: Scre
 
 /**
  * When the last thing the Mac said answers a batch the planner marked final, and every action in it
- * is done, the task is finished with the summary the planner wrote for that case.
+ * came back done, the task is finished with the summary the planner wrote for that case. An action
+ * with no result at all counts as not done, so a short or empty outcome goes back to the planner.
  */
 function finishedFinalBatch(transcript: readonly StoredMessage[]): string | undefined {
   const exchanged = transcript.filter((m) => m.direction !== "note");
   const last = exchanged.at(-1);
   if (last?.direction !== "in" || last.type !== "outcome" || last.re === null) return undefined;
   const propose = exchanged.find((m) => m.direction === "out" && m.type === "propose" && m.seq === last.re);
-  const body = propose?.body as { agent?: string; final?: boolean } | undefined;
+  const body = propose?.body as { agent?: string; final?: boolean; actions?: { action_id: string }[] } | undefined;
   if (body?.agent !== "planner" || body.final !== true) return undefined;
-  if (!(last.body as { results: ActionResult[] }).results.every((result) => result.status === "done")) return undefined;
+  const done = new Set(
+    (last.body as { results: ActionResult[] }).results.filter((result) => result.status === "done").map((result) => result.action_id),
+  );
+  const proposed = body.actions ?? [];
+  if (proposed.length === 0 || !proposed.every((action) => done.has(action.action_id))) return undefined;
   const decision = [...transcript]
     .reverse()
     .find((m) => m.direction === "note" && m.type === "planner.decision" && (m.body as PlannerDecision).kind === "operations");

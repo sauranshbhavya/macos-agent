@@ -420,6 +420,37 @@ describe("the planner's typed operations and server tools", () => {
     expect(router.calls).toHaveLength(2);
   });
 
+  it("goes back to the planner when a final batch's outcome is missing an action, rather than calling it done", async () => {
+    const router = scriptedRouter({
+      planner: [
+        plan({
+          kind: "operations",
+          operations: [op("open_app", { app: "Notes" }), op("open_app", { app: "Mail" })],
+          final: true,
+          summary: "Opened Notes and Mail.",
+        }),
+        plan({ kind: "finish", status: "failed", summary: "Mail didn't answer." }),
+      ],
+    });
+    const h = harness(router);
+    const both = await h.start("Open Notes and Mail");
+    if (both.type !== "propose") throw new Error("expected a propose");
+    const [notes] = both.body.actions;
+    await h.runner.receive(ACCOUNT, {
+      v: 1,
+      type: "outcome",
+      id: randomUUID(),
+      task: h.task,
+      seq: 2,
+      re: both.seq,
+      body: { results: [{ action_id: notes!.action_id, status: "done", effect: notes!.effect, evidence: "Notes is open." }] },
+    });
+    await h.runner.idle();
+    expect(router.calls).toHaveLength(2);
+    const ended = (await h.store.transcript(h.task)).filter((m) => m.type === "finish");
+    expect(ended.map((m) => (m.body as { summary: string }).summary)).toEqual(["Mail didn't answer."]);
+  });
+
   it("raises a declared effect to the operation's floor and stops a batch after its first consequential action", async () => {
     const router = scriptedRouter({
       planner: [
