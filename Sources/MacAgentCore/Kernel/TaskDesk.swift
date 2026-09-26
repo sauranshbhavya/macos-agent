@@ -71,6 +71,8 @@ public final class TaskDesk: ObservableObject {
     private var recorded: Set<TaskID> = []
     /// Tasks nobody started at the Mac, with the name the notice about each one uses.
     private var unattended: [TaskID: String] = [:]
+    /// Routines whose run couldn't be recorded, so the person is told once rather than every check.
+    private var couldNotMark: Set<UUID> = []
     private var watcherCheck: Task<Void, Never>?
     private var scheduleCheck: Task<Void, Never>?
     private var watching: AnyCancellable?
@@ -175,11 +177,24 @@ public final class TaskDesk: ObservableObject {
             case .due(let at), .missed(let at):
                 occurrence = at
             }
-            // Marked before starting, so a slow start can't run the same occurrence twice.
+            // Marked before starting, so a slow start can't run the same occurrence twice. A mark
+            // that can't be saved means the routine doesn't run: unmarked, it would run again at
+            // every check.
             timing.lastRunAt = occurrence
             var updated = routine
             updated.timing = timing
-            try? await routineStore.save(updated)
+            do {
+                try await routineStore.save(updated)
+                couldNotMark.remove(routine.id)
+            } catch {
+                if couldNotMark.insert(routine.id).inserted {
+                    notices.append(DeskNotice(
+                        kind: .missedSchedule,
+                        message: "\"\(routine.name)\" didn't run because Sonny couldn't save that it had."
+                    ))
+                }
+                continue
+            }
             if case .missed = decision {
                 notices.append(DeskNotice(
                     kind: .missedSchedule,

@@ -191,6 +191,31 @@ struct TaskDeskTests {
     }
 
     @Test
+    func aRoutineWhoseRunCantBeRecordedDoesntRunAgainAtEveryCheck() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("unmarkable-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.path)
+            try? FileManager.default.removeItem(at: folder)
+        }
+        let routines = RoutineGoalStore(fileURL: folder.appendingPathComponent("routines.json"), encryption: keyedEncryption(0x42))
+        let fixture = try DeskFixture(routines: routines)
+        await fixture.start()
+        let now = fixture.clock.value
+        let time = Calendar.autoupdatingCurrent.dateComponents([.hour, .minute], from: now.addingTimeInterval(-3600))
+        let timing = RoutineSchedule.newlyCreated(cadence: .daily, hour: time.hour!, minute: time.minute!, now: now.addingTimeInterval(-7200))
+        try await routines.save(RoutineGoal(name: "Standup", goal: "Post my standup", schedule: nil, timing: timing, savedAt: now))
+
+        // The file still reads, but nothing more can be written beside it.
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: folder.path)
+        await fixture.desk.runDueRoutines()
+        await fixture.desk.runDueRoutines()
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(await fixture.gateway.unread("task.start").isEmpty)
+        #expect(fixture.desk.notices.filter { $0.message.contains("\"Standup\" didn't run") }.count == 1)
+    }
+
+    @Test
     func twoScheduleChecksAtOnceStartEachOccurrenceOnce() async throws {
         let fixture = try DeskFixture()
         // Not launched: the first start opens the socket, which is when a second check could read
