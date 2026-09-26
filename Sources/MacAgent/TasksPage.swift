@@ -5,6 +5,7 @@ import SwiftUI
 /// once it ends (decision 10).
 struct TasksPage: View {
     @ObservedObject var model: SonnyAppModel
+    @EnvironmentObject private var commands: CommandCenterCommands
     @Environment(\.sonnyDensity) private var density
     @State private var search = ""
     @State private var selected: TaskID?
@@ -42,6 +43,8 @@ struct TasksPage: View {
             }
         }
         .commandCenterPageFrame()
+        // A task Insights asked to open.
+        .onAppear { selected = commands.takeTaskToOpen() ?? selected }
         .confirmationDialog("Delete every task in history?", isPresented: $isConfirmingDeleteAll, titleVisibility: .visible) {
             Button("Delete all", role: .destructive) {
                 selected = nil

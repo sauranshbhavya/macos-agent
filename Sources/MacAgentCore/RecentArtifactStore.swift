@@ -71,6 +71,17 @@ public struct RecentArtifactStore: @unchecked Sendable {
         return recorded
     }
 
+    /// Forgets one artifact. The file it points at is untouched; this store only holds a note about
+    /// it. A missing id is a no-op. `now` is threaded because `loadAll` applies the age cap.
+    public func delete(id: UUID, now: Date = Date()) throws {
+        let artifacts = try loadAll(now: now)
+        let remaining = artifacts.filter { $0.id != id }
+        guard remaining.count != artifacts.count else {
+            return
+        }
+        try write(remaining)
+    }
+
     public func loadAll(now: Date = Date()) throws -> [RecentArtifact] {
         guard fileManager.fileExists(atPath: fileURL.path) else {
             return []

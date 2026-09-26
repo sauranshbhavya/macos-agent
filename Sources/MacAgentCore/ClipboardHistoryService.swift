@@ -77,6 +77,17 @@ public struct ClipboardHistoryStore: @unchecked Sendable {
         return item
     }
 
+    /// Forgets one copied item. A missing id is a no-op. `now` is threaded because `loadAll` applies
+    /// the age cap.
+    public func delete(id: UUID, now: Date = Date()) throws {
+        let items = try loadAll(now: now)
+        let remaining = items.filter { $0.id != id }
+        guard remaining.count != items.count else {
+            return
+        }
+        try write(remaining)
+    }
+
     public func loadAll(now: Date = Date()) throws -> [ClipboardHistoryItem] {
         guard fileManager.fileExists(atPath: fileURL.path) else {
             return []

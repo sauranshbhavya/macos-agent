@@ -58,6 +58,17 @@ public struct SnippetStore: @unchecked Sendable {
         try write(snippets)
     }
 
+    /// Forgets one snippet, keyed by the trigger it is filed under. A trigger that isn't there is a
+    /// no-op: the person's intent, that it isn't saved any more, is already true.
+    public func delete(trigger rawTrigger: String) throws {
+        let trigger = try normalizedTrigger(rawTrigger)
+        var snippets = try loadAll()
+        guard snippets.removeValue(forKey: trigger) != nil else {
+            return
+        }
+        try write(snippets)
+    }
+
     public func snippet(matchingTrigger rawTrigger: String) throws -> StoredSnippet {
         let trigger = try normalizedTrigger(rawTrigger)
         guard let snippet = try loadAll()[trigger] else {

@@ -1,29 +1,37 @@
 import MacAgentCore
 import SwiftUI
 
+/// V1's sidebar order, minus Workspaces and Skills, which the V2 plan removed. The order is each
+/// page's ⌘-number.
 enum CommandCenterDestination: String, CaseIterable, Identifiable {
     case tasks
+    case insights
     case routines
+    case memory
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
         case .tasks: "Tasks"
+        case .insights: "Insights"
         case .routines: "Routines"
+        case .memory: "Memory"
         }
     }
 
     var systemImage: String {
         switch self {
         case .tasks: "checklist"
+        case .insights: "chart.bar.xaxis"
         case .routines: "clock.arrow.circlepath"
+        case .memory: "brain"
         }
     }
 }
 
-/// The main window: the green sidebar (Bhavya's 336959ca) and the Tasks and Routines pages, with
-/// Settings, the account, first run, shortcuts and About as sheets.
+/// The main window: the green sidebar (Bhavya's 336959ca) and the Tasks, Insights, Routines and
+/// Memory pages, with Settings, the account, first run, shortcuts and About as sheets.
 struct CommandCenterView: View {
     @ObservedObject var model: SonnyAppModel
     @ObservedObject var accountModel: SonnyAccountModel
@@ -46,7 +54,14 @@ struct CommandCenterView: View {
             Group {
                 switch selection {
                 case .tasks: TasksPage(model: model)
+                case .insights: InsightsPage(model: model, openTask: openTask)
                 case .routines: RoutinesPage(model: model)
+                case .memory:
+                    MemoryPage(
+                        model: model,
+                        openPage: { selection = $0 },
+                        openSettings: { isSettingsPresented = true }
+                    )
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -268,6 +283,13 @@ struct CommandCenterView: View {
         .buttonStyle(.plain)
         .sonnyPointerCursor()
         .sonnyHoverHighlight()
+    }
+
+    /// Selects Tasks with this task chosen. The request is left on `commands` rather than set on
+    /// the page, because the Tasks page doesn't exist until it is selected.
+    private func openTask(_ task: TaskID) {
+        commands.taskToOpen = task
+        selection = .tasks
     }
 
     private var profileName: String {
