@@ -326,10 +326,27 @@ public actor ScreenController: ScreenControlling {
         return textRoles.contains(element.role) && ["password", "passcode", "passwort", "mot de passe"].contains(where: label.contains)
     }
 
-    /// Whether a key chord types a character where the focus is: a letter or digit, with no Command
-    /// or Control held.
-    static func typesCharacter(_ keys: [String]) -> Bool {
-        !keys.contains(where: ["cmd", "command", "ctrl", "control"].contains) && keys.contains { $0.count == 1 }
+    /// cua's names for the modifier keys.
+    static let modifierKeys: Set<String> = ["cmd", "command", "shift", "option", "alt", "ctrl", "control", "fn"]
+    /// cua's keys that move through a window without typing: focus, cancel, caret and page keys, and
+    /// Return, which the submit rule already raises.
+    static let navigationKeys = Set(["tab", "escape", "esc", "up", "down", "left", "right", "home", "end", "pageup", "pagedown"])
+        .union(EffectRaiser.submitKeys)
+    /// ⌘N, ⌘T and ⌘W: the standard New and Close commands, which open or close and type nothing.
+    static let windowShortcutKeys: Set<String> = ["n", "t", "w"]
+
+    /// Whether a key chord surely puts no text into the focused element. This is a list of what
+    /// can't, not of what can: a letter, Space, Delete, ⌘V, ⌘Z, ⌥Tab (a tab character), ⌥Return (a
+    /// line break), a ⌃ editing binding or an app's own shortcut may all change a field's text, so
+    /// anything not listed counts as typing.
+    static func leavesTextAlone(_ keys: [String]) -> Bool {
+        let pressed = keys.map { $0.lowercased() }
+        let held = Set(pressed.filter(modifierKeys.contains))
+        let others = pressed.filter { !modifierKeys.contains($0) }
+        if others.isEmpty { return true }
+        guard others.count == 1, let key = others.first, held.isSubset(of: ["shift", "cmd", "command"]) else { return false }
+        if navigationKeys.contains(key) { return true }
+        return windowShortcutKeys.contains(key) && !held.isDisjoint(with: ["cmd", "command"])
     }
 
     /// Secrets never leave the Mac (V2 plan section 7.4): a detected secret is masked, a secure
@@ -490,8 +507,8 @@ public actor ScreenController: ScreenControlling {
             // cua doesn't say which element has focus, so a window with any text input is treated
             // as if one were focused: Return there may submit, and is raised to external.
             facts.focusedTakesText = look.hasTextInput
-            // A key that types a character types it at the focus, which may be the password field.
-            facts.targetIsSecure = look.hasSecureField && Self.typesCharacter(keys)
+            // A key that can change text changes it at the focus, which may be the password field.
+            facts.targetIsSecure = look.hasSecureField && !Self.leavesTextAlone(keys)
             target = "keys"
             content = keys.joined(separator: "+")
             preview = ApprovalPreview(title: "Press \(keys.joined(separator: "+")) in \(appName)")

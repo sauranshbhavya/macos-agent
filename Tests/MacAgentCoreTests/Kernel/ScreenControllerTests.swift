@@ -379,6 +379,37 @@ struct ScreenControllerTests {
     }
 
     @Test
+    func whileAPasswordFieldShowsOnlyChordsThatCantChangeTextArePressed() async throws {
+        var state = FakeCuaNotesState()
+        state.noteLocked = true
+        let controller = screenController(FakeCuaNotes(state: state))
+        _ = await look(controller, generation: 1)
+        func effect(_ keys: [String], declared: Effect = .navigate) async throws -> Effect {
+            judged(try await controller.prepare(.key(app: "Notes", keys: keys), actionID: ActionID()), declared: declared)
+        }
+        let power = GateContext(mode: .power, unattended: false, standing: .allowed)
+
+        // Space, Delete, a paste in any modifier order, Undo, a ⌃ editing binding, ⌥Tab and ⌥Return
+        // (a tab or line break in a Cocoa field), and a key an app may bind: each can put text in.
+        let changesText: [[String]] = [
+            ["space"], ["delete"], ["cmd", "v"], ["v", "cmd"], ["ctrl", "v"], ["shift", "insert"],
+            ["option", "shift", "cmd", "v"], ["cmd", "z"], ["ctrl", "y"], ["option", "tab"], ["option", "return"], ["f5"],
+        ]
+        for keys in changesText {
+            let judgedEffect = try await effect(keys)
+            #expect(judgedEffect == .credential, "\(keys)")
+            #expect(ActionGate.decide(judgedEffect, context: power) == .refuse(.secureField), "\(keys)")
+        }
+
+        // Moving through the window, modifiers alone, Return, and New stay as they were.
+        for keys in [["tab"], ["shift", "tab"], ["escape"], ["up"], ["cmd", "left"], ["pagedown"], ["shift"]] {
+            #expect(try await effect(keys) == .navigate, "\(keys)")
+        }
+        #expect(try await effect(["return"]) == .external)
+        #expect(try await effect(["cmd", "n"], declared: .create) == .create)
+    }
+
+    @Test
     func anAppIsWorkedInByOneTaskAtATimeUntilThatTaskEndsOrMovesOn() async throws {
         let claims = ScreenAppClaims()
         let first = screenController(FakeCuaNotes(), claims: claims)
@@ -543,9 +574,31 @@ struct ScreenKernelTests {
         )
     }
 
-    func observed(_ gateway: ScriptedGateway, _ task: TaskID, re: Int) async throws -> ClientMessage {
-        await gateway.send(task, .observe(ObserveBody(app: "Notes", ax: true, screenshot: false)), re: re)
+    func observed(_ gateway: ScriptedGateway, _ task: TaskID, re: Int, _ request: ObserveBody = ObserveBody(app: "Notes", ax: true, screenshot: false)) async throws -> ClientMessage {
+        await gateway.send(task, .observe(request), re: re)
         return try await gateway.next("observation")
+    }
+
+    /// The task stops to ask, showing the effect it was judged as.
+    func asksFirst(_ tasks: TaskController, _ task: TaskID, as effect: Effect) async -> Bool {
+        await eventually {
+            if case .awaitingApproval(let commit) = tasks.snapshot(task)?.phase { return commit.effect == effect }
+            return false
+        }
+    }
+
+    /// Starts a task in `mode`, looks at Notes with `request`, and proposes one screen action.
+    func propose(_ action: ScreenAction, declared: Effect, mode: AgentInteractionMode, fake: FakeCuaNotes, request: ObserveBody = ObserveBody(app: "Notes", ax: true, screenshot: false)) async throws -> (ScriptedGateway, TaskController, TaskID) {
+        let gateway = ScriptedGateway()
+        let tasks = controller(gateway, fake: fake)
+        await tasks.launch()
+        let task = try await startedTask(tasks, TaskRequest(goal: "Work in Notes", mode: mode))
+        _ = try await gateway.next("task.start")
+        let first = try await observed(gateway, task, re: 1, request)
+        await gateway.send(task, .propose(ProposeBody(agent: .screen, actions: [
+            WireAction(actionID: ActionID(), effect: declared, kind: .screen(action)),
+        ], final: false)), re: first.address?.seq)
+        return (gateway, tasks, task)
     }
 
     @Test
@@ -583,10 +636,7 @@ struct ScreenKernelTests {
         await gateway.send(task, .propose(ProposeBody(agent: .screen, actions: [
             WireAction(actionID: ActionID(), effect: .navigate, kind: .screen(.key(app: "Notes", keys: ["return"]))),
         ], final: false)), re: first.address?.seq)
-        #expect(await eventually {
-            if case .awaitingApproval(let commit) = tasks.snapshot(task)?.phase { return commit.effect == .external }
-            return false
-        })
+        #expect(await asksFirst(tasks, task, as: .external))
         #expect(await fake.state.keysPressed.isEmpty)
     }
 
@@ -603,10 +653,7 @@ struct ScreenKernelTests {
         await gateway.send(task, .propose(ProposeBody(agent: .screen, actions: [
             WireAction(actionID: ActionID(), effect: .editLocal, kind: .screen(.typeText(app: "Notes", text: "Late\nsee you", element: nil))),
         ], final: false)), re: first.address?.seq)
-        #expect(await eventually {
-            if case .awaitingApproval(let commit) = tasks.snapshot(task)?.phase { return commit.effect == .external }
-            return false
-        })
+        #expect(await asksFirst(tasks, task, as: .external))
         #expect(await fake.state.notes == FakeCuaNotesState().notes)
     }
 
@@ -629,6 +676,46 @@ struct ScreenKernelTests {
         #expect(results(of: outcome).map(\.status) == [.refused])
         #expect(results(of: outcome).first?.error?.code == .secureField)
         #expect(await fake.state.passwordTyped == "")
+    }
+
+    @Test
+    func returnHeldWithAnotherKeyAsksFirstInNormalMode() async throws {
+        let fake = FakeCuaNotes()
+        let (_, tasks, task) = try await propose(.key(app: "Notes", keys: ["return", "cmd"]), declared: .navigate, mode: .normal, fake: fake)
+        #expect(await asksFirst(tasks, task, as: .external))
+        #expect(await fake.state.shortcuts.isEmpty)
+    }
+
+    @Test
+    func returnAsksFirstAfterAScreenshotOnlyLookAndAfterAWindowCuaCouldNotRead() async throws {
+        var unread = FakeCuaNotesState()
+        unread.degradedReadings = 2
+        let looks = [
+            (FakeCuaNotesState(), ObserveBody(app: "Notes", ax: false, screenshot: true)),
+            (unread, ObserveBody(app: "Notes", ax: true, screenshot: true)),
+        ]
+        for (state, request) in looks {
+            let fake = FakeCuaNotes(state: state)
+            let (_, tasks, task) = try await propose(.key(app: "Notes", keys: ["return"]), declared: .navigate, mode: .normal, fake: fake, request: request)
+            #expect(await asksFirst(tasks, task, as: .external), "\(request)")
+            #expect(await fake.state.keysPressed.isEmpty)
+        }
+    }
+
+    @Test
+    func aPasteOrASpaceWhileAPasswordFieldShowsIsRefusedEvenInPowerMode() async throws {
+        var state = FakeCuaNotesState()
+        state.noteLocked = true
+        for keys in [["cmd", "v"], ["space"]] {
+            let fake = FakeCuaNotes(state: state)
+            let (gateway, tasks, _) = try await propose(.key(app: "Notes", keys: keys), declared: .navigate, mode: .power, fake: fake)
+            let outcome = try await gateway.next("outcome")
+            #expect(results(of: outcome).map(\.status) == [.refused], "\(keys)")
+            #expect(results(of: outcome).first?.error?.code == .secureField, "\(keys)")
+            #expect(await fake.state.shortcuts.isEmpty, "\(keys)")
+            #expect(await fake.state.keysPressed.isEmpty, "\(keys)")
+            withExtendedLifetime(tasks) {}
+        }
     }
 
     @Test
