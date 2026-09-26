@@ -349,6 +349,26 @@ struct KernelTests {
     }
 
     @Test
+    func anActionKnowsWhetherItsTaskIsPrivate() async throws {
+        let gateway = ScriptedGateway()
+        let seen = Shared<[Bool]>([])
+        var look = TestCapability(name: "look")
+        look.onExecute = { _ in seen.value.append(TaskPrivacy.isPrivate) }
+        let controller = makeController(gateway, capabilities: [look])
+        await controller.launch()
+
+        for isPrivate in [true, false] {
+            let task = try await startedTask(controller, TaskRequest(goal: "Look", isPrivate: isPrivate, mode: .normal))
+            _ = try await gateway.next("task.start")
+            await gateway.send(task, propose([call("look")], final: true), re: 1)
+            let outcome = try await gateway.next("outcome")
+            await gateway.send(task, .finish(FinishBody(status: .completed, summary: "Seen.")), re: outcome.address?.seq)
+            #expect(await eventually { controller.snapshot(task)?.phase.isTerminal == true })
+        }
+        #expect(seen.value == [true, false])
+    }
+
+    @Test
     func anApprovalBindsToItsTaskAndActionAndAChangedContentVoidsIt() async throws {
         let gateway = ScriptedGateway()
         let send = TestCapability(name: "send", floor: .external)

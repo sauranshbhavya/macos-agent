@@ -105,27 +105,14 @@ public struct InvokeShortcutCapabilityAdapter: CapabilityAdapter {
     }
 
     /// Run-history bookkeeping must not fail the invocation that already happened, but it also
-    /// must not vanish: this history feeds `hasCleanObservedSuccess`, which decides whether a
-    /// future run is tier 1 or tier 2. Silent rot there quietly changes risk gating.
+    /// must not vanish, so a failed write is logged. A "Don't save this task" task records nothing,
+    /// asked here rather than at the three call sites so the guard can't be half-remembered.
     private func recordHistory(
         context: CapabilityExecutionContext,
         log: @escaping (AgentPhase, String) -> Void,
         write: () throws -> Void
     ) {
-        // "Don't save this task" (SONNY-120) is asked here rather than at the three call sites
-        // above, because one guard that wraps all three cannot be half-remembered. Shortcut run
-        // history is a `.trace` store, so a suppressed run withholds it.
-        //
-        // The cost, stated because it is a real one and not obvious: this history feeds
-        // `hasCleanObservedSuccess`, which decides whether a *future* run of the same Shortcut is
-        // tier 1 or tier 2. A suppressed run therefore earns no trust it could have earned, so the
-        // next run may ask where it otherwise would not. That is the right direction for a switch
-        // whose whole promise is leaving no record — suppression may cost the user an extra
-        // confirmation later; it must never buy them a quieter approval.
-        //
-        // Task-history memory being switched off (SONNY-208) withholds it for the same reason and
-        // at the same cost — `allowsRecording(to:)` is the conjunction of both switches, so this
-        // guard did not have to learn about the second one.
+        guard !TaskPrivacy.isPrivate else { return }
         do {
             try write()
         } catch {

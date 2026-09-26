@@ -86,6 +86,13 @@ public struct UnavailableObserver: TaskObserver {
     }
 }
 
+/// Whether the action running now belongs to a "Don't save this task" task. The runtime sets it
+/// around each action it runs, so a capability can leave no trace on the Mac (V2 plan decision 10)
+/// without every signature carrying it.
+public enum TaskPrivacy {
+    @TaskLocal public static var isPrivate = false
+}
+
 public struct RuntimeDependencies: Sendable {
     public var send: @Sendable (ClientMessage) async -> Bool
     public var ledgers: any TaskLedgerStoring
@@ -549,7 +556,7 @@ public actor TaskRuntime {
             // Without a record of the dispatch, a crash could replay this action. It doesn't run.
             return answered(action, ActionResult(actionID: action.actionID, status: .failed, effect: judged, error: OutcomeError(code: .executionError, message: "Sonny couldn't record this action safely, so it didn't run.")), title: title, agent: agent)
         }
-        let outcome = await run(prepared)
+        let outcome = await TaskPrivacy.$isPrivate.withValue(record.request.isPrivate) { await run(prepared) }
         if outcome.status == .outcomeUnknown, judged > .navigate {
             unknownDuringRun = (action.actionID, judged, title)
         }

@@ -53,6 +53,8 @@ final class SonnyAppModel: ObservableObject {
     private let defaults: UserDefaults
     private var pulse: Timer?
     private var clipboardTimer: Timer?
+    /// Whether a private task was running at the clipboard's last poll.
+    private var privateRanAtLastPoll = false
     private var voiceLimit: Task<Void, Never>?
     /// The private setting when listening began; the transcription and the task both keep it.
     private var voicePrivate = false
@@ -71,14 +73,15 @@ final class SonnyAppModel: ObservableObject {
         desk: TaskDesk,
         stores: KernelStores,
         client: SonnyBackendClient,
-        defaults: UserDefaults = .standard
+        defaults: UserDefaults = .standard,
+        pasteboard: any PasteboardReading = SystemPasteboardReader()
     ) {
         self.desk = desk
         self.stores = stores
         self.client = client
         self.defaults = defaults
         creditService = CreditBalanceService(client: client)
-        clipboardMonitor = ClipboardHistoryMonitor(store: stores.clipboard, settingsStore: stores.clipboardSettings)
+        clipboardMonitor = ClipboardHistoryMonitor(reader: pasteboard, store: stores.clipboard, settingsStore: stores.clipboardSettings)
         mode = defaults.string(forKey: Self.modeKey).flatMap(AgentInteractionMode.init(rawValue:)) ?? .normal
         // The views read the desk and the controller through this model, so their changes are
         // this model's changes.
@@ -104,7 +107,7 @@ final class SonnyAppModel: ObservableObject {
             Task { @MainActor in await self?.checkSchedulesAndWatchers() }
         }
         clipboardTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
-            Task { @MainActor in _ = try? self?.clipboardMonitor.poll() }
+            Task { @MainActor in self?.pollClipboard() }
         }
         Task { await checkSchedulesAndWatchers() }
         Task { await watchClientVersion() }
@@ -114,6 +117,19 @@ final class SonnyAppModel: ObservableObject {
         pulse?.invalidate()
         clipboardTimer?.invalidate()
         await controller.shutDown()
+    }
+
+    /// Clipboard history keeps what's copied, except while a private task runs: those copies are
+    /// marked as seen and never kept, then and after it ends. One more tick is skipped after the
+    /// last private task ends, so a copy made in its final second isn't kept either.
+    func pollClipboard() {
+        let privateRunning = controller.tasks.contains { $0.isPrivate && !$0.phase.isTerminal }
+        if privateRunning || privateRanAtLastPoll {
+            clipboardMonitor.resynchronize()
+        } else {
+            _ = try? clipboardMonitor.poll()
+        }
+        privateRanAtLastPoll = privateRunning
     }
 
     private func checkSchedulesAndWatchers() async {

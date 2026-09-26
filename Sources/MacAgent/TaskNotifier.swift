@@ -35,22 +35,39 @@ final class TaskNotifier: NSObject, UNUserNotificationCenterDelegate {
 
     private func look(at tasks: [TaskSnapshot]) {
         for task in tasks {
-            switch task.phase {
-            case .awaitingApproval(let commit):
-                post(.approvalNeeded, key: "\(commit.commitID)", body: commit.preview.title)
-            case .awaitingAnswer(let ask):
-                post(.approvalNeeded, key: "\(task.id)-ask-\(ask.question)", body: ask.question)
-            case .paused(.outcomeUnknown(_, _, let title)):
-                post(.approvalNeeded, key: "\(task.id)-paused", body: "Sonny may already have done this: \(title)")
-            case .completed(let summary) where !task.origin.isUnattended:
-                post(.taskFinished, key: "\(task.id)-end", body: summary)
-            case .failed(let failure) where !task.origin.isUnattended:
-                post(.taskFailed, key: "\(task.id)-end", body: failure.message)
-            default:
-                break
-            }
+            guard let event = Self.event(for: task) else { continue }
+            post(event.kind, key: event.key, body: event.body)
         }
     }
+
+    struct Event: Equatable {
+        let kind: SonnyNotificationKind
+        let key: String
+        let body: String
+    }
+
+    /// What a task's state posts, if anything. A task the person asked Sonny not to save still
+    /// says when it needs them or ends, but with nothing of its own in the words or the key:
+    /// Notification Center keeps what it's given after Sonny quits.
+    static func event(for task: TaskSnapshot) -> Event? {
+        let quiet = task.isPrivate
+        switch task.phase {
+        case .awaitingApproval(let commit):
+            return Event(kind: .approvalNeeded, key: "\(commit.commitID)", body: quiet ? privateNeedsYou : commit.preview.title)
+        case .awaitingAnswer(let ask):
+            return Event(kind: .approvalNeeded, key: quiet ? "\(task.id)-ask" : "\(task.id)-ask-\(ask.question)", body: quiet ? privateNeedsYou : ask.question)
+        case .paused(.outcomeUnknown(_, _, let title)):
+            return Event(kind: .approvalNeeded, key: "\(task.id)-paused", body: quiet ? privateNeedsYou : "Sonny may already have done this: \(title)")
+        case .completed(let summary) where !task.origin.isUnattended:
+            return Event(kind: .taskFinished, key: "\(task.id)-end", body: quiet ? "A task that isn't being saved has finished." : summary)
+        case .failed(let failure) where !task.origin.isUnattended:
+            return Event(kind: .taskFailed, key: "\(task.id)-end", body: quiet ? "A task that isn't being saved couldn't finish." : failure.message)
+        default:
+            return nil
+        }
+    }
+
+    static let privateNeedsYou = "A task that isn't being saved needs you."
 
     private func announce(_ notices: [DeskNotice]) {
         for notice in notices {

@@ -40,6 +40,8 @@ private final class CountingCapability: Capability, @unchecked Sendable {
 @MainActor
 private struct AppFixture {
     let gateway = ScriptedGateway()
+    let pasteboard = TestPasteboard()
+    let stores: KernelStores
     let model: SonnyAppModel
     let send = CountingCapability(name: "send_it", floor: .external)
 
@@ -66,7 +68,8 @@ private struct AppFixture {
             mode: { .normal }
         )
         let defaults = try #require(UserDefaults(suiteName: "SonnyAppModelTests-\(UUID().uuidString)"))
-        model = SonnyAppModel(desk: desk, stores: stores, client: makeHermeticBackendClient(), defaults: defaults)
+        self.stores = stores
+        model = SonnyAppModel(desk: desk, stores: stores, client: makeHermeticBackendClient(), defaults: defaults, pasteboard: pasteboard)
     }
 
     func start() async throws -> (TaskID, TaskStartBody) {
@@ -179,6 +182,33 @@ struct SonnyAppModelTests {
     }
 
     @Test
+    func whatIsCopiedWhileAPrivateTaskRunsIsNeverKept() async throws {
+        let fixture = try AppFixture()
+        try fixture.stores.clipboardSettings.save(ClipboardHistorySettings(isEnabled: true))
+        fixture.model.pollClipboard()
+
+        fixture.model.togglePrivate()
+        fixture.model.composerText = "Look up my test results"
+        fixture.model.submitComposer()
+        let (task, _) = try await fixture.start()
+        #expect(await eventually { fixture.model.controller.snapshot(task)?.phase.isTerminal == false })
+
+        fixture.pasteboard.copy("my lab result code 4471")
+        fixture.model.pollClipboard()
+        // A copy in the task's last second, before the next poll, isn't kept either.
+        fixture.pasteboard.copy("my lab result code 4472")
+        await fixture.gateway.send(task, .finish(FinishBody(status: .completed, summary: "Found them.")))
+        #expect(await eventually { fixture.model.controller.snapshot(task)?.phase.isTerminal == true })
+        fixture.model.pollClipboard()
+        #expect(try fixture.stores.clipboard.loadAll().isEmpty)
+
+        // Once nothing private runs, copies are kept again.
+        fixture.pasteboard.copy("the shopping list")
+        fixture.model.pollClipboard()
+        #expect(try fixture.stores.clipboard.loadAll().map(\.text) == ["the shopping list"])
+    }
+
+    @Test
     func anApprovalShownInTheWidgetAnswersItsOwnTask() async throws {
         let fixture = try AppFixture()
         fixture.model.composerText = "Send the weekly report"
@@ -220,4 +250,19 @@ struct SonnyAppModelTests {
         _ = try await fixture.gateway.next("task.cancel")
         #expect(await eventually { fixture.model.controller.snapshot(task)?.phase == .cancelled })
     }
+}
+
+/// A pasteboard a test copies to.
+@MainActor
+private final class TestPasteboard: PasteboardReading {
+    var changeCount = 0
+    private var text: String?
+
+    func copy(_ value: String) {
+        text = value
+        changeCount += 1
+    }
+
+    func typeIdentifiers() -> [String] { ["public.utf8-plain-text"] }
+    func stringValue() -> String? { text }
 }
