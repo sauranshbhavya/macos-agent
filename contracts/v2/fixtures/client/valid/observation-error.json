@@ -1,0 +1,15 @@
+{
+  "v": 1,
+  "type": "observation",
+  "id": "00000000-0000-4000-8000-000000000009",
+  "task": "7d9f1c2e-4b3a-4e8f-9a21-0c5d6e7f8a90",
+  "seq": 4,
+  "re": 3,
+  "body": {
+    "generation": 3,
+    "error": {
+      "code": "permission_denied",
+      "message": "Sonny does not have Accessibility access."
+    }
+  }
+}

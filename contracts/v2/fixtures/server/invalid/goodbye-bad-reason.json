@@ -1,0 +1,9 @@
+{
+  "v": 1,
+  "type": "goodbye",
+  "id": "00000000-0000-4000-8000-000000000104",
+  "body": {
+    "reason": "bored",
+    "reconnect_after_ms": 500
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "v": 1,
+  "type": "task.start",
+  "id": "00000000-0000-4000-8000-000000000005",
+  "task": "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d",
+  "seq": 1,
+  "body": {
+    "goal": "Now do the same for the other file",
+    "origin": "follow_up",
+    "private": true,
+    "unattended": false,
+    "mode": "safe",
+    "prior_task": "7d9f1c2e-4b3a-4e8f-9a21-0c5d6e7f8a90",
+    "context": {}
+  }
+}

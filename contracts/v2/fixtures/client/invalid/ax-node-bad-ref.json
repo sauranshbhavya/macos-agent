@@ -1,0 +1,36 @@
+{
+  "v": 1,
+  "type": "observation",
+  "id": "00000000-0000-4000-8000-000000000007",
+  "task": "7d9f1c2e-4b3a-4e8f-9a21-0c5d6e7f8a90",
+  "seq": 2,
+  "re": 1,
+  "body": {
+    "generation": 1,
+    "app": {
+      "bundle_id": "com.apple.Notes",
+      "name": "Notes",
+      "pid": 812
+    },
+    "window": {
+      "id": 4471,
+      "title": "Notes",
+      "frame": {
+        "x": 100,
+        "y": 80,
+        "w": 1200,
+        "h": 800
+      }
+    },
+    "ax": {
+      "nodes": [
+        {
+          "ref": "button-1",
+          "depth": 0,
+          "role": "AXButton"
+        }
+      ],
+      "truncated": false
+    }
+  }
+}

@@ -2,10 +2,11 @@
 
 This is the current guidance for agents and contributors. Start with the user's requested outcome and the code that implements it. Historical plans and branch records are context, not standing instructions.
 
-## Current phase (founders, 2026-09-23, updated 2026-09-24)
+## Current phase (founders, 2026-09-25)
 
-- **Feature freeze until Milestone A of the [V2 plan](sonny_v2_architecture_implementation_plan.md) lands.** Do not add features, capabilities or improvements to the current execution path. The only exception is a fix for a defect that loses data, breaks security or blocks everyday use, and a founder approves each one.
-- Skill packs come first, then the V2 plan resumes from Milestone A (founders, 2026-09-24, reversing the hold of 2026-09-23). The work is the pack groups SONNY-545 to SONNY-552, plus the sites SONNY-537 already has in flight. Only sites in the Chrome UX Report top 10,000 get deep packs; niche sites stay shallow. The Jev local decision model is still on hold.
+- **The [V2 implementation plan](docs/sonny-v2-implementation-plan.md) is under way, one phase at a time.** Its section 1 decisions replace the earlier feature freeze and the Milestone A scope. New work goes into the V2 kernel (`Sources/MacAgentCore/Kernel/`), the gateway agent (`server/src/agent/`) and the shared contract (`contracts/v2/`), not the current execution path, which phase 7 deletes.
+- Changes to the current execution path are limited to fixes for defects that lose data, break security or block everyday use, and a founder approves each one.
+- For V2 work, plan decisions 1 and 2 override the data rules below: V2 starts with fresh local stores, keeps no readers for old formats, and has no retention or deletion scaffolding beyond the security floor and the private-mode toggle.
 - If a request conflicts with this phase, say so and ask before starting.
 
 ## Make changes

@@ -1,0 +1,23 @@
+{
+  "v": 1,
+  "type": "task.start",
+  "id": "00000000-0000-4000-8000-000000000004",
+  "task": "7d9f1c2e-4b3a-4e8f-9a21-0c5d6e7f8a90",
+  "seq": 1,
+  "body": {
+    "goal": "Make a new note in Notes that says buy milk",
+    "origin": "telepathy",
+    "private": false,
+    "unattended": false,
+    "mode": "normal",
+    "context": {
+      "frontmost_app": {
+        "bundle_id": "com.apple.finder",
+        "name": "Finder"
+      },
+      "finder_selection": [
+        "/Users/me/Desktop/report.docx"
+      ]
+    }
+  }
+}

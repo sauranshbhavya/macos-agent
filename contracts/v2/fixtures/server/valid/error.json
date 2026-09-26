@@ -1,0 +1,10 @@
+{
+  "v": 1,
+  "type": "error",
+  "id": "00000000-0000-4000-8000-000000000106",
+  "body": {
+    "code": "malformed",
+    "message": "The message could not be read.",
+    "ref": "00000000-0000-4000-8000-000000000009"
+  }
+}

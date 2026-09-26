@@ -1,0 +1,99 @@
+{
+  "v": 1,
+  "type": "propose",
+  "id": "00000000-0000-4000-8000-000000000110",
+  "task": "7d9f1c2e-4b3a-4e8f-9a21-0c5d6e7f8a90",
+  "seq": 4,
+  "re": 3,
+  "body": {
+    "agent": "screen",
+    "actions": [
+      {
+        "action_id": "aaaaaaaa-0000-4000-8000-000000000002",
+        "effect": "navigate",
+        "screen": {
+          "tool": "press",
+          "app": "com.apple.Notes",
+          "element": {
+            "ref": "e5",
+            "generation": 1
+          }
+        }
+      },
+      {
+        "action_id": "aaaaaaaa-0000-4000-8000-000000000003",
+        "effect": "create",
+        "screen": {
+          "tool": "key",
+          "app": "com.apple.Notes",
+          "keys": [
+            "cmd",
+            "n"
+          ]
+        }
+      },
+      {
+        "action_id": "aaaaaaaa-0000-4000-8000-000000000004",
+        "effect": "edit_local",
+        "screen": {
+          "tool": "set_value",
+          "app": "com.apple.Notes",
+          "element": {
+            "ref": "e3",
+            "generation": 1
+          },
+          "value": "buy milk"
+        }
+      },
+      {
+        "action_id": "aaaaaaaa-0000-4000-8000-000000000005",
+        "effect": "edit_local",
+        "screen": {
+          "tool": "type_text",
+          "app": "com.apple.Notes",
+          "text": "and eggs",
+          "element": {
+            "ref": "e3",
+            "generation": 1
+          }
+        }
+      },
+      {
+        "action_id": "aaaaaaaa-0000-4000-8000-000000000006",
+        "effect": "navigate",
+        "screen": {
+          "tool": "scroll",
+          "app": "com.apple.Notes",
+          "direction": "down",
+          "amount": 3
+        }
+      },
+      {
+        "action_id": "aaaaaaaa-0000-4000-8000-000000000007",
+        "effect": "create",
+        "screen": {
+          "tool": "menu",
+          "app": "com.apple.Notes",
+          "path": [
+            "File",
+            "New Note"
+          ]
+        }
+      },
+      {
+        "action_id": "aaaaaaaa-0000-4000-8000-000000000008",
+        "effect": "unknown",
+        "expect": "The note list shows the new note",
+        "screen": {
+          "tool": "click_point",
+          "app": "com.apple.Notes",
+          "x": 312,
+          "y": 204.5,
+          "generation": 2,
+          "count": 2
+        }
+      }
+    ],
+    "final": true
+  }
+}

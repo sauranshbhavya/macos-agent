@@ -1,0 +1,42 @@
+{
+  "v": 1,
+  "type": "hello",
+  "id": "00000000-0000-4000-8000-000000000001",
+  "body": {
+    "device_id": "d0d0d0d0-1111-4222-8333-444455556666",
+    "app_version": "2.0.0",
+    "os_version": "26.0",
+    "manifest": {
+      "operations": [
+        {
+          "name": "open_app",
+          "version": 1
+        }
+      ],
+      "screen": {
+        "tools": [
+          "observe_ax",
+          "screenshot",
+          "press",
+          "set_value",
+          "type_text",
+          "key",
+          "scroll",
+          "menu",
+          "click_point"
+        ]
+      },
+      "permissions": {
+        "accessibility": "granted",
+        "screen_recording": "not_determined",
+        "automation": [
+          {
+            "bundle_id": "com.apple.mail",
+            "state": "denied"
+          }
+        ]
+      }
+    },
+    "resume": []
+  }
+}

@@ -1,0 +1,38 @@
+{
+  "v": 1,
+  "type": "hello",
+  "id": "00000000-0000-4000-8000-000000000002",
+  "body": {
+    "device_id": "d0d0d0d0-1111-4222-8333-444455556666",
+    "app_version": "2.0.0",
+    "os_version": "15.6.1",
+    "manifest": {
+      "operations": [],
+      "screen": {
+        "tools": []
+      },
+      "permissions": {
+        "accessibility": "denied",
+        "screen_recording": "denied",
+        "automation": []
+      }
+    },
+    "resume": [
+      {
+        "task": "7d9f1c2e-4b3a-4e8f-9a21-0c5d6e7f8a90",
+        "last_seq_in": 4,
+        "last_seq_out": 3,
+        "ledger": [
+          {
+            "action_id": "aaaaaaaa-0000-4000-8000-000000000001",
+            "state": "done"
+          },
+          {
+            "action_id": "aaaaaaaa-0000-4000-8000-000000000002",
+            "state": "dispatched"
+          }
+        ]
+      }
+    ]
+  }
+}

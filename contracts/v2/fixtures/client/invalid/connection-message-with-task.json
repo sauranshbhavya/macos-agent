@@ -1,0 +1,9 @@
+{
+  "v": 1,
+  "type": "reauth",
+  "id": "00000000-0000-4000-8000-000000000003",
+  "body": {
+    "access_token": "eyJhbGciOiJIUzI1NiJ9.e30.sig"
+  },
+  "task": "7d9f1c2e-4b3a-4e8f-9a21-0c5d6e7f8a90"
+}

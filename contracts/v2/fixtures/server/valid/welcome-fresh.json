@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "type": "welcome",
+  "id": "00000000-0000-4000-8000-000000000101",
+  "body": {
+    "session_id": "5e55e55e-5e55-4e55-8e55-5e555e555e55",
+    "server_time_ms": 1790000000000,
+    "max_payload_bytes": 6291456,
+    "heartbeat_seconds": 20,
+    "tasks": []
+  }
+}
