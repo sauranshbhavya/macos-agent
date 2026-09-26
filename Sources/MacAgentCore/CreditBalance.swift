@@ -1,69 +1,34 @@
 import Foundation
 
-/// **How many screen-control runs are left this month** — the one number the product asks a user to
-/// track, read from the gateway (SONNY-212).
-///
-/// SONNY-17 fixed the user-facing unit and the founders re-affirmed it on 2026-08-31 against the one
-/// case that had been written down as contradicting it: a standing watcher's repeated checks, which
-/// SONNY-236 had recorded as drawing on the same allowance. That went the other way — **watchers are
-/// free and capped instead** — so screen control stays the only line that draws and this stays a
-/// single number rather than a pool two different things spend out of.
-///
-/// **This type reads and does nothing else.** Rendering it is SONNY-214's and refusing on it is
-/// SONNY-213's; neither decision is taken here, and neither belongs in a type whose whole job is to
-/// carry a figure the server derived.
-public struct ScreenControlAllowance: Sendable, Equatable {
+/// An account's credits this month, read from the gateway (V2 plan decision 8): what the plan and
+/// any top-ups give, and what is left after the model calls its tasks made. Tasks spend credits by
+/// tokens; the gateway stops a task before its next model call when they run out.
+public struct CreditBalance: Sendable, Equatable {
     /// The plan the server applied — its own, or the catalogue's default for an account with none.
-    /// Opaque here: this build knows no plan keys and must not learn any.
     public let plan: String
-    /// The number a user sees. Never negative; the server floors it.
-    public let runsLeft: Int
-    /// What a full period on this plan is worth, in runs — the denominator of "3 of 20 left".
-    public let runsIncluded: Int
-    /// **What is left in credits, which is not the same question as ``runsLeft`` and is never shown
-    /// to anybody** (SONNY-213, PR #190's F1).
-    ///
-    /// `runsLeft` is `floor(remaining / runCredits)`: how many *whole further runs* the account can
-    /// afford. That is the right question at a session's door and the wrong one at a step boundary,
-    /// because a session in flight has already had its own iterations subtracted from `remaining` —
-    /// so an account admitted on its last run reads `0` at the very next boundary and would be
-    /// halted for spending the run it was just granted. The boundary's question is whether the
-    /// account has actually *run out*, which is this figure.
-    ///
-    /// **Reading it is not a second number in the product**, which is what
-    /// ``WireScreenControlAllowance``'s own note guards against: nothing renders this, SONNY-214's
-    /// surface still shows one number, and the two cannot disagree — the gateway derives `runsLeft`
-    /// from this very value, rounding before the floor precisely so that a reader recomputing the
-    /// run count from the credits beside it gets the same answer (`balance.ts`'s `runsFrom`).
+    /// What this period is worth: the plan's monthly credits plus what was topped up.
+    public let creditsAllowance: Double
+    /// What is left. Never negative.
     public let creditsRemaining: Double
-    /// The period this figure is about. `periodEnd` is exclusive.
+    /// The period these figures are about. `periodEnd` is exclusive.
     public let periodStart: Date
     public let periodEnd: Date
-    /// Whether more runs can be bought when these run out, and whether the user asked for that
-    /// (SONNY-215).
-    public let autoTopUp: ScreenControlAutoTopUp
-    /// **What this account was last charged for a top-up, and when** — `nil` when it never has been
-    /// (SONNY-215's F6, founder decision option B).
-    ///
-    /// **Not part of ``autoTopUp``, because it is not the setting.** It is a record of something
-    /// that happened, and it stays true after the switch is turned off. It is not part of the
-    /// credits block either, for the mirror of that reason: every figure there is a credit in this
-    /// period's pool, and this is money in a currency at an instant that may be months old.
-    public let lastTopUp: ScreenControlTopUpCharge?
+    /// Whether more credits can be bought when these run out, and whether the user asked for that.
+    public let autoTopUp: CreditAutoTopUp
+    /// What this account was last charged for a top-up, and when; `nil` when it never has been.
+    public let lastTopUp: CreditTopUpCharge?
 
     public init(
         plan: String,
-        runsLeft: Int,
-        runsIncluded: Int,
+        creditsAllowance: Double,
         creditsRemaining: Double,
         periodStart: Date,
         periodEnd: Date,
-        autoTopUp: ScreenControlAutoTopUp,
-        lastTopUp: ScreenControlTopUpCharge?
+        autoTopUp: CreditAutoTopUp,
+        lastTopUp: CreditTopUpCharge?
     ) {
         self.plan = plan
-        self.runsLeft = runsLeft
-        self.runsIncluded = runsIncluded
+        self.creditsAllowance = creditsAllowance
         self.creditsRemaining = creditsRemaining
         self.periodStart = periodStart
         self.periodEnd = periodEnd
@@ -77,8 +42,8 @@ public struct ScreenControlAllowance: Sendable, Equatable {
 /// **Minor units and a currency code, never a formatted string.** §7.1's rule is that the words are
 /// this repository's rather than the server's, and a price is words the moment it is written down —
 /// a currency symbol, a separator and a decimal place are all locale decisions. The gateway sends
-/// the number and the code; `ScreenControlUsagePresentation` is where they become something to read.
-public struct ScreenControlMoney: Sendable, Equatable {
+/// the number and the code; `CreditPresentation` is where they become something to read.
+public struct CreditMoney: Sendable, Equatable {
     /// In the currency's smallest unit — 500 for $5.00. Never fractional.
     public let amount: Int
     /// ISO 4217, as the provider writes it. Case is not normalised here; the formatter uppercases.
@@ -91,11 +56,11 @@ public struct ScreenControlMoney: Sendable, Equatable {
 }
 
 /// One charge that happened: what it cost, and when the session that triggered it asked.
-public struct ScreenControlTopUpCharge: Sendable, Equatable {
-    public let price: ScreenControlMoney
+public struct CreditTopUpCharge: Sendable, Equatable {
+    public let price: CreditMoney
     public let at: Date
 
-    public init(price: ScreenControlMoney, at: Date) {
+    public init(price: CreditMoney, at: Date) {
         self.price = price
         self.at = at
     }
@@ -108,8 +73,8 @@ public struct ScreenControlTopUpCharge: Sendable, Equatable {
 /// ``isOptedIn`` is the user's. Collapsing them would make "nothing to sell" and "you said no" the
 /// same state, and the product does opposite things with them: the first renders no control at all,
 /// and the second renders one that is off.
-public struct ScreenControlAutoTopUp: Sendable, Equatable {
-    /// Whether this deployment sells more runs at all. `false` renders no control — a control that
+public struct CreditAutoTopUp: Sendable, Equatable {
+    /// Whether this deployment sells more credits at all. `false` renders no control — a control that
     /// only fails when pressed is a broken control (founder direction, 2026-08-31).
     public let isOffered: Bool
     /// Whether this account asked for automatic purchases. **`false` is the default and the
@@ -125,21 +90,21 @@ public struct ScreenControlAutoTopUp: Sendable, Equatable {
     /// founder decision option B). `nil` when this deployment sells none.
     ///
     /// This is the *configured* price, which is the only one available before a purchase has
-    /// happened. The record of a charge that did happen is ``ScreenControlAllowance/lastTopUp``, and
+    /// happened. The record of a charge that did happen is ``CreditBalance/lastTopUp``, and
     /// that one carries the provider's own figure.
-    public let price: ScreenControlMoney?
+    public let price: CreditMoney?
 
     /// The state a build gets before it has read anything. **Nothing offered, nothing agreed and no
     /// price** — fail-closed in every direction, so a decoding path that lost these fields could not
     /// turn the feature on or put a number on a control.
-    public static let none = ScreenControlAutoTopUp(
+    public static let none = CreditAutoTopUp(
         isOffered: false,
         isOptedIn: false,
         attemptsLeft: 0,
         price: nil
     )
 
-    public init(isOffered: Bool, isOptedIn: Bool, attemptsLeft: Int, price: ScreenControlMoney?) {
+    public init(isOffered: Bool, isOptedIn: Bool, attemptsLeft: Int, price: CreditMoney?) {
         self.isOffered = isOffered
         self.isOptedIn = isOptedIn
         self.attemptsLeft = attemptsLeft
@@ -157,26 +122,10 @@ public struct ScreenControlAutoTopUp: Sendable, Equatable {
     }
 }
 
-/// Fetches the allowance. One request, no cache, no store.
-///
-/// ## Why there is no cache here, and why that is the opposite call to `EntitlementService`'s
-///
-/// That service caches deliberately and honours a claim for up to four days past its issue, because
-/// an entitlement changes on the order of a subscription and the guarantee it carries — §16.3's — is
-/// that a user with no network is not locked out. **A run count is the opposite kind of number.** It
-/// changes on the order of a run, so a stored one is wrong most of the time it is read, and wrong in
-/// the direction that matters: showing runs to somebody who has none. Nothing here writes to a local
-/// store, which also keeps this type out of `LocalStore.allCases` and the six enrolments a new store
-/// owes.
-///
-/// **A failure is a failure and never a number.** There is no fallback figure, because every
-/// candidate is a lie: zero locks a user out of a feature they have paid for, and any positive
-/// number promises runs the server never granted. The caller decides what to show when this throws,
-/// and SONNY-214 built that surface: `AgentViewModel.refreshScreenControlAllowance()` is the one
-/// caller in the app, it catches into `nil`, and both surfaces render no line at all on `nil` —
-/// no placeholder, no zero, and no sentence about why. (This said the only caller was a test, which
-/// SONNY-214 made false and PR #188's F8 caught.)
-public actor ScreenControlAllowanceService {
+/// Fetches the balance. One request, no cache, no store: a balance changes with every model call,
+/// so a stored one would be wrong most of the time it is read. A failure is a failure and never a
+/// number; the app shows no line at all rather than a figure the server never gave.
+public actor CreditBalanceService {
     private let client: SonnyBackendClient
 
     /// No default, the same hazard `EntitlementService` and `SonnyBackendClient` both record: every
@@ -186,8 +135,8 @@ public actor ScreenControlAllowanceService {
         self.client = client
     }
 
-    /// Ask the gateway how many runs are left, or throw.
-    public func fetch() async throws -> ScreenControlAllowance {
+    /// Ask the gateway how many credits are left, or throw.
+    public func fetch() async throws -> CreditBalance {
         let response = try await client.send(SonnyBackendRequest(
             method: "GET",
             path: Self.creditsPath,
@@ -215,7 +164,7 @@ public actor ScreenControlAllowanceService {
     /// **A `PUT` and not a `POST`, so it carries no idempotency key and needs none**: sending it
     /// twice leaves the same setting, which is what idempotent means, and §9.1 asks for a key on a
     /// `POST` that changes something precisely because those are the ones a repeat can double.
-    public func setAutoTopUp(_ enabled: Bool) async throws -> ScreenControlAllowance {
+    public func setAutoTopUp(_ enabled: Bool) async throws -> CreditBalance {
         let body = try JSONSerialization.data(withJSONObject: ["enabled": enabled])
         let response = try await client.send(SonnyBackendRequest(
             method: "PUT",
@@ -231,7 +180,7 @@ public actor ScreenControlAllowanceService {
         return try Self.decode(response.data)
     }
 
-    /// Ask the gateway to buy one more pack of runs, and read back the allowance it bought
+    /// Ask the gateway to buy one more pack of credits, and read back the balance it bought
     /// (SONNY-215).
     ///
     /// **Every guard that matters is the gateway's**, and this method takes no argument for that
@@ -244,7 +193,7 @@ public actor ScreenControlAllowanceService {
     /// changes something, and this one moves money — so a key is what stops a repeat buying a second
     /// pack, and `isRetrySafe: false` is `verifyEmailCode`'s pairing for its reason: a call that
     /// spends something the user cannot get back is made once.
-    public func purchaseTopUp() async throws -> ScreenControlAllowance {
+    public func purchaseTopUp() async throws -> CreditBalance {
         let response = try await client.send(SonnyBackendRequest(
             method: "POST",
             path: "/v1/account/credits/top-up",
@@ -265,31 +214,30 @@ public actor ScreenControlAllowanceService {
     /// **One decode for three calls.** The `GET`, the setting and the purchase answer the same shape
     /// deliberately, so an answer is the account's whole position rather than a fragment a caller
     /// has to merge — and a second decoder here would be a second place for the three to disagree.
-    private static func decode(_ data: Data) throws -> ScreenControlAllowance {
-        guard let wire = try? decoder.decode(WireScreenControlAllowance.self, from: data) else {
-            throw SonnyBackendError.undecodableResponse("screen-control allowance response")
+    private static func decode(_ data: Data) throws -> CreditBalance {
+        guard let wire = try? decoder.decode(WireCreditBalance.self, from: data) else {
+            throw SonnyBackendError.undecodableResponse("credit balance response")
         }
-        return ScreenControlAllowance(
+        return CreditBalance(
             plan: wire.plan,
-            runsLeft: wire.screen_control_runs_left,
-            runsIncluded: wire.screen_control_runs_included,
+            creditsAllowance: wire.credits.allowance,
             creditsRemaining: wire.credits.remaining,
             periodStart: wire.period_start,
             periodEnd: wire.period_end,
             // **Absent decodes to nothing offered and nothing agreed**, which is the fail-closed
             // direction on both axes: a gateway too old to send this block cannot turn the feature
             // on, and cannot make a user look opted in.
-            autoTopUp: ScreenControlAutoTopUp(
+            autoTopUp: CreditAutoTopUp(
                 isOffered: wire.auto_top_up?.offered ?? false,
                 isOptedIn: wire.auto_top_up?.opted_in ?? false,
                 attemptsLeft: wire.auto_top_up?.attempts_left ?? 0,
                 price: wire.auto_top_up?.price.map {
-                    ScreenControlMoney(amount: $0.amount, currency: $0.currency)
+                    CreditMoney(amount: $0.amount, currency: $0.currency)
                 }
             ),
             lastTopUp: wire.last_top_up.map {
-                ScreenControlTopUpCharge(
-                    price: ScreenControlMoney(amount: $0.amount, currency: $0.currency),
+                CreditTopUpCharge(
+                    price: CreditMoney(amount: $0.amount, currency: $0.currency),
                     at: $0.at
                 )
             }
@@ -304,27 +252,11 @@ public actor ScreenControlAllowanceService {
     }()
 }
 
-/// The wire body, field-for-field.
-///
-/// **`credits.remaining` is read, and only that one of the four.** This note used to say `credits`
-/// was deliberately not read at all, on the ground that reading it "would be the first step toward a
-/// second number in the product, which is exactly what the one-paid-line decision exists to
-/// prevent". That reasoning was right about the *product* and wrong as a rule about this struct, and
-/// the difference cost a user runs they had paid for (PR #190's F1): with only `runsLeft` in hand,
-/// the gate had one figure for two different questions, and the question it got wrong was whether a
-/// session already under way may continue.
-///
-/// The line that still holds is the one about the product surface: **nothing renders this**, and
-/// SONNY-214 still shows exactly one number. `allowance`, `drawn` and `per_run` remain unread,
-/// because no decision in this client needs them and §2.1 makes ignoring them free.
-private struct WireScreenControlAllowance: Decodable {
-    /// The derivation the gateway publishes beside the run count so a founder can sanity-check the
-    /// weights against a measured cost. Only `remaining` is consumed; see the note above.
-    ///
-    /// `topped_up` is the fifth figure and is not read here for the reason the other three are not:
-    /// no decision in this client needs it. It is on the wire so a founder can subtract what was
-    /// bought from what the plan included.
+/// The wire body, field-for-field. `drawn` and `topped_up` are on the wire for a founder checking the
+/// arithmetic; nothing in this client reads them.
+private struct WireCreditBalance: Decodable {
     struct Credits: Decodable {
+        let allowance: Double
         let remaining: Double
     }
 
@@ -357,8 +289,6 @@ private struct WireScreenControlAllowance: Decodable {
     }
 
     let plan: String
-    let screen_control_runs_left: Int
-    let screen_control_runs_included: Int
     let credits: Credits
     let period_start: Date
     let period_end: Date

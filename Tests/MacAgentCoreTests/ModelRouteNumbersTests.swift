@@ -24,22 +24,12 @@ struct ModelRouteNumbersTests {
     /// §12's table, transcribed. `serverTotal` is `DEADLINE_MS[route].total` in
     /// `server/src/model/limits.ts`, in seconds.
     private static let table: [(route: SonnyModelRoute, serverTotal: TimeInterval, client: TimeInterval)] = [
-        (.plan, 75, 90),
-        (.researchSynthesis, 105, 120),
         (.transcription, 75, 90),
-        (.search, 25, 30),
-        (.screenAnalyze, 105, 120),
     ]
 
     @Test
     func everyRouteCarriesTheClientTimeoutSection12GivesIt() {
-        #expect(SonnyBackendTimeouts.plan == 90)
-        #expect(SonnyBackendTimeouts.researchSynthesis == 120)
         #expect(SonnyBackendTimeouts.transcription == 90)
-        #expect(SonnyBackendTimeouts.search == 30)
-        #expect(SonnyBackendTimeouts.screenAnalyze == 120)
-        // The row SONNY-128 declared, unchanged by either branch and asserted so it cannot drift
-        // while the five beside it are held.
         #expect(SonnyBackendTimeouts.auth == 20)
     }
 
@@ -68,41 +58,17 @@ struct ModelRouteNumbersTests {
     }
 
     @Test
-    func theMarginIsFifteenSecondsOnTheLongRoutesAndFiveOnSearch() {
+    func theMarginIsFifteenSecondsOnTranscriptionAndFiveOnTheAccountRoutes() {
         // Written out rather than asserted as one number, because it is not one number — and
         // because a reader who has just seen the ordering rule will otherwise assume it is.
-        #expect(SonnyBackendTimeouts.plan - 75 == 15)
-        #expect(SonnyBackendTimeouts.researchSynthesis - 105 == 15)
         #expect(SonnyBackendTimeouts.transcription - 75 == 15)
-        #expect(SonnyBackendTimeouts.screenAnalyze - 105 == 15)
-        #expect(SonnyBackendTimeouts.search - 25 == 5)
         #expect(SonnyBackendTimeouts.auth - 15 == 5)
     }
 
     @Test
-    func everyRoutePathIsTheOneTheContractNames() {
-        // §4.1's table. A path typo is a 404 the client reads as `resource.not_found`, which it
-        // does not retry and cannot explain — and no other test in the tree reads all five.
-        #expect(SonnyModelRoute.plan.path == "/v1/plan")
-        #expect(SonnyModelRoute.researchSynthesis.path == "/v1/research/synthesize")
+    func theTranscriptionRouteIsTheOneTheContractNames() {
+        // A path typo is a 404 the client reads as `resource.not_found`, which it does not retry.
         #expect(SonnyModelRoute.transcription.path == "/v1/transcriptions")
-        #expect(SonnyModelRoute.search.path == "/v1/search")
-        #expect(SonnyModelRoute.screenAnalyze.path == "/v1/screen/analyze")
-    }
-
-    @Test
-    func everyRoutesUsageModelNameIsItsOwn() {
-        // §4.2: `AIUsageRecord.model` holds the route's name rather than a model identifier the
-        // client is no longer allowed to know. Distinctness is the property — two routes sharing a
-        // name would make a usage summary unreadable, and it is one `return` away.
-        let names = [
-            SonnyModelRoute.plan.usageModelName,
-            SonnyModelRoute.researchSynthesis.usageModelName,
-            SonnyModelRoute.transcription.usageModelName,
-            SonnyModelRoute.search.usageModelName,
-            SonnyModelRoute.screenAnalyze.usageModelName,
-        ]
-        #expect(names == ["plan", "research.synthesize", "transcriptions", "search", "screen.analyze"])
-        #expect(Set(names).count == names.count)
+        #expect(SonnyModelRoute.transcription.usageModelName == "transcriptions")
     }
 }

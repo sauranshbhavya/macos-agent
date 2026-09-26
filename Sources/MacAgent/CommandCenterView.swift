@@ -84,9 +84,9 @@ struct CommandCenterView: View {
             SignInDialogView(
                 model: accountModel,
                 isPresented: $isSignInPresented,
-                screenControlAllowance: model.allowance,
-                refreshScreenControlAllowance: { await model.refreshAllowance() },
-                screenControlAutoTopUp: ScreenControlAutoTopUpControl(
+                creditBalance: model.credits,
+                refreshCreditBalance: { await model.refreshCredits() },
+                creditAutoTopUp: CreditAutoTopUpControl(
                     isBusy: model.isSettingAutoTopUp,
                     failure: model.autoTopUpFailure,
                     set: { await model.setAutoTopUp($0) }

@@ -64,79 +64,16 @@ public struct BackendTaskContext: Equatable, Sendable {
 /// `usageModelName` is what `AIUsageRecord.model` is set to. §4.2 makes that explicit and gives the
 /// reason: the field is non-optional and eventually gets rendered, so it holds the route's name
 /// rather than a model identifier the client is no longer allowed to know.
+/// The one model route the Mac calls directly: voice becomes text there. Every other model call is
+/// the gateway's own, inside a task.
 enum SonnyModelRoute {
-    case plan
-    case researchSynthesis
     case transcription
-    case search
-    /// §4.5, the screen-control route (SONNY-131).
-    case screenAnalyze
 
-    var path: String {
-        switch self {
-        case .plan: return "/v1/plan"
-        case .researchSynthesis: return "/v1/research/synthesize"
-        case .transcription: return "/v1/transcriptions"
-        case .search: return "/v1/search"
-        case .screenAnalyze: return "/v1/screen/analyze"
-        }
-    }
-
-    var timeout: TimeInterval {
-        switch self {
-        case .plan: return SonnyBackendTimeouts.plan
-        case .researchSynthesis: return SonnyBackendTimeouts.researchSynthesis
-        case .transcription: return SonnyBackendTimeouts.transcription
-        case .search: return SonnyBackendTimeouts.search
-        case .screenAnalyze: return SonnyBackendTimeouts.screenAnalyze
-        }
-    }
-
-    var usageModelName: String {
-        switch self {
-        case .plan: return "plan"
-        case .researchSynthesis: return "research.synthesize"
-        case .transcription: return "transcriptions"
-        case .search: return "search"
-        case .screenAnalyze: return "screen.analyze"
-        }
-    }
+    var path: String { "/v1/transcriptions" }
+    var timeout: TimeInterval { SonnyBackendTimeouts.transcription }
+    var usageModelName: String { "transcriptions" }
 }
 
-/// §4.2's request body, shared by `/v1/plan` and `/v1/research/synthesize`.
-///
-/// **One shape across two paths**, which is the contract's own decision and its reason: it lets the
-/// server hold one adapter per provider instead of one per route, while still routing, metering and
-/// pricing them separately.
-struct SonnyTextRouteBody {
-    let context: BackendTaskContext
-    /// Ordered and role-tagged. §4.2: the server forwards this text and never edits, re-wraps or
-    /// re-orders it — which is what keeps row I's `TRUSTED_USER_INSTRUCTION` and
-    /// `UNTRUSTED_OBSERVED_CONTENT` boundaries intact across the network hop.
-    let messages: [(role: String, text: String)]
-    let schemaName: String
-    let schema: [String: Any]
-
-    func encoded() throws -> Data {
-        var body = context.wireFields
-        body["messages"] = messages.map { ["role": $0.role, "text": $0.text] }
-        body["response_schema_name"] = schemaName
-        body["response_schema"] = schema
-        // Advisory hints, kept at the values the Mac has always sent so the move changes nothing a
-        // model can see. §4.2: a provider with no equivalent ignores them.
-        body["reasoning_effort"] = "medium"
-        body["verbosity"] = "low"
-        return try JSONSerialization.data(withJSONObject: body)
-    }
-}
-
-/// §4.2's response to the two text routes.
-struct SonnyTextRouteResponse: Decodable {
-    let output_text: String
-    let usage: SonnyWireUsage?
-}
-
-/// §4.4's response to `/v1/transcriptions`.
 struct SonnyTranscriptionRouteResponse: Decodable {
     let text: String
     let usage: SonnyWireUsage?
@@ -144,21 +81,6 @@ struct SonnyTranscriptionRouteResponse: Decodable {
 
 /// §4.3's response to `/v1/search`. It carries no `usage` block, and that is the contract's shape
 /// rather than an omission here — search has never fed the local per-task summary.
-struct SonnySearchRouteResponse: Decodable {
-    struct Item: Decodable {
-        let title: String?
-        let url: String
-        let snippet: String?
-    }
-
-    let results: [Item]
-}
-
-/// The `usage` block every content-bearing response but search carries.
-///
-/// Every field is optional, because §2.1 makes the client tolerant of a response it cannot fully
-/// read and because the two routes genuinely report different halves of it: a transcript may come
-/// back with a duration and no tokens, a plan with tokens and no duration.
 struct SonnyWireUsage: Decodable {
     let input_tokens: Int?
     let output_tokens: Int?

@@ -33,7 +33,7 @@ final class SonnyAppModel: ObservableObject {
     @Published private(set) var voice: VoiceState = .idle
     @Published private(set) var voiceProblem: String?
     @Published private(set) var clientVersion: ClientVersionState = .current
-    @Published private(set) var allowance: ScreenControlAllowance?
+    @Published private(set) var credits: CreditBalance?
     @Published private(set) var isSettingAutoTopUp = false
     @Published private(set) var autoTopUpFailure: BillingSettingFailure?
     @Published private(set) var approvedApps: [ApprovedApp] = []
@@ -46,7 +46,7 @@ final class SonnyAppModel: ObservableObject {
     let desk: TaskDesk
     let stores: KernelStores
     private let client: SonnyBackendClient
-    private let allowanceService: ScreenControlAllowanceService
+    private let creditService: CreditBalanceService
     private let clipboardMonitor: ClipboardHistoryMonitor
     private let recorder = AudioCommandRecorder()
     private let permissionService = PermissionReadinessService()
@@ -74,7 +74,7 @@ final class SonnyAppModel: ObservableObject {
         self.stores = stores
         self.client = client
         self.defaults = defaults
-        allowanceService = ScreenControlAllowanceService(client: client)
+        creditService = CreditBalanceService(client: client)
         clipboardMonitor = ClipboardHistoryMonitor(store: stores.clipboard, settingsStore: stores.clipboardSettings)
         mode = defaults.string(forKey: Self.modeKey).flatMap(AgentInteractionMode.init(rawValue:)) ?? .normal
         // The views read the desk and the controller through this model, so their changes are
@@ -380,12 +380,12 @@ final class SonnyAppModel: ObservableObject {
         )
     }
 
-    func refreshAllowance() async {
-        allowance = try? await allowanceService.fetch()
+    func refreshCredits() async {
+        credits = try? await creditService.fetch()
     }
 
-    func forgetAllowance() {
-        allowance = nil
+    func forgetCredits() {
+        credits = nil
     }
 
     func setAutoTopUp(_ enabled: Bool) async {
@@ -393,7 +393,7 @@ final class SonnyAppModel: ObservableObject {
         autoTopUpFailure = nil
         defer { isSettingAutoTopUp = false }
         do {
-            allowance = try await allowanceService.setAutoTopUp(enabled)
+            credits = try await creditService.setAutoTopUp(enabled)
         } catch let error as SonnyBackendError {
             autoTopUpFailure = BillingSettingFailure(error)
         } catch {

@@ -4,64 +4,45 @@ import Testing
 @testable import MacAgentCore
 
 /// The pack price the fixtures below read, in the gateway's own terms.
-private let TEST_PACK_PRICE = ScreenControlMoney(amount: 500, currency: "usd")
+private let TEST_PACK_PRICE = CreditMoney(amount: 500, currency: "usd")
 
-/// Reading "screen-control runs left this month" off the gateway (SONNY-212).
+/// Reading an account's credits off the gateway.
 ///
 /// **The client half of this ticket is a read and nothing else**, so this suite is about exactly
 /// that: the request it sends, the body it accepts, and what it does with a body it cannot trust.
 /// Where the number comes from is the server's, and `server/test/credit.test.ts` and
 /// `credit.db.test.ts` own it; rendering it is SONNY-214's and refusing on it is SONNY-213's.
 @Suite
-struct ScreenControlAllowanceTests {
+struct CreditBalanceTests {
     static let now = SonnyISO8601.parse("2026-08-15T12:00:00Z")!
 
     static func body(
         plan: String = "test-plan-a",
-        runsLeft: Int = 97,
-        runsIncluded: Int = 100,
+        creditsAllowance: Double = 1000,
         creditsRemaining: Double = 970
     ) -> Data {
         try! JSONSerialization.data(withJSONObject: [
             "plan": plan,
-            // **The server's own form, milliseconds included.** `Date.toISOString()` writes `.000Z`
-            // and contract §5.4's example shows it, so a fixture without them is a shape the gateway
-            // never sends. `.iso8601` decodes both — measured, and `TaskHistoryStore.swift` records
-            // the same measurement — but a fixture should be the real thing rather than a near miss
-            // a later reader has to re-measure (PR #182's review, recorded residual).
+            // The server's own form, milliseconds included: `Date.toISOString()` writes `.000Z`.
             "period_start": "2026-08-01T00:00:00.000Z",
             "period_end": "2026-09-01T00:00:00.000Z",
-            "screen_control_runs_left": runsLeft,
-            "screen_control_runs_included": runsIncluded,
-            // The derivation the gateway publishes beside the number. **`remaining` is read now**
-            // (SONNY-213, PR #190's F1) — the step boundary asks whether the account has actually
-            // run out, which `runsLeft` cannot answer for a session already spending its own run.
-            // The other three stay unread. This comment said "this client must ignore it" until that
-            // finding.
             "credits": [
-                "allowance": 1000, "drawn": 30, "remaining": creditsRemaining, "per_run": 10,
-                // SONNY-215's fifth figure. Unread here for the same reason three of its four
-                // neighbours are: no decision in this client needs it.
+                "allowance": creditsAllowance,
+                "drawn": creditsAllowance - creditsRemaining,
+                "remaining": creditsRemaining,
                 "topped_up": 0
             ]
         ] as [String: Any])
     }
 
-    /// The same body with SONNY-215's setting block on it.
-    ///
-    /// **A separate builder rather than a defaulted parameter on the one above**, so every existing
-    /// test in this suite still describes a body with no `auto_top_up` at all — which is the shape a
-    /// gateway too old to send it produces, and the shape whose safe reading this ticket has to get
-    /// right.
     static func bodyWithAutoTopUp(
         offered: Bool,
         optedIn: Bool,
         attemptsLeft: Int,
-        runsLeft: Int = 97,
         creditsRemaining: Double = 970
     ) -> Data {
         var document = try! JSONSerialization.jsonObject(
-            with: body(runsLeft: runsLeft, creditsRemaining: creditsRemaining)
+            with: body(creditsRemaining: creditsRemaining)
         ) as! [String: Any]
         document["auto_top_up"] = [
             "offered": offered,
@@ -85,7 +66,7 @@ struct ScreenControlAllowanceTests {
 
     @Test
     @MainActor
-    func theRunsLeftFigureIsReadFromTheGateway() async throws {
+    func theBalanceIsReadFromTheGateway() async throws {
         let fixture = SignedInBackendFixture(now: { Self.now })
         defer { fixture.unregister() }
         let seen = RecordedBackendRequests()
@@ -94,13 +75,9 @@ struct ScreenControlAllowanceTests {
             return Self.reply(Self.body())
         }
 
-        let allowance = try await ScreenControlAllowanceService(client: fixture.client).fetch()
+        let allowance = try await CreditBalanceService(client: fixture.client).fetch()
 
-        #expect(allowance.runsLeft == 97)
-        #expect(allowance.runsIncluded == 100)
-        // **Read from `credits.remaining`, and 970 rather than 97 is the whole assertion**: the two
-        // figures are different numbers in the same body, so this fails if the remainder is ever
-        // derived from the run count instead of decoded.
+        #expect(allowance.creditsAllowance == 1000)
         #expect(allowance.creditsRemaining == 970)
         #expect(allowance.plan == "test-plan-a")
         #expect(allowance.periodStart == SonnyISO8601.parse("2026-08-01T00:00:00Z")!)
@@ -117,30 +94,19 @@ struct ScreenControlAllowanceTests {
         #expect(sent.idempotencyKey == nil)
     }
 
-    /// **The state a session in flight is actually in: no whole run affordable, real credit left.**
-    ///
-    /// This is the reading SONNY-213's step boundary exists to tell apart from a genuine exhaustion,
-    /// and it is unreachable from `runsLeft` alone — `floor(remaining / runCredits)` is 0 for every
-    /// remainder below one run, so the run count says the same thing about "82% of a run left" and
-    /// "nothing left". A client that derived the remainder from the run count would read both as
-    /// zero and halt a session on the run the door had just granted it, which is exactly what PR
-    /// #190's F1 was.
-    ///
-    /// Asserted here rather than only at the gate because the gate's own tests use a stub reader:
-    /// nothing else in the suite decodes this field off a real body, and a mutant reading it off
-    /// `screen_control_runs_left` survived the whole suite until this test existed.
+    /// Credits are spent by tokens, so a remainder is rarely whole; it is read exactly.
     @Test
     @MainActor
-    func theRemainderAndTheRunCountAreReadFromTheirOwnFields() async throws {
+    func aFractionalRemainderIsReadExactly() async throws {
         let fixture = SignedInBackendFixture(now: { Self.now })
         defer { fixture.unregister() }
         fixture.register { _ in
-            Self.reply(Self.body(runsLeft: 0, runsIncluded: 10, creditsRemaining: 8.2))
+            Self.reply(Self.body(creditsAllowance: 10, creditsRemaining: 8.2))
         }
 
-        let allowance = try await ScreenControlAllowanceService(client: fixture.client).fetch()
+        let allowance = try await CreditBalanceService(client: fixture.client).fetch()
 
-        #expect(allowance.runsLeft == 0)
+        #expect(allowance.creditsAllowance == 10)
         #expect(allowance.creditsRemaining == 8.2)
     }
 
@@ -155,7 +121,7 @@ struct ScreenControlAllowanceTests {
         fixture.register { _ in .failure(URLError(.notConnectedToInternet)) }
 
         await #expect(throws: (any Error).self) {
-            try await ScreenControlAllowanceService(client: fixture.client).fetch()
+            try await CreditBalanceService(client: fixture.client).fetch()
         }
     }
 
@@ -171,12 +137,12 @@ struct ScreenControlAllowanceTests {
             "plan": "test-plan-a",
             "period_start": "2026-08-01T00:00:00.000Z",
             "period_end": "2026-09-01T00:00:00.000Z",
-            "screen_control_runs_included": 100
+            "credits": ["allowance": 1000]
         ])
         fixture.register { _ in Self.reply(partial) }
 
         await #expect(throws: SonnyBackendError.self) {
-            try await ScreenControlAllowanceService(client: fixture.client).fetch()
+            try await CreditBalanceService(client: fixture.client).fetch()
         }
     }
 
@@ -192,8 +158,8 @@ struct ScreenControlAllowanceTests {
         let grown = try! JSONSerialization.data(withJSONObject: object)
         fixture.register { _ in Self.reply(grown) }
 
-        let allowance = try await ScreenControlAllowanceService(client: fixture.client).fetch()
-        #expect(allowance.runsLeft == 97)
+        let allowance = try await CreditBalanceService(client: fixture.client).fetch()
+        #expect(allowance.creditsRemaining == 970)
     }
 
     @Test
@@ -201,20 +167,20 @@ struct ScreenControlAllowanceTests {
     func nothingIsCachedBetweenReads() async throws {
         // **The opposite call to `EntitlementService`'s**, and deliberately. A claim is honoured for
         // up to four days past its issue because an entitlement changes on the order of a
-        // subscription; a run count changes on the order of a run, so a stored one is wrong most of
-        // the time it is read — and wrong in the direction that shows runs to somebody who has none.
+        // subscription; a balance changes with every model call, so a stored one is wrong most of
+        // the time it is read.
         let fixture = SignedInBackendFixture(now: { Self.now })
         defer { fixture.unregister() }
         let seen = RecordedBackendRequests()
-        let answers = RunCounts([97, 42])
+        let answers = RunCounts([970, 420])
         fixture.register { request in
             seen.append(request)
-            return Self.reply(Self.body(runsLeft: answers.next()))
+            return Self.reply(Self.body(creditsRemaining: Double(answers.next())))
         }
-        let service = ScreenControlAllowanceService(client: fixture.client)
+        let service = CreditBalanceService(client: fixture.client)
 
-        #expect(try await service.fetch().runsLeft == 97)
-        #expect(try await service.fetch().runsLeft == 42)
+        #expect(try await service.fetch().creditsRemaining == 970)
+        #expect(try await service.fetch().creditsRemaining == 420)
         #expect(seen.all.count == 2)
     }
 
@@ -232,7 +198,7 @@ struct ScreenControlAllowanceTests {
         defer { fixture.unregister() }
         fixture.register { _ in Self.reply(Self.body()) }
 
-        let allowance = try await ScreenControlAllowanceService(client: fixture.client).fetch()
+        let allowance = try await CreditBalanceService(client: fixture.client).fetch()
 
         #expect(allowance.autoTopUp == .none)
         #expect(allowance.autoTopUp.isOptedIn == false)
@@ -251,7 +217,7 @@ struct ScreenControlAllowanceTests {
             Self.reply(Self.bodyWithAutoTopUp(offered: true, optedIn: false, attemptsLeft: 2))
         }
 
-        let allowance = try await ScreenControlAllowanceService(client: fixture.client).fetch()
+        let allowance = try await CreditBalanceService(client: fixture.client).fetch()
 
         #expect(allowance.autoTopUp.isOffered)
         #expect(allowance.autoTopUp.isOptedIn == false)
@@ -280,7 +246,7 @@ struct ScreenControlAllowanceTests {
         attemptsLeft: Int,
         expected: Bool
     ) {
-        let setting = ScreenControlAutoTopUp(
+        let setting = CreditAutoTopUp(
             isOffered: offered,
             isOptedIn: optedIn,
             attemptsLeft: attemptsLeft,
@@ -295,17 +261,17 @@ struct ScreenControlAllowanceTests {
         // **SONNY-215's F6, and §7.1's rule is why the wire carries neither a symbol nor a
         // sentence.** A price is words the moment it is written down — a currency symbol, a
         // separator and a decimal place are all locale decisions — so the gateway sends minor units
-        // and a code, and `ScreenControlUsagePresentation` turns them into something to read.
+        // and a code, and `CreditPresentation` turns them into something to read.
         let fixture = SignedInBackendFixture(now: { Self.now })
         defer { fixture.unregister() }
         fixture.register { _ in
             Self.reply(Self.bodyWithLastTopUp(amount: 700, currency: "eur", at: "2026-08-14T09:15:00.000Z"))
         }
 
-        let allowance = try await ScreenControlAllowanceService(client: fixture.client).fetch()
+        let allowance = try await CreditBalanceService(client: fixture.client).fetch()
 
         let charge = try #require(allowance.lastTopUp)
-        #expect(charge.price == ScreenControlMoney(amount: 700, currency: "eur"))
+        #expect(charge.price == CreditMoney(amount: 700, currency: "eur"))
         #expect(charge.at == SonnyISO8601.parse("2026-08-14T09:15:00Z")!)
     }
 
@@ -318,7 +284,7 @@ struct ScreenControlAllowanceTests {
         defer { fixture.unregister() }
         fixture.register { _ in Self.reply(Self.body()) }
 
-        let allowance = try await ScreenControlAllowanceService(client: fixture.client).fetch()
+        let allowance = try await CreditBalanceService(client: fixture.client).fetch()
 
         #expect(allowance.lastTopUp == nil)
         // And a body with no setting block carries no price either, so nothing can put a number on
@@ -335,9 +301,9 @@ struct ScreenControlAllowanceTests {
             Self.reply(Self.bodyWithAutoTopUp(offered: true, optedIn: false, attemptsLeft: 2))
         }
 
-        let allowance = try await ScreenControlAllowanceService(client: fixture.client).fetch()
+        let allowance = try await CreditBalanceService(client: fixture.client).fetch()
 
-        #expect(allowance.autoTopUp.price == ScreenControlMoney(amount: 500, currency: "usd"))
+        #expect(allowance.autoTopUp.price == CreditMoney(amount: 500, currency: "usd"))
     }
 
     @Test
@@ -354,13 +320,13 @@ struct ScreenControlAllowanceTests {
             return Self.reply(Self.bodyWithAutoTopUp(offered: true, optedIn: true, attemptsLeft: 3))
         }
 
-        let allowance = try await ScreenControlAllowanceService(client: fixture.client)
+        let allowance = try await CreditBalanceService(client: fixture.client)
             .setAutoTopUp(true)
 
         #expect(allowance.autoTopUp.isOptedIn)
         // The whole position comes back, not an acknowledgement — so the surface showing the switch
         // and the number beside it can never be one request apart.
-        #expect(allowance.runsLeft == 97)
+        #expect(allowance.creditsRemaining == 970)
 
         let requests = seen.all
         try #require(requests.count == 1)
@@ -390,7 +356,7 @@ struct ScreenControlAllowanceTests {
             return Self.reply(Self.bodyWithAutoTopUp(offered: true, optedIn: false, attemptsLeft: 3))
         }
 
-        let allowance = try await ScreenControlAllowanceService(client: fixture.client)
+        let allowance = try await CreditBalanceService(client: fixture.client)
             .setAutoTopUp(false)
 
         #expect(allowance.autoTopUp.isOptedIn == false)
@@ -413,17 +379,16 @@ struct ScreenControlAllowanceTests {
             seen.append(request)
             return Self.reply(
                 Self.bodyWithAutoTopUp(
-                    offered: true, optedIn: true, attemptsLeft: 2, runsLeft: 50, creditsRemaining: 500
+                    offered: true, optedIn: true, attemptsLeft: 2, creditsRemaining: 500
                 )
             )
         }
 
-        let allowance = try await ScreenControlAllowanceService(client: fixture.client)
+        let allowance = try await CreditBalanceService(client: fixture.client)
             .purchaseTopUp()
 
         // The answer is the allowance the purchase bought, which is what lets the gate re-ask its
         // own question without a second read.
-        #expect(allowance.runsLeft == 50)
         #expect(allowance.creditsRemaining == 500)
         #expect(allowance.autoTopUp.attemptsLeft == 2)
 
@@ -471,7 +436,7 @@ struct ScreenControlAllowanceTests {
         }
 
         await #expect(throws: SonnyBackendError.self) {
-            _ = try await ScreenControlAllowanceService(client: fixture.client).purchaseTopUp()
+            _ = try await CreditBalanceService(client: fixture.client).purchaseTopUp()
         }
 
         #expect(seen.all.count == 1)
@@ -495,7 +460,7 @@ struct ScreenControlAllowanceTests {
             )
         }
         await #expect(throws: SonnyBackendError.self) {
-            _ = try await ScreenControlAllowanceService(client: readFixture.client).fetch()
+            _ = try await CreditBalanceService(client: readFixture.client).fetch()
         }
         #expect(reads.all.count > 1)
     }
@@ -514,7 +479,7 @@ struct ScreenControlAllowanceTests {
             seen.append(request)
             return Self.reply(Self.bodyWithAutoTopUp(offered: true, optedIn: true, attemptsLeft: 1))
         }
-        let service = ScreenControlAllowanceService(client: fixture.client)
+        let service = CreditBalanceService(client: fixture.client)
 
         _ = try await service.purchaseTopUp()
         _ = try await service.purchaseTopUp()
@@ -547,7 +512,7 @@ struct ScreenControlAllowanceTests {
         }
 
         await #expect(throws: SonnyBackendError.self) {
-            _ = try await ScreenControlAllowanceService(client: fixture.client).purchaseTopUp()
+            _ = try await CreditBalanceService(client: fixture.client).purchaseTopUp()
         }
     }
 

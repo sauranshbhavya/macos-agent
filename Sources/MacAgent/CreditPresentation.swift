@@ -1,55 +1,30 @@
 import Foundation
 import MacAgentCore
 
-/// The words the product says about the screen-control allowance (SONNY-214).
+/// The words the product says about an account's credits.
 ///
-/// Pure and in one place, because no SwiftUI inspection harness exists here to pin what a view
-/// renders — the same reason `AgentActivityPresentation` beside it is a type rather than a pile of
-/// string literals in `FloatingWidgetView`.
-///
-/// **Both are the number and nothing else, and that is the ticket's own constraint rather than
-/// terseness for its own sake.** A usage line says how many runs are left. It does not say what a
-/// run is, what draws on the allowance, or what happens when it reaches zero — the last of those is
-/// SONNY-213's behaviour and not a sentence this surface gets to promise.
-enum ScreenControlUsagePresentation {
-    /// What the widget shows while a screen-control task is in flight — "12 runs left".
-    ///
-    /// No denominator here, unlike the Account line: the widget is 472pt of glass over the
-    /// user's work while Sonny is about to move their cursor, and the only figure that matters at
-    /// that moment is how many they have got left.
-    static func inTaskLine(runsLeft: Int) -> String {
-        "\(runsLeft) \(runsLeft == 1 ? "run" : "runs") left"
-    }
-
+/// A usage line says how many credits are left and nothing about what spends them; the label beside
+/// it names what the number is.
+enum CreditPresentation {
     /// What the Account section calls the figure it shows beside the plan.
-    ///
-    /// **Here rather than inline in the view, which is where it used to be** (PR #188's F12 named
-    /// the gap: this type's own doc claims to be the copy's one home, and a third literal sat in
-    /// `CommandCenterView` outside it). Widening the prohibition test to cover the product's copy as
-    /// a population is SONNY-399's, not this line's; what this does is make the claim above true.
-    ///
-    /// It is a label and not an explanation. Beside `Pro · Active` and a Manage-subscription button,
-    /// "12 of 20 runs left this month" on its own would not say runs *of what*.
-    static let label = "Screen Control"
+    static let label = "Credits"
 
-    /// What the Account section shows beside the plan — "12 of 20 runs left this month".
+    /// What the Account section shows beside the plan — "1,240 of 2,000 credits left this month".
     ///
-    /// The denominator is what makes this a *usage* line rather than a countdown: 12 of 20 says
-    /// eight were used, which is what somebody looking at their plan is there to find out.
-    /// `runsIncluded` exists on
-    /// `ScreenControlAllowance` for exactly this — its own doc comment calls it "the denominator of
-    /// '3 of 20 left'".
-    ///
-    /// **"this month" is the period, not an explanation.** The server's period is the UTC calendar
-    /// month (`server/src/entitlement/period.ts`), and a count of what is left with no period
-    /// attached is a number a reader cannot use.
-    /// **The noun agrees with the denominator, not with the numerator.** "1 of 20 run left" is what
-    /// the obvious spelling produces, and it is wrong: the unit being counted here is the plan's
-    /// twenty, and the one is a quantity of them.
-    static func usageLine(_ allowance: ScreenControlAllowance) -> String {
-        "\(allowance.runsLeft) of \(allowance.runsIncluded) "
-            + "\(allowance.runsIncluded == 1 ? "run" : "runs") left this month"
+    /// Whole credits, rounded down, so the line never promises a credit the account doesn't have.
+    /// "this month" is the server's period, the UTC calendar month.
+    static func usageLine(_ balance: CreditBalance) -> String {
+        let left = wholeCredits.string(from: NSNumber(value: floor(balance.creditsRemaining))) ?? "0"
+        let total = wholeCredits.string(from: NSNumber(value: floor(balance.creditsAllowance))) ?? "0"
+        return "\(left) of \(total) credits left this month"
     }
+
+    private static let wholeCredits: NumberFormatter = {
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .decimal
+        formatter.maximumFractionDigits = 0
+        return formatter
+    }()
 
     /// The auto-top-up control's name (SONNY-215).
     ///
@@ -60,7 +35,7 @@ enum ScreenControlUsagePresentation {
     /// obvious remedy is a line of how-it-works copy, which the no-explanatory-copy rule of
     /// 2026-08-14 forbids.
     ///
-    /// So the name carries all three: **buy** (it costs money), **more runs** (of the thing named
+    /// So the name carries all three: **buy** (it costs money), **more credits** (of the thing named
     /// directly above it), and **when these run out** (not on a schedule, and not now). "These"
     /// has a referent on screen — the row above is ``label`` and ``usageLine`` — which is the same
     /// device "Delete what Sonny did on screen" uses, reusing the section title beside it so the
@@ -69,7 +44,7 @@ enum ScreenControlUsagePresentation {
     /// **What it deliberately does not say** is what a pack costs, how many can be bought in a
     /// month, or what happens when a card is declined. Those are real and they belong on the
     /// website's terms; the product says what the control does and stops.
-    static let autoTopUpLabel = "Buy more runs when these run out"
+    static let autoTopUpLabel = "Buy more credits when these run out"
 
     /// The same control's name **with the price on it** (SONNY-215's F6, founder decision option B).
     ///
@@ -81,14 +56,14 @@ enum ScreenControlUsagePresentation {
     /// the price goes on the control, and **nothing explains why it is there**.
     ///
     /// **Parenthesised rather than made into a clause**, so the label still reads once at a glance
-    /// — "Buy more runs when these run out ($5.00)" is a name with a price after it, and "which
+    /// — "Buy more credits when these run out ($5.00)" is a name with a price after it, and "which
     /// costs $5.00 each time" would be the sentence the pattern of 2026-08-16 exists to avoid.
     ///
     /// Falls back to the bare name when the deployment sent no price. That is a shape the app should
     /// not render at all — `SignInView` requires `isOffered`, and a gateway that offers a pack sends
     /// its price — so this is the honest answer to an impossible state rather than a supported one:
     /// a name with no number beats a name with a wrong one.
-    static func autoTopUpLabel(price: ScreenControlMoney?) -> String {
+    static func autoTopUpLabel(price: CreditMoney?) -> String {
         guard let price, let formatted = money(price) else { return autoTopUpLabel }
         return "\(autoTopUpLabel) (\(formatted))"
     }
@@ -100,13 +75,13 @@ enum ScreenControlUsagePresentation {
     ///
     /// **Amount and date, and nothing else.** It is a receipt line rather than a history: what was
     /// taken and when. It does not say what it bought, whether it worked, or that more may follow —
-    /// the first is the runs line above it and the last two would be the explanation this surface is
+    /// the first is the credits line above it and the last two would be the explanation this surface is
     /// not allowed to write.
     ///
     /// **No year**, for the reason the usage line says "this month": the charge a user is checking
     /// is a recent one, and a year on it reads as an archive rather than a receipt. The full instant
     /// is in the accessibility label so a screen reader is not left guessing.
-    static func lastTopUpLine(_ charge: ScreenControlTopUpCharge) -> String? {
+    static func lastTopUpLine(_ charge: CreditTopUpCharge) -> String? {
         guard let formatted = money(charge.price) else { return nil }
         return "\(formatted) on \(dayAndMonth.string(from: charge.at))"
     }
@@ -122,7 +97,7 @@ enum ScreenControlUsagePresentation {
     /// `nil` when the code is one this build cannot format, which renders no line at all — the same
     /// call every other figure on this surface makes, and for the same reason: a number nobody can
     /// read is worse than none.
-    private static func money(_ price: ScreenControlMoney) -> String? {
+    private static func money(_ price: CreditMoney) -> String? {
         let formatter = NumberFormatter()
         formatter.numberStyle = .currency
         formatter.currencyCode = price.currency.uppercased()

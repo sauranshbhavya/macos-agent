@@ -45,7 +45,7 @@ struct ClientVersionClientTests {
             body: Data("{}".utf8),
             authentication: .bearer,
             idempotencyKey: UUID(),
-            timeout: SonnyBackendTimeouts.plan,
+            timeout: SonnyBackendTimeouts.transcription,
             isRetrySafe: true
         )
     }

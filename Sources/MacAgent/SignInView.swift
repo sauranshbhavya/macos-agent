@@ -549,7 +549,7 @@ final class SonnyAccountModel: ObservableObject {
 /// and the number it is about from being one request apart. What this carries is only what the
 /// allowance cannot say — whether a write is in flight, why the last one failed, and how to make the
 /// next one.
-struct ScreenControlAutoTopUpControl {
+struct CreditAutoTopUpControl {
     let isBusy: Bool
     let failure: BillingSettingFailure?
     let set: (Bool) async -> Void
@@ -559,26 +559,16 @@ struct SignInDialogView: View {
     @ObservedObject var model: SonnyAccountModel
     @Binding var isPresented: Bool
 
-    /// The screen-control allowance to show beside the plan, or `nil` for none (SONNY-214, moved
-    /// here from Insights by the founder decision of 2026-09-02).
-    ///
-    /// **Passed in rather than read from a second copy of the state.** It lives on the one
-    /// `AgentViewModel` both surfaces observe — the widget's in-task line reads the same property —
-    /// which is `.claude/rules/macagent-ui-conventions.md`'s shared-state rule: new published state
-    /// goes on that instance and never gets a second, independently-coded path per surface.
-    ///
-    /// **Both parameters are required and first run passes `nil` in words.** A default would let a
-    /// third host of this dialog silently show no figure, and where the line does *not* belong is a
-    /// decision worth being able to read at the call site.
-    let screenControlAllowance: ScreenControlAllowance?
-    let refreshScreenControlAllowance: (() async -> Void)?
+    /// The credit balance to show beside the plan, or `nil` for none: a failed read shows no line.
+    let creditBalance: CreditBalance?
+    let refreshCreditBalance: (() async -> Void)?
     /// The auto-top-up control's write half, or `nil` where the control does not belong (SONNY-215).
     ///
     /// **Its *read* half is deliberately absent from this type**: whether the setting is on comes off
-    /// `screenControlAllowance.autoTopUp`, which is the same object the row above renders, so the
+    /// `creditBalance.autoTopUp`, which is the same object the row above renders, so the
     /// switch and the number beside it can never be one request apart. A `Bool` here would be a
     /// second copy of a fact the view already holds.
-    let screenControlAutoTopUp: ScreenControlAutoTopUpControl?
+    let creditAutoTopUp: CreditAutoTopUpControl?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -631,7 +621,7 @@ struct SignInDialogView: View {
         //
         // (This read "it is the one of these three that goes to the network on every open", which
         // was true only of `FirstRunSequence`, the one host that passes
-        // `refreshScreenControlAllowance: nil` — and that is not where the Account row is read.
+        // `refreshCreditBalance: nil` — and that is not where the Account row is read.
         // PR #206's F4.)
         .task { await model.refreshPaymentState() }
         .onChange(of: model.step) { _, step in
@@ -648,10 +638,10 @@ struct SignInDialogView: View {
         // The allowance is read on the same two occasions and for the same reason (SONNY-214). Its
         // own read rather than folded into the subscription's, so neither waits on the other: they
         // are two requests to two routes, and a slow one must not hold the other's row off screen.
-        .task { await refreshScreenControlAllowance?() }
+        .task { await refreshCreditBalance?() }
         .onChange(of: model.step) { _, step in
             guard step == .signedIn else { return }
-            Task { await refreshScreenControlAllowance?() }
+            Task { await refreshCreditBalance?() }
         }
     }
 
@@ -783,14 +773,14 @@ struct SignInDialogView: View {
             }
 
             subscriptionRow
-            screenControlUsageRow
-            screenControlAutoTopUpRow
-            screenControlLastTopUpRow
+            creditUsageRow
+            creditAutoTopUpRow
+            creditLastTopUpRow
         }
         .padding(.top, SonnySpacing.md)
     }
 
-    /// Whether Sonny may buy more runs when these run out (SONNY-215).
+    /// Whether Sonny may buy more credits when these run out (SONNY-215).
     ///
     /// **Directly under the usage row, and that placement is what the label leans on.** The control's
     /// name says "when *these* run out", and "these" is the figure on the line above — the same
@@ -808,14 +798,14 @@ struct SignInDialogView: View {
     /// `SonnyToggle`, flat opaque fills and no shadow. Nothing here is borrowed from the widget's
     /// material.
     @ViewBuilder
-    private var screenControlAutoTopUpRow: some View {
-        if let allowance = screenControlAllowance,
-           let control = screenControlAutoTopUp,
+    private var creditAutoTopUpRow: some View {
+        if let allowance = creditBalance,
+           let control = creditAutoTopUp,
            allowance.autoTopUp.isOffered {
             // **The price is on the control itself** (SONNY-215's F6, founder decision option B). A
             // switch that authorises a standing charge names the amount; nothing beside it explains
             // why, which is the line the no-explanatory-copy rule draws and the founder held.
-            let label = ScreenControlUsagePresentation.autoTopUpLabel(price: allowance.autoTopUp.price)
+            let label = CreditPresentation.autoTopUpLabel(price: allowance.autoTopUp.price)
             SettingsAdaptiveControlRow {
                 Text(label)
                     .font(SonnyType.body)
@@ -859,18 +849,18 @@ struct SignInDialogView: View {
     ///
     /// **A record, not a setting**, which is why it is its own row below the switch rather than a
     /// second line inside it: it stays true after the switch is turned off, and it is about money
-    /// rather than about runs.
+    /// rather than about credits.
     ///
     /// **Rendered whenever there is a charge to show, including when the setting is off and even
     /// when this deployment stopped offering top-ups.** A user who was charged is owed the record
     /// whatever the switch says now — hiding it behind `isOffered`, as the switch above is, would
     /// make a receipt disappear because a configuration changed.
     @ViewBuilder
-    private var screenControlLastTopUpRow: some View {
-        if let charge = screenControlAllowance?.lastTopUp,
-           let line = ScreenControlUsagePresentation.lastTopUpLine(charge) {
+    private var creditLastTopUpRow: some View {
+        if let charge = creditBalance?.lastTopUp,
+           let line = CreditPresentation.lastTopUpLine(charge) {
             SettingsAdaptiveControlRow {
-                Text(ScreenControlUsagePresentation.lastTopUpLabel)
+                Text(CreditPresentation.lastTopUpLabel)
                     .font(SonnyType.body)
                     .foregroundStyle(SonnyTheme.muted)
                     .fixedSize(horizontal: false, vertical: true)
@@ -879,33 +869,21 @@ struct SignInDialogView: View {
                     .font(SonnyType.body)
                     .foregroundStyle(SonnyTheme.text)
                     .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityLabel("\(ScreenControlUsagePresentation.lastTopUpLabel), \(line)")
+                    .accessibilityLabel("\(CreditPresentation.lastTopUpLabel), \(line)")
             }
         }
     }
 
-    /// How many screen-control runs the plan has left, beside the plan itself (SONNY-214).
-    ///
-    /// **Here, and deliberately not on Insights.** It was built there first, against a founder
-    /// decision of 2026-07-24 that nobody in the chain had read: that page refuses
-    /// usage/quota-consumption metrics outright, on stated product-strategy grounds — cancellation
-    /// anxiety in heavy users, "am I getting my money's worth" doubt in light ones. The ruling of
-    /// 2026-09-02 moved the line here instead of overriding that decision, so both stand: Insights
-    /// stays encouraging, and the figure appears where somebody is already thinking about their
-    /// plan. The widget's in-task line is a different surface and did not move.
-    ///
-    /// **Absent, not zeroed, when there is no figure** — the same rule the subscription row above
-    /// follows and the same one `ScreenControlAllowanceService` states: a failed read is a failure
-    /// and never a number, because zero locks a user out of what they paid for and any positive
-    /// number promises runs the server never granted.
+    /// How many credits the plan has left, beside the plan itself. Absent, not zeroed, when there is
+    /// no figure: a failed read is a failure and never a number.
     @ViewBuilder
-    private var screenControlUsageRow: some View {
-        if let screenControlAllowance {
+    private var creditUsageRow: some View {
+        if let creditBalance {
             // Formatted once and read twice — the visible line and the screen reader's must be the
             // same sentence, and two calls are two places for them to stop being.
-            let line = ScreenControlUsagePresentation.usageLine(screenControlAllowance)
+            let line = CreditPresentation.usageLine(creditBalance)
             SettingsAdaptiveControlRow {
-                Text(ScreenControlUsagePresentation.label)
+                Text(CreditPresentation.label)
                     .font(SonnyType.body)
                     .foregroundStyle(SonnyTheme.muted)
                     .fixedSize(horizontal: false, vertical: true)
@@ -914,7 +892,7 @@ struct SignInDialogView: View {
                     .font(SonnyType.body)
                     .foregroundStyle(SonnyTheme.text)
                     .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityLabel("\(ScreenControlUsagePresentation.label), \(line)")
+                    .accessibilityLabel("\(CreditPresentation.label), \(line)")
             }
         }
     }
