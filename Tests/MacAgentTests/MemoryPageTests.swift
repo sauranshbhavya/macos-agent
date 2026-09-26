@@ -34,6 +34,30 @@ struct MemoryPageTests {
         }
     }
 
+    /// A file its store can't read is kept, whatever Delete is pressed on: it may be data a key
+    /// would still open, and V2 keeps unreadable files rather than replacing them.
+    @Test(arguments: [MemoryCategory.snippets, .recentArtifacts, .clipboardHistory, .approvedApps])
+    func aDeleteLeavesAFileItsStoreCantReadExactlyAsItWas(category: MemoryCategory) async throws {
+        let fixture = try PagesFixture()
+        defer { fixture.cleanUp() }
+        let url: URL = switch category {
+        case .snippets: fixture.stores.snippets.fileURL
+        case .recentArtifacts: fixture.stores.recentFiles.fileURL
+        case .clipboardHistory: fixture.stores.clipboard.fileURL
+        default: fixture.stores.approvedApps.fileURL
+        }
+        let junk = Data("not a store this Mac can read".utf8)
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try junk.write(to: url)
+        let memory = MemoryModel(app: fixture.app)
+        memory.refresh()
+
+        await memory.deleteAll(in: category)
+
+        #expect(try Data(contentsOf: url) == junk)
+        #expect(memory.deletionStatus == MemoryStatus(text: "Could not delete \(category.title.lowercased()).", isSuccess: false))
+    }
+
     /// Deleting allowed apps from Memory is the same list Settings shows, so Settings sees it too.
     @Test
     func deletingAllowedAppsFromMemoryEmptiesTheListSettingsShows() async throws {

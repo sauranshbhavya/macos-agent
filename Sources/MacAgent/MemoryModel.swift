@@ -100,6 +100,8 @@ final class MemoryModel: ObservableObject {
         do {
             switch category {
             case .routines:
+                // One routine at a time, as the Routines page deletes them. A failure part-way leaves
+                // the rest in place and is reported, rather than claimed as done.
                 for routine in app.desk.routines {
                     await app.desk.deleteRoutine(routine)
                 }
@@ -107,13 +109,20 @@ final class MemoryModel: ObservableObject {
             case .taskHistory:
                 // The same delete as the Tasks page's Delete all.
                 await app.desk.deleteAllHistory()
+            // Each file is read through its own store first, and a file that can't be read is kept:
+            // it may be data a key would still open (V2 keeps unreadable files rather than replacing
+            // them). The read throwing ends the delete before anything is removed.
             case .recentArtifacts:
+                _ = try stores.recentFiles.loadAll()
                 try removeFile(stores.recentFiles.fileURL)
             case .clipboardHistory:
+                _ = try stores.clipboard.loadAll()
                 try removeFile(stores.clipboard.fileURL)
             case .snippets:
+                _ = try stores.snippets.loadAll()
                 try removeFile(stores.snippets.fileURL)
             case .approvedApps:
+                _ = try stores.approvedApps.loadAll()
                 try removeFile(stores.approvedApps.fileURL)
             }
             deletionStatus = MemoryDeletionCopy.outcome(for: category)
