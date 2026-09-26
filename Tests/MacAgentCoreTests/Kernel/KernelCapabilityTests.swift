@@ -17,6 +17,8 @@ final class FakeMail: AppleScriptRunning, @unchecked Sendable {
     private var nextID = 41
     private(set) var sent: [Int] = []
     var sendHangs = false
+    /// What the send script answers, as Mail's `send` result reaches it.
+    var sendReply = MailCapabilities.sentReply
 
     var draftIDs: [Int] { lock.withLock { Array(drafts.keys) } }
 
@@ -48,8 +50,9 @@ final class FakeMail: AppleScriptRunning, @unchecked Sendable {
         }
         if script == MailCapabilities.sendScript {
             if sendHangs { throw AppleScriptRunError.timedOut }
+            if sendReply != MailCapabilities.sentReply { return sendReply }
             lock.withLock { sent.append(id) }
-            return "sent"
+            return sendReply
         }
         throw AppleScriptRunError.failed("unknown script")
     }
@@ -268,6 +271,29 @@ struct MailKernelTests {
         let outcome = try await gateway.next("outcome")
         #expect(results(of: outcome).map(\.status) == [.stale])
         #expect(fixture.mail.sent.isEmpty)
+    }
+
+    @Test
+    func aSendMailDoesNotConfirmIsUnknownAndPauses() async throws {
+        for reply in ["unsure: Mail said it couldn't send it", "unsure -609: Connection is invalid."] {
+            let fixture = try CapabilityFixture()
+            let id = try await draft(fixture)
+            fixture.mail.sendReply = reply
+            let gateway = ScriptedGateway()
+            let tasks = controller(gateway, fixture)
+            await tasks.launch()
+            let task = try await startedTask(tasks, TaskRequest(goal: "Send it", mode: .normal))
+            _ = try await gateway.next("task.start")
+            let action = ActionID()
+            await gateway.send(task, propose([call("send_mail", action, effect: .external, args: ["draft": .string(String(id))])]), re: 1)
+            let commit = try #require(await approval(tasks, task))
+            await tasks.decide(task: task, action: action, commit: commit.commitID, approved: true)
+            #expect(await eventually {
+                if case .paused(.outcomeUnknown(action, .external, _)) = tasks.snapshot(task)?.phase { return true }
+                return false
+            })
+            await tasks.shutDown()
+        }
     }
 
     @Test
