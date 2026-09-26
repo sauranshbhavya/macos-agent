@@ -194,7 +194,7 @@ struct SkillPackTests {
         }
 
         // The control: the walk reached this file and the suite that used to read the folder.
-        #expect(scanned.isSuperset(of: ["Tests/MacAgentCoreTests/SkillPackTests.swift", "Tests/MacAgentTests/MemoryCommandCenterTests.swift"]))
+        #expect(scanned.isSuperset(of: ["Tests/MacAgentCoreTests/SkillPackTests.swift", "Tests/MacAgentTests/SonnyAppModelTests.swift"]))
         // This file's own sample lines satisfy this on their own; the validating tests' count checks
         // are what show they read the folder.
         #expect(readers == ["Tests/MacAgentCoreTests/SkillPackTests.swift"])

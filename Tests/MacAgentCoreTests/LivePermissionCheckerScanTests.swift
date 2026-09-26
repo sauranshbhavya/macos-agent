@@ -84,7 +84,7 @@ struct LivePermissionCheckerScanTests {
     /// `TestSourceTree.targets` with no entry here fails at the `#require` rather than being skipped.
     private static let sentinels: [String: [String]] = [
         "MacAgentCoreTests": ["LivePermissionCheckerScanTests.swift", "TestSourceTree.swift"],
-        "MacAgentTests": ["MacAgentSourceScan.swift", "ProductShellTests.swift"],
+        "MacAgentTests": ["MacAgentSourceScan.swift", "SonnyAppModelTests.swift"],
         "MacAgentTestSupport": ["DeterministicPermissions.swift", "UnprivilegedProcess.swift"]
     ]
 

@@ -151,7 +151,8 @@ public actor TaskRuntime {
         self.id = record.task
         self.record = record
         self.deps = deps
-        self.phase = .reconciling
+        // A task that ended here is still ended; only its undelivered messages remain to send.
+        self.phase = record.endedLocally == .cancelled ? .cancelled : .reconciling
     }
 
     // MARK: Driving the task
@@ -218,7 +219,14 @@ public actor TaskRuntime {
 
     /// The connection is up and the gateway has said what it knows about this task.
     public func welcomed(_ state: WelcomeBody.TaskState?, generation: UInt64) async {
+        // A task that already sent on this connection has nothing to send again.
+        let alreadyHere = connectionGeneration == generation
         connectionGeneration = generation
+        // Ended here, and over or gone on the gateway too: nothing left to deliver.
+        if phase.isTerminal, state?.state == .finished || state?.state == .unknown {
+            try? deps.ledgers.delete(id)
+            return
+        }
         if phase == .reconciling { await reconcile() }
         switch state?.state {
         case .unknown?:
@@ -238,7 +246,9 @@ public actor TaskRuntime {
         case nil:
             break
         }
-        for message in record.outbox { _ = await deps.send(message) }
+        if !alreadyHere {
+            for message in record.outbox { _ = await deps.send(message) }
+        }
         if case .paused = phase { return }
         if let held = heldOutcome {
             heldOutcome = nil
@@ -349,8 +359,11 @@ public actor TaskRuntime {
         }
     }
 
+    /// What hello tells the gateway about this task: nothing for a task the gateway has never
+    /// heard from, or one that ended with nothing left to deliver.
     public func resumeEntry() -> HelloBody.ResumeEntry? {
-        phase.isTerminal && record.outbox.isEmpty ? nil : record.resumeEntry
+        if record.lastSeqOut == 0 { return nil }
+        return phase.isTerminal && record.outbox.isEmpty ? nil : record.resumeEntry
     }
 
     public func snapshot() -> TaskSnapshot {
@@ -554,6 +567,7 @@ public actor TaskRuntime {
         phase = terminal
         await deps.broker.void(task: id)
         if keepLedgerUntilAcknowledged && !record.outbox.isEmpty {
+            if terminal == .cancelled { record.endedLocally = .cancelled }
             try? save()
         } else {
             try? deps.ledgers.delete(id)

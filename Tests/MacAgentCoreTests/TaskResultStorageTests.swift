@@ -368,7 +368,7 @@ struct TaskResultStorageTests {
     /// whole guard, and a halved default satisfied it (PR #89 cycle 2, M13).
     @Test
     func noProductionPathPassesACapToThePlanStore() throws {
-        for file in ["AgentViewModel.swift", "LocalDataDeletionService.swift", "LocalStoreClassification.swift"] {
+        for file in ["LocalDataDeletionService.swift", "LocalStoreClassification.swift"] {
             let text = try sourceNamed(file)
             // **Both spellings, since SONNY-350 split them.** Two of these three files used to
             // construct a store purely to read `.fileURL` off it; they call the store's named

@@ -67,12 +67,15 @@ public final class TaskController: ObservableObject {
     @Published public private(set) var gateway: GatewayState = .idle
 
     private var runtimes: [TaskID: TaskRuntime] = [:]
+    /// Instant-path tasks: they never touch the gateway, so they sit out hello and welcome.
+    private var localTasks: Set<TaskID> = []
     private var waiting: [TaskID] = []
     private var liveTask: TaskID?
     private var generation: UInt64 = 0
     private var connection: GatewayConnection!
     private let ledgers: any TaskLedgerStoring
     private let capabilities: KernelCapabilities
+    private let localCapabilities: KernelCapabilities
     private let screenTools: Set<ScreenToolName>
     private let screenFactory: @Sendable () -> (any ScreenControlling)?
     private let broker: ApprovalBroker
@@ -87,6 +90,7 @@ public final class TaskController: ObservableObject {
         identity: GatewayConnection.Identity,
         ledgers: any TaskLedgerStoring,
         capabilities: KernelCapabilities,
+        localCapabilities: [any Capability] = [],
         screenTools: Set<ScreenToolName> = [],
         screenFactory: @escaping @Sendable () -> (any ScreenControlling)? = { nil },
         permissions: @escaping @Sendable () -> Manifest.Permissions,
@@ -96,6 +100,7 @@ public final class TaskController: ObservableObject {
     ) {
         self.ledgers = ledgers
         self.capabilities = capabilities
+        self.localCapabilities = KernelCapabilities(capabilities.all + localCapabilities)
         self.screenTools = screenTools
         self.screenFactory = screenFactory
         self.broker = ApprovalBroker(now: now)
@@ -127,8 +132,10 @@ public final class TaskController: ObservableObject {
         for record in unfinished {
             let runtime = TaskRuntime(restoring: record, deps: dependencies())
             runtimes[record.task] = runtime
-            if liveTask == nil { liveTask = record.task }
-            apply(await runtime.snapshot())
+            let snapshot = await runtime.snapshot()
+            // A task that already ended here only has messages to deliver; it holds no slot.
+            if liveTask == nil, !snapshot.phase.isTerminal { liveTask = record.task }
+            apply(snapshot)
         }
         await connection.start()
     }
@@ -160,6 +167,32 @@ public final class TaskController: ObservableObject {
         return .started(id)
     }
 
+    /// Runs a command the Mac resolved on its own, with no model and no gateway (V2 plan section 6,
+    /// "Instant path"). Its actions go through the same validator, gate, approval and ledger as a
+    /// gateway task's, and the task ends from its own outcome. Instant commands don't queue behind a
+    /// running task: they are single quick actions, and the gate and the foreground lease still
+    /// apply.
+    @discardableResult
+    public func submitLocal(_ request: TaskRequest, actions: [WireAction]) async -> TaskSubmission {
+        let id = TaskID()
+        let finisher = LocalFinisher()
+        let runtime = TaskRuntime(id: id, request: request.startBody, deps: dependencies(local: finisher))
+        await finisher.attach(runtime)
+        runtimes[id] = runtime
+        localTasks.insert(id)
+        apply(await runtime.snapshot())
+        await runtime.start(generation: Self.localGeneration)
+        let propose = ServerMessage(
+            address: TaskAddress(task: id, seq: 1, re: 1),
+            payload: .propose(ProposeBody(agent: .planner, actions: actions, final: true))
+        )
+        await runtime.receive(propose, generation: Self.localGeneration)
+        return .started(id)
+    }
+
+    /// Local tasks' connection generation. A gateway connection's generations start at 1.
+    static let localGeneration: UInt64 = 0
+
     public func cancel(_ task: TaskID) async {
         if let index = waiting.firstIndex(of: task) {
             waiting.remove(at: index)
@@ -187,12 +220,18 @@ public final class TaskController: ObservableObject {
 
     // MARK: Connection callbacks
 
-    private func dependencies() -> RuntimeDependencies {
+    private func dependencies(local: LocalFinisher? = nil) -> RuntimeDependencies {
         let connection = self.connection!
         return RuntimeDependencies(
-            send: { message in await connection.send(message) },
+            send: { message in
+                if let local {
+                    await local.handle(message)
+                    return true
+                }
+                return await connection.send(message)
+            },
             ledgers: ledgers,
-            capabilities: capabilities,
+            capabilities: local == nil ? capabilities : localCapabilities,
             screen: screenFactory(),
             broker: broker,
             publish: { [weak self] snapshot in await self?.apply(snapshot) },
@@ -202,7 +241,7 @@ public final class TaskController: ObservableObject {
 
     private func resumeEntries() async -> [HelloBody.ResumeEntry] {
         var entries: [HelloBody.ResumeEntry] = []
-        for runtime in runtimes.values {
+        for (id, runtime) in runtimes where !localTasks.contains(id) {
             if let entry = await runtime.resumeEntry() { entries.append(entry) }
         }
         return Array(entries.prefix(16))
@@ -210,7 +249,7 @@ public final class TaskController: ObservableObject {
 
     private func welcomed(_ welcome: WelcomeBody, generation: UInt64) async {
         self.generation = generation
-        for (id, runtime) in runtimes {
+        for (id, runtime) in runtimes where !localTasks.contains(id) {
             let state = welcome.tasks.first { $0.task == id }
             await runtime.welcomed(state, generation: generation)
         }
@@ -235,6 +274,21 @@ public final class TaskController: ObservableObject {
             liveTask = nil
             Task { await self.startNext() }
         }
+        if snapshot.phase.isTerminal { forgetOldFinishedTasks() }
+    }
+
+    /// Finished tasks kept in memory for the UI; history keeps the rest on disk.
+    static let finishedKept = 20
+
+    private func forgetOldFinishedTasks() {
+        let finished = tasks.filter { $0.phase.isTerminal }
+        guard finished.count > Self.finishedKept else { return }
+        let forgotten = Set(finished.prefix(finished.count - Self.finishedKept).map(\.id))
+        tasks.removeAll { forgotten.contains($0.id) }
+        for id in forgotten {
+            runtimes[id] = nil
+            localTasks.remove(id)
+        }
     }
 
     private func startNext() async {
@@ -250,6 +304,29 @@ public final class TaskController: ObservableObject {
             return
         }
         await runtime.start(generation: generation)
+    }
+}
+
+/// Plays the gateway's last part for an instant-path task: when the task's outcome comes back, it
+/// finishes the task from that outcome.
+actor LocalFinisher {
+    private var runtime: TaskRuntime?
+
+    func attach(_ runtime: TaskRuntime) {
+        self.runtime = runtime
+    }
+
+    func handle(_ message: ClientMessage) {
+        guard case .outcome(let body) = message.payload, let runtime, let address = message.address else { return }
+        let done = body.results.allSatisfy { $0.status == .done }
+        let evidence = body.results.compactMap { $0.evidence ?? $0.error?.message }.prefix(3).joined(separator: " ")
+        let finish = FinishBody(
+            status: done ? .completed : .failed,
+            summary: evidence.isEmpty ? (done ? "Done." : "That didn't work.") : evidence
+        )
+        let message = ServerMessage(address: TaskAddress(task: address.task, seq: 2, re: address.seq), payload: .finish(finish))
+        // Delivered after this send returns, so the runtime isn't finishing mid-send.
+        Task { await runtime.receive(message, generation: TaskController.localGeneration) }
     }
 }
 

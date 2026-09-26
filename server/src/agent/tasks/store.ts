@@ -6,7 +6,8 @@
  * counts per direction. The transcript is the whole of a task's state: an agent's next turn is a
  * function of it, which is what lets any gateway process resume a task after a restart.
  */
-import type { Mode } from "../protocol.js";
+import { randomUUID } from "node:crypto";
+import type { FinishBody, Mode } from "../protocol.js";
 
 export type TaskStatus = "live" | "completed" | "failed" | "cancelled";
 export type EndedStatus = Exclude<TaskStatus, "live">;
@@ -116,6 +117,16 @@ export interface TaskStore {
    */
   sweep(now: Date, limits: { retentionMs: number; abandonAfterMs: number }): Promise<SweepOutcome>;
 }
+
+/**
+ * What an abandoned task's Mac is told when it next connects: a task the sweep ends gets a real
+ * `finish`, so a Mac that was away hears the task is over rather than waiting on it forever.
+ */
+export const ABANDONED_FINISH: FinishBody = {
+  status: "failed",
+  summary: "This task waited too long for this Mac and has ended.",
+  reason: "internal_error",
+};
 
 /** An in-memory store for tests and for a gateway run without a database. */
 export function memoryTaskStore(): TaskStore & { readonly devices: Map<string, string> } {
@@ -249,6 +260,13 @@ export function memoryTaskStore(): TaskStore & { readonly devices: Map<string, s
         const { record } = row;
         if (record.status === "live") {
           if (now.getTime() - record.updatedAt.getTime() >= limits.abandonAfterMs) {
+            if (!record.isPrivate) {
+              const msgId = randomUUID();
+              const seq = record.lastSeqOut + 1;
+              messageIds.add(msgId);
+              row.messages.push({ direction: "out", seq, re: null, msgId, type: "finish", body: ABANDONED_FINISH, createdAt: now });
+              row.record = { ...row.record, lastSeqOut: seq };
+            }
             finish(row, "failed", now);
             abandoned += 1;
           }

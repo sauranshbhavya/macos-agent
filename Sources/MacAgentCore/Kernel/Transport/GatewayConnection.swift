@@ -280,8 +280,12 @@ public actor GatewayConnection {
                 switch message.payload {
                 case .welcome(let welcome):
                     failures = 0
-                    await setState(.connected)
+                    // Sends work from here, but a request waiting to start waits until every task
+                    // already here has handled the welcome, so none of them sends a message twice.
+                    state = .connected
                     await handlers.welcomed(welcome, current)
+                    resolveWaiters(true)
+                    await handlers.stateChanged(.connected)
                 case .reauthRequired:
                     if let token = try? await credentials.accessToken(forceRefresh: true) {
                         _ = await send(ClientMessage(payload: .reauth(ReauthBody(accessToken: token))))

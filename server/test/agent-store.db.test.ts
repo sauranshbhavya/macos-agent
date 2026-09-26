@@ -136,6 +136,10 @@ describeDb("V2 tasks in Postgres", () => {
     const nextDay = new Date(at.getTime() + TASK_ABANDON_AFTER_MS);
     expect(await sweepTasksOnce({ store, ledger, now: () => nextDay })).toMatchObject({ deleted: 0, abandoned: 1 });
     expect((await store.task(idle.id))?.status).toBe("failed");
+    // The abandoned task's Mac is replayed an end when it reconnects.
+    const [finish] = await store.outboundAfter(idle.id, 0);
+    expect(finish).toMatchObject({ direction: "out", seq: 1, type: "finish", body: { status: "failed" } });
+    expect((await store.task(idle.id))?.lastSeqOut).toBe(1);
     expect(await store.task(ended.id)).toBeDefined();
 
     const monthLater = new Date(at.getTime() + TASK_RETENTION_MS);

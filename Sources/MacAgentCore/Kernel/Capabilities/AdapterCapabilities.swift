@@ -296,7 +296,8 @@ public enum AdapterCapabilities {
 public enum StandardCapabilities {
     public static func all(
         context: @escaping @MainActor @Sendable () -> CapabilityExecutionContext,
-        finderRevealer: @escaping RevealInFinderCapabilityAdapter.Reveal = { NSWorkspace.shared.activateFileViewerSelecting($0) },
+        // The app hands in the live reveal; nothing in this package names it (SONNY-395).
+        finderRevealer: @escaping RevealInFinderCapabilityAdapter.Reveal,
         routines: RoutineGoalStore,
         appleScript: any AppleScriptRunning = OsascriptRunner(),
         now: @escaping @Sendable () -> Date = { Date() }

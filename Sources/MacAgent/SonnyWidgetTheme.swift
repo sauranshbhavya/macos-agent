@@ -55,22 +55,30 @@ enum WidgetTheme {
     static let attention = Color(red: 0xE8 / 255, green: 0xB8 / 255, blue: 0x4A / 255)
 
     static let textFull = Color.white
-    static let textMuted = Color.white.opacity(0.55)
+    static let textMuted = Color.white.opacity(0.72)
+    static let helperText = Color.white.opacity(0.78)
     /// The compact capsule's glyph and the file-preview chip's "Open" label — a step brighter than
     /// `textMuted`, short of full `textFull` (2026-09-08 modernization pass).
-    static let textStrong = Color.white.opacity(0.85)
+    static let textStrong = Color.white.opacity(0.92)
     /// The composer's wand glyph while the field is disabled — dimmer than `textMuted`, the
     /// composer withdrawing its invitation rather than merely muting it.
     static let textFaint = Color.white.opacity(0.28)
+    static let privateModeOutline = Color.white.opacity(0.38)
 
-    /// §3.1/§3.2's note: the authored Figma radius is genuinely 34, but on a fixed 40pt-tall bar
-    /// that exceeds half the height, so callers use `Capsule()` there rather than this literal value.
+    /// §3.1/§3.2's note: the authored Figma radius is genuinely 34, but on the fixed-height bar that
+    /// exceeds half the height, so callers use `Capsule()` there rather than this literal value.
     static let panelRadius: CGFloat = 34
 
     /// The panel/pill's fixed width — one token so every frame that must match it (the panel, the
     /// composer pill, the mic hover hint row, a notice strip) reads the same source rather than
     /// repeating the literal (2026-09-08 modernization pass).
-    static let panelWidth: CGFloat = 472
+    static let panelWidth: CGFloat = 520
+    static let composerHeight: CGFloat = 44
+    static let composerEdgeInset: CGFloat = 8
+    static let startButtonHeight: CGFloat = composerHeight - (composerEdgeInset * 2)
+    static let satelliteControlSize: CGFloat = 40
+    static let compactSize: CGFloat = 44
+    static let composerMarkSize: CGFloat = 18
     /// The floor every circular/capsule control in the widget's panels grows to. Was a bare 23pt at
     /// seventeen call sites; 28 matches System A's own `SonnyMetrics.controlRegular` floor without
     /// importing that token, since System B may not reach into System A's set.
@@ -108,74 +116,38 @@ enum WidgetType {
     static let iconLarge = Font.system(size: 14, weight: .medium, design: .default)
 }
 
-/// Reusable liquid-glass background matching §3.1/§3.2's recipe as closely as SwiftUI's drawing
-/// primitives allow. Two parts are approximations rather than literal ports: the blend-mode-layered
-/// gradient fill (approximated with `.blendMode` on stacked translucent layers) and the inset
-/// "inner glass highlight" shadows (CSS `inset` shadows have no SwiftUI counterpart; approximated
-/// with edge-fading gradient overlays).
+/// Native Liquid Glass on macOS 26 and later, with the real AppKit vibrancy material retained only
+/// as the compatibility path for this package's macOS 14 deployment target.
 private struct WidgetGlassBackground<S: InsettableShape>: ViewModifier {
     let shape: S
-    let highlightBandHeight: CGFloat
 
+    @ViewBuilder
     func body(content: Content) -> some View {
-        content
-            .background(
-                ZStack {
-                    // Real blur/vibrancy first — everything after this is a tint wash layered on
-                    // top of genuine blurred content, not a substitute for it.
-                    WidgetVisualEffectBackground()
-                    WidgetTheme.panelBase
-                        .blendMode(.lighten)
-                    WidgetTheme.panelBase.opacity(0.5)
-                        .blendMode(.luminosity)
-                    WidgetTheme.panelBase.opacity(0.5)
-                        .blendMode(.luminosity)
-                }
+        if #available(macOS 26.0, *) {
+            content.glassEffect(.regular, in: shape)
+        } else {
+            content
+                .background(WidgetVisualEffectBackground().clipShape(shape))
+                .overlay(shape.stroke(WidgetTheme.hairline.opacity(0.9), lineWidth: 1.25))
                 .compositingGroup()
-                .clipShape(shape)
-            )
-            .overlay(
-                VStack(spacing: 0) {
-                    LinearGradient(colors: [Color.white.opacity(0.06), .clear], startPoint: .top, endPoint: .bottom)
-                        .frame(height: highlightBandHeight)
-                    Spacer(minLength: 0)
-                    LinearGradient(colors: [.clear, Color.black.opacity(0.1)], startPoint: .top, endPoint: .bottom)
-                        .frame(height: highlightBandHeight)
-                }
-                .clipShape(shape)
-                .allowsHitTesting(false)
-            )
-            // Border-driven elevation, not shadow-driven — per Wispr Flow's own design system
-            // ("border-driven design without box-shadow for card elevation"), and directly
-            // motivated by this exact shape: §3.2's literal CSS shadow recipe (0 18px 48px
-            // rgba(0,0,0,.45)) kept rendering as a smudge in SwiftUI across two separate tuning
-            // passes (padding, opacity, compositingGroup ordering), never as a clean soft shadow.
-            // A visibly-real border reads as intentional "glass edge" definition on its own,
-            // without fighting SwiftUI's shadow model for something it isn't good at reproducing.
-            .overlay(shape.stroke(WidgetTheme.hairline.opacity(0.9), lineWidth: 1.25))
-            // Flattens content+background+overlay into one properly-clipped layer before the
-            // small residual shadow below — without this, shadows compute against the
-            // pre-composited tree (blend-mode layers stacked with unclipped `content`) instead of
-            // the final clipped silhouette.
-            .compositingGroup()
-            // A small, tight shadow only — just enough to lift the shape off very light desktop
-            // backgrounds, not the primary definition (the border above is). Needs minimal bleed
-            // room, unlike the old radius-20 version.
-            .shadow(color: Color.black.opacity(0.22), radius: 6, x: 0, y: 3)
+                .shadow(color: Color.black.opacity(0.22), radius: 6, x: 0, y: 3)
+        }
     }
 }
 
 extension View {
     /// For the taller step-log / result / permission panels.
     func widgetGlassPanel() -> some View {
-        modifier(
-            WidgetGlassBackground(shape: RoundedRectangle(cornerRadius: WidgetTheme.panelRadius), highlightBandHeight: 32)
-        )
+        modifier(WidgetGlassBackground(shape: RoundedRectangle(cornerRadius: WidgetTheme.panelRadius)))
     }
 
-    /// For the fixed 40pt-tall command pill — `Capsule()` per §3.1/§3.2's SwiftUI-clamping note.
+    /// For the fixed-height command pill — `Capsule()` per §3.1/§3.2's SwiftUI-clamping note.
     func widgetGlassPill() -> some View {
-        modifier(WidgetGlassBackground(shape: Capsule(), highlightBandHeight: 14))
+        modifier(WidgetGlassBackground(shape: Capsule()))
+    }
+
+    func widgetGlassCircle() -> some View {
+        modifier(WidgetGlassBackground(shape: Circle()))
     }
 }
 

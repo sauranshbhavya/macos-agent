@@ -636,8 +636,8 @@ struct FirstRunSequenceTests {
             "FirstRunSequence.swift": 1
         ])
         #expect(try Self.sitesOf("ScreenAccessOnboardingView(") == [
-            "CommandCenterView.swift": 1,
-            "FirstRunSequence.swift": 1
+            "FirstRunSequence.swift": 1,
+            "SettingsView.swift": 1
         ])
         // And the sequence hosts them rather than reimplementing either: no second state machine, no
         // second permission model.
@@ -659,12 +659,14 @@ struct FirstRunSequenceTests {
         }
         #expect(constructionSites == ["main.swift": 1], "found \(constructionSites)")
 
-        // And it is threaded rather than rebuilt on the way down: three declarations in Command
-        // Center — the view, the Settings dialog it forwards through, and the Security & Access page
-        // that used to own one — and no `@StateObject`, which is what owning one would look like.
+        // And it is threaded rather than rebuilt on the way down: Command Center, the Settings
+        // dialog it forwards through, and the Security & Access page — and no `@StateObject`, which
+        // is what owning one would look like.
         let commandCenter = try MacAgentSource.read("CommandCenterView.swift")
-        #expect(MacAgentSource.count(of: "@StateObject private var screenAccessModel", inText: commandCenter) == 0)
-        #expect(MacAgentSource.count(of: "@ObservedObject var screenAccessModel", inText: commandCenter) == 3)
+        let settings = try MacAgentSource.read("SettingsView.swift")
+        #expect(MacAgentSource.count(of: "@StateObject private var screenAccessModel", inText: commandCenter + settings) == 0)
+        #expect(MacAgentSource.count(of: "@ObservedObject var screenAccessModel", inText: commandCenter) == 1)
+        #expect(MacAgentSource.count(of: "@ObservedObject var screenAccessModel", inText: settings) == 2)
     }
 
     // MARK: - Helpers

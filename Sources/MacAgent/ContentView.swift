@@ -18,60 +18,6 @@ import SwiftUI
 //    modifiers below rather than hand-rolled per view.
 // 3. Motion reads `accessibilityReduceMotion` through `sonnyAnimation`, never bare `withAnimation`.
 
-/// The one-line result under a delete control, shared by the Command Center surfaces that have
-/// one: Settings' Data page, where it reports the whole wipe and, since SONNY-266, the narrower
-/// control beside it on the same slot, and the Memory page, where it reports a per-row Delete off
-/// its own channel. Success is read off the "Deleted" prefix, so any outcome copy that means
-/// success starts with that word and any that does not, does not. (This comment named
-/// `SettingsSecurityAccessPage` as a second host until SONNY-266; the wipe moved off that page on
-/// 2026-07-18 and the Memory page took the second seat with SONNY-208.)
-struct LocalDataDeletionStatusMessage: View {
-    let message: String?
-
-    var body: some View {
-        if let message {
-            Label(message, systemImage: message.hasPrefix("Deleted") ? "checkmark.circle" : "exclamationmark.triangle")
-                .font(SonnyType.micro)
-                .foregroundStyle(message.hasPrefix("Deleted") ? SonnyTheme.success : SonnyTheme.warning)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-    }
-}
-
-extension View {
-    func localDataDeletionConfirmationDialog(isPresented: Binding<Bool>, viewModel: AgentViewModel) -> some View {
-        confirmationDialog(
-            "Delete Sonny Local Data?",
-            isPresented: isPresented,
-            titleVisibility: .visible
-        ) {
-            Button("Delete Local Data", role: .destructive) {
-                viewModel.deleteLocalData()
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            // **The list is `LocalDataDeletionCopy`'s, shared with Settings' own detail line**
-            // (SONNY-233). This literal named nine of the thirteen the wipe deleted then — one
-            // fewer than the line on the page behind it, so the two surfaces describing one
-            // irreversible press disagreed with each other as well as with the wipe. What stays
-            // written here is the part that is this dialog's alone: what the press does *not* take.
-            // **Two sentences: what the press reaches, and what it leaves alone** (SONNY-404,
-            // founder decision 2026-09-04 restated 2026-09-05). The account is named in the second
-            // because "delete my data" and "delete my account" are two promises and only one of
-            // them is this button. This said "from this Mac" for one round, under a reversal that
-            // was a coordinator's error.
-            //
-            // **A third sentence stood here and is gone** (PR #207's R5): "If Sonny can't reach them
-            // now, it deletes their copy the next time it can." That is how-it-works copy in a
-            // pre-press confirmation, which the standing rule forbids, and the founder's condition
-            // is about what the press says *afterwards* — which `LocalDataDeletionCopy.outcome`
-            // covers in all three of its states, including the signed-out one that tells the user
-            // what to do.
-            Text("This deletes \(LocalDataDeletionCopy.everythingItTakes) from this Mac and from Sonny's servers. Generated files, API keys and your account are not deleted.")
-        }
-    }
-}
-
 struct PermissionReadinessRows: View {
     let items: [PermissionReadinessItem]
 
@@ -169,12 +115,12 @@ enum SonnyType {
 /// text, hairlines and fills are the foreground colour at an opacity, so they compose the same on
 /// every level. Every token is an `NSColor` with a dynamic provider, so it resolves against the
 /// appearance of the window it is drawn in: `SonnyAppearanceModel` sets that at the application,
-/// and the floating widget pins its own panel dark. The brand accent is the one saturated colour;
-/// its light reading is a step darker so white text on it keeps its contrast on paper.
+/// and the floating widget pins its own panel dark. The sidebar alone carries the green brand tint;
+/// the main content keeps its neutral surfaces and blue accent.
 enum SonnyTheme {
     // Surfaces, level 0 to 4.
     /// Sidebar and the Settings dialog's own sidebar.
-    static let sidebar = dynamic(dark: 0x0F1012, light: 0xECEDF0)
+    static let sidebar = dynamic(dark: 0x0B2F28, light: 0xDDE8E3)
     /// The window canvas.
     static let ink = dynamic(dark: 0x141518, light: 0xF5F6F8)
     /// The bordered content panel inside each page.
@@ -206,6 +152,11 @@ enum SonnyTheme {
     static let accent = dynamic(dark: 0x5C84FE, light: 0x3B67E9)
     static let accentSubtle = accent.opacity(0.14)
     static let accentBorder = accent.opacity(0.40)
+    static let sidebarAccent = dynamic(dark: 0x2A6B5C, light: 0x1F594C)
+    static let sidebarAccentSubtle = dynamic(dark: 0xE8DCC4, light: 0x123F36).opacity(0.14)
+    static let sidebarBrandGold = dynamic(dark: 0xC49A45, light: 0x9B742C)
+    static let sidebarBrandGoldSubtle = sidebarBrandGold.opacity(0.16)
+    static let sidebarTextOnAccent = Color(nsColor: NSColor(sonnyHex: 0x123F36))
     static let success = dynamic(dark: 0x4CC38A, light: 0x1E9E5F)
     static let warning = dynamic(dark: 0xE8B84A, light: 0xA8760A)
     static let danger = dynamic(dark: 0xE5484D, light: 0xD2353B)
@@ -752,6 +703,8 @@ struct SonnyButtonStyle: ButtonStyle {
     enum Tone {
         /// The one action a surface is for. Accent fill.
         case primary
+        /// The Command Center sidebar's primary action, isolated from the main content accent.
+        case sidebarPrimary
         /// Everything else that has a border: row actions, toolbar actions, sheet buttons.
         case secondary
         /// A quiet action that only shows a fill under the pointer: "Clear", a header's "+".
@@ -826,6 +779,7 @@ struct SonnyButtonStyle: ButtonStyle {
     private var foreground: Color {
         switch tone {
         case .primary: return SonnyTheme.textOnAccent
+        case .sidebarPrimary: return SonnyTheme.sidebarTextOnAccent
         case .secondary, .tertiary: return SonnyTheme.text
         case .danger: return SonnyTheme.danger
         }
@@ -834,6 +788,7 @@ struct SonnyButtonStyle: ButtonStyle {
     private var background: Color {
         switch tone {
         case .primary: return SonnyTheme.accent
+        case .sidebarPrimary: return SonnyTheme.sidebarBrandGold
         case .secondary: return SonnyTheme.surfaceRaised
         case .tertiary: return .clear
         case .danger: return SonnyTheme.danger.opacity(0.12)
@@ -842,7 +797,7 @@ struct SonnyButtonStyle: ButtonStyle {
 
     private var border: Color {
         switch tone {
-        case .primary: return .clear
+        case .primary, .sidebarPrimary: return .clear
         case .secondary: return SonnyTheme.cardBorder
         case .tertiary: return .clear
         case .danger: return SonnyTheme.danger.opacity(0.35)
@@ -851,7 +806,7 @@ struct SonnyButtonStyle: ButtonStyle {
 
     private var pressedOverlay: Color {
         switch tone {
-        case .primary: return Color.black.opacity(0.18)
+        case .primary, .sidebarPrimary: return Color.black.opacity(0.18)
         case .secondary, .tertiary: return SonnyTheme.fillPressed
         case .danger: return SonnyTheme.danger.opacity(0.12)
         }

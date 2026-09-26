@@ -48,6 +48,13 @@ public struct TaskLedgerRecord: Sendable, Equatable, Codable {
     public var outbox: [ClientMessage]
     public var actions: [LedgerAction]
     public var pending: PendingProposal?
+    /// Set when the task ended on this Mac while its last messages were still undelivered, so a
+    /// relaunch restores it as ended rather than as a task still waiting on the gateway.
+    public var endedLocally: LocalEnd?
+
+    public enum LocalEnd: String, Sendable, Equatable, Codable {
+        case cancelled
+    }
 
     public init(task: TaskID, request: TaskStartBody, createdAt: Date) {
         self.task = task
@@ -100,16 +107,6 @@ public struct FileTaskLedgerStore: TaskLedgerStoring {
     public init(directory: URL, encryption: LocalStorageEncryption = .shared) {
         self.directory = directory
         self.encryption = encryption
-    }
-
-    public static func inApplicationSupport() throws -> FileTaskLedgerStore {
-        let base = try FileManager.default.url(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask,
-            appropriateFor: nil,
-            create: true
-        )
-        return FileTaskLedgerStore(directory: base.appendingPathComponent("Sonny/V2/Tasks", isDirectory: true))
     }
 
     public func save(_ record: TaskLedgerRecord) throws {

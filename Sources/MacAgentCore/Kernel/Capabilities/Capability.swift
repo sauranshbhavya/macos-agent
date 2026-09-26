@@ -139,6 +139,9 @@ public struct KernelCapabilities: Sendable {
         capabilities[Self.key(name, version)]
     }
 
+    /// Every capability, for building a larger set from this one.
+    public var all: [any Capability] { Array(capabilities.values) }
+
     public var manifestOperations: [Manifest.Operation] {
         capabilities.values
             .map { Manifest.Operation(name: $0.name, version: $0.version) }
