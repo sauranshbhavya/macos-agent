@@ -198,9 +198,20 @@ public actor TaskRuntime {
     }
 
     /// Rebuilds what a relaunch interrupted. An action that was dispatched but never recorded as
-    /// ended is outcome_unknown; one that never reached dispatch did not run.
+    /// ended is outcome_unknown; one that never reached dispatch did not run. A question waiting for
+    /// the user is asked again; a screen request is looked at again once the connection is up.
     public func reconcile() async {
-        guard phase == .reconciling, let pending = record.pending else { return }
+        guard phase == .reconciling else { return }
+        guard let pending = record.pending else {
+            if case .ask(let seq, let body)? = record.awaiting {
+                askSeq = seq
+                phase = .awaitingAnswer(body)
+            } else {
+                phase = .running
+            }
+            await publish()
+            return
+        }
         var results: [ActionResult] = []
         var unknownConsequential: LedgerAction?
         for actionID in pending.actions {
@@ -275,6 +286,11 @@ public actor TaskRuntime {
             heldOutcome = nil
             await sendNew(.outcome(OutcomeBody(results: held.results)), re: held.re, clearingPending: true)
         }
+        // After the outbox, so the new observation's seq follows everything already sent. A look
+        // still in progress (phase observing) answers on its own.
+        if case .observe(let seq, let body)? = record.awaiting, phase == .running {
+            await look(body, re: seq)
+        }
     }
 
     public func receive(_ message: ServerMessage, generation: UInt64) async {
@@ -299,6 +315,11 @@ public actor TaskRuntime {
 
         record.lastSeqIn = address.seq
         if let re = address.re { record.acknowledge(through: re) }
+        switch message.payload {
+        case .ask(let body): record.awaiting = .ask(seq: address.seq, body: body)
+        case .observe(let body): record.awaiting = .observe(seq: address.seq, body: body)
+        default: break
+        }
         try? save()
 
         switch message.payload {
@@ -310,14 +331,7 @@ public actor TaskRuntime {
             phase = .awaitingAnswer(body)
             await publish()
         case .observe(let body):
-            phase = .observing
-            await publish()
-            observationGeneration += 1
-            let observer: any TaskObserver = deps.screen ?? UnavailableObserver()
-            let observation = await observer.observe(body, generation: observationGeneration)
-            guard !phase.isTerminal else { return }
-            phase = .running
-            await sendNew(.observation(observation), re: address.seq)
+            await look(body, re: address.seq)
         case .propose(let body):
             phase = .acting
             await publish()
@@ -357,7 +371,21 @@ public actor TaskRuntime {
         guard case .awaitingAnswer = phase, let askSeq else { return }
         self.askSeq = nil
         phase = .running
+        record.awaiting = nil
         await sendNew(.answer(AnswerBody(text: text)), re: askSeq)
+    }
+
+    /// Looks at the screen for the gateway's request `re` and sends what it saw.
+    private func look(_ body: ObserveBody, re: Int) async {
+        phase = .observing
+        await publish()
+        observationGeneration += 1
+        let observer: any TaskObserver = deps.screen ?? UnavailableObserver()
+        let observation = await observer.observe(body, generation: observationGeneration)
+        guard !phase.isTerminal else { return }
+        phase = .running
+        record.awaiting = nil
+        await sendNew(.observation(observation), re: re)
     }
 
     /// The user's decision on a confirm-level action. It counts only for the commit issued for this
