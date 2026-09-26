@@ -91,6 +91,18 @@ public enum AsyncProcessRunner {
         arguments: [String],
         currentDirectoryURL: URL? = nil
     ) async throws -> ProcessResult {
+        try await run(executablePath: executablePath, arguments: arguments, currentDirectoryURL: currentDirectoryURL, beforeLaunch: {})
+    }
+
+    /// `beforeLaunch` runs after the process is registered for cancellation and before it launches.
+    /// Only tests pass one: a cancel landing in that gap is the one path a test can't otherwise
+    /// reach, because a launch takes less time than a cancel does to arrive (SONNY-342).
+    static func run(
+        executablePath: String,
+        arguments: [String],
+        currentDirectoryURL: URL?,
+        beforeLaunch: @escaping @Sendable () -> Void
+    ) async throws -> ProcessResult {
         let box = ProcessBox()
 
         return try await withTaskCancellationHandler {
@@ -108,6 +120,7 @@ public enum AsyncProcessRunner {
                     throw CancellationError()
                 }
 
+                beforeLaunch()
                 try process.run()
                 if box.confirmLaunched() {
                     process.terminate()
