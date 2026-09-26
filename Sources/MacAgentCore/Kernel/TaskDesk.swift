@@ -135,7 +135,8 @@ public final class TaskDesk: ObservableObject {
     ) async -> TaskSubmission? {
         let goal = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !goal.isEmpty else { return nil }
-        if prior == nil, let routine = routineNamed(goal, await routineStore.all()) {
+        // Routines that can't be read name nothing, and the request goes to the gateway as typed.
+        if prior == nil, let routine = routineNamed(goal, (try? await routineStore.all()) ?? []) {
             return await run(routine, isPrivate: isPrivate)
         }
         let request = TaskRequest(
