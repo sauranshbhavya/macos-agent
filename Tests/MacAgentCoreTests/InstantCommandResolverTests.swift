@@ -332,6 +332,71 @@ struct InstantCommandResolverTests {
         #expect(polite.steps[0].searchQuery == "2 + 2")
     }
 
+    // MARK: - A saved routine by name (V1's quick dispatch)
+
+    private static let routines = [
+        RoutineGoal(name: "Morning Setup", goal: "Open my calendar", schedule: nil, savedAt: Date()),
+        RoutineGoal(name: "Draft Routine", goal: "Write the draft", schedule: nil, savedAt: Date()),
+        RoutineGoal(name: "The Archive", goal: "Tidy the archive", schedule: nil, savedAt: Date()),
+        RoutineGoal(name: "clip notes", goal: "Clip my notes", schedule: nil, savedAt: Date()),
+    ]
+
+    @Test
+    func aSavedRoutineIsFoundByEveryShapeV1Recognised() {
+        let resolver = Self.hermeticResolver()
+        let named: [(String, String)] = [
+            ("run morning setup", "Morning Setup"),
+            ("run routine Morning Setup", "Morning Setup"),
+            ("routine morning setup", "Morning Setup"),
+            ("launch my morning setup routine", "Morning Setup"),
+            ("start the Morning Setup", "Morning Setup"),
+            ("  Morning Setup  ", "Morning Setup"),
+            ("run Mörning Setup", "Morning Setup"),
+            ("run draft routine", "Draft Routine"),
+            // The original candidate is kept beside the article-stripped one.
+            ("run the archive", "The Archive"),
+        ]
+        for (command, name) in named {
+            #expect(resolver.routine(namedBy: command, in: Self.routines)?.name == name, "\(command)")
+        }
+    }
+
+    @Test
+    func aCommandThatDoesNotNameASavedRoutineExactlyIsLeftAlone() {
+        let resolver = Self.hermeticResolver()
+        for command in [
+            "run missing setup", "morning setup now", "open morning setup", "summarise my morning setup",
+            "run", "", "my morning setup",
+            // The clipboard door read before this one in V1 and keeps its command.
+            "clip notes",
+        ] {
+            #expect(resolver.routine(namedBy: command, in: Self.routines) == nil, "\(command)")
+        }
+        #expect(resolver.routine(namedBy: "run morning setup", in: []) == nil)
+    }
+
+    /// A bare verb whose name is also an installed app steps aside; naming the kind, or the exact
+    /// name on its own, still runs the routine.
+    @Test
+    func aBareVerbStepsAsideForAnInstalledAppButNamingTheKindDoesNot() {
+        let discord = InstalledApp(displayName: "Discord", bundleIdentifier: "com.hnc.Discord", applicationURL: URL(fileURLWithPath: "/Applications/Discord.app"))
+        let resolver = InstantCommandResolver(
+            snippetStore: UnreachableLocalStores.snippets(),
+            recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
+            shortcutCatalog: NoShortcuts(),
+            installedAppResolver: InstalledAppResolver(source: FixedAppSource([discord]))
+        )
+        let routines = [RoutineGoal(name: "Discord", goal: "Post my standup", schedule: nil, savedAt: Date())]
+
+        #expect(resolver.routine(namedBy: "run Discord", in: routines) == nil)
+        #expect(resolver.routine(namedBy: "launch discord", in: routines) == nil)
+        #expect(resolver.routine(namedBy: "run routine Discord", in: routines)?.name == "Discord")
+        #expect(resolver.routine(namedBy: "run Discord routine", in: routines)?.name == "Discord")
+        #expect(resolver.routine(namedBy: "Discord", in: routines)?.name == "Discord")
+        // With no such app installed, the bare verb runs it.
+        #expect(Self.hermeticResolver().routine(namedBy: "run Discord", in: routines)?.name == "Discord")
+    }
+
     /// No live catalog and no live app lookup: this suite's commands are about the calculator, and
     /// the two defaults on the initializer reach the real machine.
     private static func hermeticResolver() -> InstantCommandResolver {
