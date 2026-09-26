@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "drawio",
+  "name": "draw.io",
+  "domain": "app.diagrams.net",
+  "category": "design",
+  "summary": "Free diagramming tool.",
+  "signInURL": null,
+  "triggers": ["draw.io", "app.diagrams.net"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

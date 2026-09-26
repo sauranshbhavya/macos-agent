@@ -1,0 +1,55 @@
+{
+  "format": 1,
+  "id": "pandadoc",
+  "name": "PandaDoc",
+  "domain": "pandadoc.com",
+  "category": "documents_storage",
+  "summary": "Proposals, quotes and contracts with electronic signatures.",
+  "signInURL": "https://app.pandadoc.com/login/?lng=en-US&cid=fdgdfgdf",
+  "triggers": ["pandadoc", "pandadoc.com"],
+  "sections": [],
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Create a document",
+      "startURL": "https://app.pandadoc.com/",
+      "steps": [
+        "Select + Create new, or + Document.",
+        "Upload a file, or start from a template or a blank document.",
+        "Follow the guided creation flow: add recipients, then configure delivery and settings.",
+        "Select Send document in the top-right corner, or the link icon next to it to get a shareable link instead."
+      ],
+      "source": "https://support.pandadoc.com/en/articles/11197006-create-a-document-new-experience"
+    },
+    {
+      "title": "Send a document for signature",
+      "startURL": "https://app.pandadoc.com/",
+      "steps": [
+        "In the document, select Review and send in the top right corner.",
+        "Choose a delivery method for each recipient. For email, edit the subject line and add a message if needed.",
+        "Review the settings, such as expiration and auto-reminders, if relevant.",
+        "Select Send document."
+      ],
+      "source": "https://support.pandadoc.com/en/articles/9714673-send-and-sign-a-document-new-experience"
+    },
+    {
+      "title": "See a sent document's audit trail",
+      "startURL": "https://app.pandadoc.com/",
+      "steps": [
+        "Open the sent document.",
+        "Click Audit trail in the top right, or click File, then Document, then Audit trail, to see the list of activities for the document."
+      ],
+      "source": "https://support.pandadoc.com/en/articles/9714819-review-audit-trail-for-sent-documents"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://app.pandadoc.com/",
+      "landedURL": "https://app.pandadoc.com/login/",
+      "title": "PandaDoc - fast and easy way to send and sign documents online.",
+      "heading": "Log in to PandaDoc",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
+  ]
+}

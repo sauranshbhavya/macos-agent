@@ -1,0 +1,47 @@
+{
+  "format": 1,
+  "id": "demio",
+  "name": "Demio",
+  "domain": "demio.com",
+  "category": "communication",
+  "summary": "Webinar platform.",
+  "signInURL": "https://my.demio.com/login",
+  "triggers": ["demio", "demio.com"],
+  "sections": [],
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Create an event",
+      "startURL": "https://my.demio.com/",
+      "steps": [
+        "From your Events, select Add New Event at the top right.",
+        "In the drop-down choose the event type: Standard, Series or Automated.",
+        "For a Standard event, set the Event name — that is all it needs.",
+        "Schedule the sessions afterwards from the Event summary. A Standard event's sessions are individual ones registrants choose between."
+      ],
+      "source": "https://help.demio.com/en/articles/3527840-creating-an-event"
+    },
+    {
+      "title": "Invite an attendee on stage",
+      "startURL": "https://my.demio.com/",
+      "steps": [
+        "During the live event, click the People icon to open the list of attendees.",
+        "Find the attendee and click the three dots to the right of their name.",
+        "Choose to invite them On Stage, which lets them use their microphone and webcam. Attendees cannot turn either on by themselves, and the options are missing if their device has no supported webcam and microphone.",
+        "The attendee sees a prompt to Go On Stage or Cancel. If they Go On Stage their selected microphone and webcam turn on straight away; if they decline, invite them again when they are ready.",
+        "To take them off the stage, click the three dots at the bottom right of their card and select Remove From Stage. An attendee who was invited on stage cannot present or share their screen."
+      ],
+      "source": "https://help.demio.com/en/articles/937102-invite-attendees-on-stage-and-manage-attendee-devices-webcam-microphone"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://my.demio.com/",
+      "landedURL": "https://my.demio.com/login",
+      "title": "Login - Demio",
+      "heading": "",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
+  ]
+}

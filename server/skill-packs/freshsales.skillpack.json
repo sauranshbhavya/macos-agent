@@ -1,0 +1,63 @@
+{
+  "format": 1,
+  "id": "freshsales",
+  "name": "Freshsales",
+  "domain": "freshworks.com",
+  "category": "sales_crm",
+  "summary": "Sales CRM from Freshworks.",
+  "signInURL": "https://login.freshworks.com/email-login/",
+  "triggers": ["freshsales"],
+  "sections": [],
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Create a deal for a contact",
+      "startURL": "https://login.freshworks.com/email-login/",
+      "steps": [
+        "Go to the details page of the contact.",
+        "Click the Add deal button. You can also create a deal from the Deals section under Contact information.",
+        "Add other contacts related to the deal in the Related contacts section.",
+        "Choose the Related account for the deal, if there is one.",
+        "Choose the deal type and give the deal a name in Deal Name. Freshsales suggests a name based on the account name and the deal type.",
+        "Enter the Deal value.",
+        "Add products to the deal and select the Deal stage from the drop-down.",
+        "Fill in any other required field the form shows, then click Save.",
+        "Find the new deal on the Deals list view page, and click it to see the Deal summary page."
+      ],
+      "source": "https://crmsupport.freshworks.com/support/solutions/articles/50000002386"
+    },
+    {
+      "title": "Find contacts with a view of your own",
+      "startURL": "https://login.freshworks.com/email-login/",
+      "steps": [
+        "Open the Contacts module and choose one of the tabs to see a refined list of contacts.",
+        "To make a view of your own, go to Contacts, click + beside the tabs and choose Add new view.",
+        "Click Filter by to open the filter overlay, and add the filters you need.",
+        "Sort the contacts by when they were Created, Updated or Last contacted.",
+        "Keep the search criteria as a custom view, so the same list does not have to be built again."
+      ],
+      "source": "https://crmsupport.freshworks.com/support/solutions/articles/50000002373-how-to-add-and-use-contacts-"
+    },
+    {
+      "title": "Review a contact's details",
+      "startURL": "https://login.freshworks.com/email-login/",
+      "steps": [
+        "In the Contacts module, click a contact to open the contact's details page.",
+        "Read the page: the contact's picture, deals with their lifecycle stage, score, recent conversations and recent activities, and details such as Phone number, Email, Source, Time zone, Owner and Location.",
+        "Click Edit (View and edit all fields) to see all of the contact's information.",
+        "Click the notes, tasks or appointments icon to view each of those for the contact."
+      ],
+      "source": "https://crmsupport.freshworks.com/support/solutions/articles/50000002373-how-to-add-and-use-contacts-"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://login.freshworks.com/email-login/",
+      "landedURL": "https://login.freshworks.com/email-login/",
+      "title": "Login | Freshworks",
+      "heading": "Sign into your Freshworks account",
+      "offers": "sign-in",
+      "read": "2026-09-19"
+    }
+  ]
+}

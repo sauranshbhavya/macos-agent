@@ -1,0 +1,16 @@
+{
+  "format": 1,
+  "id": "heygen",
+  "name": "HeyGen",
+  "domain": "heygen.com",
+  "category": "ai_assistants",
+  "summary": "AI video generation with avatars.",
+  "signInURL": "https://auth.heygen.com",
+  "triggers": [
+    "heygen",
+    "heygen.com"
+  ],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

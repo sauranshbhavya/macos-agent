@@ -1,0 +1,48 @@
+{
+  "format": 1,
+  "id": "justcall",
+  "name": "JustCall",
+  "domain": "justcall.io",
+  "category": "communication",
+  "summary": "Cloud phone and SMS for sales and support teams.",
+  "signInURL": "https://justcall.io/login/",
+  "triggers": [
+    "justcall",
+    "justcall.io"
+  ],
+  "sections": [],
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Turn call recording on or off for a number",
+      "startURL": "https://justcall.io/login/",
+      "steps": [
+        "Head to the Phone Numbers section of your JustCall account.",
+        "Choose the number to configure.",
+        "Click Recording & Transcripts.",
+        "Enable or disable call recording there, then click Save Changes. Recording is on by default for every JustCall number and each number is set separately, so repeat this for every number that should change."
+      ],
+      "source": "https://help.justcall.io/en/articles/3942487-enable-call-recordings-in-justcall"
+    },
+    {
+      "title": "Set a wrap-up time after calls",
+      "startURL": "https://justcall.io/login/",
+      "steps": [
+        "Click your Gravatar in the top right corner of the Dashboard, then Settings.",
+        "Scroll down to the Wrap-up time section and pick how long it lasts from the drop-down. No calls come through during wrap-up time.",
+        "To turn it off, choose Disable from the same drop-down."
+      ],
+      "source": "https://help.justcall.io/en/articles/2707274-wrap-up-time"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://justcall.io/login/",
+      "landedURL": "https://justcall.io/apex/login",
+      "title": "JustCall",
+      "heading": "",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
+  ]
+}

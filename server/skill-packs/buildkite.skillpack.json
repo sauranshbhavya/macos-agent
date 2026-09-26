@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "buildkite",
+  "name": "Buildkite",
+  "domain": "buildkite.com",
+  "category": "code_hosting",
+  "summary": "CI/CD platform.",
+  "signInURL": "https://buildkite.com/login",
+  "triggers": ["buildkite", "buildkite.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

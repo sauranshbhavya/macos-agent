@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "forms_app",
+  "name": "forms.app",
+  "domain": "forms.app",
+  "category": "forms_surveys",
+  "summary": "Online form builder.",
+  "signInURL": "https://dashboard.forms.app/auth/signin",
+  "triggers": ["forms.app"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

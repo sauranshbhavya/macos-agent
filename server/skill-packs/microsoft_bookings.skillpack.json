@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "microsoft_bookings",
+  "name": "Microsoft Bookings",
+  "domain": "bookings.cloud.microsoft",
+  "category": "scheduling",
+  "summary": "Microsoft's appointment booking.",
+  "signInURL": "https://www.office.com/launch/bookings",
+  "triggers": ["microsoft bookings", "bookings.cloud.microsoft"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

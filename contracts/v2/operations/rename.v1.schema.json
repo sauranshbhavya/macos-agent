@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sonny.app/contracts/v2/operations/rename.v1.schema.json",
+  "title": "rename v1",
+  "description": "Rename one file or folder where it is. One item only: for several, ask what to call each. Floor effect: destructive.",
+  "type": "object",
+  "properties": {
+    "path": {
+      "description": "A path on the Mac, as the user said it or as an earlier step reported it.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024
+    },
+    "new_name": {
+      "description": "A bare name with no slashes; the item keeps its folder.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255
+    }
+  },
+  "required": [
+    "path",
+    "new_name"
+  ],
+  "additionalProperties": false
+}

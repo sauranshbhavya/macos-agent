@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "databricks",
+  "name": "Databricks",
+  "domain": "databricks.com",
+  "category": "data_databases",
+  "summary": "Data and AI platform.",
+  "signInURL": "https://login.databricks.com/?dbx_source=www&itm=main-cta-login&l=en-EN",
+  "triggers": ["databricks", "databricks.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

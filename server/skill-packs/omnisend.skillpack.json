@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "omnisend",
+  "name": "Omnisend",
+  "domain": "omnisend.com",
+  "category": "marketing_email",
+  "summary": "Email and SMS marketing for online stores.",
+  "signInURL": "https://app.omnisend.com/login",
+  "triggers": ["omnisend", "omnisend.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

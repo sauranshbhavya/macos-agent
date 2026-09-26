@@ -1,0 +1,48 @@
+{
+  "format": 1,
+  "id": "duda",
+  "name": "Duda",
+  "domain": "duda.co",
+  "category": "websites_apps_commerce",
+  "summary": "Website builder for agencies.",
+  "signInURL": "https://www.duda.co/login",
+  "triggers": [
+    "duda",
+    "duda.co"
+  ],
+  "sections": [],
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Duplicate a site",
+      "startURL": "https://www.duda.co/login",
+      "steps": [
+        "This needs the Site creation permission, and site backups do not come across to the copy.",
+        "On your dashboard, click the three dots menu next to the site you want to copy, then click Duplicate.",
+        "Type a name for the new site, then click Copy. The duplicated site appears in the site list on your dashboard."
+      ],
+      "source": "https://support.duda.co/hc/en-us/articles/26519246953495-Duplicate-a-Site"
+    },
+    {
+      "title": "Export the site list to CSV",
+      "startURL": "https://www.duda.co/login",
+      "steps": [
+        "Only Account Owners and Staff Members can do this, and a Staff Member's file holds only what they are allowed to see in the platform.",
+        "Go to your dashboard.",
+        "Click the three horizontal dots icon next to the Create New Site button.",
+        "Select Export CSV. A success message appears and the CSV file is sent to your account email in .zip format."
+      ],
+      "source": "https://support.duda.co/hc/en-us/articles/26519239837975-Export-Site-List-to-CSV"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://www.duda.co/login",
+      "landedURL": "https://www.duda.co/login",
+      "title": "Log In to Duda Platform ┃ Sign In to the Duda Website Builder",
+      "heading": "Log in",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
+  ]
+}

@@ -1,0 +1,55 @@
+{
+  "format": 1,
+  "id": "teams",
+  "name": "Microsoft Teams",
+  "domain": "teams.microsoft.com",
+  "category": "communication",
+  "summary": "Microsoft's chat, meetings and calling for work.",
+  "signInURL": "https://teams.microsoft.com",
+  "triggers": ["microsoft teams", "teams.microsoft.com"],
+  "sections": [],
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Create a team",
+      "startURL": "https://teams.microsoft.com/",
+      "steps": [
+        "On the left side of the app, select Chat, or Teams if using the separate view.",
+        "Select New items above the list of chats and channels, then New team.",
+        "Name the team and add an optional description.",
+        "Choose Private to limit it to a certain group of people, or Public for anyone in the org.",
+        "Name the first channel, then select Create."
+      ],
+      "source": "https://support.microsoft.com/en-us/teams/teams-channels/create-a-team-from-scratch-in-microsoft-teams"
+    },
+    {
+      "title": "Attach a file to a chat message",
+      "startURL": "https://teams.microsoft.com/",
+      "steps": [
+        "In the chat or channel, select Actions and apps, then Attach file.",
+        "Select a recently opened file, or choose Attach cloud files or Upload from this device."
+      ],
+      "source": "https://support.microsoft.com/en-us/office/chat-and-share-files-in-teams-d7978db0-33b5-4ad3-93ac-ef0bd3c2a670"
+    },
+    {
+      "title": "Pin a chat message",
+      "startURL": "https://teams.microsoft.com/",
+      "steps": [
+        "In the chat, hover over the message to pin.",
+        "In the menu above the message, select More options.",
+        "Choose Pin for everyone. The message appears at the top of the chat."
+      ],
+      "source": "https://support.microsoft.com/en-us/teams/chat/pin-a-chat-message-to-the-top-of-a-chat-in-microsoft-teams"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://teams.microsoft.com/",
+      "landedURL": "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
+      "title": "Sign in to your account",
+      "heading": "Sign in",
+      "offers": "sign-in",
+      "read": "2026-09-19"
+    }
+  ]
+}

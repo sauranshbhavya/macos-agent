@@ -1,0 +1,57 @@
+{
+  "format": 1,
+  "id": "salesforce",
+  "name": "Salesforce",
+  "domain": "salesforce.com",
+  "category": "sales_crm",
+  "summary": "Customer relationship management platform.",
+  "signInURL": "https://salesforce.com/login",
+  "triggers": ["salesforce", "salesforce.com"],
+  "sections": [],
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Update a lead",
+      "startURL": "https://salesforce.com/login",
+      "steps": [
+        "Sign in, find the lead, and click its name to open the lead record.",
+        "Click Edit and change the fields to update. Optionally select Assign using active assignment rule to reassign the lead by that rule.",
+        "Save the changes.",
+        "To change the status of several leads at once in Lightning Experience, select them in a list view and choose Change Status from the Action menu."
+      ],
+      "source": "https://help.salesforce.com/s/articleView?id=sales.leads_edit.htm&type=5"
+    },
+    {
+      "title": "Convert a qualified lead",
+      "startURL": "https://salesforce.com/login",
+      "steps": [
+        "Sign in, open the lead record, and choose to convert the lead. A conversion cannot be reversed.",
+        "Enter a name for a new account, or select an existing account.",
+        "Select a contact, or enter a name for a new contact.",
+        "Enter a name for a new opportunity, or in Lightning Experience select an existing one. Up to 20 matching opportunities are listed.",
+        "Convert the lead, and optionally create a follow-up task."
+      ],
+      "source": "https://help.salesforce.com/s/articleView?id=sales.leads_convert.htm&type=5"
+    },
+    {
+      "title": "Take leads from a queue",
+      "startURL": "https://salesforce.com/login",
+      "steps": [
+        "Sign in and go to a list view that shows a lead queue. If there is none, an admin has to add you as a queue member.",
+        "Select the leads you want to own and click Accept.",
+        "To reassign a single lead from a queue, open its record detail page and change the record owner."
+      ],
+      "source": "https://help.salesforce.com/s/articleView?id=sales.leads_assign.htm&type=5"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://salesforce.com/login",
+      "landedURL": "https://login.salesforce.com/",
+      "title": "Login | Salesforce",
+      "heading": "Salesforce login",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
+  ]
+}

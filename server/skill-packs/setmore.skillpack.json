@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "setmore",
+  "name": "Setmore",
+  "domain": "setmore.com",
+  "category": "scheduling",
+  "summary": "Appointment booking software.",
+  "signInURL": "https://www.setmore.com/login",
+  "triggers": ["setmore", "setmore.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

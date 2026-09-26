@@ -1,0 +1,57 @@
+{
+  "format": 1,
+  "id": "grok",
+  "name": "Grok",
+  "domain": "grok.com",
+  "category": "ai_assistants",
+  "summary": "AI assistant from xAI.",
+  "signInURL": "https://grok.com/sign-in?return_to=%2F",
+  "triggers": ["grok.com"],
+  "sections": ["Chat", "Imagine"],
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Ask Grok a question",
+      "startURL": "https://grok.com/",
+      "steps": [
+        "Go to grok.com. There is no side navigation: Imagine, Settings, Sign in and Sign up sit in one row across the top right, and the prompt box is in the middle of the page.",
+        "Type the question into that box, whose accessible name is Ask Grok anything.",
+        "Attach, at the left of the row under the box, adds a file to the question before it is sent.",
+        "The control labelled Fast, at the right of that same row, opens the model menu — its accessible name is Model select.",
+        "Select Submit, next to Fast, to send the question."
+      ],
+      "source": "https://grok.com/"
+    },
+    {
+      "title": "Make an image or a video with Imagine",
+      "startURL": "https://grok.com/imagine",
+      "steps": [
+        "Open grok.com/imagine — Imagine is the top-right link on grok.com, and the page it opens is titled Grok Imagine.",
+        "Describe what you want in the box, whose accessible name is Ask Grok anything, the same wording the question page uses.",
+        "Choose Image, Video or Agent from the row of buttons under the box.",
+        "Upload adds a picture to work from, and Aspect Ratio sets the shape of the result.",
+        "Select Submit. The page also carries Text Edit and Precise Edit, and five links to ready-made templates — restyle, aspect ratio, photo edit, background removal and e-commerce listing.",
+        "Chat, at the top of this page, goes back to the question page."
+      ],
+      "source": "https://grok.com/imagine"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://grok.com/",
+      "landedURL": "https://grok.com/",
+      "title": "Grok",
+      "heading": "What should we explore?",
+      "offers": "product",
+      "read": "2026-09-18"
+    },
+    {
+      "url": "https://grok.com/imagine",
+      "landedURL": "https://grok.com/imagine",
+      "title": "Grok Imagine",
+      "heading": "What should we imagine?",
+      "offers": "product",
+      "read": "2026-09-18"
+    }
+  ]
+}

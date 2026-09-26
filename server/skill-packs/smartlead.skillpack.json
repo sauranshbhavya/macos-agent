@@ -1,0 +1,60 @@
+{
+  "format": 1,
+  "id": "smartlead",
+  "name": "Smartlead",
+  "domain": "smartlead.ai",
+  "category": "marketing_email",
+  "summary": "Cold email outreach platform.",
+  "signInURL": "https://app.smartlead.ai/login",
+  "triggers": ["smartlead", "smartlead.ai"],
+  "sections": [],
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Create a cold email campaign",
+      "startURL": "https://app.smartlead.ai/",
+      "steps": [
+        "Under Engage, click Campaigns to open the Email Campaigns dashboard, click + Create Campaign, enter a campaign name, and click Continue.",
+        "On the Leads tab, click + Add Leads and choose a source — upload a CSV, import from a CRM, import from saved lists, or add from SmartProspect.",
+        "On Configure Upload Settings, choose how the leads are processed: the global block list, the unsubscribe list, the community bounce list, and whether leads already in this campaign are skipped or re-added.",
+        "On Map Your Fields, review the mapping Smartlead suggests for each column, adjust any that are wrong, then click Import Leads.",
+        "On the Sequence tab, click + Create First Step, choose a step type (Email, Manual Task, or Call), and fill in its details, such as the subject line and body for an email step.",
+        "On the Email Accounts tab, select the sending accounts to assign to the campaign.",
+        "On the Settings tab, configure the schedule, then click Launch Campaign."
+      ],
+      "source": "https://helpcenter.smartlead.ai/en/articles/442-how-to-create-an-email-campaign-in-smartlead-the-new-version"
+    },
+    {
+      "title": "Find prospects with SmartProspect",
+      "startURL": "https://app.smartlead.ai/",
+      "steps": [
+        "Under Engage, click Prospect Finder to open the SmartProspect screen.",
+        "Apply filters — such as industry, company name, domain, keywords, revenue, or location — to narrow the search to your ideal customer profile.",
+        "Review the prospect list, select the leads you want to enrich, and click Find emails.",
+        "Once your list is ready, select the verified contacts and click Push to Campaign."
+      ],
+      "source": "https://helpcenter.smartlead.ai/en/articles/420-getting-started-with-smartprospect"
+    },
+    {
+      "title": "Review campaign performance",
+      "startURL": "https://app.smartlead.ai/",
+      "steps": [
+        "Select Email Campaign from the left navigation to open the Campaign Dashboard, and toggle between the All Campaigns and Folders views.",
+        "Use the filter icon to narrow campaigns by status, tag, or client name, or use the search bar to find a campaign by name.",
+        "Use the column selector to choose which metrics appear, such as Opened, Clicked, Replied, Positive Reply, and Bounced.",
+        "Review the metrics for each campaign, and select the Go to Master Inbox link in the Positive Reply column to see the conversations."
+      ],
+      "source": "https://helpcenter.smartlead.ai/en/articles/100-main-dashboard-analytics-explanation"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://app.smartlead.ai/",
+      "landedURL": "https://app.smartlead.ai/login",
+      "title": "Login | Smartlead",
+      "heading": "Welcome back.",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
+  ]
+}

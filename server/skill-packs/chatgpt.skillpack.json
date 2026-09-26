@@ -1,0 +1,16 @@
+{
+  "format": 1,
+  "id": "chatgpt",
+  "name": "ChatGPT",
+  "domain": "chatgpt.com",
+  "category": "ai_assistants",
+  "summary": "OpenAI's AI assistant.",
+  "signInURL": "https://chatgpt.com/auth/login",
+  "triggers": [
+    "chatgpt",
+    "chatgpt.com"
+  ],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

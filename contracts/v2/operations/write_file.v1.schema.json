@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sonny.app/contracts/v2/operations/write_file.v1.schema.json",
+  "title": "write_file v1",
+  "description": "Save text as a Markdown file on the Mac, for a note, a draft or research the gateway wrote. Replacing a file that exists asks first. This does not use Notes, Mail or any app. Floor effect: create.",
+  "type": "object",
+  "properties": {
+    "content": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200000
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "path": {
+      "description": "Where to save; the Documents folder with a name from the title when omitted.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024
+    }
+  },
+  "required": [
+    "content"
+  ],
+  "additionalProperties": false
+}

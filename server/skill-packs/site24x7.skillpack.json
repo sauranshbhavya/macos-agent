@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "site24x7",
+  "name": "Site24x7",
+  "domain": "site24x7.com",
+  "category": "analytics_monitoring",
+  "summary": "Website and infrastructure monitoring.",
+  "signInURL": "https://www.site24x7.com/login.html",
+  "triggers": ["site24x7", "site24x7.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

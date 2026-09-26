@@ -1,0 +1,40 @@
+{
+  "format": 1,
+  "id": "hugging_face",
+  "name": "Hugging Face",
+  "domain": "huggingface.co",
+  "category": "code_hosting",
+  "summary": "Platform for machine learning models, datasets and demos.",
+  "signInURL": "https://huggingface.co/login",
+  "triggers": [
+    "hugging face",
+    "huggingface.co"
+  ],
+  "sections": [],
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Add a file to a repository through the web interface",
+      "startURL": "https://huggingface.co/login",
+      "steps": [
+        "Open the repository and select the Files tab.",
+        "Navigate to the directory the file belongs in, then click Add file.",
+        "Choose to create a new file, which opens the editor screen.",
+        "Choose a name for the file and add its content.",
+        "Optional: instead of committing straight to the repository's main branch, select Open as a pull request to create a Pull Request.",
+        "Save the file with a message that summarises the changes."
+      ],
+      "source": "https://huggingface.co/docs/hub/repositories-getting-started"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://huggingface.co/login",
+      "landedURL": "https://huggingface.co/login",
+      "title": "Hugging Face – The AI community building the future.",
+      "heading": "Log In",
+      "offers": "sign-in",
+      "read": "2026-09-25"
+    }
+  ]
+}

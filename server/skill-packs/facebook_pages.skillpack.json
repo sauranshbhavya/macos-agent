@@ -1,0 +1,60 @@
+{
+  "format": 1,
+  "id": "facebook_pages",
+  "name": "Facebook Pages",
+  "domain": "facebook.com",
+  "category": "marketing_growth",
+  "summary": "Facebook's pages for businesses and public figures.",
+  "signInURL": "https://www.facebook.com/login/",
+  "triggers": ["facebook pages", "facebook page", "facebook business page"],
+  "sections": [],
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Create a Page",
+      "startURL": "https://www.facebook.com/",
+      "steps": [
+        "Click Pages on the left, then click Create Page.",
+        "Select Public Page, then click Next. Click Get Started.",
+        "Add the Page's name and category, add an optional bio, and click Create Page.",
+        "Add information such as contact info, location and hours, and click Next. Add profile and cover photos, edit the action button, and click Next.",
+        "Connect WhatsApp to the Page or click Skip, invite friends to connect with the Page and click Next, then select notification settings and click Done."
+      ],
+      "source": "https://www.facebook.com/help/104002523024878"
+    },
+    {
+      "title": "Post on your Page",
+      "startURL": "https://www.facebook.com/",
+      "steps": [
+        "Switch to the Page you want to use.",
+        "From the top of your Feed, click \"What's on your mind, [Page name]?\"",
+        "Create your post, then click Next.",
+        "Review your post settings.",
+        "Click Post."
+      ],
+      "source": "https://www.facebook.com/help/642707099175171"
+    },
+    {
+      "title": "Invite friends to follow your Page",
+      "startURL": "https://www.facebook.com/",
+      "steps": [
+        "Go to the Page you'd like to share with your friends.",
+        "Click Options below the Page's cover photo and select Invite Friends.",
+        "Click Switch below Switch profiles in the pop-up box.",
+        "Click the names of the profiles you want to invite to follow the Page.",
+        "Click Send Invites."
+      ],
+      "source": "https://www.facebook.com/help/174333482624856"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://www.facebook.com/",
+      "landedURL": "https://www.facebook.com/",
+      "title": "Facebook",
+      "heading": "",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
+  ]
+}

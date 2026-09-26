@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sonny.app/contracts/v2/operations/find_largest_files.v1.schema.json",
+  "title": "find_largest_files v1",
+  "description": "List the largest files in a folder, skipping links. Changes nothing. The evidence names them with their sizes. Floor effect: observe.",
+  "type": "object",
+  "properties": {
+    "folder": {
+      "description": "A path on the Mac, as the user said it or as an earlier step reported it.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024
+    },
+    "count": {
+      "description": "How many; 3 when the user didn't say.",
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 50
+    }
+  },
+  "required": [
+    "folder"
+  ],
+  "additionalProperties": false
+}

@@ -1,0 +1,56 @@
+{
+  "format": 1,
+  "id": "google_contacts",
+  "name": "Google Contacts",
+  "domain": "contacts.google.com",
+  "category": "email_calendar",
+  "summary": "Google's address book.",
+  "signInURL": "https://contacts.google.com/",
+  "triggers": ["google contacts", "contacts.google.com"],
+  "sections": [],
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Create a label",
+      "startURL": "https://contacts.google.com/",
+      "steps": [
+        "Go to Google Contacts.",
+        "On the left, next to \"Labels,\" click Create label.",
+        "Type a name, then click Save."
+      ],
+      "source": "https://support.google.com/contacts/answer/30970?hl=en"
+    },
+    {
+      "title": "Add contacts to a label",
+      "startURL": "https://contacts.google.com/",
+      "steps": [
+        "Go to Google Contacts.",
+        "Check the box next to each contact you want. To take every one, check the box next to any contact and, in the top left, click Selection Actions, then All.",
+        "At the top, click Manage labels.",
+        "Click the label you want, then click Apply."
+      ],
+      "source": "https://support.google.com/contacts/answer/30970?hl=en"
+    },
+    {
+      "title": "Export contacts to a file",
+      "startURL": "https://contacts.google.com/",
+      "steps": [
+        "Go to Google Contacts.",
+        "Check the box next to each contact you want. To take every one, check the box next to any contact and, in the top left, click Selection Actions, then All.",
+        "At the top right, click More actions, then Export.",
+        "Select Google CSV, then click Export."
+      ],
+      "source": "https://support.google.com/contacts/answer/7199294?hl=en"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://contacts.google.com/",
+      "landedURL": "https://accounts.google.com/v3/signin/identifier",
+      "title": "Sign in - Google Accounts",
+      "heading": "Sign in",
+      "offers": "sign-in",
+      "read": "2026-09-25"
+    }
+  ]
+}

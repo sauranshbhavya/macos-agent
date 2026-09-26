@@ -1,0 +1,16 @@
+{
+  "format": 1,
+  "id": "growthbook",
+  "name": "GrowthBook",
+  "domain": "growthbook.io",
+  "category": "developer_platforms",
+  "summary": "Open-source feature flagging and experimentation.",
+  "signInURL": "https://app.growthbook.io/",
+  "triggers": [
+    "growthbook",
+    "growthbook.io"
+  ],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

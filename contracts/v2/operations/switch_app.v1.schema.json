@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sonny.app/contracts/v2/operations/switch_app.v1.schema.json",
+  "title": "switch_app v1",
+  "description": "Bring an app that is already running to the front. Launches nothing: if the app isn't running, it fails by name. Use open_app when the app may not be running. Floor effect: navigate.",
+  "type": "object",
+  "properties": {
+    "app": {
+      "description": "The app's name or bundle id.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255
+    }
+  },
+  "required": [
+    "app"
+  ],
+  "additionalProperties": false
+}

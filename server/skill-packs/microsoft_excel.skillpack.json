@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "microsoft_excel",
+  "name": "Microsoft Excel for the web",
+  "domain": "excel.cloud.microsoft",
+  "category": "documents_storage",
+  "summary": "Microsoft's spreadsheets in the browser.",
+  "signInURL": "https://www.office.com/launch/excel",
+  "triggers": ["microsoft excel", "excel.cloud.microsoft"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

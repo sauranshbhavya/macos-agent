@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sonny.app/contracts/v2/operations/read_calendar.v1.schema.json",
+  "title": "read_calendar v1",
+  "description": "List the events on the user's calendars for one day. Changes nothing. Floor effect: observe.",
+  "type": "object",
+  "properties": {
+    "day": {
+      "description": "The day asked about, in the user's words; today when omitted.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100
+    }
+  },
+  "additionalProperties": false
+}

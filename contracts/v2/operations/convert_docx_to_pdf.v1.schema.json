@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sonny.app/contracts/v2/operations/convert_docx_to_pdf.v1.schema.json",
+  "title": "convert_docx_to_pdf v1",
+  "description": "Convert the .docx files in a folder to PDFs with Microsoft Word, skipping ones that already have a PDF. Floor effect: create.",
+  "type": "object",
+  "properties": {
+    "folder": {
+      "description": "A path on the Mac, as the user said it or as an earlier step reported it.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024
+    },
+    "output_folder": {
+      "description": "An existing folder for the PDFs; beside each .docx when omitted.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024
+    }
+  },
+  "required": [
+    "folder"
+  ],
+  "additionalProperties": false
+}

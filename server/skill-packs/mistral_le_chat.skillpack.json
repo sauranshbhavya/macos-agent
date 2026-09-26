@@ -1,0 +1,16 @@
+{
+  "format": 1,
+  "id": "mistral_le_chat",
+  "name": "Le Chat by Mistral AI",
+  "domain": "chat.mistral.ai",
+  "category": "ai_assistants",
+  "summary": "AI assistant from Mistral AI.",
+  "signInURL": "https://chat.mistral.ai/login",
+  "triggers": [
+    "le chat by mistral ai",
+    "chat.mistral.ai"
+  ],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

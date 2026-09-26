@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "bitrix24",
+  "name": "Bitrix24",
+  "domain": "bitrix24.com",
+  "category": "sales_crm",
+  "summary": "Online workspace with CRM, tasks and communication.",
+  "signInURL": "https://www.bitrix24.com/auth.php",
+  "triggers": ["bitrix24", "bitrix24.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

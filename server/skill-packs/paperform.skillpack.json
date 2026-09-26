@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "paperform",
+  "name": "Paperform",
+  "domain": "paperform.co",
+  "category": "forms_surveys",
+  "summary": "Online form builder with page-style layouts.",
+  "signInURL": "https://paperform.co/dashboard",
+  "triggers": ["paperform", "paperform.co"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

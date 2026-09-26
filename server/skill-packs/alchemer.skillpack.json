@@ -1,0 +1,36 @@
+{
+  "format": 1,
+  "id": "alchemer",
+  "name": "Alchemer",
+  "domain": "alchemer.com",
+  "category": "forms_surveys",
+  "summary": "Online survey software.",
+  "signInURL": "https://app.alchemer.com/login",
+  "triggers": ["alchemer", "alchemer.com"],
+  "sections": [],
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Add a question to a survey",
+      "startURL": "https://app.alchemer.com/login",
+      "steps": [
+        "Click the target at the centre of the blank page, or click the Add New Question link at the bottom of the page.",
+        "A question starts as the Radio Buttons type, which lets someone pick one choice from a list. Use the Question Type dropdown to choose the type you want; the preview on the left updates as you try each one, and nothing is committed until you choose.",
+        "If you are unsure which type fits, click the Question Types Cheatsheet link to read about them, then click Use this Question Type to take one.",
+        "Enter the question you want to ask. The survey on the left updates as you type.",
+        "Add the answers people can choose: enter them one at a time with Click to Add Option, or use Paste in options and put each answer on its own line."
+      ],
+      "source": "https://help.alchemer.com/help/add-a-question"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://app.alchemer.com/login",
+      "landedURL": "https://login.alchemer.com/",
+      "title": "Alchemer Login",
+      "heading": "",
+      "offers": "sign-in",
+      "read": "2026-09-25"
+    }
+  ]
+}

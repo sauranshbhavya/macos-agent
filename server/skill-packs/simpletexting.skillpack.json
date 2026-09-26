@@ -1,0 +1,52 @@
+{
+  "format": 1,
+  "id": "simpletexting",
+  "name": "SimpleTexting",
+  "domain": "simpletexting.com",
+  "category": "communication",
+  "summary": "SMS marketing platform.",
+  "signInURL": "https://app.simpletexting.com/login",
+  "triggers": [
+    "simpletexting",
+    "simpletexting.com"
+  ],
+  "sections": [],
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Send a campaign",
+      "startURL": "https://app.simpletexting.com/",
+      "steps": [
+        "Go to Messaging, then New campaign.",
+        "Give the campaign a name for your own reference.",
+        "Write the message, including any link you want people to open.",
+        "Select the list to text.",
+        "Send the message, or schedule it for a later time instead of sending it now."
+      ],
+      "source": "https://help.simpletexting.com/en/articles/1142999-how-to-send-your-first-campaign"
+    },
+    {
+      "title": "Keep a message as a template and reuse it",
+      "startURL": "https://app.simpletexting.com/",
+      "steps": [
+        "Go to Campaigns in the left-hand panel and click the New Campaign plus sign beside it.",
+        "Click Use template in the message box, then Add Template, and give the template a name for your reference.",
+        "Type the message the template should hold, then click Add Template to keep it.",
+        "To use it again, click Use template and pick it from the list; its text fills the message box.",
+        "A template belongs to the place it was made in, so a template made for an autoresponder shows up only among autoresponder templates.",
+        "To reuse a whole campaign instead, open the Campaigns tab, select a campaign, click the copy symbol at the top right next to the archive button, give the copy a new name and send it."
+      ],
+      "source": "https://help.simpletexting.com/en/articles/2599128-creating-templates-and-duplicating-campaigns"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://app.simpletexting.com/",
+      "landedURL": "https://app2.simpletexting.com/auth",
+      "title": "Login",
+      "heading": "Log in to SimpleTexting",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
+  ]
+}

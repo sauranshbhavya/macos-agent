@@ -1,0 +1,46 @@
+{
+  "format": 1,
+  "id": "twilio",
+  "name": "Twilio",
+  "domain": "twilio.com",
+  "category": "communication",
+  "summary": "Communications APIs for messaging, voice and video.",
+  "signInURL": "https://app.twilio.com/login",
+  "triggers": ["twilio", "twilio.com", "twilio console"],
+  "sections": [],
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Look up a message in the messaging logs",
+      "startURL": "https://console.twilio.com/",
+      "steps": [
+        "Log in to the Twilio Console and go to Monitor > Logs > Messaging in the left-side navigation menu.",
+        "The table lists the 50 most recent messages, newest first. Search by Message SID or by the From and To phone numbers, and filter by start and end times.",
+        "Messages whose status is not 200 show in yellow or red. Click a message's hyperlinked date to open its Message Details page, with its delivery steps, errors or warnings, and the Request Inspector.",
+        "For recommendations on one message, click its Troubleshoot button."
+      ],
+      "source": "https://www.twilio.com/docs/messaging/features/messaging-logs"
+    },
+    {
+      "title": "Review message delivery in Messaging Insights",
+      "startURL": "https://console.twilio.com/",
+      "steps": [
+        "In the Twilio Console, go to Monitor > Insights > Messaging.",
+        "Use the filter controls at the top: select a Time Range, then add criteria from the Filter by dropdowns, such as Channel, Carrier, Country, Delivery Status, Messaging Service, Error Code or Twilio number.",
+        "On the Overview dashboard, the Outgoing Messages tiles count Delivered, Delivery Unknown and Sent as Status OK, and Undelivered and Failed as Messages with Errors.",
+        "Open the Delivery & Errors dashboard to find the most common error codes behind undelivered or failed messages."
+      ],
+      "source": "https://www.twilio.com/docs/messaging/features/messaging-insights/dashboards"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://console.twilio.com/",
+      "landedURL": "https://www.twilio.com/login",
+      "title": "Twilio",
+      "heading": "Welcome",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
+  ]
+}

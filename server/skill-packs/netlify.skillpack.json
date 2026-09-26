@@ -1,0 +1,48 @@
+{
+  "format": 1,
+  "id": "netlify",
+  "name": "Netlify",
+  "domain": "netlify.com",
+  "category": "developer_platforms",
+  "summary": "Platform for building and deploying websites.",
+  "signInURL": "https://app.netlify.com/login",
+  "triggers": ["netlify", "netlify.com"],
+  "sections": [],
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Add a domain alias to a site",
+      "startURL": "https://app.netlify.com/",
+      "steps": [
+        "Open the site and go to its configuration settings under Domain management > Production domains.",
+        "Select Add domain alias, and follow the prompts to assign the domain to the site.",
+        "Optionally, to make an alias the primary domain, select the Options button next to it, then select Set as primary domain."
+      ],
+      "source": "https://docs.netlify.com/manage/domains/configure-domains/add-a-domain-alias/"
+    },
+    {
+      "title": "Create a site environment variable",
+      "startURL": "https://app.netlify.com/",
+      "steps": [
+        "Stop and ask before adding or reading a value. Environment variables often hold sensitive values that the user enters themselves, so this flow never types or reads one without the user saying so.",
+        "Open the project and go to Project configuration > Environment variables.",
+        "Create the variable there individually, or import variables from a .env file.",
+        "Build and deploy the site again for the addition to take effect. A variable with the same key set in a netlify.toml file overrides the one set in the Netlify UI."
+      ],
+      "stops": [
+        "typing, pasting or reading a secret, an API key or any other credential in a variable's value"
+      ],
+      "source": "https://docs.netlify.com/build/environment-variables/get-started/"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://app.netlify.com/",
+      "landedURL": "https://app.netlify.com/",
+      "title": "Netlify",
+      "heading": "Log in",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
+  ]
+}

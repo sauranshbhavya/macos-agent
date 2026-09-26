@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "missive",
+  "name": "Missive",
+  "domain": "missiveapp.com",
+  "category": "customer_support",
+  "summary": "Team inbox and chat app.",
+  "signInURL": "https://mail.missiveapp.com/#login",
+  "triggers": ["missiveapp.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

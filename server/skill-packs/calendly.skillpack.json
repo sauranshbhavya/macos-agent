@@ -1,0 +1,56 @@
+{
+  "format": 1,
+  "id": "calendly",
+  "name": "Calendly",
+  "domain": "calendly.com",
+  "category": "scheduling",
+  "summary": "Meeting scheduling links.",
+  "signInURL": "https://calendly.com/login",
+  "triggers": ["calendly", "calendly.com"],
+  "sections": [],
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Create an event type",
+      "startURL": "https://calendly.com/login",
+      "steps": [
+        "Go to the Scheduling page.",
+        "Select the + Create button and choose an event type.",
+        "Customize the event's details in the event editor on the right. Select More options for further settings.",
+        "Select Save changes."
+      ],
+      "source": "https://calendly.com/help/how-to-set-up-an-event-type"
+    },
+    {
+      "title": "Copy a scheduling link",
+      "startURL": "https://calendly.com/login",
+      "steps": [
+        "Go to Scheduling.",
+        "Find the event type to share and hover over it to see more options.",
+        "Choose Copy link to copy the standard booking link to paste anywhere."
+      ],
+      "source": "https://calendly.com/help/how-to-share-your-scheduling-link"
+    },
+    {
+      "title": "Create an availability schedule",
+      "startURL": "https://calendly.com/login",
+      "steps": [
+        "Go to Scheduling, then select Manage availability.",
+        "Open the Schedule dropdown menu and select + Create schedule.",
+        "Name the new schedule and select Create.",
+        "In List view, under Weekly hours, select + to add each day to be available, then set the start and end times for each time block."
+      ],
+      "source": "https://calendly.com/help/how-to-set-your-availability"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://calendly.com/login",
+      "landedURL": "https://calendly.com/login",
+      "title": "Welcome back to Calendly. Log in to your account here. | Calendly",
+      "heading": "Log in to your account",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
+  ]
+}

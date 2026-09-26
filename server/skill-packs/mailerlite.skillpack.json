@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "mailerlite",
+  "name": "MailerLite",
+  "domain": "mailerlite.com",
+  "category": "marketing_email",
+  "summary": "Email marketing platform.",
+  "signInURL": "https://accounts.mailerlite.com/",
+  "triggers": ["mailerlite", "mailerlite.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

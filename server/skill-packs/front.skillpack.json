@@ -1,0 +1,61 @@
+{
+  "format": 1,
+  "id": "front",
+  "name": "Front",
+  "domain": "front.com",
+  "category": "customer_support",
+  "summary": "Shared inbox for customer communication.",
+  "signInURL": "https://app.frontapp.com/signin",
+  "triggers": ["front.com", "frontapp", "frontapp.com"],
+  "sections": [],
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Reply to a conversation",
+      "startURL": "https://front.com/login",
+      "steps": [
+        "Open the conversation, then click Reply at the bottom of the most recent message, or use the three-dot menu on any message; this replies only to that message's sender.",
+        "If the most recent message has multiple recipients, click Reply all instead to send your reply to everyone on that message."
+      ],
+      "source": "https://help.front.com/en/articles/2247"
+    },
+    {
+      "title": "Assign a conversation",
+      "startURL": "https://front.com/login",
+      "steps": [
+        "Open the conversation and click Assign in the conversation toolbar, then pick a teammate from the dropdown; your most recently used assignees show at the top of the list.",
+        "To reassign or unassign it later, click the current assignee's name at the top of the conversation and choose Unassigned or a different teammate."
+      ],
+      "source": "https://help.front.com/en/articles/2344"
+    },
+    {
+      "title": "Tag a conversation",
+      "startURL": "https://front.com/login",
+      "steps": [
+        "Click the plus icon at the top of the conversation and select the Tag option from the dropdown.",
+        "Type the tag name in the search bar, then pick an existing tag or create a new one; you can add as many tags as you want to the conversation."
+      ],
+      "source": "https://help.front.com/en/articles/2100"
+    },
+    {
+      "title": "Find a conversation",
+      "startURL": "https://front.com/login",
+      "steps": [
+        "Click the search icon at the top of your inbox and type your keywords; press Enter to see the full list of results.",
+        "Use the dropdown at the right of the search pop-up to search the inbox you're viewing, everything in your sidebar, or All inboxes.",
+        "Narrow further with filters such as tag:tag name, is:unassigned, or assignee:teammate name from the search filter bar or the search builder."
+      ],
+      "source": "https://help.front.com/en/articles/2131"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://front.com/login",
+      "landedURL": "https://app.frontapp.com/signin",
+      "title": "Front",
+      "heading": "",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
+  ]
+}

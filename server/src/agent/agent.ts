@@ -6,7 +6,7 @@
  * effects beyond model calls and server tools, so the runner may run it again after a crash: the
  * transcript alone is the agent's state.
  */
-import type { FinishBody, ObserveBody, ProposeBody } from "./protocol.js";
+import type { FinishBody, Manifest, ObserveBody, ProposeBody } from "./protocol.js";
 import type { ProposingAgent, Tier } from "./credits.js";
 import type { StoredMessage, TaskRecord } from "./tasks/store.js";
 
@@ -55,6 +55,10 @@ export interface TurnContext {
   readonly signal: AbortSignal;
   /** The screenshot of an observation received during this process's life, by message id. */
   screenshot(msgId: string): string | undefined;
+  /** What the task's Mac declared it can do, when it is connected to say. */
+  manifest(): Manifest | undefined;
+  /** A short account of the task this one follows up, when there is one the account can see. */
+  priorTask(): Promise<string | undefined>;
   /** Runs one model call under the task's budget and the account's credits. */
   modelCall<T>(spec: ModelCallSpec, invoke: (signal: AbortSignal) => Promise<ModelInvocation<T>>): Promise<T>;
 }

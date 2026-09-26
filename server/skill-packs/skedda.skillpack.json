@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "skedda",
+  "name": "Skedda",
+  "domain": "skedda.com",
+  "category": "scheduling",
+  "summary": "Booking software for desks, rooms and spaces.",
+  "signInURL": "https://app.skedda.com/account/login",
+  "triggers": ["skedda", "skedda.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

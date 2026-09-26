@@ -1,0 +1,54 @@
+{
+  "format": 1,
+  "id": "figma",
+  "name": "Figma",
+  "domain": "figma.com",
+  "category": "design",
+  "summary": "Collaborative interface design tool.",
+  "signInURL": "https://www.figma.com/login",
+  "triggers": ["figma", "figma.com"],
+  "sections": [],
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Create a design file",
+      "startURL": "https://www.figma.com/files/",
+      "steps": [
+        "Select Drafts in the sidebar.",
+        "Select Design from the menu. The new file opens in the Figma Design editor. Typing figma.new in the address bar also creates a new design file."
+      ],
+      "source": "https://help.figma.com/hc/en-us/articles/30926129986199-FD4B-Create-your-first-design-file"
+    },
+    {
+      "title": "Share a file",
+      "startURL": "https://www.figma.com/files/",
+      "steps": [
+        "Open the file and click Share in the top-right corner.",
+        "To invite people, enter their email addresses or user group names in the invite field, separated by commas, adjust each person's permissions, and click Send invite. Invitees get an email and a notification in the file browser.",
+        "To share by link instead, adjust the share settings and permissions in the share modal, then click Copy link and send the link to collaborators."
+      ],
+      "source": "https://help.figma.com/hc/en-us/articles/360040531773-Share-files-and-prototypes"
+    },
+    {
+      "title": "Add a comment to a file",
+      "startURL": "https://www.figma.com/files/",
+      "steps": [
+        "Click the comment icon in the toolbar, or press C, to enter comment mode.",
+        "Click the place on the canvas to pin the comment, or click and drag to select a region.",
+        "Type the message. Press @ to mention a collaborator.",
+        "Click the send button to post the comment."
+      ],
+      "source": "https://help.figma.com/hc/en-us/articles/360041068574-Add-comments-to-files"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://www.figma.com/files/",
+      "landedURL": "https://www.figma.com/login",
+      "title": "Login | Figma",
+      "heading": "Sign in to Figma",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
+  ]
+}

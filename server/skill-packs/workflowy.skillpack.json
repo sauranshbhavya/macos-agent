@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "workflowy",
+  "name": "Workflowy",
+  "domain": "workflowy.com",
+  "category": "knowledge_bases",
+  "summary": "Outliner for notes and lists.",
+  "signInURL": "https://workflowy.com/login",
+  "triggers": ["workflowy", "workflowy.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

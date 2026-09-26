@@ -1,0 +1,49 @@
+{
+  "format": 1,
+  "id": "read_ai",
+  "name": "Read AI",
+  "domain": "read.ai",
+  "category": "communication",
+  "summary": "AI meeting summaries and notes.",
+  "signInURL": "https://app.read.ai/analytics/signin",
+  "triggers": [
+    "read ai",
+    "read.ai"
+  ],
+  "sections": [],
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Share a meeting report",
+      "startURL": "https://app.read.ai/",
+      "steps": [
+        "Open the meeting report and click Share. Managing sharing needs editor access, which you have if you invited Read to the meeting; without it the button only lets you request access from the report owner.",
+        "In the Share Report dialog, type a person's name — only if they already have a Read account — or their email address. In a Workspace you can also pick a team or the whole Workspace.",
+        "Choose whether they are a viewer or an editor, and whether to notify them by email with an optional message, then click Share. The report then appears under their Shared with me tab.",
+        "To change someone's access or remove it later, click Viewer or Editor beside them under People with access.",
+        "Leave Link access at the bottom on People with access unless the report should be public: Anyone with the link lets anyone holding the URL view it without signing in."
+      ],
+      "source": "https://support.read.ai/hc/en-us/articles/23834622441875-How-can-I-manage-access-to-an-existing-report"
+    },
+    {
+      "title": "Download a meeting report",
+      "startURL": "https://app.read.ai/",
+      "steps": [
+        "Open the meeting report. Anyone who can view it can download it, unless their Workspace has turned report downloads off.",
+        "Click Download towards the top right of the report to open its menu.",
+        "Click the option you want; the download starts for that section of the report. Video, as an .mp4, is offered only when video playback was enabled on the report and on the Enterprise plan."
+      ],
+      "source": "https://support.read.ai/hc/en-us/articles/23833171061139-How-do-I-download-meeting-reports-transcripts-and-more"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://app.read.ai/",
+      "landedURL": "https://app.read.ai/analytics/signin",
+      "title": "Read - Sign in",
+      "heading": "Meetings + Ask Read",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
+  ]
+}

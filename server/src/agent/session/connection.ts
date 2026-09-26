@@ -14,6 +14,7 @@ import {
   PROTOCOL_VERSION,
   type ClientMessage,
   type ErrorCode,
+  type Manifest,
   type ServerMessage,
   type ServerTaskMessage,
 } from "../protocol.js";
@@ -63,6 +64,7 @@ type TaskMessage = Exclude<ClientMessage, ConnectionMessage>;
 export class SessionConnection implements SessionPeer {
   private caller: AuthenticatedCaller;
   private device: string | undefined;
+  private declared: Manifest | undefined;
   private readonly sessionId = randomUUID();
   private readonly seen = new Set<string>();
   private queue: Promise<void> = Promise.resolve();
@@ -103,6 +105,10 @@ export class SessionConnection implements SessionPeer {
 
   get providerSessionId(): string | undefined {
     return this.caller.providerSessionId;
+  }
+
+  get manifest(): Manifest | undefined {
+    return this.declared;
   }
 
   sendTask(messages: readonly ServerTaskMessage[]): void {
@@ -256,6 +262,7 @@ export class SessionConnection implements SessionPeer {
     }
     const { deps } = this;
     this.device = message.body.device_id;
+    this.declared = message.body.manifest;
     deps.registry.bindDevice(this, this.device);
     await deps.store.touchDevice(this.device, this.accountId, deps.now());
     const { tasks, replay } = await deps.runner.resume(

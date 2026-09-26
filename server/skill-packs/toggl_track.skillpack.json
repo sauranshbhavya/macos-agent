@@ -1,0 +1,48 @@
+{
+  "format": 1,
+  "id": "toggl_track",
+  "name": "Toggl Track",
+  "domain": "toggl.com",
+  "category": "finance_billing",
+  "summary": "Time tracking app.",
+  "signInURL": "https://accounts.toggl.com/app/login/",
+  "triggers": ["toggl track"],
+  "sections": [],
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Create a project",
+      "startURL": "https://track.toggl.com/timer",
+      "steps": [
+        "In the Toggl Track web app, click the Projects tab in the menu bar on the left.",
+        "Click + New Project in the top right corner, and enter the project's name in the popup.",
+        "For more detail, click Advanced Options: select the client the project belongs to, set its start and end dates, and choose which workspace it belongs to. Leave the project Public: private projects are not part of the Free plan, so if the person wants one and Private is missing, locked or leads to another page, stop and tell them, and never change the plan.",
+        "Click Create Project to save it."
+      ],
+      "stops": [
+        "upgrading the plan to make Private available"
+      ],
+      "source": "https://support.toggl.com/en-us/article/creating-projects-jrbd27/"
+    },
+    {
+      "title": "Create a client",
+      "startURL": "https://track.toggl.com/timer",
+      "steps": [
+        "In the Toggl Track web app, click the Clients page in the menu on the left. If the workspace lets only admins create projects and clients, only an admin can do this.",
+        "Click + New client in the top right corner.",
+        "Type the client's name in the Client name box and click Create. Existing projects can be assigned to the client, or new ones created for it, from here."
+      ],
+      "source": "https://support.toggl.com/en-us/article/managing-clients-12r3oug/"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://track.toggl.com/timer",
+      "landedURL": "https://accounts.toggl.com/track/login/",
+      "title": "Login | Toggl Track",
+      "heading": "Log in and get tracking!",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
+  ]
+}

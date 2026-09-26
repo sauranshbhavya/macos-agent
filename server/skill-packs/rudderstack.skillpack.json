@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "rudderstack",
+  "name": "RudderStack",
+  "domain": "rudderstack.com",
+  "category": "data_databases",
+  "summary": "Customer data platform for data teams.",
+  "signInURL": "https://app.rudderstack.com/login",
+  "triggers": ["rudderstack", "rudderstack.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

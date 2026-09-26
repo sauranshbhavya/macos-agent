@@ -1,0 +1,44 @@
+{
+  "format": 1,
+  "id": "smartsheet",
+  "name": "Smartsheet",
+  "domain": "smartsheet.com",
+  "category": "project_tracking",
+  "summary": "Spreadsheet-style work management platform.",
+  "signInURL": "https://app.smartsheet.com/b/home",
+  "triggers": ["smartsheet", "smartsheet.com"],
+  "sections": [],
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Add pages to a WorkApp",
+      "startURL": "https://app.smartsheet.com/b/home",
+      "steps": [
+        "In WorkApps, hover over the WorkApp you want to change and select the Edit app icon, or use its three-dot menu and choose Edit app or Edit app in new tab.",
+        "On the left toolbar, select Pages, then select + Add Pages.",
+        "Select what you want to add and follow the prompts."
+      ],
+      "source": "https://help.smartsheet.com/learning-track/workapps/add-pages-your-workapp"
+    },
+    {
+      "title": "Add roles to a WorkApp",
+      "startURL": "https://app.smartsheet.com/b/home",
+      "steps": [
+        "Open the WorkApp for editing, as in the flow above.",
+        "Select the Roles icon from the left rail.",
+        "Select Add Roles."
+      ],
+      "source": "https://help.smartsheet.com/learning-track/workapps/add-roles-your-workapp"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://app.smartsheet.com/b/home",
+      "landedURL": "https://app.smartsheet.com/login",
+      "title": "Log In | Smartsheet",
+      "heading": "",
+      "offers": "sign-in",
+      "read": "2026-09-25"
+    }
+  ]
+}

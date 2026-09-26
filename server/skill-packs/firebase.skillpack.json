@@ -1,0 +1,46 @@
+{
+  "format": 1,
+  "id": "firebase",
+  "name": "Firebase",
+  "domain": "firebase.google.com",
+  "category": "developer_platforms",
+  "summary": "Google's app development platform.",
+  "signInURL": "https://console.firebase.google.com/",
+  "triggers": ["firebase", "firebase.google.com"],
+  "sections": [],
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Register a web app in a Firebase project",
+      "startURL": "https://console.firebase.google.com/",
+      "steps": [
+        "Open the project, and in the center of the Firebase console's project overview page click the Web icon. If the project already has an app, click Add app first to show the platform options.",
+        "Enter the app's nickname. It is an internal identifier, visible only in the Firebase console.",
+        "Click Register app.",
+        "Follow the on-screen instructions to add and initialize the Firebase SDK in the app."
+      ],
+      "source": "https://firebase.google.com/docs/web/setup"
+    },
+    {
+      "title": "Create a Cloud Firestore database",
+      "startURL": "https://console.firebase.google.com/",
+      "steps": [
+        "Open the project, and in the left panel go to Databases & Storage > Firestore.",
+        "Click Create database and select a location for the database. If no location can be selected, the project's location for default Google Cloud resources has already been set.",
+        "Select a starting mode for the Cloud Firestore Security Rules. Test mode lets anyone read and overwrite the data and suits getting started with the web, Apple or Android SDKs; Production mode denies all reads and writes from mobile and web clients.",
+        "Click Create."
+      ],
+      "source": "https://firebase.google.com/docs/firestore/quickstart"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://console.firebase.google.com/",
+      "landedURL": "https://accounts.google.com/v3/signin/identifier",
+      "title": "Sign in - Google Accounts",
+      "heading": "Sign in",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
+  ]
+}

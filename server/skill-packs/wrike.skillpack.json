@@ -1,0 +1,56 @@
+{
+  "format": 1,
+  "id": "wrike",
+  "name": "Wrike",
+  "domain": "wrike.com",
+  "category": "project_tracking",
+  "summary": "Project management platform for teams.",
+  "signInURL": "https://login.wrike.com/login/",
+  "triggers": ["wrike", "wrike.com"],
+  "sections": [],
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Create a task",
+      "startURL": "https://www.wrike.com/workspace.htm",
+      "steps": [
+        "Click the + button at the top of the workspace.",
+        "Select Task from the list.",
+        "In the pop-up, type the title of the new task and press Enter."
+      ],
+      "source": "https://help.wrike.com/hc/en-us/articles/1500005120921-Creating-a-Task"
+    },
+    {
+      "title": "Search the workspace",
+      "startURL": "https://www.wrike.com/workspace.htm",
+      "steps": [
+        "Click the Search icon in the sidebar to open the search box.",
+        "Type an item's or a person's name, keywords, or an ID number.",
+        "Select the item from the list when it appears, or click Show more for more results in each category.",
+        "To see every task that matches, click the Search icon or press Enter."
+      ],
+      "source": "https://help.wrike.com/hc/en-us/articles/209602909-Using-Workspace-Search-in-Wrike"
+    },
+    {
+      "title": "Share a task",
+      "startURL": "https://www.wrike.com/workspace.htm",
+      "steps": [
+        "Go to the folder, project or space the task is in, and open the task in Item view.",
+        "Click the three-dot menu at the top-right corner, then Share.",
+        "Enter the name of the person or user group in the search field, and click their name in the list.",
+        "Click Save."
+      ],
+      "source": "https://help.wrike.com/hc/en-us/articles/209603849-Sharing-Tasks"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://www.wrike.com/workspace.htm",
+      "landedURL": "https://login.wrike.com/login/",
+      "title": "Sign in to your Wrike account",
+      "heading": "",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
+  ]
+}

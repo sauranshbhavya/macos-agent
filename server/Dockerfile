@@ -44,6 +44,10 @@ COPY --from=build /app/node_modules ./node_modules
 # this stage while the old `migrate` script pointed at it, so the documented command could not run
 # here at all, and the compiled runner that could had no .sql files beside it.
 COPY --from=build /app/dist ./dist
+# The skill packs the planner matches per task, read at boot from `../../../skill-packs/` relative
+# to `dist/agent/skills/`, which is `/app/skill-packs` here. Data rather than code, so the build
+# stage never needs them.
+COPY skill-packs ./skill-packs
 COPY package.json ./
 
 # Run as a non-root user. `node` exists in this base image already.

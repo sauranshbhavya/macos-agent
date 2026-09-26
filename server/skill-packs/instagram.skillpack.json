@@ -1,0 +1,35 @@
+{
+  "format": 1,
+  "id": "instagram",
+  "name": "Instagram",
+  "domain": "instagram.com",
+  "category": "marketing_growth",
+  "summary": "Photo and video social network.",
+  "signInURL": "https://www.instagram.com/accounts/login/",
+  "triggers": ["instagram", "instagram.com"],
+  "sections": [],
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "View your account and content insights",
+      "startURL": "https://www.instagram.com/accounts/login/",
+      "steps": [
+        "Select Dashboard from the left-hand menu.",
+        "On a professional account, select Insights below For professionals; on a personal account, select Your dashboard below Your insights.",
+        "From the Insights drop-down menu, select Account or Content.",
+        "Use the drop-down menu to set the period you want: the last 7, 14, 30 or 90 days, or a range of your own."
+      ],
+      "source": "https://help.instagram.com/1533933820244654"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://www.instagram.com/accounts/login/",
+      "landedURL": "https://www.instagram.com/accounts/login/",
+      "title": "Instagram",
+      "heading": "",
+      "offers": "sign-in",
+      "read": "2026-09-25"
+    }
+  ]
+}

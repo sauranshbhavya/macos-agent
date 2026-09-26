@@ -88,7 +88,10 @@ agentViewModel.screenControlGate = SonnyScreenControlGate(
 )
 // The V2 kernel, only when the SonnyV2Kernel default is on (`V2KernelBridge`; phase 6 replaces it).
 Task { @MainActor in
-    agentViewModel.v2Kernel = await V2KernelBridge.make(client: accountModel.backendClient) { [weak agentViewModel] line in
+    agentViewModel.v2Kernel = await V2KernelBridge.make(
+        client: accountModel.backendClient,
+        capabilityContext: { [unowned agentViewModel] in agentViewModel.makeExecutor().kernelCapabilityContext() }
+    ) { [weak agentViewModel] line in
         agentViewModel?.logStore.append(.observe, line)
     }
 }

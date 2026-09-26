@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "netsuite",
+  "name": "NetSuite",
+  "domain": "netsuite.com",
+  "category": "finance_billing",
+  "summary": "Cloud ERP from Oracle.",
+  "signInURL": "https://system.netsuite.com/pages/customerlogin.jsp?country=US",
+  "triggers": ["netsuite", "netsuite.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

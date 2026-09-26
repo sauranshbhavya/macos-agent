@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sonny.app/contracts/v2/operations/open_app_search.v1.schema.json",
+  "title": "open_app_search v1",
+  "description": "Open an app's or website's own search page for a query, from a fixed list of supported search targets. It fails for a target it doesn't support; never invent a search URL. Floor effect: navigate.",
+  "type": "object",
+  "properties": {
+    "app": {
+      "description": "The app's name or bundle id.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255
+    },
+    "query": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500
+    }
+  },
+  "required": [
+    "app",
+    "query"
+  ],
+  "additionalProperties": false
+}

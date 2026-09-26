@@ -1,0 +1,49 @@
+{
+  "format": 1,
+  "id": "outreach",
+  "name": "Outreach",
+  "domain": "outreach.io",
+  "category": "sales_crm",
+  "summary": "Sales engagement platform.",
+  "signInURL": "https://web.outreach.io/",
+  "triggers": [
+    "outreach.io"
+  ],
+  "sections": [],
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Create a sequence from scratch",
+      "startURL": "https://web.outreach.io/",
+      "steps": [
+        "In the top right corner, click the Actions button > Sequence. Or, in the left nav, click Content > Sequences, then click +Sequence in the top right corner.",
+        "Click New.",
+        "Enter the name in the Sequence Name field, choose a Sequence Type — Steps by day interval, or Steps by exact date/time for a one-time event — and choose a Sharing option: Private to Owner, Others can only see it, or Others can see it and use it.",
+        "Click Create. On the Sequence Settings page, click Add Step, choose the Step Type (Auto Email, Manual Email, Phone Call, Generic Task or LinkedIn), configure it and click Save. Repeat for each step; Outreach recommends at least five.",
+        "Click Activate in the bottom right corner to make the sequence live. Activating a sequence is a governance permission, so if you cannot, ask an Admin to do it."
+      ],
+      "source": "https://support.outreach.io/support/solutions/articles/159000425632-how-to-create-an-outreach-sequence"
+    },
+    {
+      "title": "Turn on a sequence step",
+      "startURL": "https://web.outreach.io/",
+      "steps": [
+        "Click Sequences. You need permission to edit sequences; if you cannot edit one, contact your Outreach Admin.",
+        "Click the sequence.",
+        "Find the sequence step and turn on its toggle.",
+        "Click Save. If you change a step to a scheduled task, its due date is reset."
+      ],
+      "source": "https://support.outreach.io/support/solutions/articles/159000420899-how-to-activate-a-sequence-step"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://web.outreach.io/",
+      "landedURL": "https://login.outreach.io/",
+      "title": "Outreach",
+      "heading": "Sign in",
+      "offers": "sign-in",
+      "read": "2026-09-19"
+    }
+  ]
+}

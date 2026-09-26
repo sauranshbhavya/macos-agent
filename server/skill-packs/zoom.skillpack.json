@@ -1,0 +1,65 @@
+{
+  "format": 1,
+  "id": "zoom",
+  "name": "Zoom",
+  "domain": "zoom.us",
+  "category": "communication",
+  "summary": "Video meetings and communication platform.",
+  "signInURL": "https://zoom.us/signin",
+  "triggers": ["zoom.us", "zoom meeting", "zoom meetings", "zoom call", "zoom calls", "zoom link"],
+  "sections": [],
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Schedule a meeting",
+      "startURL": "https://zoom.us/signin",
+      "steps": [
+        "Sign in to the Zoom web portal. In the top-right corner, click the Zoom Products icon, then click Meetings. Meetings opens in a new browser tab.",
+        "Click Schedule a Meeting.",
+        "Enter a topic or name for the meeting, and set the date and time.",
+        "Optionally add invitees by their name, email or phone number, and select the meeting options.",
+        "Click Save. When the host has the calendar and contacts integration on, invitees get an email invitation once the meeting is saved."
+      ],
+      "source": "https://support.zoom.com/hc/en/article?id=zm_kb&sysparm_article=KB0060700"
+    },
+    {
+      "title": "Join a meeting from a browser",
+      "startURL": "https://join.zoom.us/",
+      "steps": [
+        "Go to join.zoom.us, enter the meeting ID the host or organizer gave you, and click Join.",
+        "With an invitation link instead, click the join link in the email or calendar invitation. When a pop-up asks to open or download the app, click Cancel, then click join from your browser at the bottom of the page. The host has to have that link turned on.",
+        "Click Allow to give Zoom the microphone and camera, enter your name, and click Join. The host may admit you from a waiting room."
+      ],
+      "source": "https://support.zoom.com/hc/en/article?id=zm_kb&sysparm_article=KB0060732"
+    },
+    {
+      "title": "Find a cloud recording",
+      "startURL": "https://zoom.us/signin",
+      "steps": [
+        "Sign in to the Zoom web portal and click Recordings & Transcripts in the navigation menu.",
+        "Click the Cloud recordings tab. It lists the cloud recordings you started that have finished processing.",
+        "Adjust the date range and status, then search by host, meeting ID, topic or keyword.",
+        "A recording that is not there may be in the trash folder, where a cloud recording can be recovered within 30 days."
+      ],
+      "source": "https://support.zoom.com/hc/en/article?id=zm_kb&sysparm_article=KB0058006"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://zoom.us/signin",
+      "landedURL": "https://zoom.us/signin#/login",
+      "title": "Sign In | Zoom",
+      "heading": "Sign in",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    },
+    {
+      "url": "https://join.zoom.us/",
+      "landedURL": "https://zoom.us/join",
+      "title": "Join Meeting | Zoom",
+      "heading": "Join Meeting",
+      "offers": "product",
+      "read": "2026-09-18"
+    }
+  ]
+}

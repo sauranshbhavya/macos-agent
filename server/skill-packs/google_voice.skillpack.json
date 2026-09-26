@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "google_voice",
+  "name": "Google Voice",
+  "domain": "voice.google.com",
+  "category": "communication",
+  "summary": "Google's phone numbers for calls and texts.",
+  "signInURL": "https://voice.google.com/landing",
+  "triggers": ["google voice", "voice.google.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

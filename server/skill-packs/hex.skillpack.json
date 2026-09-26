@@ -1,0 +1,54 @@
+{
+  "format": 1,
+  "id": "hex",
+  "name": "Hex",
+  "domain": "hex.tech",
+  "category": "data_databases",
+  "summary": "Collaborative data notebooks and analytics.",
+  "signInURL": "https://app.hex.tech/login",
+  "triggers": ["hex project", "hex projects", "hex notebook", "hex.tech"],
+  "sections": [],
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Create a project",
+      "startURL": "https://app.hex.tech/",
+      "steps": [
+        "Click the New project button on your workspace Home.",
+        "Give the project a descriptive title. It can be changed later.",
+        "To start from an existing .ipynb Jupyter notebook or .yaml Hex project instead, import it; or copy a template from the Template Gallery with Copy this template."
+      ],
+      "source": "https://learn.hex.tech/docs/getting-started/create-your-first-project"
+    },
+    {
+      "title": "Upload a file to a project",
+      "startURL": "https://app.hex.tech/",
+      "steps": [
+        "In the project, open the Files sidebar.",
+        "Drag and drop the files into the Drop files here area, or click browse files, select the files and click Upload. A project holds up to 100 files, each under 2 GB.",
+        "To query a CSV, open the three-dot menu next to the file's name in the Files sidebar and click Query in new SQL cell."
+      ],
+      "source": "https://learn.hex.tech/docs/connect-to-data/upload-files"
+    },
+    {
+      "title": "Share a project",
+      "startURL": "https://app.hex.tech/",
+      "steps": [
+        "In the project, click Share in the upper right.",
+        "Invite specific users or groups, and choose the permission each gets: Full Access, Can Edit, Can Explore or Can View App.",
+        "To open it to the whole workspace, select Share with your workspace from the bottom left dropdown. Anyone with the link makes it public, with Can View App or Can Explore only."
+      ],
+      "source": "https://learn.hex.tech/docs/collaborate/sharing-and-permissions/project-sharing"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://app.hex.tech/",
+      "landedURL": "https://app.hex.tech/login",
+      "title": "Hex",
+      "heading": "Log in",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
+  ]
+}

@@ -20,7 +20,11 @@ final class V2KernelBridge {
         UserDefaults.standard.bool(forKey: "SonnyV2Kernel")
     }
 
-    static func make(client: SonnyBackendClient, log: @escaping (String) -> Void) async -> V2KernelBridge? {
+    static func make(
+        client: SonnyBackendClient,
+        capabilityContext: @escaping @MainActor @Sendable () -> CapabilityExecutionContext,
+        log: @escaping (String) -> Void
+    ) async -> V2KernelBridge? {
         guard isRequested, let base = await client.backendEnvironment?.baseURL else { return nil }
         let ledgers: any TaskLedgerStoring = (try? FileTaskLedgerStore.inApplicationSupport()) ?? MemoryTaskLedgerStore()
         let checker = SystemScreenCapturePermissionChecker()
@@ -34,7 +38,10 @@ final class V2KernelBridge {
                 osVersion: String(SonnyClientIdentity.platform.prefix(32))
             ),
             ledgers: ledgers,
-            capabilities: KernelCapabilities([OpenAppCapability()]),
+            capabilities: StandardCapabilities.all(
+                context: capabilityContext,
+                routines: (try? RoutineGoalStore.inApplicationSupport()) ?? RoutineGoalStore(fileURL: nil)
+            ),
             screenTools: Set(ScreenToolName.allCases),
             screenFactory: {
                 ScreenController(dependencies: .init(driver: { manifest in try CuaDriverLibrary(manifest: manifest) }))

@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "looker",
+  "name": "Looker",
+  "domain": "looker.com",
+  "category": "data_databases",
+  "summary": "Business intelligence platform from Google Cloud.",
+  "signInURL": "https://accounts.google.com/ServiceLogin?continue=https%3A%2F%2Fcloud.google.com%2Flooker",
+  "triggers": ["looker.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

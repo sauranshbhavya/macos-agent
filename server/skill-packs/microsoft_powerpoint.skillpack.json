@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "microsoft_powerpoint",
+  "name": "Microsoft PowerPoint for the web",
+  "domain": "powerpoint.cloud.microsoft",
+  "category": "documents_storage",
+  "summary": "Microsoft's presentations in the browser.",
+  "signInURL": "https://www.office.com/launch/powerpoint",
+  "triggers": ["microsoft powerpoint", "powerpoint.cloud.microsoft"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

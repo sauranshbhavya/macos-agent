@@ -2070,6 +2070,13 @@ public final class AgentActionExecutor {
         return result
     }
 
+    /// The same services a V1 run gets, for the V2 kernel's adapter-backed capabilities
+    /// (`AdapterCapabilities`), unscoped since V2 has no workspaces. Phase 7 builds this context
+    /// without the executor.
+    public func kernelCapabilityContext() -> CapabilityExecutionContext {
+        capabilityContext(scope: .unscoped)
+    }
+
     private func capabilityContext(
         preferredBrowser: MacApp? = nil,
         claimedEarlierInThisRun: RunClaims = .none,

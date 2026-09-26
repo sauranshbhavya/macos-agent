@@ -1,0 +1,36 @@
+{
+  "format": 1,
+  "id": "gumroad",
+  "name": "Gumroad",
+  "domain": "gumroad.com",
+  "category": "websites_apps_commerce",
+  "summary": "Platform for selling digital products.",
+  "signInURL": "https://gumroad.com/login",
+  "triggers": ["gumroad", "gumroad.com"],
+  "sections": [],
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Add a product",
+      "startURL": "https://gumroad.com/login",
+      "steps": [
+        "Click New product on the Products dashboard and select the product type you want.",
+        "Set the product's price. A product can be free, and a minimum price can be left open-ended with a plus sign so buyers may give more.",
+        "Describe the product in the editor, where you can style the text inline and add images, quotes, code blocks or embedded video.",
+        "Open the product's Content tab and add what the buyer receives — files, pages and embedded media, grouped into folders if you want.",
+        "Publish the product when it is ready."
+      ],
+      "source": "https://gumroad.com/help/article/149-adding-a-product"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://gumroad.com/login",
+      "landedURL": "https://gumroad.com/login",
+      "title": "Log in to Gumroad",
+      "heading": "Gumroad",
+      "offers": "sign-in",
+      "read": "2026-09-25"
+    }
+  ]
+}

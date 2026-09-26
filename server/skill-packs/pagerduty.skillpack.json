@@ -1,0 +1,57 @@
+{
+  "format": 1,
+  "id": "pagerduty",
+  "name": "PagerDuty",
+  "domain": "pagerduty.com",
+  "category": "analytics_monitoring",
+  "summary": "Incident response and on-call management.",
+  "signInURL": "https://app.pagerduty.com/",
+  "triggers": ["pagerduty", "pagerduty.com"],
+  "sections": [],
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Declare an incident",
+      "startURL": "https://app.pagerduty.com/",
+      "steps": [
+        "In the top navigation bar, click + New Incident.",
+        "In the Create New Incident dialog, enter a Title. The Incident Type is pre-filled; select another if needed.",
+        "Optionally select the Impacted Service and enter a description, an urgency and a priority.",
+        "Assign the incident by selecting an escalation policy or a user from their tabs.",
+        "Click Create Incident. PagerDuty notifies the escalation policy or user you selected."
+      ],
+      "source": "https://support.pagerduty.com/main/docs/incidents"
+    },
+    {
+      "title": "Acknowledge or resolve an incident",
+      "startURL": "https://app.pagerduty.com/",
+      "steps": [
+        "Navigate to Incidents to view the Open Incidents page.",
+        "Select the checkbox to the left of the incident.",
+        "Click Acknowledge, or Resolve, in the actions menu bar. On an incident's details page, reached by clicking its title, the same buttons are in the actions menu bar."
+      ],
+      "source": "https://support.pagerduty.com/main/docs/incidents"
+    },
+    {
+      "title": "Add a user",
+      "startURL": "https://app.pagerduty.com/",
+      "steps": [
+        "In the PagerDuty web app, navigate to People > Users.",
+        "Click Add Users in the top right corner of the page.",
+        "Enter the user's Name (first and last) and Email Address, select the License type if applicable, and select their Base Role. If the account has Teams, optionally select a Team.",
+        "Click Add. PagerDuty emails the user an invitation to accept."
+      ],
+      "source": "https://support.pagerduty.com/main/docs/manage-users"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://app.pagerduty.com/",
+      "landedURL": "https://identity.pagerduty.com/global/authn/authentication/PagerDutyGlobalLogin/enter_email",
+      "title": "PagerDuty Sign In",
+      "heading": "Sign in to your account",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "format": 1,
+  "id": "bamboohr",
+  "name": "BambooHR",
+  "domain": "bamboohr.com",
+  "category": "recruiting_hr",
+  "summary": "HR software for small and medium businesses.",
+  "signInURL": "https://app.bamboohr.com/login",
+  "triggers": [
+    "bamboohr",
+    "bamboohr.com"
+  ],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

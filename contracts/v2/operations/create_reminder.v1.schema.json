@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sonny.app/contracts/v2/operations/create_reminder.v1.schema.json",
+  "title": "create_reminder v1",
+  "description": "Add one reminder with an alert to the user's Reminders. Give exactly one of minutes_from_now or time, and day when they named one. If they named no time, ask when. Floor effect: create.",
+  "type": "object",
+  "properties": {
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500
+    },
+    "minutes_from_now": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 525600
+    },
+    "time": {
+      "description": "A clock time such as 17:30.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 50
+    },
+    "day": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100
+    }
+  },
+  "required": [
+    "title"
+  ],
+  "additionalProperties": false
+}

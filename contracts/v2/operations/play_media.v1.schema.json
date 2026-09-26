@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sonny.app/contracts/v2/operations/play_media.v1.schema.json",
+  "title": "play_media v1",
+  "description": "Play a song or album in Apple Music or Spotify, falling back to opening the provider's result or search. If the provider or title is missing, ask. Floor effect: navigate.",
+  "type": "object",
+  "properties": {
+    "provider": {
+      "type": "string",
+      "enum": [
+        "apple_music",
+        "spotify"
+      ]
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 300
+    },
+    "artist": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "url": {
+      "description": "Only an exact Apple Music or Spotify URI the user supplied.",
+      "type": "string",
+      "maxLength": 2048
+    }
+  },
+  "required": [
+    "provider",
+    "title"
+  ],
+  "additionalProperties": false
+}

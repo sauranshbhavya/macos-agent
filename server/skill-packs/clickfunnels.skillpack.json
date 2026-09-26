@@ -1,0 +1,53 @@
+{
+  "format": 1,
+  "id": "clickfunnels",
+  "name": "ClickFunnels",
+  "domain": "clickfunnels.com",
+  "category": "websites_apps_commerce",
+  "summary": "Sales funnel and landing page builder.",
+  "signInURL": "https://app.clickfunnels.com/users/sign_in",
+  "triggers": [
+    "clickfunnels",
+    "clickfunnels.com"
+  ],
+  "sections": [],
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Save a section or row as a template",
+      "startURL": "https://app.clickfunnels.com/users/sign_in",
+      "steps": [
+        "Select the funnel you want.",
+        "Click the funnel step containing the sections and rows you want to save.",
+        "Click the Edit Page button to open the page editor.",
+        "Hover over the section or row you want to save and click the disk icon. Hovering over it shows the word Save.",
+        "Give the template a name and click Save Section or Row.",
+        "To reuse it on another page, hover over the Sections or Rows tab in the page editor, click Add Section or Add Row, click My Sections or My Rows, and drag the template to where it should appear. Save the page before closing the editor."
+      ],
+      "source": "https://support.clickfunnels.com/en/articles/12733843-saving-sections-and-rows-as-templates"
+    },
+    {
+      "title": "Restore an earlier version of a page",
+      "startURL": "https://app.clickfunnels.com/users/sign_in",
+      "steps": [
+        "Choose the funnel by clicking its Funnel Name.",
+        "Select the funnel page.",
+        "Click the gear icon to open the Page Settings.",
+        "Go to the Version History section. ClickFunnels keeps the last 5 saved versions of a page from the past 30 days.",
+        "Click Preview to check it is the version you need.",
+        "Click Restore to restore that version of the page."
+      ],
+      "source": "https://support.clickfunnels.com/en/articles/12734348-restoring-a-page-version"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://app.clickfunnels.com/users/sign_in",
+      "landedURL": "https://app.clickfunnels.com/users/sign_in",
+      "title": "ClickFunnels - Login",
+      "heading": "",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
+  ]
+}
