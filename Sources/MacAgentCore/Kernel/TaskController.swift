@@ -272,6 +272,21 @@ public final class TaskController: ObservableObject {
             liveTask = nil
             Task { await self.startNext() }
         }
+        if snapshot.phase.isTerminal { forgetOldFinishedTasks() }
+    }
+
+    /// Finished tasks kept in memory for the UI; history keeps the rest on disk.
+    static let finishedKept = 20
+
+    private func forgetOldFinishedTasks() {
+        let finished = tasks.filter { $0.phase.isTerminal }
+        guard finished.count > Self.finishedKept else { return }
+        let forgotten = Set(finished.prefix(finished.count - Self.finishedKept).map(\.id))
+        tasks.removeAll { forgotten.contains($0.id) }
+        for id in forgotten {
+            runtimes[id] = nil
+            localTasks.remove(id)
+        }
     }
 
     private func startNext() async {

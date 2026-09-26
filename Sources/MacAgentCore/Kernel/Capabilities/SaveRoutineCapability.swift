@@ -6,14 +6,18 @@ public struct RoutineGoal: Codable, Sendable, Equatable, Identifiable {
     public var id: UUID
     public var name: String
     public var goal: String
+    /// When it runs, as the person said it when the routine was saved.
     public var schedule: String?
+    /// When it runs, as set on the Routines page. A scheduled run is unattended.
+    public var timing: RoutineSchedule?
     public var savedAt: Date
 
-    public init(id: UUID = UUID(), name: String, goal: String, schedule: String?, savedAt: Date) {
+    public init(id: UUID = UUID(), name: String, goal: String, schedule: String?, timing: RoutineSchedule? = nil, savedAt: Date) {
         self.id = id
         self.name = name
         self.goal = goal
         self.schedule = schedule
+        self.timing = timing
         self.savedAt = savedAt
     }
 }
@@ -50,11 +54,19 @@ public actor RoutineGoalStore {
         all().first { $0.name.caseInsensitiveCompare(name) == .orderedSame }
     }
 
+    public func delete(_ id: UUID) throws {
+        try write(all().filter { $0.id != id })
+    }
+
     /// Saves a routine, replacing one with the same name.
     public func save(_ routine: RoutineGoal) throws {
         var routines = all().filter { $0.name.caseInsensitiveCompare(routine.name) != .orderedSame }
         routines.append(routine)
         routines.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        try write(routines)
+    }
+
+    private func write(_ routines: [RoutineGoal]) throws {
         if let fileURL {
             try FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
             try encryption.encode(routines).write(to: fileURL, options: [.atomic, .completeFileProtection])
@@ -86,7 +98,7 @@ struct SaveRoutineCapability: Capability {
                 details: [goal] + (schedule.map { ["Runs \($0)"] } ?? [])
             ),
             retry: .idempotent,
-            payload: RoutineGoal(id: existing?.id ?? UUID(), name: name, goal: goal, schedule: schedule, savedAt: now())
+            payload: RoutineGoal(id: existing?.id ?? UUID(), name: name, goal: goal, schedule: schedule, timing: existing?.timing, savedAt: now())
         )
     }
 
