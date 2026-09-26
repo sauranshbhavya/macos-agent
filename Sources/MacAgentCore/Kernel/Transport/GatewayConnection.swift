@@ -134,7 +134,9 @@ public actor GatewayConnection {
     /// (V2 plan decision 13).
     public func ensureConnected(within timeout: TimeInterval) async -> Bool {
         if state == .connected { return true }
-        if case .stopped = state { return false }
+        // A version the gateway refused, or a session another took over, stays stopped. A stop for
+        // being signed out doesn't: the person may have signed in since, so this tries again.
+        if case .stopped(let reason) = state, reason == .clientTooOld || reason == .replaced { return false }
         start()
         let id = UUID()
         return await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in

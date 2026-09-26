@@ -25,6 +25,12 @@ public struct TaskFailure: Sendable, Equatable {
         reason: nil,
         message: "Sonny couldn't reach its server, so it can't do this right now. Check your internet connection and try again."
     )
+    public static let signInNeeded = TaskFailure(reason: nil, message: "Sign in to Sonny to do this.")
+    public static let clientTooOld = TaskFailure(reason: nil, message: ClientVersionCopy.tooOldMessage)
+    public static let replacedElsewhere = TaskFailure(
+        reason: nil,
+        message: "Another copy of Sonny on this Mac is connected, so this one can't reach its server."
+    )
 }
 
 public enum TaskPhase: Sendable, Equatable {
@@ -142,6 +148,9 @@ public actor TaskRuntime {
     private var heldOutcome: (re: Int, results: [ActionResult])?
     /// A consequential action in the proposal now running ended unknown.
     private var unknownDuringRun: (action: ActionID, effect: Effect, title: String)?
+    /// Set when the task belonged to an account that is no longer signed in: from then on it
+    /// writes and sends nothing.
+    private var discarded = false
 
     /// A new task.
     public init(id: TaskID, request: TaskStartBody, deps: RuntimeDependencies) {
@@ -318,6 +327,20 @@ public actor TaskRuntime {
         case .welcome, .reauthRequired, .goodbye, .error:
             break
         }
+    }
+
+    /// Ends a task whose account signed out or changed, without a word to the gateway: its
+    /// approvals are voided, anything running stops, and its ledger goes, so nothing of it reaches
+    /// the next account's session.
+    public func discard() async {
+        discarded = true
+        working?.cancel()
+        approval?.reply.resume(returning: false)
+        approval = nil
+        await deps.broker.void(task: id)
+        await deps.screen?.taskEnded()
+        phase = .cancelled
+        try? deps.ledgers.delete(id)
     }
 
     public func cancel() async {
@@ -541,6 +564,11 @@ public actor TaskRuntime {
             break
         }
 
+        // Stopped, or its account gone, while this was being prepared or approved: it doesn't run.
+        if discarded || phase.isTerminal || Task.isCancelled {
+            return answered(action, ActionResult(actionID: action.actionID, status: .skipped, effect: judged), title: title, agent: agent)
+        }
+
         record.update(action.actionID) { $0.state = .approved }
         record.update(action.actionID) { $0.state = .dispatched }
         do {
@@ -598,6 +626,7 @@ public actor TaskRuntime {
     /// Numbers, records and sends one message. With `clearingPending`, the proposal it answers stops
     /// being pending in the same write that puts the answer in the outbox.
     private func sendNew(_ payload: ClientPayload, re: Int?, clearingPending: Bool = false) async {
+        guard !discarded else { return }
         record.lastSeqOut += 1
         let message = ClientMessage(address: TaskAddress(task: id, seq: record.lastSeqOut, re: re), payload: payload)
         record.outbox.append(message)
@@ -608,10 +637,12 @@ public actor TaskRuntime {
     }
 
     private func save() throws {
+        guard !discarded else { return }
         try deps.ledgers.save(record)
     }
 
     private func publish() async {
+        guard !discarded else { return }
         await deps.publish(snapshot())
     }
 
