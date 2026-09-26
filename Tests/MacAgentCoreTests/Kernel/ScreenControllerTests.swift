@@ -76,6 +76,18 @@ struct ShellInThePicture: WindowScreenshotting {
     }
 }
 
+/// cua's Notes, except that it refuses every click with a reason longer than the contract carries.
+struct LongWindedCua: CuaToolInvoking {
+    let notes: FakeCuaNotes
+
+    func invoke(_ tool: String, arguments: Data) async throws -> Data {
+        guard tool == "click" else { return try await notes.invoke(tool, arguments: arguments) }
+        return try JSONSerialization.data(withJSONObject: [
+            "content": [["type": "text", "text": overByOneUnit(1000)]], "isError": true,
+        ])
+    }
+}
+
 func screenController(
     _ fake: FakeCuaNotes,
     apps: any ScreenApps = FakeScreenApps(),
@@ -84,12 +96,13 @@ func screenController(
     claims: ScreenAppClaims = ScreenAppClaims(),
     screenshots: any WindowScreenshotting = FakeScreenshots(),
     attention: any SessionAttentionMonitoring = FixedAttention(),
-    focusReturn: FocusReturn = FocusReturn()
+    focusReturn: FocusReturn = FocusReturn(),
+    invoker: (any CuaToolInvoking)? = nil
 ) -> ScreenController {
     ScreenController(dependencies: .init(
         driver: { manifest in
             manifests.value.append(manifest)
-            return fake
+            return invoker ?? fake
         },
         apps: apps,
         screenshots: screenshots,
@@ -553,12 +566,30 @@ struct ScreenControllerTests {
         #expect(await controller.execute(prepared).status == .done)
         #expect(await fake.state.clicked == ["New Note"])
     }
+
+    @Test
+    func whatALookSendsFitsTheGatewaysLimitsCountedInUTF16Units() {
+        let state = CuaWindowState(snapshotID: "s1", windowID: 1, elements: [
+            CuaElement(index: 0, role: "AXWindow", label: overByOneUnit(500)),
+            CuaElement(index: 1, role: overByOneUnit(64), value: overByOneUnit(2000), actions: [overByOneUnit(64)], parentIndex: 0),
+        ])
+        let nodes = ScreenController.tree(from: state, maxNodes: 100).tree.nodes
+        #expect(nodes.map(\.label) == [lettersOf(500), nil])
+        #expect(nodes.map(\.value) == [nil, lettersOf(2000)])
+        #expect(nodes.map(\.role) == ["AXWindow", lettersOf(64)])
+        #expect(nodes.map(\.actions) == [nil, [lettersOf(64)]])
+    }
 }
 
 @Suite(.serialized)
 @MainActor
 struct ScreenKernelTests {
-    func controller(_ gateway: ScriptedGateway, fake: FakeCuaNotes, claims: ScreenAppClaims = ScreenAppClaims()) -> TaskController {
+    func controller(
+        _ gateway: ScriptedGateway,
+        fake: FakeCuaNotes,
+        claims: ScreenAppClaims = ScreenAppClaims(),
+        invoker: (any CuaToolInvoking)? = nil
+    ) -> TaskController {
         TaskController(
             url: URL(string: "ws://gateway.test/v2/session")!,
             transport: gateway,
@@ -567,7 +598,7 @@ struct ScreenKernelTests {
             ledgers: MemoryTaskLedgerStore(),
             capabilities: KernelCapabilities([]),
             screenTools: Set(ScreenToolName.allCases),
-            screenFactory: { screenController(fake, claims: claims) },
+            screenFactory: { screenController(fake, claims: claims, invoker: invoker) },
             permissions: { .init(accessibility: .granted, screenRecording: .granted, automation: []) },
             backoff: GatewayBackoff(base: 0.01, cap: 0.05, jitter: { 0 }),
             connectTimeout: 60
@@ -738,5 +769,27 @@ struct ScreenKernelTests {
         await gateway.send(first, .finish(FinishBody(status: .completed, summary: "Tidied.")), re: 2)
         #expect(await eventually { tasks.snapshot(first)?.phase.isTerminal == true })
         #expect(try observation(await observed(gateway, second, re: 2)).error == nil)
+    }
+
+    @Test
+    func cuasReasonForRefusingAnActionIsCutToWhatTheGatewayTakes() async throws {
+        let gateway = ScriptedGateway()
+        let fake = FakeCuaNotes()
+        let tasks = controller(gateway, fake: fake, invoker: LongWindedCua(notes: fake))
+        await tasks.launch()
+        let task = try await startedTask(tasks, TaskRequest(goal: "New note", mode: .normal))
+        _ = try await gateway.next("task.start")
+        let first = try await observed(gateway, task, re: 1)
+        guard case .observation(let look) = first.payload else { throw KernelTestFailure("not an observation") }
+
+        let press = ActionID()
+        let newNote = try ref(look) { $0.label == "New Note" && $0.role == "AXButton" }
+        await gateway.send(task, .propose(ProposeBody(agent: .screen, actions: [
+            WireAction(actionID: press, effect: .navigate, kind: .screen(.press(app: "com.apple.Notes", element: newNote))),
+        ], final: false)), re: first.address?.seq)
+        let outcome = try await gateway.next("outcome")
+        let result = try #require(results(of: outcome).first)
+        #expect(result.status == .failed)
+        #expect(result.error?.message == lettersOf(1000))
     }
 }

@@ -26,8 +26,8 @@ enum SonnyKernel {
             credentials: client,
             identity: .init(
                 deviceID: GatewayDeviceIdentity.deviceID(),
-                appVersion: String(SonnyClientIdentity.version.prefix(32)),
-                osVersion: String(SonnyClientIdentity.platform.prefix(32))
+                appVersion: SonnyClientIdentity.version,
+                osVersion: SonnyClientIdentity.platform
             ),
             ledgers: stores.ledgers,
             capabilities: StandardCapabilities.all(

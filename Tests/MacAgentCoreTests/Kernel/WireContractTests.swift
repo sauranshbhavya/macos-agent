@@ -97,4 +97,19 @@ struct WireContractTests {
         #expect(Effect.credential.raised(to: .financial) == .credential)
         #expect(Effect.allCases.sorted() == Effect.allCases)
     }
+
+    @Test
+    func textIsCutToTheGatewaysLimitInUTF16UnitsAndNeverInsideACharacter() {
+        // 499 letters and an emoji: 500 Characters and 500 scalars, but 501 UTF-16 units.
+        #expect(overByOneUnit(500).clipped(toUTF16: 500) == lettersOf(500))
+        #expect("ab😀".clipped(toUTF16: 4) == "ab😀")
+        #expect("ab😀".clipped(toUTF16: 3) == "ab")
+        // An accent written as its own scalar stays with its letter.
+        #expect("cafe\u{301}".clipped(toUTF16: 4) == "caf")
+        // A family is one Character of eight units, kept whole or left out whole.
+        #expect("hi👨‍👩‍👧".clipped(toUTF16: 9) == "hi")
+        #expect("hi👨‍👩‍👧".clipped(toUTF16: 10) == "hi👨‍👩‍👧")
+        #expect("abc".clipped(toUTF16: 0) == "")
+        #expect("".clipped(toUTF16: 0) == "")
+    }
 }

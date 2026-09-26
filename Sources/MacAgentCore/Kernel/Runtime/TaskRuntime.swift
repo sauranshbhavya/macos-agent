@@ -31,6 +31,11 @@ public struct TaskFailure: Sendable, Equatable {
         reason: nil,
         message: "Another copy of Sonny on this Mac is connected, so this one can't reach its server."
     )
+    /// The gateway refused one of the task's messages as not matching the protocol.
+    public static let messageRefused = TaskFailure(
+        reason: nil,
+        message: "Sonny couldn't send this step to its server, so the task stopped."
+    )
 }
 
 public enum TaskPhase: Sendable, Equatable {
@@ -367,12 +372,31 @@ public actor TaskRuntime {
         await end(.cancelled, keepLedgerUntilAcknowledged: true)
     }
 
+    /// The gateway refused this message as not matching the protocol. Sent again it would be refused
+    /// again, and anything sent after it would leave a gap in the task's seqs, so the task ends here
+    /// and nothing more of it is sent: its outbox is emptied along with its ledger. False when the
+    /// message isn't one this task is still waiting to hear the gateway got.
+    public func refused(_ message: MessageID) async -> Bool {
+        guard record.outbox.contains(where: { $0.id == message }) else { return false }
+        record.outbox.removeAll()
+        guard !phase.isTerminal else {
+            try? deps.ledgers.delete(id)
+            return true
+        }
+        working?.cancel()
+        approval?.reply.resume(returning: false)
+        approval = nil
+        heldOutcome = nil
+        await end(.failed(.messageRefused))
+        return true
+    }
+
     public func answer(_ text: String) async {
         guard case .awaitingAnswer = phase, let askSeq else { return }
         self.askSeq = nil
         phase = .running
         record.awaiting = nil
-        await sendNew(.answer(AnswerBody(text: text)), re: askSeq)
+        await sendNew(.answer(AnswerBody(text: text.clipped(toUTF16: 4000))), re: askSeq)
     }
 
     /// Looks at the screen for the gateway's request `re` and sends what it saw.
@@ -481,7 +505,13 @@ public actor TaskRuntime {
         return ActionResult(actionID: action.actionID, status: .skipped, effect: action.effect)
     }
 
+    /// Records how an action ended. Every action result passes through here on its way to the
+    /// gateway, so this is where its text is cut to the contract's lengths, whichever capability,
+    /// screen action or cua error wrote it.
     private func answered(_ action: WireAction, _ result: ActionResult, title: String, agent: ProposingAgent) -> ActionResult {
+        var result = result
+        result.evidence = result.evidence?.clipped(toUTF16: 2000)
+        if let message = result.error?.message { result.error?.message = message.clipped(toUTF16: 1000) }
         record.update(action.actionID) {
             $0.state = Self.ledgerState(of: result.status)
             $0.title = title

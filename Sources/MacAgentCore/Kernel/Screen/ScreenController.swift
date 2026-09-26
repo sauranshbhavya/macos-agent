@@ -140,7 +140,7 @@ public actor ScreenController: ScreenControlling {
 
     public func observe(_ request: ObserveBody, generation: Int) async -> ObservationBody {
         @Sendable func failure(_ code: ObservationBody.ErrorCode, _ message: String) -> ObservationBody {
-            ObservationBody(generation: generation, error: .init(code: code, message: message))
+            Self.failure(code, message, generation: generation)
         }
         guard let app = await deps.apps.resolve(request.app) else {
             return failure(.appNotRunning, "No installed app matches \(request.app).")
@@ -218,7 +218,7 @@ public actor ScreenController: ScreenControlling {
 
     private func read(_ request: ObserveBody, app: ScreenApp, pid: pid_t, client: CuaDriverClient, generation: Int) async -> ObservationBody {
         func failure(_ code: ObservationBody.ErrorCode, _ message: String) -> ObservationBody {
-            ObservationBody(generation: generation, error: .init(code: code, message: message))
+            Self.failure(code, message, generation: generation)
         }
         let windows: [CuaWindow]
         do {
@@ -290,7 +290,7 @@ public actor ScreenController: ScreenControlling {
 
         return ObservationBody(
             generation: generation,
-            app: .init(bundleID: app.bundleID, name: app.name, pid: Int(pid)),
+            app: .init(bundleID: app.bundleID.clipped(toUTF16: 255), name: app.name.clipped(toUTF16: 255), pid: Int(pid)),
             window: .init(id: window.windowID, title: state?.windowTitle.map { Self.masked($0, limit: 500) }, frame: frame),
             ax: tree,
             screenshot: screenshot
@@ -349,12 +349,17 @@ public actor ScreenController: ScreenControlling {
         return windowShortcutKeys.contains(key) && !held.isDisjoint(with: ["cmd", "command"])
     }
 
+    /// A look that couldn't be taken, with its reason cut to the contract's length.
+    static func failure(_ code: ObservationBody.ErrorCode, _ message: String, generation: Int) -> ObservationBody {
+        ObservationBody(generation: generation, error: .init(code: code, message: message.clipped(toUTF16: 1000)))
+    }
+
     /// Secrets never leave the Mac (V2 plan section 7.4): a detected secret is masked, a secure
     /// field's value is never read out, and every field is cut to the contract's length.
     static func masked(_ text: String, limit: Int) -> String {
         let detector = SecretTextDetector()
         let masked = SecretTextDetector.mask(matches: detector.matches(in: text), in: text)
-        return String(masked.unicodeScalars.prefix(limit).map(Character.init))
+        return masked.clipped(toUTF16: limit)
     }
 
     static func tree(from state: CuaWindowState, maxNodes: Int) -> (tree: ObservationBody.Tree, elements: [String: CuaElement], secureRefs: Set<String>) {
@@ -398,14 +403,14 @@ public actor ScreenController: ScreenControlling {
             nodes.append(AXNode(
                 ref: ref,
                 depth: depth(element),
-                role: String(element.role.prefix(64)),
+                role: element.role.clipped(toUTF16: 64),
                 label: label,
                 value: value,
                 enabled: element.enabled,
                 selected: element.selected,
                 secure: secure ? true : nil,
                 frame: element.frame.map { WireRect(x: $0.x, y: $0.y, w: max(0, $0.w), h: max(0, $0.h)) },
-                actions: element.actions.isEmpty ? nil : Array(element.actions.prefix(8).map { String($0.prefix(64)) })
+                actions: element.actions.isEmpty ? nil : Array(element.actions.prefix(8).map { $0.clipped(toUTF16: 64) })
             ))
             elements[ref] = element
             if secure { secureRefs.insert(ref) }
