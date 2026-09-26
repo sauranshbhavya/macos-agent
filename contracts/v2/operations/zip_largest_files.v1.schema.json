@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://sonny.app/contracts/v2/operations/find_largest_files.v1.schema.json",
-  "title": "find_largest_files v1",
-  "description": "List the largest files in a folder, skipping links. Changes nothing. The evidence names them with their sizes. Floor effect: observe.",
+  "$id": "https://sonny.app/contracts/v2/operations/zip_largest_files.v1.schema.json",
+  "title": "zip_largest_files v1",
+  "description": "Make a zip archive of the largest files in a folder. The evidence names the archive. Floor effect: create.",
   "type": "object",
   "properties": {
     "folder": {
@@ -16,6 +16,12 @@
       "type": "integer",
       "minimum": 1,
       "maximum": 50
+    },
+    "output_path": {
+      "description": "Where to save the archive; a timestamped name in the folder when omitted.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024
     }
   },
   "required": [

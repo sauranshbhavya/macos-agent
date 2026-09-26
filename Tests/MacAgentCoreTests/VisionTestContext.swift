@@ -15,13 +15,14 @@ import MacAgentTestSupport
 enum VisionTestContext {
     static func make(
         installed: [InstalledApp],
+        whitelist: PathWhitelist = PathWhitelist(),
         vision: VisionSessionEnvironment? = nil,
         appOpener: any AppOpening = WorkspaceAppOpener(),
         browserOpener: any BrowserOpening = WorkspaceBrowserOpener(),
         focusRestorer: any FocusRestoring = FocusRestorer.inert()
     ) -> CapabilityExecutionContext {
         CapabilityExecutionContext(
-            whitelist: PathWhitelist(),
+            whitelist: whitelist,
             inventory: FileInventory(),
             zipArchiver: ProcessZipArchiver(),
             documentConverter: AutoDocumentConverter(),

@@ -396,7 +396,7 @@ describe("the planner's typed operations and server tools", () => {
         }),
         plan({
           kind: "operations",
-          operations: [op("create_zip", { paths: ["~/Downloads/a.mov", "~/Downloads/b.iso"] }, "create", "an archive exists")],
+          operations: [op("zip_largest_files", { folder: "~/Downloads", count: 3 }, "create", "an archive exists")],
           final: true,
           summary: "Zipped your three largest downloads.",
         }),
@@ -409,7 +409,7 @@ describe("the planner's typed operations and server tools", () => {
       body: { agent: "planner", final: false, actions: [{ effect: "observe", operation: { name: "find_largest_files", version: 1, args: { folder: "~/Downloads", count: 3 } } }] },
     });
     const zip = await h.outcome(scan, "done", "~/Downloads/a.mov (2 GB), ~/Downloads/b.iso (1 GB)");
-    expect(zip).toMatchObject({ type: "propose", body: { final: true, actions: [{ effect: "create", operation: { name: "create_zip" } }] } });
+    expect(zip).toMatchObject({ type: "propose", body: { final: true, actions: [{ effect: "create", operation: { name: "zip_largest_files" } }] } });
     expect(router.calls.at(-1)!.user).toContain("You ran find_largest_files");
     expect(router.calls.at(-1)!.user).toContain("~/Downloads/a.mov (2 GB)");
 

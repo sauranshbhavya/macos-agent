@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://sonny.app/contracts/v2/operations/find_docx.v1.schema.json",
   "title": "find_docx v1",
-  "description": "Find .docx files in a folder and its subfolders. The evidence lists their paths. Floor effect: observe.",
+  "description": "List the .docx files in a folder and its subfolders that don't have a PDF yet. Changes nothing. Floor effect: observe.",
   "type": "object",
   "properties": {
     "folder": {
