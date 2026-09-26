@@ -227,6 +227,13 @@ struct AdapterOperationTests {
         #expect(made.count == 1)
         #expect(made.first?.hasPrefix("largest-files-") == true)
         #expect(made.first?.hasSuffix(".zip") == true)
+
+        // A name with no extension: zip adds ".zip", and Sonny names that same file.
+        let bare = archives.appendingPathComponent("backup").path
+        let (prepared, named) = try await run(zip, ["folder": .string(folder.path), "output_path": .string(bare)])
+        #expect(named.status == .done)
+        #expect(prepared.targetIdentity.hasSuffix("/archives/backup.zip"))
+        #expect(FileManager.default.fileExists(atPath: bare + ".zip"))
     }
 
     @Test
