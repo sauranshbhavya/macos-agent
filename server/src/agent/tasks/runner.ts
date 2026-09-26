@@ -19,7 +19,7 @@ import {
   type TurnContext,
   type TurnResult,
 } from "../agent.js";
-import { creditsFor, type ModelCallLedger, type TokenRates } from "../credits.js";
+import { creditsFor, SpendCapReached, type ModelCallLedger, type TokenRates } from "../credits.js";
 import {
   PROTOCOL_VERSION,
   serverMessageSchema,
@@ -105,6 +105,11 @@ const FINISH_FOR_ERROR: Record<string, FinishBody> = {
     status: "failed",
     summary: "You're out of credits. Top up to keep going.",
     reason: "credits_exhausted",
+  },
+  spendCap: {
+    status: "failed",
+    summary: "You've used up this period's allowance.",
+    reason: "spend_cap",
   },
   budget: {
     status: "failed",
@@ -407,6 +412,7 @@ export class TaskRunner {
 
   private finishFor(error: unknown, task: TaskRecord): FinishBody {
     if (error instanceof CreditsExhausted) return FINISH_FOR_ERROR.credits!;
+    if (error instanceof SpendCapReached) return FINISH_FOR_ERROR.spendCap!;
     if (error instanceof BudgetExhausted) return FINISH_FOR_ERROR.budget!;
     if (error instanceof ModelUnavailable) return FINISH_FOR_ERROR.model!;
     this.deps.log.error({ err: error, task: task.id }, "an agent turn threw");

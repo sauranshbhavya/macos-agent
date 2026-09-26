@@ -472,6 +472,7 @@ export const progressSchema = taskMessage(
 
 export const finishReasonSchema = z.enum([
   "credits_exhausted",
+  "spend_cap",
   "budget_exhausted",
   "model_unavailable",
   "invalid_output",

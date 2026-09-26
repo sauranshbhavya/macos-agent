@@ -459,6 +459,7 @@ public struct FinishBody: Hashable, Sendable, Codable {
 
     public enum Reason: String, Hashable, Sendable, Codable {
         case creditsExhausted = "credits_exhausted"
+        case spendCap = "spend_cap"
         case budgetExhausted = "budget_exhausted"
         case modelUnavailable = "model_unavailable"
         case invalidOutput = "invalid_output"

@@ -712,7 +712,7 @@
             "status": { "description": "The gateway's claim. The Mac decides the verified status from its own evidence.", "enum": ["completed", "failed", "cancelled"] },
             "summary": { "type": "string", "maxLength": 4000 },
             "reason": {
-              "enum": ["credits_exhausted", "budget_exhausted", "model_unavailable", "invalid_output", "no_progress", "unsupported", "refused", "cancelled", "internal_error"]
+              "enum": ["credits_exhausted", "spend_cap", "budget_exhausted", "model_unavailable", "invalid_output", "no_progress", "unsupported", "refused", "cancelled", "internal_error"]
             }
           }
         }
