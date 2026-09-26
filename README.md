@@ -33,6 +33,8 @@ design. Older plans, specs and the per-branch records under `docs/changelog/` ar
   on a schedule runs unattended: anything that would need your OK is refused and reported. A watched
   page that changes starts a task that says what changed.
 - **Follow-ups.** Follow up on a finished task and the gateway picks up where it left off.
+- **Several tasks at once.** Up to three tasks run side by side and more wait their turn. Only one
+  task works inside a given app at a time.
 - **Command Center.** Tasks (running and finished, with search), Routines (run now, schedule,
   watchers) and Settings (appearance, mode, clipboard history, permissions, allowed apps,
   notifications, history).

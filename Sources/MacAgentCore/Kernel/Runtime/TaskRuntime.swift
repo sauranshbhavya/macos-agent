@@ -100,6 +100,9 @@ public struct RuntimeDependencies: Sendable {
     /// This task's screen control, or nil on a Mac that can't control apps.
     public var screen: (any ScreenControlling)?
     public var broker: ApprovalBroker
+    /// Shared by every task: an operation that brings an app forward waits here for any screen
+    /// action in flight, and screen actions wait for it.
+    public var lease: ForegroundLease
     public var publish: @Sendable (TaskSnapshot) async -> Void
     public var now: @Sendable () -> Date
 
@@ -109,6 +112,7 @@ public struct RuntimeDependencies: Sendable {
         capabilities: KernelCapabilities,
         screen: (any ScreenControlling)? = nil,
         broker: ApprovalBroker,
+        lease: ForegroundLease = .shared,
         publish: @escaping @Sendable (TaskSnapshot) async -> Void,
         now: @escaping @Sendable () -> Date = { Date() }
     ) {
@@ -117,6 +121,7 @@ public struct RuntimeDependencies: Sendable {
         self.capabilities = capabilities
         self.screen = screen
         self.broker = broker
+        self.lease = lease
         self.publish = publish
         self.now = now
     }
@@ -175,6 +180,13 @@ public actor TaskRuntime {
     public func setConnecting() async {
         guard phase == .queued else { return }
         phase = .connecting
+        await publish()
+    }
+
+    /// Connected, but every slot is taken: it waits its turn.
+    public func setQueued() async {
+        guard phase == .connecting else { return }
+        phase = .queued
         await publish()
     }
 
@@ -472,7 +484,12 @@ public actor TaskRuntime {
         case .operation(let capability, let args):
             let actionID = action.actionID
             prepareAgain = { try await capability.prepare(actionID: actionID, args: args) }
-            run = { await capability.execute($0) }
+            if capability.bringsAppForward {
+                let lease = deps.lease
+                run = { prepared in await lease.hold { await capability.execute(prepared) } }
+            } else {
+                run = { await capability.execute($0) }
+            }
         }
 
         var prepared: PreparedAction
@@ -573,6 +590,7 @@ public actor TaskRuntime {
     private func end(_ terminal: TaskPhase, keepLedgerUntilAcknowledged: Bool = false) async {
         phase = terminal
         await deps.broker.void(task: id)
+        await deps.screen?.taskEnded()
         if keepLedgerUntilAcknowledged && !record.outbox.isEmpty {
             if terminal == .cancelled { record.endedLocally = .cancelled }
             try? save()

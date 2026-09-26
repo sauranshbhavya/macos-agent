@@ -22,7 +22,7 @@ final class SonnyAppModel: ObservableObject {
     // The composer.
     @Published var composerText = ""
     /// "Don't save this task": the next request is private (decision 10). Resets once it's sent.
-    @Published var isPrivate = false
+    @Published private(set) var isPrivate = false
     @Published private(set) var followUp: FollowUp?
     @Published var mode: AgentInteractionMode {
         didSet { defaults.set(mode.rawValue, forKey: Self.modeKey) }
@@ -61,6 +61,9 @@ final class SonnyAppModel: ObservableObject {
     private var forwarding: Set<AnyCancellable> = []
     /// The private task the toggle is on for; the toggle resets when it ends.
     private var privateTask: TaskID?
+    /// Counts the person's own toggles, so a submission that finishes later can tell whether they
+    /// changed it meanwhile.
+    private var privateChoices = 0
 
     static let modeKey = "SonnyV2InteractionMode"
     /// How often schedules and watchers are checked.
@@ -168,16 +171,26 @@ final class SonnyAppModel: ObservableObject {
     private func ask(_ text: String, origin: TaskOrigin, isPrivate: Bool? = nil) {
         let isPrivate = isPrivate ?? self.isPrivate
         let prior = followUp?.task
+        let choice = privateChoices
         followUp = nil
         Task {
             guard let submission = await desk.ask(text, origin: origin, isPrivate: isPrivate, followingUp: prior) else { return }
             followedTask = submission.task
-            if isPrivate {
+            // Unless the person turned the toggle while this was being sent: their choice stands.
+            if isPrivate, choice == privateChoices {
                 privateTask = submission.task
                 self.isPrivate = true
             }
             resetPrivateIfSettled()
         }
+    }
+
+    /// The person's own choice for the next request. It takes the toggle over from the private
+    /// task it was left on for, so that task ending doesn't switch it back off.
+    func togglePrivate() {
+        privateTask = nil
+        privateChoices += 1
+        isPrivate.toggle()
     }
 
     private func resetPrivateIfSettled() {
@@ -191,15 +204,9 @@ final class SonnyAppModel: ObservableObject {
         widgetRequests += 1
     }
 
-    /// True while the task the widget follows is still going; the composer and the buttons that
-    /// start another followed task wait for it.
-    var isFollowedTaskRunning: Bool {
-        followedTask.flatMap { controller.snapshot($0) }.map { !$0.phase.isTerminal } ?? false
-    }
-
-    /// Asks for the same thing again, as a new task.
+    /// Asks for the same thing again, as a new task. Tasks run side by side, so it doesn't wait for
+    /// the one the widget follows.
     func runAgain(_ goal: String) {
-        guard !isFollowedTaskRunning else { return }
         widgetRequests += 1
         ask(goal, origin: .composer)
     }
@@ -209,7 +216,6 @@ final class SonnyAppModel: ObservableObject {
     }
 
     func run(_ routine: RoutineGoal) {
-        guard !isFollowedTaskRunning else { return }
         widgetRequests += 1
         Task { followedTask = await desk.run(routine).task }
     }

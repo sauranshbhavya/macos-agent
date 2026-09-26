@@ -103,7 +103,7 @@ struct SonnyAppModelTests {
     @Test
     func thePrivateToggleHoldsForTheWholeTaskAndResetsWhenItEnds() async throws {
         let fixture = try AppFixture()
-        fixture.model.isPrivate = true
+        fixture.model.togglePrivate()
         fixture.model.composerText = "Look up my test results"
         fixture.model.submitComposer()
         let (task, body) = try await fixture.start()
@@ -115,6 +115,57 @@ struct SonnyAppModelTests {
         #expect(await eventually { !fixture.model.isPrivate })
         try await Task.sleep(for: .milliseconds(100))
         #expect(fixture.model.desk.history.isEmpty)
+    }
+
+    @Test
+    func aSecondRequestStartsWhileTheFirstIsStillRunning() async throws {
+        let fixture = try AppFixture()
+        fixture.model.composerText = "Summarise my inbox"
+        fixture.model.submitComposer()
+        let (first, _) = try await fixture.start()
+        #expect(await eventually { fixture.model.followedTask == first })
+
+        fixture.model.composerText = "Book a table for two"
+        #expect(fixture.model.canSubmit)
+        fixture.model.submitComposer()
+        let (second, body) = try await fixture.start()
+        #expect(body.goal == "Book a table for two")
+        #expect(await eventually { fixture.model.followedTask == second })
+        #expect(fixture.model.controller.snapshot(first)?.phase.isTerminal == false)
+    }
+
+    @Test
+    func turningThePrivateToggleOnByHandSurvivesAnEarlierPrivateTaskEnding() async throws {
+        let fixture = try AppFixture()
+        fixture.model.togglePrivate()
+        fixture.model.composerText = "Look up my test results"
+        fixture.model.submitComposer()
+        let (task, _) = try await fixture.start()
+        #expect(await eventually { fixture.model.followedTask == task })
+
+        // Off, then on again by hand for the next request, while the private task still runs.
+        fixture.model.togglePrivate()
+        fixture.model.togglePrivate()
+        #expect(fixture.model.isPrivate)
+
+        await fixture.gateway.send(task, .finish(FinishBody(status: .completed, summary: "Found them.")))
+        #expect(await eventually { fixture.model.controller.snapshot(task)?.phase.isTerminal == true })
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(fixture.model.isPrivate)
+    }
+
+    @Test
+    func turningThePrivateToggleOffWhileAPrivateRequestIsBeingSentKeepsItOff() async throws {
+        let fixture = try AppFixture()
+        fixture.model.togglePrivate()
+        fixture.model.composerText = "Look up my test results"
+        fixture.model.submitComposer()
+        // Before the submission has come back.
+        fixture.model.togglePrivate()
+        let (task, body) = try await fixture.start()
+        #expect(body.isPrivate)
+        #expect(await eventually { fixture.model.followedTask == task })
+        #expect(!fixture.model.isPrivate)
     }
 
     @Test

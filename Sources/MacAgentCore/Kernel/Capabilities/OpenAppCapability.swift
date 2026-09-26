@@ -9,6 +9,7 @@ import Foundation
 public struct OpenAppCapability: Capability {
     public let name = "open_app"
     public let version = 1
+    public let bringsAppForward = true
 
     struct Args: Decodable {
         let app: String

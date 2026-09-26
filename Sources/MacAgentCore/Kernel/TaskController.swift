@@ -45,7 +45,7 @@ public struct TaskRequest: Sendable, Equatable {
 
 public enum TaskSubmission: Sendable, Equatable {
     case started(TaskID)
-    /// Another task is running; this one starts when it ends.
+    /// As many tasks as run at once are running; this one starts when one of them ends.
     case queued(TaskID)
     case failed(TaskID, TaskFailure)
 
@@ -59,8 +59,9 @@ public enum TaskSubmission: Sendable, Equatable {
 /// The one thing the UI talks to. It submits requests, publishes a snapshot per task, and routes
 /// approvals, answers and cancels by task and action id — never by which window is in front.
 ///
-/// One task runs at a time for now; later ones wait their turn (V2 plan, "Later — concurrent
-/// tasks").
+/// Up to `maxLiveTasks` tasks run at once, and later ones wait their turn (V2 plan, "Later —
+/// concurrent tasks"). Tasks share the Mac through the foreground lease, and an app's screen work
+/// belongs to one task at a time.
 @MainActor
 public final class TaskController: ObservableObject {
     @Published public private(set) var tasks: [TaskSnapshot] = []
@@ -70,7 +71,8 @@ public final class TaskController: ObservableObject {
     /// Instant-path tasks: they never touch the gateway, so they sit out hello and welcome.
     private var localTasks: Set<TaskID> = []
     private var waiting: [TaskID] = []
-    private var liveTask: TaskID?
+    private var liveTasks: Set<TaskID> = []
+    private let maxLiveTasks: Int
     private var generation: UInt64 = 0
     private var connection: GatewayConnection!
     private let ledgers: any TaskLedgerStoring
@@ -79,6 +81,7 @@ public final class TaskController: ObservableObject {
     private let screenTools: Set<ScreenToolName>
     private let screenFactory: @Sendable () -> (any ScreenControlling)?
     private let broker: ApprovalBroker
+    private let lease: ForegroundLease
     private let permissions: @Sendable () -> Manifest.Permissions
     private let connectTimeout: TimeInterval
     private let now: @Sendable () -> Date
@@ -96,8 +99,12 @@ public final class TaskController: ObservableObject {
         permissions: @escaping @Sendable () -> Manifest.Permissions,
         backoff: GatewayBackoff = GatewayBackoff(),
         connectTimeout: TimeInterval = 8,
+        maxLiveTasks: Int = TaskController.defaultMaxLiveTasks,
+        lease: ForegroundLease = .shared,
         now: @escaping @Sendable () -> Date = { Date() }
     ) {
+        self.maxLiveTasks = max(1, maxLiveTasks)
+        self.lease = lease
         self.ledgers = ledgers
         self.capabilities = capabilities
         self.localCapabilities = KernelCapabilities(capabilities.all + localCapabilities)
@@ -134,7 +141,7 @@ public final class TaskController: ObservableObject {
             runtimes[record.task] = runtime
             let snapshot = await runtime.snapshot()
             // A task that already ended here only has messages to deliver; it holds no slot.
-            if liveTask == nil, !snapshot.phase.isTerminal { liveTask = record.task }
+            if !snapshot.phase.isTerminal { liveTasks.insert(record.task) }
             apply(snapshot)
         }
         await connection.start()
@@ -158,11 +165,12 @@ public final class TaskController: ObservableObject {
             await runtime.fail(.serverUnavailable)
             return .failed(id, .serverUnavailable)
         }
-        if liveTask != nil {
+        if liveTasks.count >= maxLiveTasks || !waiting.isEmpty {
             waiting.append(id)
+            await runtime.setQueued()
             return .queued(id)
         }
-        liveTask = id
+        liveTasks.insert(id)
         await runtime.start(generation: generation)
         return .started(id)
     }
@@ -192,6 +200,10 @@ public final class TaskController: ObservableObject {
 
     /// Local tasks' connection generation. A gateway connection's generations start at 1.
     static let localGeneration: UInt64 = 0
+
+    /// How many model-backed tasks run at once. Each holds a planner on the gateway and may hold an
+    /// app's screen work, so a few is plenty; more wait their turn.
+    public static let defaultMaxLiveTasks = 3
 
     public func cancel(_ task: TaskID) async {
         if let index = waiting.firstIndex(of: task) {
@@ -234,6 +246,7 @@ public final class TaskController: ObservableObject {
             capabilities: local == nil ? capabilities : localCapabilities,
             screen: screenFactory(),
             broker: broker,
+            lease: lease,
             publish: { [weak self] snapshot in await self?.apply(snapshot) },
             now: now
         )
@@ -270,8 +283,7 @@ public final class TaskController: ObservableObject {
         } else {
             tasks.append(snapshot)
         }
-        if snapshot.phase.isTerminal, liveTask == snapshot.id {
-            liveTask = nil
+        if snapshot.phase.isTerminal, liveTasks.remove(snapshot.id) != nil {
             Task { await self.startNext() }
         }
         if snapshot.phase.isTerminal { forgetOldFinishedTasks() }
@@ -291,19 +303,21 @@ public final class TaskController: ObservableObject {
         }
     }
 
+    /// Starts waiting tasks, oldest first, while there are free slots.
     private func startNext() async {
-        guard liveTask == nil, !waiting.isEmpty else { return }
-        let next = waiting.removeFirst()
-        guard let runtime = runtimes[next] else { return }
-        // Claimed before the wait below, so a second call can't start another task meanwhile.
-        liveTask = next
-        guard await connection.ensureConnected(within: connectTimeout) else {
-            liveTask = nil
-            await runtime.fail(.serverUnavailable)
-            await startNext()
-            return
+        while liveTasks.count < maxLiveTasks, !waiting.isEmpty {
+            let next = waiting.removeFirst()
+            guard let runtime = runtimes[next] else { continue }
+            // Claimed before the wait below, so a second call can't start more tasks than there are
+            // slots.
+            liveTasks.insert(next)
+            guard await connection.ensureConnected(within: connectTimeout) else {
+                liveTasks.remove(next)
+                await runtime.fail(.serverUnavailable)
+                continue
+            }
+            await runtime.start(generation: generation)
         }
-        await runtime.start(generation: generation)
     }
 }
 

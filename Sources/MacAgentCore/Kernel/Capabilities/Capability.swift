@@ -121,6 +121,14 @@ public protocol Capability: Sendable {
 
     /// Runs a prepared action. Must honour task cancellation where it can.
     func execute(_ prepared: PreparedAction) async -> CapabilityOutcome
+
+    /// True for an operation that brings an app to the front. It runs under the foreground lease,
+    /// so it can't pull another app forward in the middle of another task's screen action.
+    var bringsAppForward: Bool { get }
+}
+
+extension Capability {
+    public var bringsAppForward: Bool { false }
 }
 
 /// The capabilities this Mac has, keyed by operation name and version.

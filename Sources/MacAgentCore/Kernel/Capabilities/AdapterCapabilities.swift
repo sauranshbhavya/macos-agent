@@ -15,6 +15,7 @@ public struct AdapterCapability: Capability {
     let adapter: any CapabilityAdapter
     /// An observe operation answered from the adapter's preview alone; nothing runs.
     let previewOnly: Bool
+    public var bringsAppForward = false
     let context: @MainActor @Sendable () -> CapabilityExecutionContext
     let steps: @Sendable ([String: JSONValue]) throws -> [AgentStep]
     /// What an adapter pinned the first time an action was prepared. The kernel prepares an action
@@ -215,6 +216,7 @@ public enum AdapterCapabilities {
             _ floor: Effect,
             _ adapter: any CapabilityAdapter,
             previewOnly: Bool = false,
+            bringsAppForward: Bool = false,
             _ steps: @escaping @Sendable (OperationArgs) throws -> [AgentStep]
         ) -> AdapterCapability {
             AdapterCapability(
@@ -222,27 +224,28 @@ public enum AdapterCapabilities {
                 floor: floor,
                 adapter: adapter,
                 previewOnly: previewOnly,
+                bringsAppForward: bringsAppForward,
                 context: context,
                 steps: { try steps(OperationArgs($0)) }
             )
         }
 
         return [
-            capability("switch_app", .navigate, RunningAppSwitchCapabilityAdapter()) { args in
+            capability("switch_app", .navigate, RunningAppSwitchCapabilityAdapter(), bringsAppForward: true) { args in
                 let app = try args.text("app")
                 return [step(.switchRunningApp) { $0.appName = app }]
             },
-            capability("open_url", .navigate, OpenSafeURLCapabilityAdapter()) { args in
+            capability("open_url", .navigate, OpenSafeURLCapabilityAdapter(), bringsAppForward: true) { args in
                 let url = try args.text("url")
                 let browser = try args.optionalText("browser")
                 return [step(.openURL) { $0.targetURL = url; $0.browserName = browser }]
             },
-            capability("open_app_search", .navigate, OpenAppSearchURLCapabilityAdapter()) { args in
+            capability("open_app_search", .navigate, OpenAppSearchURLCapabilityAdapter(), bringsAppForward: true) { args in
                 let app = try args.text("app")
                 let query = try args.text("query")
                 return [step(.openAppSearchURL) { $0.appName = app; $0.searchQuery = query }]
             },
-            capability("play_media", .navigate, OpenMediaResultCapabilityAdapter()) { args in
+            capability("play_media", .navigate, OpenMediaResultCapabilityAdapter(), bringsAppForward: true) { args in
                 guard let provider = MediaProvider(rawValue: try args.text("provider")) else {
                     throw CapabilityPrepareError.invalidArguments("provider is apple_music or spotify.")
                 }
@@ -256,11 +259,11 @@ public enum AdapterCapabilities {
                     $0.targetURL = url
                 }]
             },
-            capability("open_file", .navigate, OpenGeneratedArtifactCapabilityAdapter()) { args in
+            capability("open_file", .navigate, OpenGeneratedArtifactCapabilityAdapter(), bringsAppForward: true) { args in
                 let path = try args.text("path")
                 return [step(.openGeneratedArtifact) { $0.outputPath = path }]
             },
-            capability("reveal_in_finder", .navigate, RevealInFinderCapabilityAdapter(reveal: finderRevealer)) { args in
+            capability("reveal_in_finder", .navigate, RevealInFinderCapabilityAdapter(reveal: finderRevealer), bringsAppForward: true) { args in
                 let path = try args.text("path")
                 return [step(.revealInFinder) { $0.outputPath = path }]
             },
@@ -285,7 +288,8 @@ public enum AdapterCapabilities {
                 let folder = try args.text("folder")
                 return [step(.scanDocx) { $0.inputPath = folder }]
             },
-            capability("convert_docx_to_pdf", .create, DocxConversionCapabilityAdapter()) { args in
+            // Word does the conversion, and opening the document can bring Word forward.
+            capability("convert_docx_to_pdf", .create, DocxConversionCapabilityAdapter(), bringsAppForward: true) { args in
                 let folder = try args.text("folder")
                 let output = try args.optionalText("output_folder")
                 return [step(.scanDocx) { $0.inputPath = folder }, step(.convertDocxToPDF) { $0.outputPath = output }]
