@@ -76,6 +76,7 @@ struct RoutinesPage: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             Button("Run now") { model.run(routine) }
                 .buttonStyle(SonnyButtonStyle(tone: .secondary))
+                .disabled(model.isFollowedTaskRunning)
             Button("Schedule") { editing = routine }
                 .buttonStyle(SonnyButtonStyle(tone: .secondary))
             Button {

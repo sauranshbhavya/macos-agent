@@ -108,7 +108,7 @@ struct WidgetView: View {
     // MARK: Composer
 
     private var composerIsBusy: Bool {
-        model.followedTask.flatMap { model.controller.snapshot($0) }.map { !$0.phase.isTerminal } ?? false
+        model.isFollowedTaskRunning
     }
 
     private var composerPill: some View {
@@ -164,7 +164,7 @@ struct WidgetView: View {
                     .contentShape(Circle())
             }
             .buttonStyle(.plain)
-            .disabled(composerIsBusy)
+            .disabled(composerIsBusy || model.voice != .idle)
             .accessibilityLabel("Don't save this task")
             .accessibilityValue(model.isPrivate ? "On" : "Off")
             .accessibilityAddTraits(model.isPrivate ? [.isButton, .isSelected] : .isButton)

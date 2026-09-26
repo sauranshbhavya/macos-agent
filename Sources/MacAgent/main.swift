@@ -12,10 +12,14 @@ let app = NSApplication.shared
 // two token caches, and the server reads a second refresh as a stolen token.
 let accountModel = SonnyAccountModel.atItsRealKeychainLocation()
 let screenAccessModel = ScreenAccessOnboardingModel()
-let kernelStores = KernelStores(
-    folder: (try? KernelStores.applicationSupportFolder())
-        ?? FileManager.default.temporaryDirectory.appendingPathComponent("Sonny/V2", isDirectory: true)
-)
+let kernelStores: KernelStores
+do {
+    kernelStores = KernelStores(folder: try KernelStores.applicationSupportFolder())
+} catch {
+    // Keeps Sonny usable this launch; what it saves goes to a folder macOS may clear.
+    print("Sonny could not open Application Support (\(error.localizedDescription)); keeping its data in a temporary folder this launch.")
+    kernelStores = KernelStores(folder: FileManager.default.temporaryDirectory.appendingPathComponent("Sonny/V2", isDirectory: true))
+}
 let appModel = SonnyAppModel(
     desk: SonnyKernel.makeDesk(client: accountModel.backendClient, stores: kernelStores),
     stores: kernelStores,

@@ -54,6 +54,8 @@ final class SonnyAppModel: ObservableObject {
     private var pulse: Timer?
     private var clipboardTimer: Timer?
     private var voiceLimit: Task<Void, Never>?
+    /// The private setting when listening began; the transcription and the task both keep it.
+    private var voicePrivate = false
     private var forwarding: Set<AnyCancellable> = []
     /// The private task the toggle is on for; the toggle resets when it ends.
     private var privateTask: TaskID?
@@ -147,14 +149,17 @@ final class SonnyAppModel: ObservableObject {
     }
 
     /// The private toggle stays as it was for the whole task and resets once the task settles.
-    private func ask(_ text: String, origin: TaskOrigin) {
-        let isPrivate = self.isPrivate
+    private func ask(_ text: String, origin: TaskOrigin, isPrivate: Bool? = nil) {
+        let isPrivate = isPrivate ?? self.isPrivate
         let prior = followUp?.task
         followUp = nil
         Task {
             guard let submission = await desk.ask(text, origin: origin, isPrivate: isPrivate, followingUp: prior) else { return }
             followedTask = submission.task
-            if isPrivate { privateTask = submission.task }
+            if isPrivate {
+                privateTask = submission.task
+                self.isPrivate = true
+            }
             resetPrivateIfSettled()
         }
     }
@@ -170,8 +175,15 @@ final class SonnyAppModel: ObservableObject {
         widgetRequests += 1
     }
 
+    /// True while the task the widget follows is still going; the composer and the buttons that
+    /// start another followed task wait for it.
+    var isFollowedTaskRunning: Bool {
+        followedTask.flatMap { controller.snapshot($0) }.map { !$0.phase.isTerminal } ?? false
+    }
+
     /// Asks for the same thing again, as a new task.
     func runAgain(_ goal: String) {
+        guard !isFollowedTaskRunning else { return }
         widgetRequests += 1
         ask(goal, origin: .composer)
     }
@@ -181,6 +193,7 @@ final class SonnyAppModel: ObservableObject {
     }
 
     func run(_ routine: RoutineGoal) {
+        guard !isFollowedTaskRunning else { return }
         widgetRequests += 1
         Task { followedTask = await desk.run(routine).task }
     }
@@ -237,6 +250,7 @@ final class SonnyAppModel: ObservableObject {
     func beginVoice() {
         guard voice == .idle else { return }
         voiceProblem = nil
+        voicePrivate = isPrivate
         Task {
             guard await AudioCommandRecorder.requestMicrophonePermission() else {
                 voiceProblem = "Sonny needs the microphone. Allow it in System Settings › Privacy & Security › Microphone."
@@ -272,7 +286,7 @@ final class SonnyAppModel: ObservableObject {
         voice = .transcribing
         let transcriber = OpenAITranscriber(
             client: client,
-            taskContext: BackendTaskContext(taskID: UUID().uuidString, retention: isPrivate ? .notStored : .standard)
+            taskContext: BackendTaskContext(taskID: UUID().uuidString, retention: voicePrivate ? .notStored : .standard)
         )
         Task {
             defer { try? FileManager.default.removeItem(at: recording.url) }
@@ -284,7 +298,7 @@ final class SonnyAppModel: ObservableObject {
                     voiceProblem = "Sonny didn't hear anything."
                     return
                 }
-                ask(heard, origin: .voice)
+                ask(heard, origin: .voice, isPrivate: voicePrivate)
             } catch {
                 voice = .idle
                 voiceProblem = (error as? LocalizedError)?.errorDescription ?? "Sonny couldn't understand the recording."

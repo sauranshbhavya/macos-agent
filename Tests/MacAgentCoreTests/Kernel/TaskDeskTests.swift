@@ -48,8 +48,8 @@ private struct DeskFixture {
         await desk.load()
     }
 
-    func startBody() async throws -> (TaskID, TaskStartBody) {
-        let message = try await gateway.next("task.start")
+    func startBody(within timeout: TimeInterval = 120) async throws -> (TaskID, TaskStartBody) {
+        let message = try await gateway.next("task.start", timeout: timeout)
         guard case .taskStart(let body) = message.payload, let task = message.address?.task else {
             throw KernelTestFailure("not a task.start")
         }
@@ -181,6 +181,31 @@ struct TaskDeskTests {
         let notice = try #require(fixture.desk.notices.first { $0.task == task })
         #expect(notice.kind == .unattendedRun)
         #expect(notice.message.contains("\"Weekly report\" stopped where it needed you"))
+    }
+
+    @Test
+    func twoScheduleChecksAtOnceStartEachOccurrenceOnce() async throws {
+        let fixture = try DeskFixture()
+        // Not launched: the first start opens the socket, which is when a second check could read
+        // a list the first one hasn't finished marking.
+        let now = fixture.clock.value
+        let time = Calendar.autoupdatingCurrent.dateComponents([.hour, .minute], from: now.addingTimeInterval(-3600))
+        for name in ["Standup", "Timesheet"] {
+            let timing = RoutineSchedule.newlyCreated(cadence: .daily, hour: time.hour!, minute: time.minute!, now: now.addingTimeInterval(-7200))
+            try await fixture.routines.save(RoutineGoal(name: name, goal: "Do the \(name)", schedule: nil, timing: timing, savedAt: now))
+        }
+
+        async let first: Void = fixture.desk.runDueRoutines()
+        async let second: Void = fixture.desk.runDueRoutines()
+        _ = await (first, second)
+        // One task runs at a time, so each start is finished to let the next one through; a
+        // duplicate would show up as a third.
+        var goals: [String] = []
+        while let (task, body) = try? await fixture.startBody(within: 2) {
+            goals.append(body.goal)
+            await fixture.finish(task)
+        }
+        #expect(goals.sorted() == ["Do the Standup", "Do the Timesheet"])
     }
 
     @Test

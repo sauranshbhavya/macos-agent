@@ -58,6 +58,7 @@ public final class TaskDesk: ObservableObject {
     /// Tasks nobody started at the Mac, with the name the notice about each one uses.
     private var unattended: [TaskID: String] = [:]
     private var watcherCheck: Task<Void, Never>?
+    private var scheduleCheck: Task<Void, Never>?
     private var watching: AnyCancellable?
 
     /// The longest goal the protocol carries.
@@ -135,8 +136,20 @@ public final class TaskDesk: ObservableObject {
     }
 
     /// Starts every routine whose time has come. A scheduled run is unattended: anything that
-    /// would need a yes is refused, and the person hears about it afterwards.
+    /// would need a yes is refused, and the person hears about it afterwards. A check that starts
+    /// while another is still running waits for it rather than reading the same occurrences again.
     public func runDueRoutines() async {
+        if let running = scheduleCheck {
+            await running.value
+            return
+        }
+        let check = Task { await self.startDueRoutines() }
+        scheduleCheck = check
+        await check.value
+        scheduleCheck = nil
+    }
+
+    private func startDueRoutines() async {
         for routine in await routineStore.all() {
             guard var timing = routine.timing else { continue }
             let decision = RoutineScheduler.decision(for: timing, now: now(), calendar: calendar)
