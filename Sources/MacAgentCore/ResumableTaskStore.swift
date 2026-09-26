@@ -101,20 +101,6 @@ public struct ResumableTask: Codable, Equatable, Sendable, Identifiable {
     /// it answers "when" as well as "whether" at no extra cost, and a file written before this field
     /// existed decodes as never declined.
     public var declinedAt: Date?
-    /// The items of a job over many items that this run tried and could not do (SONNY-235). Empty
-    /// for every record that is not a job, and for a job in which nothing has failed.
-    ///
-    /// **The one thing about a job's progress that is stored rather than derived.** Which items
-    /// finished is already `completedStepIDs` read through the plan's own `AgentStep.itemIndex` —
-    /// see `ItemJobProgress` — so recording it here as well would be two homes for one fact.
-    /// A failed item is indistinguishable from an item that never ran by that route: neither has
-    /// completed steps. So the failures are written, and the completions are computed.
-    ///
-    /// **A resume starts this empty rather than carrying it forward.** A failed item's steps are
-    /// still in `remainingPlan()`, so Continue re-attempts it — which is what Continue means for a
-    /// job that is not finished — and a failure carried across that retry would describe an attempt
-    /// that has been replaced.
-    public var itemJobFailures: [ItemJobFailure]
 
     /// The longest `command` this keeps, in characters. Display-only text, so trimming it is safe in
     /// the way trimming the plan is not.
@@ -129,8 +115,7 @@ public struct ResumableTask: Codable, Equatable, Sendable, Identifiable {
         startedAt: Date,
         updatedAt: Date,
         stopReason: ResumableTaskStopReason = .interrupted,
-        declinedAt: Date? = nil,
-        itemJobFailures: [ItemJobFailure] = []
+        declinedAt: Date? = nil
     ) {
         self.id = id
         self.command = Self.cappedCommand(command)
@@ -145,7 +130,6 @@ public struct ResumableTask: Codable, Equatable, Sendable, Identifiable {
         self.updatedAt = updatedAt
         self.stopReason = stopReason
         self.declinedAt = declinedAt
-        self.itemJobFailures = itemJobFailures
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -158,7 +142,6 @@ public struct ResumableTask: Codable, Equatable, Sendable, Identifiable {
         case updatedAt
         case stopReason
         case declinedAt
-        case itemJobFailures
     }
 
     /// Written out rather than synthesized so a decoded record runs through the same command cap and
@@ -178,11 +161,7 @@ public struct ResumableTask: Codable, Equatable, Sendable, Identifiable {
             // `decodeIfPresent`, so every record written before SONNY-282 reads as never declined
             // rather than failing to decode — which would take the whole file, and every other
             // unfinished task in it, down with it.
-            declinedAt: try container.decodeIfPresent(Date.self, forKey: .declinedAt),
-            // `decodeIfPresent` for `declinedAt`'s reason: a record written before SONNY-235 reads
-            // as a job that has failed nothing rather than failing to decode, which would take the
-            // whole file and every other unfinished task in it down with it.
-            itemJobFailures: try container.decodeIfPresent([ItemJobFailure].self, forKey: .itemJobFailures) ?? []
+            declinedAt: try container.decodeIfPresent(Date.self, forKey: .declinedAt)
         )
     }
 
@@ -190,12 +169,6 @@ public struct ResumableTask: Codable, Equatable, Sendable, Identifiable {
     /// Memory list and `mayBeOfferedForResume` deliberately do not — see `declinedAt`.
     public var isDeclined: Bool { declinedAt != nil }
 
-    /// How far this job over many items got, or `nil` when this record is not one (SONNY-235).
-    /// Everything it reports is computed from this record's own plan, its completed step ids and its
-    /// failures — see `ItemJobProgress`.
-    public var itemJobProgress: ItemJobProgress? {
-        ItemJobProgress.of(plan: plan, completedStepIDs: completedStepIDs, failures: itemJobFailures)
-    }
 
     /// The steps this run has not finished, in plan order.
     public var remainingSteps: [AgentStep] {
@@ -272,16 +245,7 @@ public struct ResumableTask: Codable, Equatable, Sendable, Identifiable {
         AgentPlan(
             summary: plan.summary,
             requiresConfirmation: plan.requiresConfirmation,
-            steps: remainingSteps,
-            // **The declaration and the whole item list, with the earlier attempt's unavailable items
-            // cleared** — the same rule, and the same reason, as `itemJobFailures` starting empty on a
-            // resume. Those items were reported by the run that met them; carrying them would make the
-            // remainder report a failure it never experienced and count itself larger than it is.
-            itemJob: plan.itemJob.map { job in
-                var carried = job
-                carried.unavailableItems = []
-                return carried
-            }
+            steps: remainingSteps
         )
     }
 
@@ -301,16 +265,7 @@ public struct ResumableTask: Codable, Equatable, Sendable, Identifiable {
     /// carried, which is what `executeChain`'s own item-boundary reset would have done had the value
     /// not arrived pre-applied.
     public var chainedArtifactPathForRemainder: String? {
-        guard plan.itemJob != nil else {
-            return chainedArtifactPath
-        }
-        let done = Set(completedStepIDs)
-        let lastCompletedItem = plan.steps.last { done.contains($0.id) }?.itemIndex
-        let nextItem = remainingSteps.first?.itemIndex
-        guard lastCompletedItem == nextItem else {
-            return nil
-        }
-        return chainedArtifactPath
+        chainedArtifactPath
     }
 
     private static func cappedCommand(_ value: String) -> String {

@@ -3,6 +3,9 @@ import MacAgentTestSupport
 import Testing
 @testable import MacAgentCore
 
+/// The pack price the fixtures below read, in the gateway's own terms.
+private let TEST_PACK_PRICE = ScreenControlMoney(amount: 500, currency: "usd")
+
 /// Reading "screen-control runs left this month" off the gateway (SONNY-212).
 ///
 /// **The client half of this ticket is a read and nothing else**, so this suite is about exactly

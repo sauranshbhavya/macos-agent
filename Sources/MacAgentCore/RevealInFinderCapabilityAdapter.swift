@@ -95,17 +95,6 @@ public struct RevealInFinderCapabilityAdapter: CapabilityAdapter {
         displayName: "Reveal in Finder",
         description: "Reveal a whitelisted path in Finder.",
         operations: [.revealInFinder],
-        plannerTools: [
-            AgentTool(
-                operation: .revealInFinder,
-                name: "Reveal path in Finder",
-                description: "Reveal a specific whitelisted path in Finder, or reveal the most recent file produced earlier in the same chain when outputPath is null.",
-                requiredFields: [],
-                sideEffects: ["open Finder"],
-                dryRunBehavior: "Show the path that would be revealed.",
-                examples: ["Reveal the zip in Finder", "Show the generated Markdown in Finder"]
-            )
-        ],
         requiredPermissions: [
             CapabilityPermissionMetadata(requirement: .desktopDocumentsAccess),
             CapabilityPermissionMetadata(requirement: .appOpening)

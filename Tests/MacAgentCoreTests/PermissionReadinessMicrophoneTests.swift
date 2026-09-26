@@ -45,7 +45,7 @@ struct PermissionReadinessMicrophoneTests {
     /// and only running both told them apart.
     ///
     /// What genuinely is not detectable from inside a test is a *fixture's* readiness default being
-    /// reverted to a live service — `makeExecutor`'s and `VisionTestContext`'s, mutated to
+    /// reverted to a live service — `makeExecutor`'s and `CapabilityTestContext`'s, mutated to
     /// `PermissionReadinessService()`, both left the whole suite green. No assertion can catch that,
     /// because the deterministic default is a state a real Mac can also be in. That gap is closed in
     /// the source instead, by `LivePermissionCheckerScanTests`, and those two mutants die against

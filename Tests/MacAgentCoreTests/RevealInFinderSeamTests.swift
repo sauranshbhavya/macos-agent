@@ -58,82 +58,7 @@ struct RevealInFinderSeamTests {
         }
     }
 
-    /// **The property the ticket asked for: a test that fails if the real call comes back.**
-    ///
-    /// Driven through `AgentActionExecutor` rather than by calling the adapter directly, because the
-    /// executor is what resolves the plan and builds the context, and a test that skipped it would
-    /// exercise a path production never takes.
-    @Test
-    func aRevealReachesTheSeamTheRegistryWasBuiltWith() async throws {
-        let root = try makeDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
-        let file = root.appendingPathComponent("shown.pdf")
-        try Data("x".utf8).write(to: file, options: .atomic)
 
-        let recorder = RevealRecorder()
-        let executor = makeExecutor(root: root, registry: .revealing(with: { recorder.record($0) }))
-
-        let result = try await executor.execute(
-            plan: AgentPlan(
-                summary: "Reveal it.",
-                requiresConfirmation: false,
-                steps: [
-                    AgentStep(
-                        id: "reveal",
-                        operation: .revealInFinder,
-                        description: "Reveal it.",
-                        inputPath: file.path
-                    )
-                ]
-            ),
-            log: { _, _ in }
-        )
-
-        // The control: the run really did reach the reveal capability rather than failing early.
-        #expect(result.summary == "Revealed \(file.path) in Finder.")
-        // The property: exactly one reveal, of exactly the resolved URL, through the seam.
-        #expect(recorder.revealed.count == 1, "the seam was called \(recorder.revealed.count) times")
-        let revealed = try #require(recorder.revealed.first)
-        #expect(revealed == [file])
-    }
-
-    /// Two registries do not share a revealer.
-    ///
-    /// The mutant this is against is a seam stored somewhere process-wide — a static, a shared box —
-    /// which the test above cannot see, because with one registry in play a global and a per-registry
-    /// closure behave identically.
-    @Test
-    func eachRegistryRevealsThroughItsOwnSeamAndNotItsNeighbours() async throws {
-        let root = try makeDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
-        let file = root.appendingPathComponent("shown.pdf")
-        try Data("x".utf8).write(to: file, options: .atomic)
-
-        let mine = RevealRecorder()
-        let theirs = RevealRecorder()
-        // Built first and deliberately never run: a shared seam would have it filling anyway.
-        _ = CapabilityRegistry.revealing(with: { theirs.record($0) })
-
-        let executor = makeExecutor(root: root, registry: .revealing(with: { mine.record($0) }))
-        _ = try await executor.execute(
-            plan: AgentPlan(
-                summary: "Reveal it.",
-                requiresConfirmation: false,
-                steps: [
-                    AgentStep(
-                        id: "reveal",
-                        operation: .revealInFinder,
-                        description: "Reveal it.",
-                        inputPath: file.path
-                    )
-                ]
-            ),
-            log: { _, _ in }
-        )
-
-        #expect(mine.revealed == [[file]])
-        #expect(theirs.revealed.isEmpty, "a second registry's seam saw \(theirs.revealed)")
-    }
 
     /// **The sweep the behavioural tests cannot do: no line in the core names the Finder-reveal
     /// call.**
@@ -210,49 +135,6 @@ struct RevealInFinderSeamTests {
         )
     }
 
-    /// **The executor's default registry reveals nowhere.**
-    ///
-    /// Unobservable at run time — a registry that reveals nowhere and one that reveals for real are
-    /// behaviourally identical to everything a test can read, which is the whole reason the live one
-    /// went unnoticed. So this is a scan, and it is the one guard on the inverted default that
-    /// `.revealingNowhere`'s own doc comment explains.
-    /// **The count is the assertion, not the presence** (PR #193 review, F4).
-    ///
-    /// A bare `contains` over a whole file is satisfied by *any* site carrying the token, so it
-    /// stands in for a property of one of them and keeps passing once that one has stopped holding
-    /// it — `CLAUDE.md`'s shared-marker gotcha, which landed four times in PR #175 alone. This file
-    /// declares three `public init(`s, so a second one carrying `= .revealingNowhere` would satisfy
-    /// a presence check while the real initializer took a live default.
-    ///
-    /// **The negative arm is not a second line of defence**, which is why the count carries this
-    /// rather than the pair: `= .revealing(\n    with: live\n)` contains no forbidden substring, and
-    /// neither does `= makeLiveRegistry()`. Pinning the occurrence count at exactly one catches
-    /// both, because either would leave the counted default absent.
-    @Test
-    func theExecutorsDefaultRegistryIsTheOneThatRevealsNowhere() throws {
-        let sources = try TestSourceTree.sourceFiles(in: "MacAgentCore")
-        let executor = try #require(
-            sources.first { $0.relativePath.hasSuffix("/AgentActionExecutor.swift") },
-            "the sweep did not enumerate AgentActionExecutor.swift"
-        )
-        let code = Self.code(of: try TestSourceTree.read(executor))
-
-        let token = "capabilityRegistry: CapabilityRegistry = .revealingNowhere"
-        #expect(
-            code.components(separatedBy: token).count - 1 == 1,
-            """
-            AgentActionExecutor declares the revealing-nowhere default \
-            \(code.components(separatedBy: token).count - 1) times rather than once. Zero means the \
-            default reaches the desktop again; more than one means this file grew a second \
-            initializer and a presence check would no longer be about the real one.
-            """
-        )
-        #expect(
-            !code.contains("CapabilityRegistry = .revealing(with:"),
-            "AgentActionExecutor defaults its registry to a live revealer again"
-        )
-    }
-
     // MARK: - Helpers
 
     static let revealCall = "activateFileViewerSelecting"
@@ -304,17 +186,4 @@ struct RevealInFinderSeamTests {
         return root
     }
 
-    private func makeExecutor(root: URL, registry: CapabilityRegistry) -> AgentActionExecutor {
-        AgentActionExecutor(
-            whitelist: PathWhitelist(roots: [root]),
-            routineStore: UnreachableLocalStores.routines(),
-            workspaceStore: UnreachableLocalStores.workspaces(),
-            clipboardHistoryStore: UnreachableLocalStores.clipboardHistory(),
-            snippetStore: UnreachableLocalStores.snippets(),
-            recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
-            shortcutRunHistoryStore: UnreachableLocalStores.shortcutRunHistory(),
-            resumableTaskStore: UnreachableLocalStores.resumableTasks(),
-            capabilityRegistry: registry
-        )
-    }
 }

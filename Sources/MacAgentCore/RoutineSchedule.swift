@@ -378,24 +378,4 @@ public struct RoutineSchedule: Codable, Equatable, Sendable {
         try container.encode(activation, forKey: .activation)
     }
 
-    /// Checked at the single choke point every write goes through (`RoutineStore.save`), the same
-    /// way `SnippetStore.save` validates a trigger — not in `init`, which `Decodable` bypasses.
-    func validate() throws {
-        guard (0...23).contains(hour), (0...59).contains(minute) else {
-            throw AutomationStoreError.invalidSchedule("Run time must be a real time of day.")
-        }
-
-        switch cadence {
-        case .daily:
-            break
-        case .weekly:
-            guard let weekday, (1...7).contains(weekday) else {
-                throw AutomationStoreError.invalidSchedule("A weekly routine needs a weekday.")
-            }
-        case .monthly:
-            guard let dayOfMonth, (1...31).contains(dayOfMonth) else {
-                throw AutomationStoreError.invalidSchedule("A monthly routine needs a day of the month.")
-            }
-        }
-    }
 }

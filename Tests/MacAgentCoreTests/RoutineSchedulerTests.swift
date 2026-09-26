@@ -377,57 +377,7 @@ struct RoutineSchedulerTests {
 
     // MARK: - Selecting across many routines
 
-    @Test
-    func dueRoutinesReturnsOnlyTheEnabledOutstandingOnes() throws {
-        let calendar = try easternCalendar()
-        let anchoredYesterday = try date(2026, 7, 14, 12, 0, calendar)
-        var enabled = RoutineSchedule(cadence: .daily, hour: 9, minute: 0)
-        enabled.setEnabled(true, now: anchoredYesterday)
-        var alreadyRan = RoutineSchedule(cadence: .daily, hour: 9, minute: 0)
-        alreadyRan.setEnabled(true, now: anchoredYesterday)
-        alreadyRan.lastRunAt = try date(2026, 7, 15, 9, 0, calendar)
-        var disabled = RoutineSchedule(cadence: .daily, hour: 9, minute: 0)
-        disabled.lastRunAt = anchoredYesterday
 
-        let routines = [
-            StoredRoutine(name: "Due", steps: [.fixture], schedule: enabled),
-            StoredRoutine(name: "Already ran", steps: [.fixture], schedule: alreadyRan),
-            StoredRoutine(name: "Disabled", steps: [.fixture], schedule: disabled),
-            StoredRoutine(name: "Unscheduled", steps: [.fixture]),
-        ]
-
-        let outstanding = RoutineScheduler.outstanding(
-            in: routines,
-            now: try date(2026, 7, 15, 10, 0, calendar),
-            calendar: calendar
-        )
-
-        #expect(outstanding.map(\.routine.name) == ["Due"])
-        #expect(outstanding.first?.decision == .due(occurrence: try date(2026, 7, 15, 9, 0, calendar)))
-    }
-
-    /// Ordering is by occurrence, oldest first, so a backlog is worked through in the order it
-    /// actually happened rather than in whatever order the store's dictionary iterates — which is
-    /// not stable between loads.
-    @Test
-    func outstandingRoutinesComeBackOldestOccurrenceFirst() throws {
-        let calendar = try easternCalendar()
-        var earlier = RoutineSchedule(cadence: .daily, hour: 7, minute: 0)
-        earlier.setEnabled(true, now: try date(2026, 7, 14, 12, 0, calendar))
-        var later = RoutineSchedule(cadence: .daily, hour: 9, minute: 0)
-        later.setEnabled(true, now: try date(2026, 7, 14, 12, 0, calendar))
-
-        let outstanding = RoutineScheduler.outstanding(
-            in: [
-                StoredRoutine(name: "Nine", steps: [.fixture], schedule: later),
-                StoredRoutine(name: "Seven", steps: [.fixture], schedule: earlier),
-            ],
-            now: try date(2026, 7, 15, 9, 30, calendar),
-            calendar: calendar
-        )
-
-        #expect(outstanding.map(\.routine.name) == ["Seven", "Nine"])
-    }
 
     // MARK: - Helpers
 

@@ -19,17 +19,6 @@ public struct RenameCapabilityAdapter: CapabilityAdapter {
         displayName: "Rename file or folder",
         description: "Rename one whitelisted file or folder, keeping it in the folder it is already in.",
         operations: [.rename],
-        plannerTools: [
-            AgentTool(
-                operation: .rename,
-                name: "Rename file or folder",
-                description: "Rename one whitelisted file or folder. inputPath is the item to rename and newName is what to call it — a bare name with no slashes, since the item keeps its folder. Renaming one item at a time only: if the user asks to rename several items, ask a clarification question for the new names instead.",
-                requiredFields: ["inputPath", "newName"],
-                sideEffects: ["rename file"],
-                dryRunBehavior: "Show the current path and the name it would be given.",
-                examples: ["Rename ~/Documents/scan1.pdf to invoice-march", "Rename that folder to Archive"]
-            )
-        ],
         requiredPermissions: [
             CapabilityPermissionMetadata(requirement: .desktopDocumentsAccess)
         ],

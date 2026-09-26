@@ -18,17 +18,6 @@ public struct ReadCalendarEventsCapabilityAdapter: CapabilityAdapter {
         displayName: "Read calendar",
         description: "Read one day of the user's calendars through EventKit and answer with a short list.",
         operations: [.readCalendarEvents],
-        plannerTools: [
-            AgentTool(
-                operation: .readCalendarEvents,
-                name: "Read calendar events",
-                description: "List the events on the user's calendars for one day. Reads only and changes nothing. Set calendarDay to the day the user asked about, or null for today.",
-                requiredFields: [],
-                sideEffects: ["read calendars"],
-                dryRunBehavior: "Show which day would be read, without reading the calendar.",
-                examples: ["What's on my calendar today?", "What do I have on Friday?"]
-            )
-        ],
         requiredPermissions: [
             CapabilityPermissionMetadata(requirement: .calendarsAccess)
         ],
@@ -100,11 +89,7 @@ public struct ReadCalendarEventsCapabilityAdapter: CapabilityAdapter {
         return AgentRunResult(
             plan: plan,
             previews: [previewValue(day: day, context: context)],
-            summary: Self.summary(of: events, day: day, now: context.now(), calendar: context.calendar),
-            // **Outside-authored whenever an event is listed** (SONNY-491): its title is written by
-            // whoever sent the invitation, and most calendar services add one without the user
-            // acting. "Nothing on your calendar today." names no event and is Sonny's alone.
-            summaryProvenance: events.isEmpty ? .codeAuthored : .outsideAuthored
+            summary: Self.summary(of: events, day: day, now: context.now(), calendar: context.calendar)
         )
     }
 

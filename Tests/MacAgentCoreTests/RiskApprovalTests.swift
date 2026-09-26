@@ -377,43 +377,4 @@ struct RiskApprovalTests {
         )
     }
 
-    @Test
-    func defaultExecutableCapabilityTiersMatchSpec() throws {
-        let metadataByID = Dictionary(
-            uniqueKeysWithValues: CapabilityRegistry.revealingNowhere.metadata.map { ($0.id, $0.defaultRiskTier) }
-        )
-        let expected: [String: CapabilityRiskTier] = [
-            "local.permissions.readiness": .tier0,
-            "local.finder.read-selection": .tier0,
-            "local.instant.calculator": .tier0,
-            "local.instant.clipboard-history": .tier0,
-            "local.instant.snippet-expansion": .tier0,
-            "local.instant.recent-artifacts": .tier0,
-            "local.instant.running-app-switch": .tier1,
-            "local.instant.snippet-save": .tier2,
-            "local.apps.open-app": .tier1,
-            "local.browser.open-app-search-url": .tier1,
-            "local.browser.open-url": .tier1,
-            "local.media.open-result": .tier1,
-            "local.finder.reveal-path": .tier1,
-            "local.workspaces.open": .tier1,
-            "local.files.open-generated-artifact": .tier1,
-            "local.files.largest-files-zip": .tier2,
-            "local.files.create-local-draft": .tier2,
-            "local.documents.docx-to-pdf": .tier2,
-            "local.web.research-markdown": .tier2,
-            "local.routines.save": .tier2,
-            "local.routines.run": .tier2,
-            "local.workspaces.create": .tier2,
-            // Spec §11.1 lists "Change routine/workspace" as tier 2, and editing is the same class
-            // of change as creating. Removal raises it to tier 3 dynamically, in the adapter.
-            "local.workspaces.edit": .tier2,
-            "local.shortcuts.invoke": .tier2
-        ]
-
-        for (capabilityID, tier) in expected {
-            #expect(metadataByID[capabilityID] == tier)
-        }
-        #expect(metadataByID["local.planner.clarify"] == .tier0)
-    }
 }

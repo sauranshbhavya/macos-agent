@@ -12,20 +12,6 @@ public struct OpenMediaResultCapabilityAdapter: CapabilityAdapter {
         displayName: "Play or open music",
         description: "Try provider-aware Apple Music or Spotify playback, falling back to opening the provider result or search.",
         operations: [.playMedia],
-        plannerTools: [
-            AgentTool(
-                operation: .playMedia,
-                name: "Play or open music",
-                description: "Try to play a requested song or album in Apple Music or Spotify through the provider playback seam. If playback is unavailable, open the exact provider result URI when supplied, or open the provider search/result fallback.",
-                requiredFields: ["mediaProvider", "mediaTitle"],
-                sideEffects: ["play or open music app"],
-                dryRunBehavior: "Show whether Sonny would search, play, transfer playback, or fall back to opening without starting playback or opening an app.",
-                examples: [
-                    "Play Jimmy Cooks by Drake on Apple Music",
-                    "Play Bad Habit by Steve Lacy on Spotify"
-                ]
-            )
-        ],
         requiredPermissions: [
             CapabilityPermissionMetadata(requirement: .appOpening),
             CapabilityPermissionMetadata(requirement: .networkAccess)
@@ -81,7 +67,7 @@ public struct OpenMediaResultCapabilityAdapter: CapabilityAdapter {
         // Every playback sentence quotes what the provider returned — a catalogue's track and artist
         // names, which whoever published the track wrote, or the provider's own failure detail
         // (SONNY-491).
-        return AgentRunResult(plan: plan, previews: previews, summary: summary, summaryProvenance: .outsideAuthored)
+        return AgentRunResult(plan: plan, previews: previews, summary: summary)
     }
 
     private struct MediaSpec {

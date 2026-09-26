@@ -12,7 +12,6 @@ public struct RecentArtifactsCapabilityAdapter: CapabilityAdapter {
         displayName: "Recent artifacts",
         description: "Look up recently generated Sonny files without opening them.",
         operations: [.lookupRecentArtifacts],
-        plannerTools: [],
         requiredPermissions: [],
         defaultRiskTier: .tier0
     )

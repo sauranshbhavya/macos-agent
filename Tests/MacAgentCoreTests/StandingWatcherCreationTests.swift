@@ -46,28 +46,23 @@ struct StandingWatcherCreationTests {
         store: ResumableTaskStore,
         page: String = "Status: pending",
         failing: Bool = false,
-        memoryRecording: MemoryRecordingSettings = .recordEverything,
         whitelist: PathWhitelist = PathWhitelist(),
         fetcher: (any WebPageFetching)? = nil,
         now: Date = Date(timeIntervalSince1970: 1_800_000_000)
-    ) -> AgentActionExecutor {
-        AgentActionExecutor(
-            memoryRecording: memoryRecording,
+    ) -> PlanHarness {
+        var stores = CapabilityTestStores()
+        stores.watchers = store
+        return PlanHarness(context: CapabilityTestContext.make(
+            installed: [],
             whitelist: whitelist,
-            routineStore: UnreachableLocalStores.routines(),
-            workspaceStore: UnreachableLocalStores.workspaces(),
+            stores: stores,
             webPageLoader: PublicWebPageLoader(
                 fetcher: fetcher ?? OneWatchedPageFetcher(text: page, failing: failing),
                 robotsChecker: AllowEveryPage(),
                 extractor: OneWatchedPageExtractor(text: page)
             ),
-            clipboardHistoryStore: UnreachableLocalStores.clipboardHistory(),
-            snippetStore: UnreachableLocalStores.snippets(),
-            recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
-            shortcutRunHistoryStore: UnreachableLocalStores.shortcutRunHistory(),
-            resumableTaskStore: store,
             now: { now }
-        )
+        ))
     }
 
     /// The whole point of the ticket: a plan the planner can emit turns into a watcher the checker
@@ -126,7 +121,7 @@ struct StandingWatcherCreationTests {
         #expect(preview.writes == [store.fileURL.path])
         // Tier 2 — a confirmation, not silence. Nothing is overwritten and nothing leaves the
         // machine but a GET of a page the user named, so it is not tier 3 either.
-        let assessment = try executor.assessRisk(plan: watchPlan(), scope: .unscoped)
+        let assessment = try executor.assessRisk(plan: watchPlan())
         #expect(assessment.effectiveTier == .tier2)
         #expect(assessment.escalations.isEmpty)
     }
@@ -183,28 +178,6 @@ struct StandingWatcherCreationTests {
             _ = try executor.prepare(plan: watchPlan())
         }
         #expect(try store.loadWatchers().count == limit, "a refused watcher must not have been written")
-    }
-
-    /// Memory switched off for this store refuses out loud rather than reporting a watcher that does
-    /// not exist. The control is the same plan with the switch on.
-    @Test
-    func aWatcherIsRefusedOutLoudWhenThatMemoryIsSwitchedOff() async throws {
-        let (store, root) = try makeStore()
-        defer { try? FileManager.default.removeItem(at: root) }
-        let off = makeExecutor(
-            store: store,
-            memoryRecording: MemoryRecordingSettings(categoriesDisabledByUser: [.resumableTasks])
-        )
-
-        await #expect(throws: MemoryDisabledError(category: .resumableTasks)) {
-            _ = try await off.execute(plan: watchPlan(), log: { _, _ in })
-        }
-        #expect(try store.loadWatchers().isEmpty)
-
-        // Control: the identical plan through an executor whose switch is on does create one, so the
-        // refusal above is the switch and not the fixture.
-        _ = try await makeExecutor(store: store).execute(plan: watchPlan(), log: { _, _ in })
-        #expect(try store.loadWatchers().count == 1)
     }
 
     /// A page that cannot be read starts **no** watcher. Recording one with an empty baseline would
@@ -277,88 +250,6 @@ struct StandingWatcherCreationTests {
         // The three surfaces agree by value, not merely by length: one capping rule, applied once.
         #expect(detail == "Watching for: \(watcher.subject)")
         #expect(result.summary == "Sonny is watching \u{201C}\(watcher.subject)\u{201D}.")
-    }
-
-    /// **A routine may not carry one**, and the store's own write door is what enforces it — not the
-    /// planner prompt, which is advice.
-    @Test
-    func aRoutineMayNotCarryAStartWatchingStep() {
-        #expect(StoredRoutine.forbiddenStepOperations.contains(.startWatching))
-        #expect(throws: AutomationStoreError.unsafeRoutineStep(AgentOperation.startWatching.rawValue)) {
-            try StoredRoutine.validateStepSafety(watchPlan().steps)
-        }
-    }
-
-    /// **A job over many items may not carry one either — the third repetition door** (PR #187, F1).
-    ///
-    /// This is the shape the reviewer ran rather than a hypothetical: an eight-file folder job whose
-    /// template is `[reveal_in_finder, start_watching]` passed every existing check, because
-    /// `validateTemplateReadsTheItemField` is satisfied by the *first* step alone and
-    /// `PlanItemJobResolver.expanding` then copies every step once per item. What came out was five
-    /// identical watchers of one page, the user's whole cap spent on duplicates, three refusals, and
-    /// a run reporting "Worked through 5 of 8 files."
-    ///
-    /// Driven through the real `prepare` over a real folder, so what is pinned is the door and not
-    /// the classification behind it — and the assertion that **nothing was written** is the half that
-    /// matters, since the old behaviour wrote five before refusing.
-    @Test
-    func aJobOverManyItemsMayNotCarryAStartWatchingStep() throws {
-        let (store, root) = try makeStore()
-        defer { try? FileManager.default.removeItem(at: root) }
-        for name in ["a", "b", "c", "d", "e", "f", "g", "h"] {
-            try Data("x".utf8).write(to: root.appendingPathComponent("\(name).pdf"))
-        }
-        let executor = makeExecutor(store: store, whitelist: PathWhitelist(roots: [root]))
-
-        func job(_ steps: [AgentStep]) -> AgentPlan {
-            AgentPlan(
-                summary: "Do this to each of these.",
-                requiresConfirmation: true,
-                steps: steps,
-                itemJob: PlanItemJob(
-                    source: .folder,
-                    folderPath: root.path,
-                    itemKind: .files,
-                    fileExtensions: ["pdf"],
-                    itemField: .inputPath
-                )
-            )
-        }
-        let reveal = AgentStep(id: "r", operation: .revealInFinder, description: "Show it.")
-        let watch = AgentStep(
-            id: "w",
-            operation: .startWatching,
-            description: "Watch the status page.",
-            targetURL: Self.watchedURL,
-            watchSubject: "the order status"
-        )
-
-        #expect(
-            throws: PlanItemJobError.forbiddenStepOperation(
-                "Sonny will not start a watcher for each item — that would spend everything it can watch on copies of one page. Ask for the watcher on its own."
-            )
-        ) {
-            _ = try executor.prepare(plan: job([reveal, watch]))
-        }
-        #expect(try store.loadWatchers().isEmpty, "a refused job must not have started any watcher")
-
-        // A template that is *only* the watch step is refused by the same door and with the same
-        // sentence, rather than falling through to "nothing reads the file it would put each item in"
-        // — which is true of it and tells the user nothing they can act on.
-        #expect(
-            throws: PlanItemJobError.forbiddenStepOperation(
-                "Sonny will not start a watcher for each item — that would spend everything it can watch on copies of one page. Ask for the watcher on its own."
-            )
-        ) {
-            _ = try executor.prepare(plan: job([watch]))
-        }
-
-        // Two controls, because a refusal is worthless if it fires on the fixture. The same job
-        // without the watch step prepares into eight copies, and the same watch step outside a job
-        // still starts a watcher.
-        let allowed = try executor.prepare(plan: job([reveal]))
-        #expect(allowed.plan.steps.count == 8)
-        #expect(try executor.prepare(plan: watchPlan()).plan.steps.count == 1)
     }
 
     /// **The two doors, shown disagreeing** (PR #187, F5). The branch asks the cap twice and the

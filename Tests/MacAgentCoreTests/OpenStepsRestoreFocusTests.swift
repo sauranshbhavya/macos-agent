@@ -63,7 +63,7 @@ struct OpenStepsRestoreFocusTests {
 
     @MainActor
     private func makeContext(screen: Screen, outcome: RunningAppActivationOutcome = .switched) -> CapabilityExecutionContext {
-        VisionTestContext.make(
+        CapabilityTestContext.make(
             installed: [Self.safari, Self.notes],
             appOpener: ScreenOpener(screen: screen),
             browserOpener: ScreenOpener(screen: screen),
@@ -71,25 +71,8 @@ struct OpenStepsRestoreFocusTests {
         )
     }
 
-    @Test
-    @MainActor
-    func anAppOpenBringsThePreviousAppBack() async throws {
-        let screen = Screen(frontmost: Self.xcode)
-        var trace: [String] = []
-        let plan = AgentPlan(
-            summary: "Open Safari.",
-            requiresConfirmation: false,
-            steps: [AgentStep(id: "open", operation: .openApp, description: "Open Safari.", appName: "Safari")]
-        )
 
-        _ = try await OpenAppCapabilityAdapter().execute(plan: plan, context: makeContext(screen: screen)) { _, line in
-            trace.append(line)
-        }
 
-        #expect(screen.events == ["opened com.apple.Safari", "front com.apple.dt.Xcode"])
-        #expect(screen.frontmost?.bundleIdentifier == "com.apple.dt.Xcode")
-        #expect(trace.contains("Brought Xcode back in front"))
-    }
 
     @Test
     @MainActor
@@ -133,63 +116,14 @@ struct OpenStepsRestoreFocusTests {
     /// **A launch is not reported in the trace as the user's app coming back.** The restore is
     /// attempted, Launch Services answers that it started a copy rather than switching to the one
     /// the user had, and the run's trace says nothing was brought back.
-    @Test
-    @MainActor
-    func anOpenWhoseRestoreWasALaunchDoesNotSayTheAppCameBack() async throws {
-        let screen = Screen(frontmost: Self.xcode)
-        var trace: [String] = []
-        let plan = AgentPlan(
-            summary: "Open Safari.",
-            requiresConfirmation: false,
-            steps: [AgentStep(id: "open", operation: .openApp, description: "Open Safari.", appName: "Safari")]
-        )
 
-        _ = try await OpenAppCapabilityAdapter().execute(plan: plan, context: makeContext(screen: screen, outcome: .launched)) { _, line in
-            trace.append(line)
-        }
-
-        #expect(screen.events == ["opened com.apple.Safari", "front com.apple.dt.Xcode"], "the restore was attempted")
-        #expect(!trace.contains("Brought Xcode back in front"), "a launch was reported as the user's app coming back")
-    }
 
     /// The whole workspace opens under one restore: the user's app comes back once, at the end,
     /// rather than fighting each open for the front.
-    @Test
-    @MainActor
-    func aWorkspaceOpenBringsThePreviousAppBackOnceAtTheEnd() async throws {
-        let screen = Screen(frontmost: Self.xcode)
-        let context = makeContext(screen: screen)
-        try context.workspaceStore.save(StoredWorkspace(name: "Writing", apps: ["Safari", "Notes"], urls: ["https://example.com/"]))
-        let plan = AgentPlan(
-            summary: "Open workspace.",
-            requiresConfirmation: false,
-            steps: [AgentStep(id: "open", operation: .openWorkspace, description: "Open workspace.", workspaceName: "Writing")]
-        )
 
-        _ = try await OpenWorkspaceCapabilityAdapter().execute(plan: plan, context: context) { _, _ in }
-
-        #expect(screen.events == [
-            "opened com.apple.Safari",
-            "opened com.apple.Notes",
-            "opened com.apple.Safari",
-            "front com.apple.dt.Xcode"
-        ])
-    }
 
     /// An open whose app was already in front moves nothing, so nothing is brought back.
-    @Test
-    @MainActor
-    func anOpenOfTheAppAlreadyInFrontRestoresNothing() async throws {
-        let inFront = RunningApp(displayName: "Safari", bundleIdentifier: "com.apple.Safari", processIdentifier: 3)
-        let screen = Screen(frontmost: inFront)
-        let plan = AgentPlan(
-            summary: "Open Safari.",
-            requiresConfirmation: false,
-            steps: [AgentStep(id: "open", operation: .openApp, description: "Open Safari.", appName: "Safari")]
-        )
 
-        _ = try await OpenAppCapabilityAdapter().execute(plan: plan, context: makeContext(screen: screen)) { _, _ in }
+    /// An open whose app was already in front moves nothing, so nothing is brought back.
 
-        #expect(screen.events == ["opened com.apple.Safari"])
-    }
 }

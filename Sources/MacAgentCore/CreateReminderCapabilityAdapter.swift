@@ -17,17 +17,6 @@ public struct CreateReminderCapabilityAdapter: CapabilityAdapter {
         displayName: "Add reminder",
         description: "Add one reminder with an alert to the user's default Reminders list through EventKit.",
         operations: [.createReminder],
-        plannerTools: [
-            AgentTool(
-                operation: .createReminder,
-                name: "Add a reminder",
-                description: "Add one reminder with an alert to the user's Reminders. Set reminderTitle to what to remind them about, and exactly one of reminderMinutesFromNow or reminderTime, with calendarDay when they named a day. If the user named no time, ask a clarification question for when.",
-                requiredFields: ["reminderTitle"],
-                sideEffects: ["add reminder"],
-                dryRunBehavior: "Show the reminder and when it is due, without adding it.",
-                examples: ["Remind me in 5 minutes to call the bank", "Remind me tomorrow at 9am to send the invoice"]
-            )
-        ],
         requiredPermissions: [
             CapabilityPermissionMetadata(requirement: .remindersAccess)
         ],

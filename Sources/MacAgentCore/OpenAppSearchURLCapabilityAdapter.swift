@@ -14,17 +14,6 @@ public struct OpenAppSearchURLCapabilityAdapter: CapabilityAdapter {
         displayName: descriptor.displayName,
         description: descriptor.description,
         operations: descriptor.supportedActions,
-        plannerTools: [
-            AgentTool(
-                operation: .openAppSearchURL,
-                name: "Open allowlisted search URL",
-                description: "Open a fixed allowlisted app or website search URL template. Supported search targets: \(AppSearchURLCatalog.default.displayList).",
-                requiredFields: ["appName", "searchQuery"],
-                sideEffects: ["open browser"],
-                dryRunBehavior: "Show the fixed search URL template result without opening it.",
-                examples: ["Search GitHub for Swift concurrency", "Search YouTube for Sonny demos"]
-            )
-        ],
         requiredPermissions: descriptor.requiredPermissions,
         defaultRiskTier: descriptor.defaultRiskTier
     )

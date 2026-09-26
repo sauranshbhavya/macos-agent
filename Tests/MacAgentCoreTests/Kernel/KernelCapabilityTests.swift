@@ -68,7 +68,7 @@ struct CapabilityFixture {
             .resolvingSymlinksInPath()
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let whitelist = PathWhitelist(roots: [root])
-        let context = VisionTestContext.make(installed: [], whitelist: whitelist)
+        let context = CapabilityTestContext.make(installed: [], whitelist: whitelist)
         routines = RoutineGoalStore(fileURL: nil)
         mail = FakeMail()
         capabilities = StandardCapabilities.all(

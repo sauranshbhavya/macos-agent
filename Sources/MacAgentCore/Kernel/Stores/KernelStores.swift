@@ -21,10 +21,6 @@ public final class KernelStores {
     public let clipboard: ClipboardHistoryStore
     public let clipboardSettings: ClipboardHistorySettingsStore
     public let approvedApps: ApprovedAppStore
-    /// V2 has no V1 routines or workspaces. The adapters still ask for these stores, so they get
-    /// empty ones.
-    let legacyRoutines: RoutineStore
-    let workspaces: WorkspaceStore
 
     public init(folder: URL, encryption: LocalStorageEncryption = .shared) {
         func file(_ name: String) -> URL { folder.appendingPathComponent(name) }
@@ -39,14 +35,13 @@ public final class KernelStores {
         clipboard = ClipboardHistoryStore(fileURL: file("clipboard.json"), encryption: encryption)
         clipboardSettings = ClipboardHistorySettingsStore(fileURL: file("clipboard-settings.json"), encryption: encryption)
         approvedApps = ApprovedAppStore(fileURL: file("approved-apps.json"), encryption: encryption)
-        legacyRoutines = RoutineStore(fileURL: file("unused-routines.json"), encryption: encryption)
-        workspaces = WorkspaceStore(fileURL: file("unused-workspaces.json"), encryption: encryption)
     }
 
     public static func applicationSupportFolder() throws -> URL {
         let base = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
         return base.appendingPathComponent("Sonny/V2", isDirectory: true)
     }
+
 
     /// An app's standing for screen control, asked from the screen controller's own actor: an
     /// app the person allowed is allowed, and everything else keeps the built-in standing.
@@ -63,14 +58,8 @@ public final class KernelStores {
 
     /// Recognises the zero-model commands from the person's own snippets, recent files and
     /// shortcuts.
-    public func instantResolver(runningApps: Set<String>? = nil) -> InstantCommandResolver {
-        InstantCommandResolver(
-            snippetStore: snippets,
-            recentArtifactStore: recentFiles,
-            routineStore: legacyRoutines,
-            workspaceStore: workspaces,
-            runningAppBundleIdentifiers: runningApps
-        )
+    public func instantResolver() -> InstantCommandResolver {
+        InstantCommandResolver(snippetStore: snippets, recentArtifactStore: recentFiles)
     }
 
     /// What the adapter bodies behind the typed operations run with.
@@ -86,7 +75,6 @@ public final class KernelStores {
             zipArchiver: ProcessZipArchiver(),
             documentConverter: AutoDocumentConverter(),
             browserOpener: WorkspaceBrowserOpener(),
-            hackerNewsFetcher: HackerNewsAPIClient(),
             appCatalog: .default,
             installedAppResolver: InstalledAppResolver.shared,
             appSearchURLCatalog: .default,
@@ -98,12 +86,7 @@ public final class KernelStores {
             appleMusicPlaybackProvider: UnavailableAppleMusicPlaybackProvider(),
             finderContextReader: AppleScriptFinderContextReader(),
             permissionReadinessService: permissions,
-            routineStore: legacyRoutines,
-            workspaceStore: workspaces,
             webPageLoader: PublicWebPageLoader.live(),
-            // Search and research are server tools in V2; no typed operation reaches these.
-            webSearchProvider: UnavailableWebSearchProvider(),
-            webResearchSynthesizer: UnavailableWebResearchSynthesizer(),
             clipboardHistoryStore: clipboard,
             snippetStore: snippets,
             runningAppSwitcher: WorkspaceRunningAppSwitcher.forThisMac(),
@@ -112,12 +95,7 @@ public final class KernelStores {
             shortcutInvoker: ProcessShortcutInvoker(),
             shortcutRunHistoryStore: shortcutRuns,
             resumableTaskStore: watchers,
-            eventKit: eventKit,
-            taskScope: .unscoped,
-            // Only V1's run_routine nested one plan in another, and V2 has no such operation.
-            assessNestedPlan: { _, _ in throw AgentExecutionError.invalidPlan("Nested plans don't exist in V2.") },
-            previewNestedPlan: { _ in throw AgentExecutionError.invalidPlan("Nested plans don't exist in V2.") },
-            executeNestedPlan: { _, _, _ in throw AgentExecutionError.invalidPlan("Nested plans don't exist in V2.") }
+            eventKit: eventKit
         )
     }
 }

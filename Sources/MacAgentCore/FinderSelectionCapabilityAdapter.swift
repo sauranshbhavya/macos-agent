@@ -12,17 +12,6 @@ public struct FinderSelectionCapabilityAdapter: CapabilityAdapter {
         displayName: "Read Finder selection",
         description: "Read selected Finder items and validate them against the path whitelist.",
         operations: [.getFinderSelection],
-        plannerTools: [
-            AgentTool(
-                operation: .getFinderSelection,
-                name: "Read Finder selection",
-                description: "Read selected Finder files and folders, validate that every path is inside the Desktop/Documents whitelist, and show them as context.",
-                requiredFields: [],
-                sideEffects: ["ask Finder for selection"],
-                dryRunBehavior: "Show selected Finder items without modifying them.",
-                examples: ["What is selected in Finder?", "Show my Finder selection"]
-            )
-        ],
         requiredPermissions: [
             CapabilityPermissionMetadata(requirement: .finderAutomation),
             CapabilityPermissionMetadata(requirement: .desktopDocumentsAccess)
@@ -56,10 +45,7 @@ public struct FinderSelectionCapabilityAdapter: CapabilityAdapter {
         return AgentRunResult(
             plan: plan,
             previews: previews,
-            summary: FinderSelectionSummary.sentence(naming: selection.map(\.name)),
-            // A file's name is written by whoever saved it — a download, an attachment, a colleague's
-            // share — and this sentence quotes those names (SONNY-491).
-            summaryProvenance: .outsideAuthored
+            summary: FinderSelectionSummary.sentence(naming: selection.map(\.name))
         )
     }
 

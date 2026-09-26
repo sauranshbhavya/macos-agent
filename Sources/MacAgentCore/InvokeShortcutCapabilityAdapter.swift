@@ -12,17 +12,6 @@ public struct InvokeShortcutCapabilityAdapter: CapabilityAdapter {
         displayName: "Invoke Shortcut",
         description: "Invoke an existing named Apple Shortcut through the fixed Shortcuts CLI template.",
         operations: [.invokeShortcut],
-        plannerTools: [
-            AgentTool(
-                operation: .invokeShortcut,
-                name: "Invoke Shortcut",
-                description: "Run an existing named Apple Shortcut. Use shortcutInput only for simple text input explicitly supplied by the user.",
-                requiredFields: ["shortcutName"],
-                sideEffects: ["run Shortcut"],
-                dryRunBehavior: "Show the Shortcut name and input without running it.",
-                examples: ["Run my Morning Routine shortcut", "Run shortcut Resize Image with input ~/Desktop/photo.png"]
-            )
-        ],
         requiredPermissions: [
             CapabilityPermissionMetadata(requirement: .shortcutsAutomation)
         ],
@@ -137,9 +126,6 @@ public struct InvokeShortcutCapabilityAdapter: CapabilityAdapter {
         // Task-history memory being switched off (SONNY-208) withholds it for the same reason and
         // at the same cost — `allowsRecording(to:)` is the conjunction of both switches, so this
         // guard did not have to learn about the second one.
-        guard context.allowsRecording(to: .shortcutRunHistory) else {
-            return
-        }
         do {
             try write()
         } catch {

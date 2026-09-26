@@ -384,10 +384,9 @@ struct ResumableTaskStoreTests {
         }
 
         #expect(offenders.isEmpty, "these pass a narrowed lifecycle to the shipped store: \(offenders)")
-        // And the scan really reached the construction sites, so an empty `offenders` is a finding
-        // rather than a search that matched nothing: the store's own wipe entry, the classification's
-        // URL resolver, and the view model's default parameter.
-        #expect(constructionSites >= 3, "expected the wipe list, the classification and the view model")
+        // And the scan really reached the construction site, so an empty `offenders` is a finding
+        // rather than a search that matched nothing: V2's one store set, `KernelStores`.
+        #expect(constructionSites >= 1, "expected KernelStores' construction")
     }
 
     /// Every Swift file in the two shipped targets. Its own walker rather than

@@ -340,46 +340,6 @@ struct SpokenPathTests {
 
     // MARK: - The reported command, through the executor
 
-    /// **Every executor here is temp-rooted, stores included** (PR #106 review, F7). An executor
-    /// built with no store named used to bind six local stores under `~/Library/Application
-    /// Support/Sonny`, and `LocalStorageEncryption` swaps in an ephemeral key inside a test
-    /// process — so the day a `prepare` path starts writing, it writes the developer's own data
-    /// back unreadable rather than merely wrong. That is SONNY-209's failure with a worse ending,
-    /// and the first version of this suite stood one code change away from it.
-    ///
-    /// **That default is gone now** (SONNY-350): `AgentActionExecutor` has no defaulted store left,
-    /// so a fixture that omits one does not build. This suite kept naming all six before the
-    /// compiler required it, which is why nothing here changed.
-    ///
-    /// The whitelist is temp-rooted too, which costs nothing here: a relative or tilde path always
-    /// resolves against the *home* directory, so what these tests read out of a refusal is the
-    /// resolved path — which is the whole of what the founder's report was about. They never touch
-    /// the real Desktop, and they answer the same whether or not it exists.
-    private struct ExecutorFixture {
-        let root: URL
-        let executor: AgentActionExecutor
-
-        @MainActor
-        init() throws {
-            root = FileManager.default.temporaryDirectory
-                .appendingPathComponent("SpokenPathTests-\(UUID().uuidString)", isDirectory: true)
-            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-            executor = AgentActionExecutor(
-                whitelist: PathWhitelist(roots: [root]),
-                routineStore: RoutineStore(fileURL: root.appendingPathComponent("routines.json")),
-                workspaceStore: WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json")),
-                clipboardHistoryStore: ClipboardHistoryStore(fileURL: root.appendingPathComponent("clipboard.json")),
-                snippetStore: SnippetStore(fileURL: root.appendingPathComponent("snippets.json")),
-                recentArtifactStore: RecentArtifactStore(fileURL: root.appendingPathComponent("artifacts.json")),
-                shortcutRunHistoryStore: ShortcutRunHistoryStore(fileURL: root.appendingPathComponent("shortcuts.json")),
-                resumableTaskStore: UnreachableLocalStores.resumableTasks(),
-            )
-        }
-
-        func tearDown() {
-            try? FileManager.default.removeItem(at: root)
-        }
-    }
 
     private func draftPlan(savedTo destination: String) -> AgentPlan {
         AgentPlan(
@@ -398,65 +358,9 @@ struct SpokenPathTests {
         )
     }
 
-    /// The path a refusal names when the destination is out of bounds — which, under a temp-rooted
-    /// whitelist, every home path is. That path is exactly what the founder's screenshot showed
-    /// going wrong.
-    private func refusedPath(for destination: String, fixture: ExecutorFixture) throws -> String {
-        var thrown: Error?
-        do {
-            _ = try fixture.executor.prepare(plan: draftPlan(savedTo: destination))
-        } catch {
-            thrown = error
-        }
-        guard case .outsideWhitelist(let path, _, _)? = thrown as? PathValidationError else {
-            Issue.record("Expected .outsideWhitelist for \(destination), got \(String(describing: thrown))")
-            return ""
-        }
-        return path
-    }
 
-    /// The reported command: `/Users/<user>/my Desktop` was the refused path, and the refusal then
-    /// listed the real Desktop as an allowed root. What the fix has to change is which folder the
-    /// plan resolves to, and that is what this reads back.
-    @Test
-    func theReportedCommandStopsResolvingToASiblingOfDesktop() throws {
-        let fixture = try ExecutorFixture()
-        defer { fixture.tearDown() }
-        let desktop = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Desktop", isDirectory: true)
-            .resolvingSymlinksInPath()
 
-        #expect(try refusedPath(for: "my Desktop", fixture: fixture) == desktop.path)
-    }
 
-    /// The same command in the spelling the planner's own prompt models, which was still broken
-    /// after the first round (PR #106 review, F1).
-    @Test
-    func theTildeSpellingOfTheReportedCommandResolvesTheSameWay() throws {
-        let fixture = try ExecutorFixture()
-        defer { fixture.tearDown() }
-        let desktop = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Desktop", isDirectory: true)
-            .resolvingSymlinksInPath()
-
-        #expect(try refusedPath(for: "~/my Desktop", fixture: fixture) == desktop.path)
-        #expect(try refusedPath(for: "~/my Desktop", fixture: fixture) == refusedPath(for: "my Desktop", fixture: fixture))
-    }
-
-    /// A folder Sonny cannot reach is still refused — the point of the fix is that the refusal now
-    /// names the folder the person meant instead of a sibling nobody has.
-    @Test
-    func aRefusalNamesTheFolderThePersonMeant() throws {
-        let fixture = try ExecutorFixture()
-        defer { fixture.tearDown() }
-        let downloads = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Downloads", isDirectory: true)
-            .resolvingSymlinksInPath()
-
-        let path = try refusedPath(for: "my Downloads folder", fixture: fixture)
-        #expect(path == downloads.path)
-        #expect(!path.contains("folder"))
-    }
 
     // MARK: - The existence probe
 

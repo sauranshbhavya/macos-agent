@@ -14,17 +14,6 @@ public struct CreateLocalDraftCapabilityAdapter: CapabilityAdapter {
         displayName: descriptor.displayName,
         description: descriptor.description,
         operations: descriptor.supportedActions,
-        plannerTools: [
-            AgentTool(
-                operation: .createLocalDraft,
-                name: "Create local draft",
-                description: "Create a local Markdown draft artifact in a whitelisted output path. This does not automate Notes, Mail, Calendar, or any other app UI.",
-                requiredFields: ["draftContent"],
-                sideEffects: ["write file"],
-                dryRunBehavior: "Show the draft file path without writing it.",
-                examples: ["Create a local draft called Follow-up with this text"]
-            )
-        ],
         requiredPermissions: descriptor.requiredPermissions,
         defaultRiskTier: descriptor.defaultRiskTier
     )

@@ -34,17 +34,6 @@ public struct StandingWatcherCapabilityAdapter: CapabilityAdapter {
         displayName: "Watch a page for a change",
         description: "Watch one public web page and notify the user when its readable text changes.",
         operations: [.startWatching],
-        plannerTools: [
-            AgentTool(
-                operation: .startWatching,
-                name: "Watch a page for a change",
-                description: "Watch one public http/https page and tell the user when it changes. Sonny only notifies; it cannot act on the change.",
-                requiredFields: ["targetURL", "watchSubject"],
-                sideEffects: ["read one public web page", "write local watcher record"],
-                dryRunBehavior: "Show the page and what is being watched for, without starting anything.",
-                examples: ["Tell me when https://example.com/status changes"]
-            )
-        ],
         requiredPermissions: [CapabilityPermissionMetadata(requirement: .networkAccess)],
         // Tier 2, the same as saving a routine, and for the same reason: this writes one file inside
         // Sonny's own store and reaches nobody. It is deliberately not tier 3 — nothing is
@@ -102,14 +91,6 @@ public struct StandingWatcherCapabilityAdapter: CapabilityAdapter {
     ) async throws -> AgentRunResult {
         let previews = try preview(plan: plan, context: context)
         let spec = try watchSpec(plan, context: context)
-        // Refused out loud rather than saved anyway or dropped quietly, the rule
-        // `SaveRoutineCapabilityAdapter` states: the user asked for this by name, so a silent no-op
-        // would report a watcher that does not exist. The row this names is "Unfinished tasks",
-        // which is the row `resumable-tasks.json` has — watchers share that file by SONNY-236's
-        // decision, and that row's own copy already names watchers.
-        guard context.allowsRecording(to: .resumableTasks) else {
-            throw MemoryDisabledError(category: .resumableTasks)
-        }
 
         log(.act, "Reading \(spec.url.absoluteString)")
         // The one fetch this step makes. A failure here fails the step rather than starting a

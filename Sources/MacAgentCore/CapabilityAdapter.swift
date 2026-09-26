@@ -107,7 +107,6 @@ public struct CapabilityMetadata: Equatable, Sendable {
     public var description: String
     public var version: String
     public var operations: [AgentOperation]
-    public var plannerTools: [AgentTool]
     public var requiredPermissions: [CapabilityPermissionMetadata]
     public var defaultRiskTier: CapabilityRiskTier
     public var executorLocation: CapabilityExecutorLocation
@@ -118,7 +117,6 @@ public struct CapabilityMetadata: Equatable, Sendable {
         description: String,
         version: String = "1.0",
         operations: [AgentOperation],
-        plannerTools: [AgentTool],
         requiredPermissions: [CapabilityPermissionMetadata] = [],
         defaultRiskTier: CapabilityRiskTier,
         executorLocation: CapabilityExecutorLocation = .localMac
@@ -128,7 +126,6 @@ public struct CapabilityMetadata: Equatable, Sendable {
         self.description = description
         self.version = version
         self.operations = operations
-        self.plannerTools = plannerTools
         self.requiredPermissions = requiredPermissions
         self.defaultRiskTier = defaultRiskTier
         self.executorLocation = executorLocation
@@ -136,25 +133,6 @@ public struct CapabilityMetadata: Equatable, Sendable {
 }
 
 public struct CapabilityExecutionContext {
-    /// Assesses a nested plan under an **explicitly named** workspace scope.
-    ///
-    /// The scope is a parameter rather than something the closure captures because the two callers
-    /// need opposite answers, and the difference is a recorded product decision rather than an
-    /// implementation detail: `run_routine` forwards the caller's scope (a routine's steps must not
-    /// escape the boundary its caller is bound by), while `save_routine` passes `.unscoped` because
-    /// saving touches one file inside Sonny's own store and the routine's steps are scoped when it
-    /// actually runs — `PlanScopedResources`' `.saveRoutine` case states exactly that.
-    ///
-    /// Captured scope is what made that go wrong once already: a single captured value silently
-    /// applied `run_routine`'s rule to `save_routine` too, which produced a scope prompt naming a
-    /// URL nothing in the plan would open. With the scope in the signature a new nested-assess
-    /// caller cannot inherit either rule by accident — it has to write one down.
-    public typealias AssessNestedPlan = @MainActor (AgentPlan, TaskWorkspaceScope) throws -> CapabilityRiskAssessment
-    public typealias PreviewNestedPlan = @MainActor (AgentPlan) throws -> [ActionPreview]
-    /// Runs a nested plan, optionally binding a browser for every URL it opens on the injected
-    /// browser-opener seam. `nil` means the
-    /// nested plan keeps the system default, which is what every caller except a routine passes.
-    public typealias ExecuteNestedPlan = @MainActor (AgentPlan, MacApp?, @escaping (AgentPhase, String) -> Void) async throws -> AgentRunResult
 
     public var whitelist: PathWhitelist
     public var inventory: FileInventory
@@ -166,7 +144,6 @@ public struct CapabilityExecutionContext {
     /// What the run's next unit does with the front, set by `AgentActionExecutor.executeChain` for
     /// each unit of a chain and `nil` everywhere else (PR #238's F5). See `restoringFocus(afterOpening:log:_:)`.
     public var focusHandoff: FocusHandoff?
-    public var hackerNewsFetcher: any HackerNewsFetching
     /// The alias table — which names mean the same app. Not a roster of what may be opened; that
     /// question moved to `installedAppResolver` when C12 dissolved the launch allowlist (SONNY-82).
     public var appCatalog: MacAppCatalog
@@ -181,11 +158,7 @@ public struct CapabilityExecutionContext {
     public var appleMusicPlaybackProvider: any AppleMusicPlaybackProviding
     public var finderContextReader: any FinderContextReading
     public var permissionReadinessService: PermissionReadinessService
-    public var routineStore: RoutineStore
-    public var workspaceStore: WorkspaceStore
     public var webPageLoader: PublicWebPageLoader
-    public var webSearchProvider: any WebSearchProviding
-    public var webResearchSynthesizer: any WebResearchSynthesizing
     public var clipboardHistoryStore: ClipboardHistoryStore
     public var snippetStore: SnippetStore
     public var runningAppSwitcher: any RunningAppSwitching
@@ -317,45 +290,8 @@ public struct CapabilityExecutionContext {
         }
         return installedAppResolver.resolve(named)?.macApp ?? preferredBrowser
     }
-    /// The workspace scope the *current* assessment is running under, for a nested-assess caller
-    /// that needs to forward it. `.unscoped` for every preview and execute context — neither
-    /// assesses — and for every task not bound to a workspace.
-    public var taskScope: TaskWorkspaceScope
-    public var assessNestedPlan: AssessNestedPlan
-    public var previewNestedPlan: PreviewNestedPlan
-    public var executeNestedPlan: ExecuteNestedPlan
-    /// Everything a vision session needs from outside this module, or `nil` when this build has no
-    /// screen-control wiring.
-    ///
-    /// One aggregate rather than six fields, and defaulted to `nil` rather than non-defaulted,
-    /// because the failure mode here is the opposite of `taskScope`'s: a construction site that
-    /// forgets this gets a vision session that *refuses to run* with
-    /// `VisionSessionError.visionUnavailable`, which is loud. A site that forgot a `taskScope` got a
-    /// silently unchecked routine, which is why that one is non-defaulted and this one is not.
-    public var visionSession: VisionSessionEnvironment?
-    /// Whether this run leaves traces — "Don't save this task" (SONNY-120).
-    ///
-    /// Defaulted to `.record`, so every existing construction site and every test keeps its current
-    /// behaviour, and an adapter that never asks behaves exactly as before. Adapters that write a
-    /// `.trace` store ask before writing; the classification-enumerating test is what catches one
-    /// that forgets.
-    public var recordingPolicy: TaskRecordingPolicy = .record
 
-    /// The standing memory switches — Command Center's Memory section (SONNY-208).
-    ///
-    /// Defaulted on the same reasoning as `recordingPolicy` directly above. The two are asked
-    /// together through `allowsRecording(to:)` and never separately: a run may write a store only if
-    /// *this* task is recording traces **and** the user has not switched that kind of memory off.
-    public var memoryRecording: MemoryRecordingSettings = .recordEverything
 
-    /// Whether this run may write new memory into `store` — both switches, one question.
-    ///
-    /// The single place the conjunction is written for capabilities, so an adapter cannot ask half
-    /// of it. `AgentViewModel.allowsRecording(to:)` is the same conjunction on the view model's own
-    /// writing sites, which live outside any capability.
-    public func allowsRecording(to store: LocalStore) -> Bool {
-        recordingPolicy.allowsWriting(to: store) && memoryRecording.allowsRecording(to: store)
-    }
 
     public init(
         whitelist: PathWhitelist,
@@ -363,7 +299,6 @@ public struct CapabilityExecutionContext {
         zipArchiver: any ZipArchiving,
         documentConverter: any DocumentConverting,
         browserOpener: any BrowserOpening,
-        hackerNewsFetcher: any HackerNewsFetching,
         appCatalog: MacAppCatalog,
         installedAppResolver: any InstalledAppResolving,
         appSearchURLCatalog: AppSearchURLCatalog,
@@ -380,11 +315,7 @@ public struct CapabilityExecutionContext {
         appleMusicPlaybackProvider: any AppleMusicPlaybackProviding,
         finderContextReader: any FinderContextReading,
         permissionReadinessService: PermissionReadinessService,
-        routineStore: RoutineStore,
-        workspaceStore: WorkspaceStore,
         webPageLoader: PublicWebPageLoader,
-        webSearchProvider: any WebSearchProviding,
-        webResearchSynthesizer: any WebResearchSynthesizing,
         clipboardHistoryStore: ClipboardHistoryStore,
         snippetStore: SnippetStore,
         runningAppSwitcher: any RunningAppSwitching,
@@ -406,23 +337,8 @@ public struct CapabilityExecutionContext {
         modelAccessReadiness: @escaping () -> ModelAccessReadiness = { .undetermined },
         planReadiness: @escaping () -> PlanReadiness = { .undetermined },
         preferredBrowser: MacApp? = nil,
-        claimedEarlierInThisRun: RunClaims = .none,
-        // Non-defaulted, on the same reasoning as `assessRisk(plan:scope:)` and both `AgentRunner`
-        // entry points, and for a failure that is one layer quieter than either: a second
-        // construction site omitting this would leave `taskScope` at `.unscoped`, which turns
-        // `run_routine`'s nested forward into a no-op — a routine's steps would stop being checked
-        // against the boundary its caller is bound by, with every test still green because the
-        // executor's own call site would be the only one passing a real scope.
-        taskScope: TaskWorkspaceScope,
-        assessNestedPlan: @escaping AssessNestedPlan,
-        previewNestedPlan: @escaping PreviewNestedPlan,
-        executeNestedPlan: @escaping ExecuteNestedPlan,
-        visionSession: VisionSessionEnvironment? = nil,
-        recordingPolicy: TaskRecordingPolicy = .record,
-        memoryRecording: MemoryRecordingSettings = .recordEverything
+        claimedEarlierInThisRun: RunClaims = .none
     ) {
-        self.recordingPolicy = recordingPolicy
-        self.memoryRecording = memoryRecording
         self.whitelist = whitelist
         self.inventory = inventory
         self.zipArchiver = zipArchiver
@@ -430,7 +346,6 @@ public struct CapabilityExecutionContext {
         self.browserOpener = browserOpener
         self.focusRestorer = focusRestorer
         self.focusHandoff = focusHandoff
-        self.hackerNewsFetcher = hackerNewsFetcher
         self.appCatalog = appCatalog
         self.installedAppResolver = installedAppResolver
         self.appSearchURLCatalog = appSearchURLCatalog
@@ -441,11 +356,7 @@ public struct CapabilityExecutionContext {
         self.appleMusicPlaybackProvider = appleMusicPlaybackProvider
         self.finderContextReader = finderContextReader
         self.permissionReadinessService = permissionReadinessService
-        self.routineStore = routineStore
-        self.workspaceStore = workspaceStore
         self.webPageLoader = webPageLoader
-        self.webSearchProvider = webSearchProvider
-        self.webResearchSynthesizer = webResearchSynthesizer
         self.clipboardHistoryStore = clipboardHistoryStore
         self.snippetStore = snippetStore
         self.runningAppSwitcher = runningAppSwitcher
@@ -463,11 +374,6 @@ public struct CapabilityExecutionContext {
         self.planReadiness = planReadiness
         self.preferredBrowser = preferredBrowser
         self.claimedEarlierInThisRun = claimedEarlierInThisRun
-        self.taskScope = taskScope
-        self.assessNestedPlan = assessNestedPlan
-        self.previewNestedPlan = previewNestedPlan
-        self.executeNestedPlan = executeNestedPlan
-        self.visionSession = visionSession
     }
 }
 
@@ -539,119 +445,14 @@ public extension CapabilityAdapter {
     }
 }
 
-public struct MetadataOnlyCapabilityAdapter: CapabilityAdapter {
-    public var metadata: CapabilityMetadata
-
-    public init(metadata: CapabilityMetadata) {
-        self.metadata = metadata
-    }
-}
-
+/// An adapter asked for a step it has no body for.
 public enum CapabilityRegistryError: Error, Equatable, LocalizedError {
-    case duplicateCapabilityID(String)
-    case duplicateOperation(AgentOperation, String, String)
-    case unsupportedOperation(AgentOperation)
     case notExecutable(String)
 
     public var errorDescription: String? {
         switch self {
-        case .duplicateCapabilityID(let id):
-            return "Capability ID \(id) is registered more than once."
-        case .duplicateOperation(let operation, let firstID, let secondID):
-            return "\(operation.rawValue) is registered by both \(firstID) and \(secondID)."
-        case .unsupportedOperation(let operation):
-            return "\(operation.rawValue) is not registered as an executable capability."
         case .notExecutable(let id):
             return "\(id) has metadata but no executor yet."
         }
-    }
-}
-
-public struct CapabilityRegistry: Sendable {
-    public var adapters: [any CapabilityAdapter]
-    private var operationIndex: [AgentOperation: any CapabilityAdapter]
-
-    public init(adapters: [any CapabilityAdapter]) throws {
-        var seenIDs: Set<String> = []
-        var operationIndex: [AgentOperation: any CapabilityAdapter] = [:]
-
-        for adapter in adapters {
-            let metadata = adapter.metadata
-            if !seenIDs.insert(metadata.id).inserted {
-                throw CapabilityRegistryError.duplicateCapabilityID(metadata.id)
-            }
-
-            for operation in metadata.operations {
-                if let existing = operationIndex[operation] {
-                    throw CapabilityRegistryError.duplicateOperation(
-                        operation,
-                        existing.metadata.id,
-                        metadata.id
-                    )
-                }
-                operationIndex[operation] = adapter
-            }
-        }
-
-        self.adapters = adapters
-        self.operationIndex = operationIndex
-    }
-
-    /// **The registry the shipping app runs on: its `reveal_in_finder` opens a real Finder
-    /// window.** Named at exactly one call site — `AgentViewModel.makeExecutor` — through the
-    /// revealer that view model was constructed with, so the app's Reveal in Finder control and
-    /// the `reveal_in_finder` capability are one seam rather than two (SONNY-395).
-    public static func revealing(
-        with finderRevealer: @escaping RevealInFinderCapabilityAdapter.Reveal
-    ) -> CapabilityRegistry {
-        do {
-            return try CapabilityRegistry(
-                adapters: DefaultCapabilityAdapters.all(finderRevealer: finderRevealer)
-            )
-        } catch {
-            preconditionFailure("Capability registry is invalid: \(error)")
-        }
-    }
-
-    /// **The same capabilities, revealing nowhere — and it is `AgentActionExecutor`'s default on
-    /// purpose, which inverts this repository's usual rule about defaults** (SONNY-395).
-    ///
-    /// Everywhere else the rule is that a default must not reach the machine, and the remedy is to
-    /// remove the default so that the shipping site has to name the real thing. That remedy was not
-    /// available here, because of how many call sites this one parameter sits on:
-    /// `git grep -n 'AgentActionExecutor(' 15c7bd9 -- Tests | grep -vE ':[0-9]+: *//' | wc -l`
-    /// → **42** construction lines across **26** files
-    /// (`git grep -ln 'AgentActionExecutor(' 15c7bd9 -- Tests | wc -l`), and of all of them just
-    /// **4** lines in **1** file name a registry at all
-    /// (`git grep -n 'capabilityRegistry:' 15c7bd9 -- Tests | wc -l` → 4,
-    /// `git grep -ln …` → 1). The comment stage is not decoration and its control fires: without
-    /// it the first command answers 43, the extra line being `LocalStoreInjectionScanTests`' prose
-    /// about this very initializer.
-    ///
-    /// So removing the default would have been 42 edits across 26 test files, in a repository that
-    /// runs parallel lanes, to protect a parameter one file has ever passed.
-    ///
-    /// So the default is the one that cannot open a window, and what protects the shipping path is
-    /// not a compiler error but a behavioural test: `ProductShellTests`' reveal runs through the
-    /// view model's own dispatch and asserts the fixture's recorder saw the URL, which goes empty
-    /// the moment `makeExecutor` stops threading its revealer. The trade is deliberate — a silent
-    /// no-op in the product is caught by that test and by a founder pressing the control, while
-    /// the alternative was leaving a default that seizes the window server of the machine every
-    /// manual test is run on.
-    public static let revealingNowhere: CapabilityRegistry = revealing(with: { _ in })
-
-    public var metadata: [CapabilityMetadata] {
-        adapters.map(\.metadata)
-    }
-
-    public var tools: [AgentTool] {
-        adapters.flatMap(\.metadata.plannerTools)
-    }
-
-    public func adapter(for operation: AgentOperation) throws -> any CapabilityAdapter {
-        guard let adapter = operationIndex[operation] else {
-            throw CapabilityRegistryError.unsupportedOperation(operation)
-        }
-        return adapter
     }
 }

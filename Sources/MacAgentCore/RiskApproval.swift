@@ -581,33 +581,17 @@ public struct CapabilityRiskAssessment: Codable, Equatable, Sendable {
     public var effectiveTier: CapabilityRiskTier
     public var approvalCopy: RiskApprovalCopy?
     public var escalations: [CapabilityRiskEscalation]
-    /// The plan-level workspace-scope roll-up, or `nil` when the task was assessed `.unscoped`.
-    ///
-    /// **Data, not a gate.** Under the consequence rule (2026-08-13) nothing reads this to decide
-    /// an approval requirement in either direction — the out-of-scope fact travels as an advisory
-    /// escalation whose reason surfaces on the trace, and the verdict itself stays computed and
-    /// stored for the surfaces that render it (the task's binding, chips) and for the future
-    /// vision cage. `nil` means "no workspace was bound", which is not the same as `.unconstrained`
-    /// ("a workspace was bound and says nothing about this kind") — the distinction stays
-    /// uncollapsed because both are facts a surface may need to state accurately.
-    ///
-    /// Optional and defaulted so every adapter's own `CapabilityRiskAssessment(...)` compiles
-    /// unchanged: an adapter assesses one segment and has no plan-level view, so `nil` there is the
-    /// honest answer rather than a forgotten one. The executor is the only thing that fills it in.
-    public var scopeVerdict: ScopeVerdict?
 
     public init(
         defaultTier: CapabilityRiskTier,
         effectiveTier: CapabilityRiskTier? = nil,
         approvalCopy: RiskApprovalCopy? = nil,
-        escalations: [CapabilityRiskEscalation] = [],
-        scopeVerdict: ScopeVerdict? = nil
+        escalations: [CapabilityRiskEscalation] = []
     ) {
         self.defaultTier = defaultTier
         self.effectiveTier = effectiveTier ?? Self.highestTier(defaultTier: defaultTier, escalations: escalations)
         self.approvalCopy = approvalCopy
         self.escalations = escalations
-        self.scopeVerdict = scopeVerdict
     }
 
     private static func highestTier(

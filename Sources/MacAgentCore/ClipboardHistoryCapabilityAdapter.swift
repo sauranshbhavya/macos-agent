@@ -12,7 +12,6 @@ public struct ClipboardHistoryCapabilityAdapter: CapabilityAdapter {
         displayName: "Clipboard history",
         description: "Look up recent local clipboard text captured by Sonny's privacy-filtered clipboard monitor.",
         operations: [.lookupClipboardHistory],
-        plannerTools: [],
         requiredPermissions: [],
         defaultRiskTier: .tier0
     )

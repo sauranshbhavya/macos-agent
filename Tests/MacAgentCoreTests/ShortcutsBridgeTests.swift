@@ -11,8 +11,6 @@ struct ShortcutsBridgeTests {
         let resolver = InstantCommandResolver(
             snippetStore: UnreachableLocalStores.snippets(),
             recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
-            routineStore: UnreachableLocalStores.routines(),
-            workspaceStore: UnreachableLocalStores.workspaces(),
             shortcutCatalog: FakeShortcutCatalog(names: ["Morning Routine"])
         )
 
@@ -46,8 +44,6 @@ struct ShortcutsBridgeTests {
         let resolver = InstantCommandResolver(
             snippetStore: UnreachableLocalStores.snippets(),
             recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
-            routineStore: UnreachableLocalStores.routines(),
-            workspaceStore: UnreachableLocalStores.workspaces(),
             shortcutCatalog: FakeShortcutCatalog(names: ["Our Standup", "My Standup", "Standup"])
         )
 
@@ -76,8 +72,6 @@ struct ShortcutsBridgeTests {
         let resolver = InstantCommandResolver(
             snippetStore: UnreachableLocalStores.snippets(),
             recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
-            routineStore: UnreachableLocalStores.routines(),
-            workspaceStore: UnreachableLocalStores.workspaces(),
             shortcutCatalog: FakeShortcutCatalog(names: ["Morning Routine"])
         )
 
@@ -90,97 +84,8 @@ struct ShortcutsBridgeTests {
         #expect(!question.contains("my Missing"))
     }
 
-    @Test
-    func plannerShortcutWithUnknownNameBecomesClarifyPlan() throws {
-        let runner = AgentRunner(
-            planner: FailingPlanner(),
-            executor: makeExecutor(catalog: FakeShortcutCatalog(names: ["Morning Routine"]))
-        )
 
-        let prepared = try runner.prepare(
-            plan: shortcutPlan(name: "Mornign Routine"),
-            source: .planner
-        )
 
-        #expect(prepared.plan.steps.map(\.operation) == [.clarify])
-        #expect(prepared.clarificationQuestion?.contains("Mornign Routine") == true)
-        #expect(prepared.previews.first?.title == "Clarification needed")
-    }
-
-    @Test
-    func shortcutWithoutHistoryIsTierTwoAndSuccessDemotesFutureRuns() async throws {
-        let root = try makeDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
-        let history = ShortcutRunHistoryStore(fileURL: root.appendingPathComponent("shortcuts-history.json"))
-        let invoker = FakeShortcutInvoker(results: [
-            ProcessResult(terminationStatus: 0, output: "done\n")
-        ])
-        let runner = AgentRunner(
-            planner: FailingPlanner(),
-            executor: makeExecutor(
-                catalog: FakeShortcutCatalog(names: ["Morning Routine"]),
-                invoker: invoker,
-                history: history
-            )
-        )
-        let plan = shortcutPlan(name: "Morning Routine")
-
-        let prepared = try runner.prepare(plan: plan, source: .instantResolver)
-        let firstRequest = try runner.approvalRequest(for: prepared, scope: .unscoped, context: approvalContext(for: prepared))
-        #expect(firstRequest.assessment.effectiveTier == .tier2)
-        // Tier 2 auto-runs under the consequence rule; the tier movement below is the feature.
-        #expect(firstRequest.requirement == .autoRun)
-
-        let result = try await runner.execute(prepared, approvalDecision: .approved(.tier2), scope: .unscoped, context: approvalContext(for: prepared))
-        #expect(result.summary == "Ran Shortcut Morning Routine.")
-        #expect(invoker.invocations.map(\.name) == ["Morning Routine"])
-        #expect(try history.hasCleanObservedSuccess(for: "morning routine"))
-
-        let demotedRequest = try runner.approvalRequest(for: prepared, scope: .unscoped, context: approvalContext(for: prepared))
-        #expect(demotedRequest.assessment.effectiveTier == .tier1)
-        #expect(demotedRequest.requirement == .autoRun)
-    }
-
-    @Test
-    func shortcutFailureClearsHistoryDemotion() async throws {
-        let root = try makeDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
-        let history = ShortcutRunHistoryStore(fileURL: root.appendingPathComponent("shortcuts-history.json"))
-        try history.recordSuccess(shortcutName: "Morning Routine", at: Date(timeIntervalSince1970: 100))
-        let invoker = FakeShortcutInvoker(results: [
-            ProcessResult(terminationStatus: 1, output: "boom")
-        ])
-        let runner = AgentRunner(
-            planner: FailingPlanner(),
-            executor: makeExecutor(
-                catalog: FakeShortcutCatalog(names: ["Morning Routine"]),
-                invoker: invoker,
-                history: history
-            )
-        )
-        let plan = shortcutPlan(name: "Morning Routine")
-
-        let prepared = try runner.prepare(plan: plan, source: .instantResolver)
-        let demotedRequest = try runner.approvalRequest(for: prepared, scope: .unscoped, context: approvalContext(for: prepared))
-        #expect(demotedRequest.assessment.effectiveTier == .tier1)
-        #expect(demotedRequest.requirement == .autoRun)
-
-        do {
-            _ = try await runner.execute(prepared, scope: .unscoped, context: approvalContext(for: prepared))
-            Issue.record("Expected failed Shortcut process to throw.")
-        } catch ShortcutsBridgeError.invocationFailed(let name, let code, let output) {
-            #expect(name == "Morning Routine")
-            #expect(code == 1)
-            #expect(output == "boom")
-        } catch {
-            Issue.record("Expected invocationFailed, got \(error).")
-        }
-
-        #expect(try !history.hasCleanObservedSuccess(for: "Morning Routine"))
-        let resetRequest = try runner.approvalRequest(for: prepared, scope: .unscoped, context: approvalContext(for: prepared))
-        #expect(resetRequest.assessment.effectiveTier == .tier2)
-        #expect(resetRequest.requirement == .autoRun)
-    }
 
     @Test
     func processInvokerUsesFixedShortcutsCommandAndTemporaryInputPath() async throws {
@@ -196,105 +101,8 @@ struct ShortcutsBridgeTests {
         #expect(runner.capturedInput == "hello world")
     }
 
-    @Test
-    func agentPlanDecoderAcceptsShortcutFields() throws {
-        let json = """
-        {
-          "summary": "Run Shortcut.",
-          "requiresConfirmation": true,
-          "steps": [
-            {
-              "id": "shortcut",
-              "operation": "invoke_shortcut",
-              "description": "Run Morning Routine.",
-              "inputPath": null,
-              "outputPath": null,
-              "count": null,
-              "targetURL": null,
-              "appName": null,
-              "question": null,
-              "mediaProvider": null,
-              "mediaTitle": null,
-              "mediaArtist": null,
-              "contextSource": null,
-              "routineName": null,
-              "routineSteps": null,
-              "workspaceName": null,
-              "workspaceApps": null,
-              "workspaceURLs": null,
-              "sourceURLs": null,
-              "searchQuery": null,
-              "draftTitle": null,
-              "draftContent": null,
-              "shortcutName": "Morning Routine",
-              "shortcutInput": "hello"
-            }
-          ]
-        }
-        """
 
-        let plan = try AgentPlanDecoder.decodeStrict(from: json)
 
-        #expect(plan.steps[0].operation == .invokeShortcut)
-        #expect(plan.steps[0].shortcutName == "Morning Routine")
-        #expect(plan.steps[0].shortcutInput == "hello")
-    }
-
-    /// `execute` used to resolve the shortcut spec twice on its own (once directly, once via the
-    /// preview it builds), on top of the plan-validation pass in `resolveDefaultOutputs` — three
-    /// `shortcuts list` spawns for one invocation. The adapter's own duplicate is gone; the
-    /// remaining read is the separate validation pass, deliberately left in place.
-    @Test
-    func invokingAShortcutDoesNotResolveTheCatalogTwiceInsideExecute() async throws {
-        let root = try makeDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
-        let catalog = CountingShortcutCatalog(names: ["Focus Mode"])
-        let executor = makeExecutor(
-            catalog: catalog,
-            invoker: FakeShortcutInvoker(results: [ProcessResult(terminationStatus: 0, output: "")]),
-            history: ShortcutRunHistoryStore(fileURL: root.appendingPathComponent("history.json"))
-        )
-
-        _ = try await executor.execute(plan: shortcutPlan(name: "Focus Mode")) { _, _ in }
-
-        #expect(catalog.readCount == 2)
-    }
-
-    /// "Don't save this task" reaches Shortcut run history (SONNY-120), and this goes through the
-    /// real executor rather than a hand-built context so the whole threading is exercised —
-    /// executor to `CapabilityExecutionContext` to the adapter's one `recordHistory` helper.
-    ///
-    /// Written because the end-to-end acceptance test cannot reach this: the product-shell fixture's
-    /// deterministic planner has no command that invokes a Shortcut, so a suppressed run there
-    /// leaves this store untouched whether or not the guard exists. A mutation battery caught the
-    /// gap by surviving.
-    @Test
-    func aSuppressedRunWritesNoShortcutRunHistory() async throws {
-        let root = try makeDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
-        let historyURL = root.appendingPathComponent("shortcuts-run-history.json")
-        let history = ShortcutRunHistoryStore(fileURL: historyURL)
-        let catalog = FakeShortcutCatalog(names: ["Focus"])
-        let invoker = FakeShortcutInvoker(results: [ProcessResult(terminationStatus: 0, output: "ok")])
-
-        // Recording first, so the suppressed case below is a real difference and not an empty store.
-        let recording = makeExecutor(catalog: catalog, invoker: invoker, history: history)
-        _ = try await recording.execute(plan: shortcutPlan(name: "Focus")) { _, _ in }
-        #expect(try history.hasCleanObservedSuccess(for: "Focus"))
-        let afterRecording = try Data(contentsOf: historyURL)
-
-        let suppressed = makeExecutor(
-            catalog: catalog,
-            invoker: FakeShortcutInvoker(results: [ProcessResult(terminationStatus: 0, output: "ok")]),
-            history: history,
-            recordingPolicy: .suppressTraces
-        )
-        _ = try await suppressed.execute(plan: shortcutPlan(name: "Focus")) { _, _ in }
-
-        // Byte-identical: AES-GCM reseals with a fresh nonce, so identical bytes prove no write
-        // happened rather than that the content matched.
-        #expect(try Data(contentsOf: historyURL) == afterRecording)
-    }
 
     private func makeDirectory() throws -> URL {
         let url = FileManager.default.temporaryDirectory
@@ -303,29 +111,7 @@ struct ShortcutsBridgeTests {
         return url
     }
 
-    private func approvalContext(for prepared: PreparedAgentRun) -> ApprovalContext {
-        ApprovalContext(mode: .normal, appControl: .notApplicable)
-    }
 
-    private func makeExecutor(
-        catalog: any ShortcutCatalogProviding,
-        invoker: any ShortcutInvoking = FakeShortcutInvoker(results: []),
-        history: ShortcutRunHistoryStore = ShortcutRunHistoryStore(fileURL: FileManager.default.temporaryDirectory.appendingPathComponent("unused-shortcuts-history-\(UUID().uuidString).json")),
-        recordingPolicy: TaskRecordingPolicy = .record
-    ) -> AgentActionExecutor {
-        AgentActionExecutor(
-            recordingPolicy: recordingPolicy,
-            routineStore: UnreachableLocalStores.routines(),
-            workspaceStore: UnreachableLocalStores.workspaces(),
-            clipboardHistoryStore: UnreachableLocalStores.clipboardHistory(),
-            snippetStore: UnreachableLocalStores.snippets(),
-            recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
-            shortcutCatalog: catalog,
-            shortcutInvoker: invoker,
-            shortcutRunHistoryStore: history,
-            resumableTaskStore: UnreachableLocalStores.resumableTasks(),
-        )
-    }
 
     private func shortcutPlan(name: String, input: String? = nil) -> AgentPlan {
         AgentPlan(
@@ -418,9 +204,3 @@ private final class CapturingShortcutProcessRunner: ShortcutProcessRunning, @unc
     }
 }
 
-private struct FailingPlanner: Planning {
-    func plan(command: String, priorTaskContext: PriorTaskContext?) async throws -> AgentPlan {
-        Issue.record("Planner should not be called for injected Shortcut tests.")
-        throw PlannerError.noPlannerRan
-    }
-}

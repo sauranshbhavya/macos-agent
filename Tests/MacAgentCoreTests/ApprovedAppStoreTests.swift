@@ -337,15 +337,6 @@ struct ApprovedAppStoreTests {
         #expect(try ApprovedAppStore(fileURL: fileURL, encryption: LocalStorageEncryption(keyManager: ApprovedAppTestKeyManager(byte: 0x42))).loadAll().count == 1)
     }
 
-    @Test
-    func theDefaultFileSitsBesideTheOtherStores() {
-        let store = ApprovedAppStore(fileURL: ApprovedAppStore.realFileURL())
-
-        #expect(store.fileURL.lastPathComponent == "approved-apps.json")
-        #expect(store.fileURL.deletingLastPathComponent().lastPathComponent == "Sonny")
-        #expect(LocalStore.approvedApps.fileURL() == store.fileURL)
-        #expect(LocalDataDeletionService.defaultStoreFileURLs().contains(store.fileURL))
-    }
 }
 
 /// The same instant every other store's tests pin to (1_700_000_000). Declared here because the

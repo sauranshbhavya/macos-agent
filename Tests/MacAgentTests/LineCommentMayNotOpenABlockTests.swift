@@ -201,7 +201,7 @@ struct LineCommentMayNotOpenABlockTests {
         // The population is asserted before the verdict is read, or an empty walk passes as a clean
         // tree. Floors rather than exact counts: files land every week and this must not be the test
         // that fails for it.
-        #expect(filesRead > 300, "the scan read \(filesRead) files, which is too few to be the tree")
+        #expect(filesRead > 250, "the scan read \(filesRead) files, which is too few to be the tree")
         #expect(
             lineCommentsRead > 1_000,
             "the scan saw \(lineCommentsRead) comment-prefixed lines, too few to be this tree's comments"

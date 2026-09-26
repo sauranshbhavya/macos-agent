@@ -12,26 +12,6 @@ public struct DocxConversionCapabilityAdapter: CapabilityAdapter {
         displayName: "DOCX to PDF conversion",
         description: "Find DOCX files in a whitelisted folder and convert them to PDFs using a fixed converter.",
         operations: [.scanDocx, .convertDocxToPDF],
-        plannerTools: [
-            AgentTool(
-                operation: .scanDocx,
-                name: "Scan DOCX files",
-                description: "Recursively find .docx files in a whitelisted folder.",
-                requiredFields: ["inputPath"],
-                sideEffects: [],
-                dryRunBehavior: "List conversion targets and skipped existing PDFs.",
-                examples: ["Find DOCX files in ~/Documents/MacAgentDocs"]
-            ),
-            AgentTool(
-                operation: .convertDocxToPDF,
-                name: "Convert DOCX to PDF",
-                description: "Convert discovered DOCX files to PDFs using Microsoft Word or explicit mock mode.",
-                requiredFields: ["inputPath"],
-                sideEffects: ["write files", "control Microsoft Word"],
-                dryRunBehavior: "Show conversion pairs without opening Word or writing PDFs.",
-                examples: ["Convert all .docx to .pdf in ~/Documents/MacAgentDocs"]
-            )
-        ],
         requiredPermissions: [
             CapabilityPermissionMetadata(requirement: .desktopDocumentsAccess),
             CapabilityPermissionMetadata(requirement: .wordAutomation)

@@ -14,7 +14,6 @@ public struct CalculatorCapabilityAdapter: CapabilityAdapter {
         displayName: "Calculator",
         description: "Evaluate arithmetic and common unit conversions locally without the model planner.",
         operations: [.calculateUtility],
-        plannerTools: [],
         requiredPermissions: [],
         defaultRiskTier: .tier0
     )

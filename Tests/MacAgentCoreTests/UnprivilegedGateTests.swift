@@ -153,7 +153,10 @@ struct UnprivilegedGateTests {
         //
         // Five since V2's phase 6, which replaced `AgentViewModel` with presentation over the
         // kernel: the eleven gated tests of the view model's own store writes went with it.
-        #expect(lockedAndGated == 5, "expected five gated directory-locking tests, found \(lockedAndGated)")
+        //
+        // None since V2's phase 7: the gated tests of the V1 executor's and stores' write failures
+        // went with that code. The mismatch check below still holds any new one to the gate.
+        #expect(lockedAndGated == 0, "expected no gated directory-locking tests, found \(lockedAndGated)")
         #expect(
             mismatches.isEmpty,
             """
