@@ -54,6 +54,8 @@ public struct TaskLedgerRecord: Sendable, Equatable, Codable {
     /// Set when the task ended on this Mac while its last messages were still undelivered, so a
     /// relaunch restores it as ended rather than as a task still waiting on the gateway.
     public var endedLocally: LocalEnd?
+    /// An instant-path task: no gateway knows it, so a relaunch settles it on this Mac.
+    public var runsLocally: Bool?
 
     public enum LocalEnd: String, Sendable, Equatable, Codable {
         case cancelled

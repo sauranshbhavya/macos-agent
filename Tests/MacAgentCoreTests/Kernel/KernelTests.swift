@@ -1061,6 +1061,80 @@ struct InstantPathTests {
     }
 
     @Test
+    func anInstantCommandCutOffMidActionAsksThePersonToCheckAfterARelaunch() async throws {
+        let ledgers = MemoryTaskLedgerStore()
+        let first = ScriptedGateway()
+        // The shortcut never returns: the app dies while it runs.
+        let shortcut = TestCapability(name: "run_it", floor: .create, released: Shared(false))
+        let before = makeController(first, ledgers: ledgers, capabilities: [shortcut])
+        let action = ActionID()
+        let submission = await before.submitLocal(TaskRequest(goal: "run my shortcut", mode: .normal), actions: [call("run_it", action, effect: .create)])
+        #expect(await eventually { shortcut.started.value })
+        await before.shutDown()
+
+        let second = ScriptedGateway()
+        let after = makeController(second, ledgers: ledgers, capabilities: [shortcut])
+        await after.launch()
+        #expect(await eventually {
+            if case .paused(.outcomeUnknown(action, .create, _)) = after.snapshot(submission.task)?.phase { return true }
+            return false
+        })
+        // It is never offered to the gateway, which has never heard of it.
+        let hello = try await second.next("hello")
+        guard case .hello(let body) = hello.payload else { throw KernelTestFailure("not a hello") }
+        #expect(body.resume.isEmpty)
+        await after.resolvePause(task: submission.task, choice: .stop)
+        #expect(await eventually { after.snapshot(submission.task)?.phase == .cancelled })
+        #expect(await eventually { ledgers.record(submission.task) == nil })
+        #expect(shortcut.executed.value.isEmpty)
+    }
+
+    @Test
+    func anInstantCommandWhoseOutcomeWasRecordedFinishesAfterARelaunch() async throws {
+        let ledgers = MemoryTaskLedgerStore()
+        let task = TaskID()
+        let action = ActionID()
+        var record = TaskLedgerRecord(
+            task: task,
+            request: TaskStartBody(goal: "open notes", origin: .composer, isPrivate: false, unattended: false, mode: .normal),
+            createdAt: Date()
+        )
+        record.runsLocally = true
+        record.lastSeqIn = 1
+        record.lastSeqOut = 2
+        record.actions = [LedgerAction(actionID: action, state: .done, declared: .navigate)]
+        record.outbox = [ClientMessage(
+            address: TaskAddress(task: task, seq: 2, re: 1),
+            payload: .outcome(OutcomeBody(results: [ActionResult(actionID: action, status: .done, effect: .navigate, evidence: "Notes is open.")]))
+        )]
+        try ledgers.save(record)
+
+        let controller = makeController(ScriptedGateway(), ledgers: ledgers, capabilities: [])
+        await controller.launch()
+        #expect(await eventually { controller.snapshot(task)?.phase == .completed(summary: "Notes is open.") })
+        #expect(await eventually { ledgers.record(task) == nil })
+    }
+
+    @Test
+    func anInstantCommandThatNeverRanEndsSayingSoAfterARelaunch() async throws {
+        let ledgers = MemoryTaskLedgerStore()
+        let task = TaskID()
+        var record = TaskLedgerRecord(
+            task: task,
+            request: TaskStartBody(goal: "open notes", origin: .composer, isPrivate: false, unattended: false, mode: .normal),
+            createdAt: Date()
+        )
+        record.runsLocally = true
+        record.lastSeqOut = 1
+        try ledgers.save(record)
+
+        let controller = makeController(ScriptedGateway(), ledgers: ledgers, capabilities: [])
+        await controller.launch()
+        #expect(controller.snapshot(task)?.phase == .failed(TaskFailure(reason: nil, message: "Sonny quit before this ran.")))
+        #expect(ledgers.record(task) == nil)
+    }
+
+    @Test
     func aPlanWithAStepThatHasNoV2FormGoesToTheGateway() {
         let plan = AgentPlan(summary: "x", requiresConfirmation: false, steps: [AgentStep(id: "1", operation: .rename, description: "w")])
         #expect(InstantPath.actions(for: plan) == nil)

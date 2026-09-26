@@ -147,6 +147,17 @@ public final class TaskController: ObservableObject {
     public func launch() async {
         let unfinished = (try? ledgers.unfinished()) ?? []
         for record in unfinished {
+            if record.runsLocally == true {
+                // An instant command: settled here, and never offered to the gateway.
+                let finisher = LocalFinisher()
+                let runtime = TaskRuntime(restoring: record, deps: dependencies(local: finisher))
+                await finisher.attach(runtime)
+                runtimes[record.task] = runtime
+                localTasks.insert(record.task)
+                await runtime.restoreLocally()
+                apply(await runtime.snapshot())
+                continue
+            }
             let runtime = TaskRuntime(restoring: record, deps: dependencies())
             runtimes[record.task] = runtime
             let snapshot = await runtime.snapshot()
@@ -215,7 +226,7 @@ public final class TaskController: ObservableObject {
     public func submitLocal(_ request: TaskRequest, actions: [WireAction]) async -> TaskSubmission {
         let id = TaskID()
         let finisher = LocalFinisher()
-        let runtime = TaskRuntime(id: id, request: request.startBody, deps: dependencies(local: finisher))
+        let runtime = TaskRuntime(id: id, request: request.startBody, deps: dependencies(local: finisher), local: true)
         await finisher.attach(runtime)
         runtimes[id] = runtime
         localTasks.insert(id)
