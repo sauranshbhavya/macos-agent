@@ -79,6 +79,29 @@ describe("TaskRunner", () => {
     expect(runner.tasksWithScreenshots).toBe(1);
   });
 
+  it("ends a task that runs out of time in the middle of a turn, before its next model call", async () => {
+    let clock = new Date("2026-09-10T12:00:00Z");
+    let invoked = 0;
+    const twoCalls: Agent = {
+      async turn(context) {
+        for (let call = 0; call < 2; call += 1) {
+          await context.modelCall({ agent: "planner", tier: "fast", maxInputTokens: 100, maxOutputTokens: 100 }, () => {
+            invoked += 1;
+            // The first call takes the task past its 30 minutes.
+            clock = new Date(clock.getTime() + 31 * 60_000);
+            return Promise.resolve({ value: null, usage: { inputTokens: 10, outputTokens: 10 }, provider: "test", model: "test" });
+          });
+        }
+        return { messages: [{ type: "finish", body: { status: "completed", summary: "Done." } }] };
+      },
+    };
+    const { runner, delivered } = runnerWith(twoCalls, { now: () => clock });
+    await start(runner);
+    await runner.idle();
+    expect(invoked).toBe(1);
+    expect(delivered.at(-1)).toMatchObject({ type: "finish", body: { reason: "budget_exhausted" } });
+  });
+
   it("never writes a screenshot's pixels into the transcript", async () => {
     const { runner, store } = runnerWith(observeOnce);
     const task = await start(runner);

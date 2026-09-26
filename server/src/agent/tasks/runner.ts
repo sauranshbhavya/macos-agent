@@ -472,6 +472,9 @@ export class TaskRunner {
         signal.throwIfAborted();
         const count = await store.countModelCall(task.id);
         if (count > budgets.maxModelCalls) throw new BudgetExhausted("model_calls");
+        // Checked per call, not only when a turn starts: one turn of many hops could otherwise run
+        // far past the task's time.
+        if (now().getTime() - task.createdAt.getTime() > budgets.maxWallTimeMs) throw new BudgetExhausted("wall_time");
         const rate = rates[spec.tier];
         const stepId = randomUUID();
         const held = creditsFor(rate, spec.maxInputTokens, spec.maxOutputTokens);
