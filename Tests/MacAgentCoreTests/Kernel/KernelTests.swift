@@ -370,6 +370,31 @@ struct KernelTests {
     }
 
     @Test
+    func aQuestionTheGatewayMovedPastIsNotAskedAgainAfterARelaunch() async throws {
+        let ledgers = MemoryTaskLedgerStore()
+        let first = ScriptedGateway()
+        let before = makeController(first, ledgers: ledgers, capabilities: [])
+        await before.launch()
+        let task = try await startedTask(before, TaskRequest(goal: "Plan my trip", mode: .normal))
+        _ = try await first.next("task.start")
+        await first.send(task, .ask(AskBody(question: "Which city?")), re: 1)
+        #expect(await eventually {
+            if case .awaitingAnswer = before.snapshot(task)?.phase { return true }
+            return false
+        })
+        // The gateway goes on without the answer, and its proposal is refused as unknown here.
+        await first.send(task, propose([call("launch_rockets")]), re: 1)
+        _ = try await first.next("outcome")
+        #expect(ledgers.record(task)?.awaiting == nil)
+        await before.shutDown()
+
+        let second = ScriptedGateway()
+        let after = makeController(second, ledgers: ledgers, capabilities: [])
+        await after.launch()
+        #expect(await eventually { after.snapshot(task)?.phase == .running })
+    }
+
+    @Test
     func aRelaunchWhileTheGatewayIsThinkingLeavesTheTaskRunningNotReconciling() async throws {
         let ledgers = MemoryTaskLedgerStore()
         let first = ScriptedGateway()

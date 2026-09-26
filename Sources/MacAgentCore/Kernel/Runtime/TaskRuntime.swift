@@ -318,6 +318,8 @@ public actor TaskRuntime {
         switch message.payload {
         case .ask(let body): record.awaiting = .ask(seq: address.seq, body: body)
         case .observe(let body): record.awaiting = .observe(seq: address.seq, body: body)
+        // The gateway moved on without the answer, so a later relaunch must not ask or look again.
+        case .propose, .finish: record.awaiting = nil
         default: break
         }
         try? save()
