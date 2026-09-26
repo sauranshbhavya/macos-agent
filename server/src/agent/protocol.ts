@@ -344,6 +344,7 @@ export const observationBodySchema = z.strictObject({
         "no_window",
         "unreadable",
         "foreground_unavailable",
+        "app_refused",
       ]),
       message: z.string().max(1000).optional(),
     })

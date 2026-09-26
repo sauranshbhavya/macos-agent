@@ -134,6 +134,10 @@ public actor ScreenController: ScreenControlling {
             return failure(.appNotRunning, "No installed app matches \(request.app).")
         }
         guard let pid = app.pid else { return failure(.appNotRunning, "\(app.name) isn't running.") }
+        // Terminals and script editors are refused before anything of them is read (V2 plan 7.2).
+        if deps.standing(app.bundleID) == .refused {
+            return failure(.appRefused, "Sonny doesn't work in \(app.name).")
+        }
         guard await deps.claims.claim(app.bundleID, for: ObjectIdentifier(self)) else {
             return failure(.foregroundUnavailable, "Another Sonny task is working in \(app.name). Try again when it has finished.")
         }
@@ -196,6 +200,13 @@ public actor ScreenController: ScreenControlling {
             if let state, !state.elements.isEmpty { break }
         }
 
+        // A shell showing inside an allowed app (an editor's terminal, a web console) is refused the
+        // same way: nothing of the window leaves, and no earlier look of it can be acted on.
+        if let state, Self.showsShell(state) {
+            await refuseForShell()
+            return failure(.appRefused, Self.shellRefusal(app))
+        }
+
         var tree: ObservationBody.Tree?
         var elements: [String: CuaElement] = [:]
         var secureRefs: Set<String> = []
@@ -210,7 +221,14 @@ public actor ScreenController: ScreenControlling {
 
         var screenshot: ObservationBody.Screenshot?
         if request.screenshot {
-            screenshot = try? await deps.screenshots.screenshot(bundleID: app.bundleID)
+            do {
+                screenshot = try await deps.screenshots.screenshot(bundleID: app.bundleID)
+            } catch ScreenshotRefusal.shellOnScreen {
+                await refuseForShell()
+                return failure(.appRefused, Self.shellRefusal(app))
+            } catch {
+                screenshot = nil
+            }
         }
         if tree == nil && screenshot == nil {
             return failure(.unreadable, "Sonny couldn't read \(app.name)'s window.")
@@ -241,6 +259,27 @@ public actor ScreenController: ScreenControlling {
     }
 
     static let textRoles: Set<String> = ["AXTextArea", "AXTextField", "AXSearchField", "AXComboBox", "AXSecureTextField"]
+
+    /// Whether the window's own text shows a shell. The text is read here and never leaves.
+    static func showsShell(_ state: CuaWindowState) -> Bool {
+        let text = ([state.windowTitle] + state.elements.flatMap { [$0.label, $0.value] })
+            .compactMap { $0 }
+            .joined(separator: "\n")
+        return ShellSurfaceDetector.verdict(for: text).showsShell
+    }
+
+    /// Nothing of a window showing a shell can be acted on, and the app isn't kept from other
+    /// tasks while this one moves on.
+    private func refuseForShell() async {
+        looks = [:]
+        latest = 0
+        session = nil
+        await deps.claims.release(ObjectIdentifier(self))
+    }
+
+    static func shellRefusal(_ app: ScreenApp) -> String {
+        "A shell is showing in \(app.name), and Sonny doesn't work in shells."
+    }
 
     static func isSecure(_ element: CuaElement) -> Bool {
         if element.role.localizedCaseInsensitiveContains("secure") { return true }

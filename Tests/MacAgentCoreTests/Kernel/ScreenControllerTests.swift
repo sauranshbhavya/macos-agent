@@ -12,6 +12,7 @@ struct FakeScreenApps: ScreenApps {
         switch nameOrBundleID.lowercased() {
         case "notes", "com.apple.notes": ScreenApp(bundleID: "com.apple.Notes", name: "Notes", pid: running ? 4242 : nil)
         case "mail", "com.apple.mail": ScreenApp(bundleID: "com.apple.mail", name: "Mail", pid: 5151)
+        case "terminal", "com.apple.terminal": ScreenApp(bundleID: "com.apple.Terminal", name: "Terminal", pid: 6161)
         default: nil
         }
     }
@@ -25,12 +26,20 @@ struct FakeScreenshots: WindowScreenshotting {
     }
 }
 
+/// A capture whose redaction found a shell in the picture.
+struct ShellInThePicture: WindowScreenshotting {
+    func screenshot(bundleID: String) async throws -> ObservationBody.Screenshot {
+        throw ScreenshotRefusal.shellOnScreen
+    }
+}
+
 func screenController(
     _ fake: FakeCuaNotes,
     apps: FakeScreenApps = FakeScreenApps(),
     ownPID: pid_t = 1,
     manifests: Shared<[CuaCapabilityManifest]> = Shared([]),
-    claims: ScreenAppClaims = ScreenAppClaims()
+    claims: ScreenAppClaims = ScreenAppClaims(),
+    screenshots: any WindowScreenshotting = FakeScreenshots()
 ) -> ScreenController {
     ScreenController(dependencies: .init(
         driver: { manifest in
@@ -38,7 +47,7 @@ func screenController(
             return fake
         },
         apps: apps,
-        screenshots: FakeScreenshots(),
+        screenshots: screenshots,
         lease: ForegroundLease(),
         claims: claims,
         ownPID: ownPID
@@ -225,6 +234,47 @@ struct ScreenControllerTests {
         // The second task moves on to Mail, and Notes is free again.
         _ = await second.observe(ObserveBody(app: "Mail", ax: true, screenshot: false), generation: 2)
         #expect(await look(first, generation: 2).error == nil)
+    }
+
+    @Test
+    func aTerminalIsRefusedBeforeAnythingOfItIsRead() async throws {
+        let manifests = Shared<[CuaCapabilityManifest]>([])
+        let controller = screenController(FakeCuaNotes(), manifests: manifests)
+        let observation = await controller.observe(ObserveBody(app: "Terminal", ax: true, screenshot: true), generation: 1)
+        #expect(observation.error?.code == .appRefused)
+        #expect(observation.ax == nil && observation.screenshot == nil)
+        // No driver session was even made for it.
+        #expect(manifests.value.isEmpty)
+    }
+
+    @Test
+    func aShellShowingInAnAllowedAppIsRefusedAndEarlierLooksCantBeActedOn() async throws {
+        let fake = FakeCuaNotes()
+        let claims = ScreenAppClaims()
+        let controller = screenController(fake, claims: claims)
+        let clean = await look(controller, generation: 1)
+        let newNote = try ref(clean) { $0.label == "New Note" }
+
+        // A shell's prompt and a command's output now show in the window.
+        await fake.update { $0.notes[$0.notes.count - 1] = "sauransh@Mac macos-agent % ls\nREADME.md  Sources  Tests  docs\nsauransh@Mac macos-agent %" }
+        let refused = await look(controller, generation: 2)
+        #expect(refused.error?.code == .appRefused)
+        #expect(refused.error?.message == "A shell is showing in Notes, and Sonny doesn't work in shells.")
+        #expect(refused.ax == nil)
+
+        await #expect(throws: CapabilityPrepareError.self) {
+            _ = try await controller.prepare(.press(app: "Notes", element: newNote), actionID: ActionID())
+        }
+        // The refused task doesn't keep Notes from another.
+        #expect(await look(screenController(FakeCuaNotes(), claims: claims), generation: 1).error == nil)
+    }
+
+    @Test
+    func aScreenshotShowingAShellIsNotSent() async throws {
+        let controller = screenController(FakeCuaNotes(), screenshots: ShellInThePicture())
+        let observation = await look(controller, generation: 1, screenshot: true)
+        #expect(observation.error?.code == .appRefused)
+        #expect(observation.screenshot == nil && observation.ax == nil)
     }
 
     @Test

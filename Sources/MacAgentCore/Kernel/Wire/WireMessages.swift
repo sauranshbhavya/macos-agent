@@ -216,6 +216,8 @@ public struct ObservationBody: Hashable, Sendable, Codable {
         case noWindow = "no_window"
         case unreadable
         case foregroundUnavailable = "foreground_unavailable"
+        /// Sonny doesn't work in this app, or a shell is showing in it: nothing of it was read.
+        case appRefused = "app_refused"
     }
 
     public struct Failure: Hashable, Sendable, Codable {
