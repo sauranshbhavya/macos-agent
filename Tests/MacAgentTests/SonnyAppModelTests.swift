@@ -187,7 +187,7 @@ struct SonnyAppModelTests {
         try fixture.stores.clipboardSettings.save(ClipboardHistorySettings(isEnabled: true))
         fixture.model.pollClipboard()
 
-        fixture.model.isPrivate = true
+        fixture.model.togglePrivate()
         fixture.model.composerText = "Look up my test results"
         fixture.model.submitComposer()
         let (task, _) = try await fixture.start()
