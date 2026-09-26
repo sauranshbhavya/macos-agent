@@ -20,6 +20,12 @@ public protocol ScreenApps: Sendable {
     func resolve(_ nameOrBundleID: String) async -> ScreenApp?
     /// Brings the app's process to the front. True once it is frontmost.
     func activate(pid: pid_t) async -> Bool
+    /// The process in front now, if any.
+    func frontmostPID() async -> pid_t?
+}
+
+extension ScreenApps {
+    public func frontmostPID() async -> pid_t? { nil }
 }
 
 public struct WorkspaceScreenApps: ScreenApps {
@@ -37,6 +43,10 @@ public struct WorkspaceScreenApps: ScreenApps {
                 .processIdentifier
         }
         return ScreenApp(bundleID: app.bundleIdentifier, name: app.displayName, pid: pid)
+    }
+
+    public func frontmostPID() async -> pid_t? {
+        await MainActor.run { NSWorkspace.shared.frontmostApplication?.processIdentifier }
     }
 
     public func activate(pid: pid_t) async -> Bool {
