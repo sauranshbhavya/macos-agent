@@ -144,6 +144,8 @@ struct SonnyAppModelTests {
 
         fixture.pasteboard.copy("my lab result code 4471")
         fixture.model.pollClipboard()
+        // A copy in the task's last second, before the next poll, isn't kept either.
+        fixture.pasteboard.copy("my lab result code 4472")
         await fixture.gateway.send(task, .finish(FinishBody(status: .completed, summary: "Found them.")))
         #expect(await eventually { fixture.model.controller.snapshot(task)?.phase.isTerminal == true })
         fixture.model.pollClipboard()

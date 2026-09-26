@@ -59,6 +59,7 @@ final class SonnyAppModel: ObservableObject {
     private var forwarding: Set<AnyCancellable> = []
     /// The private task the toggle is on for; the toggle resets when it ends.
     private var privateTask: TaskID?
+    private var privateRanAtLastPoll = false
 
     static let modeKey = "SonnyV2InteractionMode"
     /// How often schedules and watchers are checked.
@@ -115,13 +116,16 @@ final class SonnyAppModel: ObservableObject {
     }
 
     /// Clipboard history keeps what's copied, except while a private task runs: those copies are
-    /// marked as seen and never kept, then and after it ends.
+    /// marked as seen and never kept, then and after it ends. One more tick is skipped after the
+    /// last private task ends, so a copy made in its final second isn't kept either.
     func pollClipboard() {
-        if controller.tasks.contains(where: { $0.isPrivate && !$0.phase.isTerminal }) {
+        let privateRunning = controller.tasks.contains { $0.isPrivate && !$0.phase.isTerminal }
+        if privateRunning || privateRanAtLastPoll {
             clipboardMonitor.resynchronize()
         } else {
             _ = try? clipboardMonitor.poll()
         }
+        privateRanAtLastPoll = privateRunning
     }
 
     private func checkSchedulesAndWatchers() async {
