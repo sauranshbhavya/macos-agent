@@ -280,6 +280,63 @@ PASSTHROUGH_ABSENT=()
 PASSTHROUGH_FORWARDED=0
 SETTINGS_FORWARDED=0
 
+# ── Settings from a file, local only ─────────────────────────────────────────────────────────
+#
+# `server/.env` (or the file DEPLOY_ENV_FILE names) supplies any passthrough name the launching
+# shell has not exported, so a local gateway doesn't need two dozen exports before every run.
+# Copy `.env.example` to `.env` and fill it in; it is git-ignored and `.dockerignore`d.
+#
+# **Read as data, never sourced.** `source` would run the file as shell and strip the quotes out of
+# JSON values such as CREDIT_PLANS. Each `NAME=value` line is split at its first `=`, one pair of
+# matching outer quotes is dropped, and nothing in the value is expanded or run.
+#
+# **Only names on the two lists above are taken.** The file may hold anything else — the Supabase
+# service-role key for fetching a sign-in code, say — and none of it reaches the container: that key
+# is deliberately never forwarded. Names left out are reported by name.
+#
+# **The shell wins.** A name already set to something non-empty keeps its exported value.
+#
+# A value taken from the file enters this script's environment, which is where an exported value
+# already sits; it is never printed, logged or put on a command line, and Docker still reads it by
+# name through `-e NAME`.
+ENV_FILE="${DEPLOY_ENV_FILE:-.env}"
+ENV_FILE_LOADED=0
+ENV_FILE_SKIPPED=()
+
+is_passthrough_name() {
+  local candidate="$1" name
+  for name in ${PASSTHROUGH[@]+"${PASSTHROUGH[@]}"} ${PASSTHROUGH_SETTINGS[@]+"${PASSTHROUGH_SETTINGS[@]}"}; do
+    [[ "$name" == "$candidate" ]] && return 0
+  done
+  return 1
+}
+
+load_env_file() {
+  [[ -f "$ENV_FILE" ]] || return 0
+  local line name value
+  local blank='^[[:space:]]*(#.*)?$'
+  local pair='^[[:space:]]*(export[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)$'
+  local double_quoted='^"(.*)"$'
+  local single_quoted="^'(.*)'$"
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line%$'\r'}"
+    [[ "$line" =~ $blank ]] && continue
+    [[ "$line" =~ $pair ]] || continue
+    name="${BASH_REMATCH[2]}"
+    value="${BASH_REMATCH[3]}"
+    if [[ "$value" =~ $double_quoted || "$value" =~ $single_quoted ]]; then
+      value="${BASH_REMATCH[1]}"
+    fi
+    if ! is_passthrough_name "$name"; then
+      ENV_FILE_SKIPPED+=("$name")
+      continue
+    fi
+    [[ -n "${!name:-}" ]] && continue
+    export "$name=$value"
+    ENV_FILE_LOADED=$((ENV_FILE_LOADED + 1))
+  done < "$ENV_FILE"
+}
+
 usage() { echo "usage: $0 <local|staging|production>" >&2; exit 2; }
 [[ -z "$TARGET" ]] && usage
 
@@ -394,8 +451,15 @@ probe_auth_mount() {  # probe_auth_mount <base-url>
 case "$TARGET" in
   local)
     build
+    load_env_file
     collect_passthrough
     echo "==> starting container"
+    if [[ -f "$ENV_FILE" ]]; then
+      echo "    took ${ENV_FILE_LOADED} setting(s) from ${ENV_FILE} that this shell had not set"
+      if (( ${#ENV_FILE_SKIPPED[@]} > 0 )); then
+        echo "    left out of the container, not names it takes: ${ENV_FILE_SKIPPED[*]}"
+      fi
+    fi
     echo "    forwarding ${PASSTHROUGH_FORWARDED} of ${#PASSTHROUGH[@]} gateway credentials from this shell, by name"
     if (( ${#PASSTHROUGH_ABSENT[@]} > 0 )); then
       # Names only. No value is read to produce this line, and none could be.
