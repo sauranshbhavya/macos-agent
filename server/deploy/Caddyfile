@@ -1,0 +1,18 @@
+# The TLS proxy in front of the gateway (V2 plan, phase H). Caddy gets and renews the certificate
+# for the site address itself, and passes WebSocket upgrades to /v2/session with no extra settings.
+#
+#   SONNY_GATEWAY_SITE      the public address, e.g. gateway.example.com
+#   SONNY_GATEWAY_UPSTREAM  where the gateway listens, 127.0.0.1:8080 unless set
+#
+# With Caddy in front, every request reaches the gateway from Caddy, so the gateway needs
+# TRUSTED_PROXIES=loopback (or the proxy's address) to see each caller's own address for its rate
+# limits.
+
+{$SONNY_GATEWAY_SITE} {
+	reverse_proxy {$SONNY_GATEWAY_UPSTREAM:127.0.0.1:8080} {
+		# A Caddy config reload keeps open sessions for up to this long instead of cutting them.
+		# A restart of the gateway itself is covered by its own drain: each session is told
+		# "draining" (close code 1012) and the Mac reconnects.
+		stream_close_delay 5m
+	}
+}

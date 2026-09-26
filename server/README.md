@@ -1228,6 +1228,43 @@ remote deploy is owed and is recorded on SONNY-126.**
 `PASSTHROUGH_SETTINGS`, reported as a count rather than by name because each has a default and none
 is a secret. The script's own comment carries the reasoning for both arrays.
 
+
+### Behind Caddy (phase H)
+
+The proxy in front of the gateway is Caddy, configured by [`deploy/Caddyfile`](deploy/Caddyfile).
+Caddy gets and renews the TLS certificate for the site address itself and passes WebSocket upgrades
+to `/v2/session` as they are.
+
+```bash
+SONNY_GATEWAY_SITE=gateway.example.com caddy run --config deploy/Caddyfile
+```
+
+- `SONNY_GATEWAY_UPSTREAM` is where the gateway listens, `127.0.0.1:8080` unless set.
+- **Set `TRUSTED_PROXIES` on the gateway.** Behind Caddy every request arrives from Caddy's
+  address, so without it the per-address rate limits treat every caller as one. `loopback` is
+  right when Caddy and the gateway share the VM.
+- A Caddy config reload keeps open sessions for up to five minutes. A restart of the gateway is
+  covered by its own drain: on `SIGTERM` each session is sent `goodbye` with `reason: "draining"`
+  and a one-second reconnect pause, then closed with code 1012, and the Mac reconnects.
+
+**What was checked locally, on 2026-09-26**: Caddy in Docker with this file, in front of a gateway
+running from `dist/` against its own migrated Postgres, and a Mac-shaped WebSocket client with a
+token signed by the local JWT secret.
+
+- Health answered through Caddy.
+- A session opened through Caddy and was welcomed.
+- `SIGTERM` reached the client as the `draining` goodbye and close code 1012, 4 ms after the
+  signal, and the gateway exited 0.
+- While the gateway was down, Caddy answered the upgrade `502`.
+- After the restart, a new session was welcomed.
+
+**What only a real host can check**:
+
+- DNS for the site address, and ports 80 and 443 open for the certificate.
+- `deploy.sh staging` made real for that host.
+- `productionBaseURL` set in the app.
+- A signed Mac reconnecting across a real deploy.
+
 ## `GET /v1/health`
 
 ```json
