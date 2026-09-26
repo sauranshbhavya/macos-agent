@@ -203,7 +203,7 @@ public actor ScreenController: ScreenControlling {
         // A shell showing inside an allowed app (an editor's terminal, a web console) is refused the
         // same way: nothing of the window leaves, and no earlier look of it can be acted on.
         if let state, Self.showsShell(state) {
-            looks = [:]
+            await refuseForShell()
             return failure(.appRefused, Self.shellRefusal(app))
         }
 
@@ -224,7 +224,7 @@ public actor ScreenController: ScreenControlling {
             do {
                 screenshot = try await deps.screenshots.screenshot(bundleID: app.bundleID)
             } catch ScreenshotRefusal.shellOnScreen {
-                looks = [:]
+                await refuseForShell()
                 return failure(.appRefused, Self.shellRefusal(app))
             } catch {
                 screenshot = nil
@@ -262,10 +262,19 @@ public actor ScreenController: ScreenControlling {
 
     /// Whether the window's own text shows a shell. The text is read here and never leaves.
     static func showsShell(_ state: CuaWindowState) -> Bool {
-        let text = state.elements
-            .flatMap { [$0.label, $0.value].compactMap { $0 } }
+        let text = ([state.windowTitle] + state.elements.flatMap { [$0.label, $0.value] })
+            .compactMap { $0 }
             .joined(separator: "\n")
         return ShellSurfaceDetector.verdict(for: text).showsShell
+    }
+
+    /// Nothing of a window showing a shell can be acted on, and the app isn't kept from other
+    /// tasks while this one moves on.
+    private func refuseForShell() async {
+        looks = [:]
+        latest = 0
+        session = nil
+        await deps.claims.release(ObjectIdentifier(self))
     }
 
     static func shellRefusal(_ app: ScreenApp) -> String {

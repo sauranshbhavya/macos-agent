@@ -250,7 +250,8 @@ struct ScreenControllerTests {
     @Test
     func aShellShowingInAnAllowedAppIsRefusedAndEarlierLooksCantBeActedOn() async throws {
         let fake = FakeCuaNotes()
-        let controller = screenController(fake)
+        let claims = ScreenAppClaims()
+        let controller = screenController(fake, claims: claims)
         let clean = await look(controller, generation: 1)
         let newNote = try ref(clean) { $0.label == "New Note" }
 
@@ -264,6 +265,8 @@ struct ScreenControllerTests {
         await #expect(throws: CapabilityPrepareError.self) {
             _ = try await controller.prepare(.press(app: "Notes", element: newNote), actionID: ActionID())
         }
+        // The refused task doesn't keep Notes from another.
+        #expect(await look(screenController(FakeCuaNotes(), claims: claims), generation: 1).error == nil)
     }
 
     @Test
