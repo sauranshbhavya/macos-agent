@@ -157,10 +157,11 @@ public actor TaskRuntime {
     /// writes and sends nothing.
     private var discarded = false
 
-    /// A new task.
-    public init(id: TaskID, request: TaskStartBody, deps: RuntimeDependencies) {
+    /// A new task. A `local` one is an instant-path task that no gateway will hear of.
+    public init(id: TaskID, request: TaskStartBody, deps: RuntimeDependencies, local: Bool = false) {
         self.id = id
         self.record = TaskLedgerRecord(task: id, request: request, createdAt: deps.now())
+        if local { record.runsLocally = true }
         self.deps = deps
         self.phase = .queued
     }
@@ -252,6 +253,35 @@ public actor TaskRuntime {
             phase = .running
         }
         await publish()
+    }
+
+    /// Settles an instant-path task a relaunch interrupted. No gateway knows it, so nothing will
+    /// welcome it: an action that may have run pauses for the person to check, as it would for a
+    /// gateway task; an outcome already recorded finishes the task; and a task that never got as far
+    /// as its action ends saying so.
+    public func restoreLocally() async {
+        guard !phase.isTerminal else {
+            try? deps.ledgers.delete(id)
+            return
+        }
+        guard record.pending == nil else {
+            await reconcile()
+            if case .paused = phase { return }
+            if let held = heldOutcome {
+                heldOutcome = nil
+                await sendNew(.outcome(OutcomeBody(results: held.results)), re: held.re, clearingPending: true)
+            }
+            return
+        }
+        let sentOutcome = record.outbox.last { message in
+            if case .outcome = message.payload { return true }
+            return false
+        }
+        if let sentOutcome {
+            _ = await deps.send(sentOutcome)
+        } else {
+            await end(.failed(TaskFailure(reason: nil, message: "Sonny quit before this ran.")))
+        }
     }
 
     /// The connection is up and the gateway has said what it knows about this task.
@@ -672,7 +702,8 @@ public actor TaskRuntime {
         phase = terminal
         await deps.broker.void(task: id)
         await deps.screen?.taskEnded()
-        if keepLedgerUntilAcknowledged && !record.outbox.isEmpty {
+        // A local task's messages go to no gateway, so nothing would ever acknowledge them.
+        if keepLedgerUntilAcknowledged && !record.outbox.isEmpty && record.runsLocally != true {
             if terminal == .cancelled { record.endedLocally = .cancelled }
             try? save()
         } else {
