@@ -28,9 +28,9 @@ struct TestCapability: Capability {
     var started = Shared(false)
     /// While false, execute waits (and honours cancellation).
     var released = Shared(true)
-    var raiseFacts: RaiseFacts = .none
     /// When set, what the live Mac now makes the action: its floor from then on.
     var escalated = Shared<Effect?>(nil)
+    var raiseFacts: RaiseFacts = .none
     var onExecute: (@Sendable (ActionID) -> Void)?
 
     func prepare(actionID: ActionID, args: [String: JSONValue]) async throws -> PreparedAction {

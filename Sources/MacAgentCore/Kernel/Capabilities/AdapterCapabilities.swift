@@ -19,8 +19,7 @@ public struct AdapterCapability: Capability {
     let steps: @Sendable ([String: JSONValue]) throws -> [AgentStep]
     /// What an adapter pinned the first time an action was prepared. The kernel prepares an action
     /// again just before it runs, and "in five minutes" must still mean five minutes from when Sonny
-    /// first read it, and a default file name made from the time must stay the one the person saw, or
-    /// every approval that took a moment would be voided as changed.
+    /// first read it, or every approval that took a minute would be voided as changed.
     let pins = PreparePins()
 
     struct Resolved: Sendable {
