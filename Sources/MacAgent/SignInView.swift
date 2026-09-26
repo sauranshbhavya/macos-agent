@@ -4,18 +4,8 @@ import SwiftUI
 
 /// Sign-in state for the whole app, held once and observed by Command Center.
 ///
-/// **Its own object rather than another field on `AgentViewModel`.** The view model owns the run
-/// loop and every local store; an account session shares none of that, and adding it there
-/// would put one more required parameter on an initializer that already has no defaults at all,
-/// and would land in every one of its fixtures — which exist only because SONNY-240 removed every
-/// default from it.
-///
-/// (**Two numerals came out of that sentence, both stale, both for the same reason** — SONNY-326.
-/// It read "a *sixteenth* required parameter on an initializer whose *fifteen* fixtures". A
-/// required-parameter count moves whenever a store or a dependency is added, and a fixture count
-/// moves whenever a fixture file is — both are ordinary work, both had already happened, and
-/// neither number carried the argument. The argument is that the cost is paid at *every*
-/// construction site, and that holds at any count.)
+/// **Its own object rather than a field on `SonnyAppModel`**: the app model presents the kernel's
+/// tasks and stores, and an account session shares none of that.
 ///
 /// **`restore()` is what makes the app come back signed in.** It reads the Keychain and touches no
 /// network, so it works on a launch with no connection — and, the case this ticket exists for, on
@@ -104,26 +94,20 @@ final class SonnyAccountModel: ObservableObject {
     /// Called after this Mac's session changes — a sign-in that succeeded, or a sign-out that
     /// cleared it (SONNY-136, PR #153's F4).
     ///
-    /// **It exists because the readiness row was stale in both directions, and the direction that
-    /// matters is the second one.** `AgentViewModel.modelAccessReadiness` is refreshed only by
-    /// `refreshPermissions()`, whose call sites are all Command Center `onAppear`s and the Refresh
-    /// button — and sign-in is a *sheet* over Command Center, so the window's `onAppear` does not
-    /// re-fire when it closes. Signing in then left the "show permission readiness" tool answering
-    /// *"Sign in to Sonny in Command Center."* for a signed-in user; signing out left it answering
-    /// *"Signed in."* for a session that no longer exists, which is PR #139's F10 in its own words —
-    /// readiness that is not readiness — reappearing at the surface this ticket was assigned to fix.
+    /// **It exists because the readiness rows go stale otherwise.** Sign-in is a *sheet* over
+    /// Command Center, so the window's `onAppear` does not re-fire when it closes, and a readiness
+    /// row refreshed only there would keep saying "sign in" to a signed-in user, or "signed in" to a
+    /// session that no longer exists.
     ///
-    /// **A callback rather than this type reaching for the view model.** `SonnyAccountModel` knows
-    /// about a client and a service and nothing about the agent; giving it a reference to
-    /// `AgentViewModel` would invert that for one notification. `main.swift` owns both objects and
-    /// is where the two are already joined by the shared client, so it is where this is wired.
+    /// **A callback rather than this type reaching for the app model.** `SonnyAccountModel` knows
+    /// about a client and a service and nothing about the kernel; `main.swift` owns both objects and
+    /// is where they are already joined by the shared client, so it is where this is wired.
     ///
-    /// Not called by `restore()`: that runs at launch, before any window exists, and the view model
-    /// refreshes on the first `onAppear` anyway.
+    /// Not called by `restore()`: that runs at launch, before any window exists.
     var sessionDidChange: (@MainActor () -> Void)?
 
     /// The one backend client this process holds, exposed so `main.swift` can hand the *same* one to
-    /// `AgentViewModel` (SONNY-130).
+    /// the kernel (SONNY-130).
     ///
     /// **One client, not two, and the reason is the refresh guard.** `SonnyBackendClient` holds the
     /// single-flight generation counter that makes ten concurrent `401 auth.token_expired`s cause
@@ -164,9 +148,8 @@ final class SonnyAccountModel: ObservableObject {
 
     /// The shipping app's one request for the real Keychain and the real host resolution.
     ///
-    /// Mirrors `AgentViewModel.atItsRealStoreLocations()` exactly, including why it exists: one
-    /// named place where the real locations are allowed, rather than several where they arrive by
-    /// silence. `SignInSurfaceTests.onlyMainAsksForTheRealKeychain` holds `Sources/` as the
+    /// One named place where the real locations are allowed, rather than several where they arrive
+    /// by silence. `SignInSurfaceTests.onlyMainAsksForTheRealKeychain` holds `Sources/` as the
     /// population — exact equality on `["SignInView.swift": 1, "main.swift": 1]`, so it fails in
     /// both directions — and only `main.swift` may call it. (This named
     /// `SignInReleaseSwitchScanTests`, whose population is the five staging-pointer tokens and not

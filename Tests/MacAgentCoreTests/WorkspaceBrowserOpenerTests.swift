@@ -7,58 +7,6 @@ import Testing
 struct WorkspaceBrowserOpenerTests {
     private static let safari = MacApp(displayName: "Safari", bundleIdentifier: "com.apple.Safari")
     private static let chrome = MacApp(displayName: "Chrome", bundleIdentifier: "com.google.Chrome", aliases: ["Google Chrome"])
-    private static let notes = MacApp(displayName: "Notes", bundleIdentifier: "com.apple.Notes")
-    private static let slack = MacApp(displayName: "Slack", bundleIdentifier: "com.tinyspeck.slackmacgap")
-
-    // MARK: - Which app counts as the workspace's browser
-
-    @Test
-    func theWorkspacesBrowserIsTheFirstBrowserCapableAppNotSimplyTheFirstApp() {
-        let apps = [Self.notes, Self.chrome, Self.safari]
-        #expect(WorkspaceBrowserCatalog.firstBrowser(in: apps) == Self.chrome)
-    }
-
-    @Test
-    func aWorkspaceThatNamesNoBrowserHasNoBrowser() {
-        #expect(WorkspaceBrowserCatalog.firstBrowser(in: [Self.notes, Self.slack]) == nil)
-        #expect(WorkspaceBrowserCatalog.firstBrowser(in: []) == nil)
-        #expect(WorkspaceBrowserCatalog.isBrowser(Self.notes) == false)
-        #expect(WorkspaceBrowserCatalog.isBrowser(Self.slack) == false)
-    }
-
-    /// The alias table folds aliases down to one canonical `MacApp` before recognition ever runs, so
-    /// a workspace saved as "Google Chrome" is the same browser as one saved as "Chrome". Pinned
-    /// because recognition keys on the bundle identifier precisely so the alias problem cannot exist.
-    @Test
-    func aBrowserSavedUnderAnAliasIsStillRecognized() throws {
-        let catalog = MacAppCatalog.default
-        let viaAlias = try #require(catalog.canonicalApp(named: "Google Chrome"))
-        let viaDisplayName = try #require(catalog.canonicalApp(named: "chrome"))
-
-        #expect(viaAlias == viaDisplayName)
-        #expect(WorkspaceBrowserCatalog.isBrowser(viaAlias))
-    }
-
-    /// Safari and Chrome are the only browsers `MacAppCatalog.default` carries today. The other
-    /// three identifiers are listed ahead of the catalog on purpose: adding Arc, Firefox or Edge to
-    /// the allowlist should make it the workspace's browser in that same edit, with no second place
-    /// to remember. Both halves are pinned so neither can drift silently.
-    @Test
-    func recognitionCoversBrowsersTheDefaultCatalogDoesNotCarryYet() {
-        let browsersInDefaultCatalog = MacAppCatalog.default.apps.filter(WorkspaceBrowserCatalog.isBrowser)
-        #expect(browsersInDefaultCatalog.map(\.displayName) == ["Safari", "Chrome"])
-
-        let arc = MacApp(displayName: "Arc", bundleIdentifier: "company.thebrowser.Browser")
-        let firefox = MacApp(displayName: "Firefox", bundleIdentifier: "org.mozilla.firefox")
-        let edge = MacApp(displayName: "Edge", bundleIdentifier: "com.microsoft.edgemac")
-        #expect(WorkspaceBrowserCatalog.isBrowser(arc))
-        #expect(WorkspaceBrowserCatalog.isBrowser(firefox))
-        #expect(WorkspaceBrowserCatalog.isBrowser(edge))
-
-        // A browser-shaped display name with an unknown bundle identifier is not a browser — the set
-        // is the whole rule, and nothing infers browser-ness from the name.
-        #expect(WorkspaceBrowserCatalog.isBrowser(MacApp(displayName: "Safari", bundleIdentifier: "com.example.NotSafari")) == false)
-    }
 
     // MARK: - Opening
 

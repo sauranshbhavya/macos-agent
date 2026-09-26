@@ -2,12 +2,8 @@ import Foundation
 import Testing
 @testable import MacAgentCore
 
-/// What a stub saw, shared by both test targets (SONNY-130; moved here by PR #139's F1).
-///
-/// It started in `Tests/MacAgentCoreTests/ModelRouteFixtures.swift`, where the four migrated
-/// per-route suites use it. F1's fix needs the same reading from `Tests/MacAgentTests`, because the
-/// scheduled path's `task_id` is only observable on the wire — so it lives beside
-/// `BackendStubURLProtocol`, which is the thing it reads, rather than being written twice.
+/// What a stub saw, shared by both test targets. It lives beside `BackendStubURLProtocol`, which is
+/// the thing it reads.
 
 /// One recorded upstream request, read the way `URLProtocol` actually sees one.
 public struct RecordedBackendRequest: @unchecked Sendable {

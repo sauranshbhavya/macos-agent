@@ -51,38 +51,10 @@ public struct SnippetStore: @unchecked Sendable {
         self.encryption = encryption
     }
 
-    /// Where the shipping app keeps this store.
-    ///
-    /// The rule that makes this a named call rather than an initializer default is on
-    /// `ClipboardHistoryStore.defaultDirectory` (SONNY-350).
-    public static func realFileURL(fileManager: FileManager = .default) -> URL {
-        ClipboardHistoryStore.defaultDirectory(fileManager: fileManager)
-            .appendingPathComponent("snippets.json")
-    }
-
     public func save(_ snippet: StoredSnippet) throws {
         let normalizedSnippet = try validated(snippet)
         var snippets = try loadAll()
         snippets[normalizedSnippet.trigger] = normalizedSnippet
-        try write(snippets)
-    }
-
-    /// Forgets one snippet, keyed by the trigger it is filed under.
-    ///
-    /// A read entry point's mirror image, added for Command Center's Memory section (SONNY-208) —
-    /// the store had `save` and three readers and no way for a person to remove one thing, so the
-    /// only removal that existed was wiping every snippet at once. Goes through the same `loadAll`
-    /// and `write` as `save`, so encryption, the legacy-plaintext migration and the atomic write are
-    /// untouched.
-    ///
-    /// Deleting a trigger that is not there is a no-op rather than an error: the caller's intent is
-    /// "this must not be saved any more", and that is already true.
-    public func delete(trigger rawTrigger: String) throws {
-        let trigger = try normalizedTrigger(rawTrigger)
-        var snippets = try loadAll()
-        guard snippets.removeValue(forKey: trigger) != nil else {
-            return
-        }
         try write(snippets)
     }
 

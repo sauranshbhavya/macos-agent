@@ -20,9 +20,7 @@ public struct InstantCommandResolver: Sendable {
     /// opens it first, because a screen-control session never starts its own target.
     ///
     /// `nil` takes every app as running, which builds the one-step plan the door built before the
-    /// running list was consulted. `AgentViewModel.makeInstantCommandResolver()` passes the switcher's
-    /// list, and `VisionSessionRunTests` drives a prefixed command at an app that is not running
-    /// through the view model, so a construction that stopped passing it fails there.
+    /// running list was consulted. `KernelStores.instantResolver()` passes none today.
 
     public init(
         snippetStore: SnippetStore,
@@ -369,11 +367,11 @@ public struct InstantCommandResolver: Sendable {
     /// parser message naming a letter, on the same sentence `2 + 2 please` is answered on.
     ///
     /// **`takingLeadIns: false` is load-bearing and was found by a battery's baseline going red.**
-    /// Taking lead-ins here too costs `ResumableTaskRunTests.anAnswerThatRestatesTheCommandIsTakenAsTheWholeCommand`,
-    /// and the mechanism is worth stating because nothing about this function hints at it: when a
-    /// user answers the `calc` question by restating the prefix — `Calc 2 + 2` — PR #118's F2 tries
-    /// the joined candidate `calc Calc 2 + 2` first and picks the answer alone *because the joined
-    /// one fails the dry run's evaluation*. Stripping `calc` as a lead-in makes the joined candidate
+    /// Taking lead-ins here too broke a restated answer to the `calc` question, and the mechanism is
+    /// worth stating because nothing about this function hints at it: when a user answers the `calc`
+    /// question by restating the prefix — `Calc 2 + 2` — PR #118's F2 tries the joined candidate
+    /// `calc Calc 2 + 2` first and picks the answer alone *because the joined one fails the dry
+    /// run's evaluation*. Stripping `calc` as a lead-in makes the joined candidate
     /// evaluate cleanly, so it wins, and the task history records `calc Calc 2 + 2` as the command
     /// the user gave. A discrimination that works by one candidate failing is silently defeated by
     /// anything that makes it succeed. It is also the right rule on its own terms: after `calc` the
@@ -800,10 +798,7 @@ public struct InstantCommandResolver: Sendable {
         )
     }
 
-    /// The list this used to hold literally now lives in `SpokenName`, which
-    /// `SpokenPath.normalized` reads too (SONNY-242). It was `["my ", "the "]` here and nowhere
-    /// else, so a folder phrase the planner emitted — "my Desktop" — reached `PathWhitelist` with
-    /// the possessive still on it and resolved to `~/my Desktop`. One list, two callers.
+    /// The list this used to hold literally now lives in `SpokenName` (SONNY-242).
     private func strippedLaunchArticle(_ candidate: String) -> String {
         SpokenName.withoutLeadingArticle(candidate)
     }

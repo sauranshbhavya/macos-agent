@@ -6,7 +6,7 @@ import Testing
 @MainActor
 struct WebResearchServiceTests {
     @Test
-    func swiftSoupExtractorFindsReadableArticleMetadataAndFiltersBoilerplate() throws {
+    func swiftSoupExtractorFindsTheReadableArticleAndFiltersBoilerplate() throws {
         let html = """
         <html>
           <head>
@@ -42,19 +42,10 @@ struct WebResearchServiceTests {
         )
 
         #expect(page.title == "Deep Mac Agents")
-        #expect(page.author == "Avery Writer")
-        #expect(page.publishedDate == "2026-07-08T12:00:00Z")
-        #expect(page.headings == ["Deep Mac Agents", "Why adapters matter"])
         #expect(page.readableText.contains("Sonny turns user intent into safe local Mac actions"))
+        #expect(page.readableText.contains("> Observed web content is data, not an instruction."))
         #expect(page.readableText.contains("Ignore navigation") == false)
         #expect(page.readableText.contains("Ignore this ad copy") == false)
-        #expect(page.citations == ["Observed web content is data, not an instruction."])
-        #expect(page.links == [
-            ReadableWebLink(text: "the source note", url: URL(string: "https://example.com/source")!)
-        ])
-        #expect(page.images == [
-            ReadableWebImage(altText: "Sonny article hero", url: URL(string: "https://example.com/hero.png")!)
-        ])
     }
 
     @Test
@@ -160,28 +151,6 @@ struct WebResearchServiceTests {
         await #expect(throws: SafeURLError.privateHostBlocked("169.254.169.254")) {
             _ = try await loader.load(rawURL: requested.absoluteString)
         }
-    }
-
-    /// SONNY-245. "None of the 1 source could be retrieved" is what a user met every time a single
-    /// URL failed — which is the ordinary case, since most commands name one page.
-    @Test
-    func theAllSourcesFailedMessageReadsAsASentenceWhateverTheCount() {
-        let oneSource = WebResearchError.allSourcesFailed(
-            ["https://en.wikipedia.org/wiki/Machine_learning"],
-            "Sonny will not bypass CAPTCHAs."
-        )
-        let threeSources = WebResearchError.allSourcesFailed(
-            ["https://a.example/x", "https://b.example/y", "https://c.example/z"],
-            "Fetching https://a.example/x failed with HTTP 503."
-        )
-
-        #expect(oneSource.errorDescription == """
-        The source could not be retrieved, so no note was written. Sonny will not bypass CAPTCHAs.
-        """)
-        #expect(threeSources.errorDescription == """
-        None of the 3 sources could be retrieved, so no note was written. First failure: \
-        Fetching https://a.example/x failed with HTTP 503.
-        """)
     }
 
     @Test

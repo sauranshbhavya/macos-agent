@@ -13,9 +13,7 @@ import Foundation
 /// `CreateReminderCapabilityAdapter` pins the instant the reminder is due instead
 /// (`AgentStep.resolvedReminderDueDate`), because a clock time can occur twice on one day and a day
 /// cannot. So the day a read runs on is the day its preview named, and the time a reminder is set for
-/// is the time its approval named — both approval panels render it through
-/// `RiskApprovalCopy.involvedResource`, spelled by `absoluteName(of:calendar:)` below — however long
-/// the panel sat open.
+/// is the time its approval named, however long the panel sat open.
 public enum CalendarDay {
     /// The start of the day `phrase` names.
     ///
@@ -72,14 +70,6 @@ public enum CalendarDay {
         return String(format: "%04d-%02d-%02d", parts.year ?? 0, parts.month ?? 0, parts.day ?? 0)
     }
 
-    /// Whether `phrase` is already a pinned `YYYY-MM-DD` that `calendar` accepts as a real date.
-    public static func isPinned(_ phrase: String?, calendar: Calendar) -> Bool {
-        guard let phrase, phrase.count == 10, phrase.split(separator: "-").count == 3 else {
-            return false
-        }
-        return (try? startOfDay(named: phrase, now: Date(timeIntervalSince1970: 0), calendar: calendar)) != nil
-    }
-
     /// How a result sentence names a day: `today`, `tomorrow`, `yesterday`, or `on Friday 18 September`.
     public static func spokenName(of startOfDay: Date, now: Date, calendar: Calendar) -> String {
         let today = calendar.startOfDay(for: now)
@@ -96,28 +86,6 @@ public enum CalendarDay {
         }
     }
 
-    /// A time and a date with no word relative to today, year included:
-    /// `15:06 on Sunday, 13 September 2026`.
-    ///
-    /// **What an approval panel says, and why it is not `spokenName`.** An approval is assessed again
-    /// at every gate, and "today" read before midnight is "yesterday" after it, so a panel line built
-    /// from a relative word would read differently at two gates of one run. This reads the same at
-    /// every gate for a pinned instant.
-    ///
-    /// **Why the year is on it** (PR #244's rebase round, from the scoped pass's note that a reminder
-    /// may be a year ahead). A reminder's day may be written as `YYYY-MM-DD` in any year:
-    /// `startOfDay(named:)` refuses an impossible date and nothing bounds a dated day to the year
-    /// ahead, the way `ReminderDue.maxMinutesFromNow` bounds minutes. So a planner that writes
-    /// `2027-09-13` for this Sunday pins a reminder a year out, and without the year the panel reads
-    /// "Monday, 13 September" — a different weekday as the only trace, on the one surface that exists
-    /// so the user can see what the model got wrong. The year is the part of a date a model guesses
-    /// (this file's header) and the part the panel could not otherwise show. `dayName(of:calendar:)`
-    /// stays without it: the read's "Calendar for …" line and a result's "on Friday 18 September"
-    /// name a day the user asked for by phrase, and a read asks nothing.
-    public static func absoluteName(of date: Date, calendar: Calendar) -> String {
-        "\(clockTime(of: date, calendar: calendar)) on \(localized(date, template: "EEEEdMMMMy", calendar: calendar))"
-    }
-
     /// A date with no word relative to today and no year: `Sunday 13 September`.
     public static func dayName(of date: Date, calendar: Calendar) -> String {
         localized(date, template: "EEEEdMMMM", calendar: calendar)
@@ -129,7 +97,7 @@ public enum CalendarDay {
     }
 
     /// `date` spelled the way the calendar's own locale spells `template`'s fields, in the calendar's
-    /// zone — the one formatter the three spellings above share.
+    /// zone — the one formatter the spellings above share.
     private static func localized(_ date: Date, template: String, calendar: Calendar) -> String {
         let formatter = DateFormatter()
         formatter.calendar = calendar

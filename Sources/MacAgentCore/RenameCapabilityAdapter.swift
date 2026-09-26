@@ -84,27 +84,6 @@ public struct RenameCapabilityAdapter: CapabilityAdapter {
         )
     }
 
-    /// What a rename would actually touch: the item now, and the item afterwards.
-    ///
-    /// **The destination is derived here and nowhere else**, because two things need it and a second
-    /// derivation is a second answer waiting to disagree: this adapter, which performs the move, and
-    /// `PlanScopedResources`, which has to name both paths so a workspace boundary can be answered
-    /// about the one being written as well as the one being read.
-    ///
-    /// Pure and side-effect free — it composes strings and validates them against the whitelist, and
-    /// touches no file. That is what lets the scope classifier call it.
-    public static func destinationPath(forInputPath rawInput: String?, newName rawName: String?) -> String? {
-        guard let rawInput, let rawName else {
-            return nil
-        }
-        let input = rawInput.trimmingCharacters(in: .whitespacesAndNewlines)
-        let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !input.isEmpty, !name.isEmpty else {
-            return nil
-        }
-        return (input as NSString).deletingLastPathComponent + "/" + name
-    }
-
     private struct RenameSpec {
         var source: URL
         var destination: URL

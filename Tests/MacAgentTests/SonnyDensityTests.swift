@@ -2,8 +2,8 @@ import Foundation
 import Testing
 @testable import MacAgent
 
-/// The information-density preference (founder ask, 2026-09-09): a value type with no view host —
-/// the same reason `JumpToPalettePresentation` is tested directly — plus `SonnyDensityModel`'s
+/// The information-density preference (founder ask, 2026-09-09): a value type with no view host,
+/// so it is tested directly, plus `SonnyDensityModel`'s
 /// persistence, on the `UserDefaults(suiteName:)` fixture pattern this target already uses.
 ///
 /// Shipped with three stops in phase 11 (Compact, Default, Comfortable); the founders removed
@@ -24,34 +24,19 @@ struct SonnyDensityTests {
         // The whole point of `regular`: a user who never touches the control sees no change from
         // what shipped before this ticket.
         #expect(SonnyDensity.regular.listRowHeight == SonnyMetrics.listRowHeight)
-        // `twoLineRowHeight` has no `SonnyMetrics` twin — it is new in phase 14, replacing
-        // `listRowHeight` (36) for `TaskHistoryRow` so its second line gets air rather than
-        // sitting in a box sized for one line. 48 is the founders' literal for Default.
-        #expect(SonnyDensity.regular.twoLineRowHeight == 48)
         #expect(SonnyDensity.regular.navRowHeight == SonnyMetrics.navRowHeight)
         #expect(SonnyDensity.regular.compactRowHeight == SonnyMetrics.compactRowHeight)
-        #expect(SonnyDensity.regular.toolbarHeight == SonnyMetrics.toolbarHeight)
-        // The four values with no metric token of their own, pinned to the literals the tree used
-        // before density existed (the card's SonnySpacing.lg inset and 190 floor, the pages'
-        // SonnySpacing.lg gap, rows with no gap), so Default cannot drift for a user who never
-        // touches the control (phase 11 review, F1).
-        #expect(SonnyDensity.regular.cardInset == 16)
-        #expect(SonnyDensity.regular.cardMinHeight == 190)
-        #expect(SonnyDensity.regular.sectionGap == 16)
+        // Rows with no gap, the literal the tree used before density existed, so Default cannot
+        // drift for a user who never touches the control (phase 11 review, F1).
         #expect(SonnyDensity.regular.rowGap == 0)
     }
 
     @Test
     func everyNamedValueStrictlyIncreasesFromRegularToComfortable() {
         #expect(SonnyDensity.regular.listRowHeight < SonnyDensity.comfortable.listRowHeight)
-        #expect(SonnyDensity.regular.twoLineRowHeight < SonnyDensity.comfortable.twoLineRowHeight)
         #expect(SonnyDensity.regular.navRowHeight < SonnyDensity.comfortable.navRowHeight)
         #expect(SonnyDensity.regular.compactRowHeight < SonnyDensity.comfortable.compactRowHeight)
-        #expect(SonnyDensity.regular.toolbarHeight < SonnyDensity.comfortable.toolbarHeight)
-        #expect(SonnyDensity.regular.cardInset < SonnyDensity.comfortable.cardInset)
         #expect(SonnyDensity.regular.rowGap < SonnyDensity.comfortable.rowGap)
-        #expect(SonnyDensity.regular.sectionGap < SonnyDensity.comfortable.sectionGap)
-        #expect(SonnyDensity.regular.cardMinHeight < SonnyDensity.comfortable.cardMinHeight)
     }
 
     @Test

@@ -17,7 +17,7 @@ import Foundation
 public enum SonnyBackendTimeouts {
     public static let auth: TimeInterval = 20
     public static let transcription: TimeInterval = 90
-    /// The budget for buying more screen-control runs — **forty seconds** (SONNY-215).
+    /// The budget for buying more credits — **forty seconds** (SONNY-215).
     ///
     /// **Longer than `auth` because the gateway makes two sequential provider calls behind it**, not
     /// because a database read got slower. An off-session charge is a draft order and then a
@@ -232,12 +232,10 @@ public actor SonnyBackendClient: GatewayCredentials {
 
     /// `tokenStore` has no default, deliberately.
     ///
-    /// SONNY-240 removed every defaulted local store from `AgentViewModel.init` because a default
-    /// nobody writes is a default nobody can see, and a fixture that inherited one wrote to the
-    /// developer's own `~/Library`. The Keychain is the same hazard one step worse: every packaged
-    /// build on a Mac shares one Keychain, so a test or a fixture that let this default would read
-    /// and *delete* the founder's real session. `session` keeps the `= .shared` default the six
-    /// provider clients already use, because a URLSession touches nothing shared on disk.
+    /// A default nobody writes is a default nobody can see (SONNY-240), and the Keychain is the
+    /// worst place for one: every packaged build on a Mac shares one Keychain, so a test or a
+    /// fixture that let this default would read and *delete* the founder's real session. `session`
+    /// keeps its `= .shared` default, because a URLSession touches nothing shared on disk.
     public init(
         environment: SonnyBackendEnvironment?,
         tokenStore: any SonnyAccountTokenStoring,
@@ -904,31 +902,10 @@ public actor SonnyBackendClient: GatewayCredentials {
         meta = document
     }
 
-    // MARK: - Task deletions (SONNY-404, contract §4.6.1 and §4.6.2)
-
-    /// **Why these two live on the client while SONNY-333's single-task delete lives on
-    /// `SonnyTaskDeletionService`.** That one is a bare `send` whose body is deliberately never
-    /// decoded — nothing on this Mac consumes `requests_deleted`. These two own a response shape:
-    /// the bulk delete's answer decides whether a queued obligation is finished, and a call whose
-    /// caller must read its body is a call with a decoder, which is what this region is. They sit
-    /// together because the two routes arrived together and a reader looking for one wants the other
-    /// beside it.
-
-    /// The one instant format this client puts on a wire, per §2.1.
-    ///
-    /// Built per call rather than held statically: `ISO8601DateFormatter` is not `Sendable`, and a
-    /// shared one behind an actor would be a mutable box reachable from a nonisolated context. This
-    /// runs once per account-wipe delivery, which is at most a handful of times per launch.
-    static func iso8601(_ instant: Date) -> String {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime]
-        return formatter.string(from: instant)
-    }
-
     // MARK: - Clock
 
-    /// `public` since SONNY-404 (PR #207's cycle-3, G1): the whole wipe's cutoff is compared against
-    /// the gateway's own timestamps, so it has to be this clock rather than the Mac's.
+    /// The gateway's clock as this client last observed it, for anything compared against the
+    /// gateway's own timestamps.
     public func serverNow() -> Date { now().addingTimeInterval(serverClockOffset) }
 
     /// The last instant a server reported, paired with the monotonic reading it arrived at.

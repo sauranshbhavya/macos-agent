@@ -221,25 +221,7 @@ public struct PathWhitelist: Sendable {
     /// refuses it when it leads out of the roots and follows it when it stays inside, which is
     /// exactly what the user-named branch of every one of these callers already did.
     ///
-    /// **What this was worth, said at its real size rather than the ticket's.** SONNY-264 was filed
-    /// as a live escape through `/usr/bin/zip`, and it is not one end to end. Measured against a
-    /// tree carrying the pre-fix composition, `AgentActionExecutor` refuses that plan at both
-    /// `prepare` and `execute` and the link's target is never created — because
-    /// `resolveDefaultOutputs` pins the generated path into the step's `outputPath` and the next
-    /// pass through the adapter takes the user-named branch, which has always validated.
-    ///
-    /// **This paragraph said "what was really exposed was the dry-run `preview`", and that named a
-    /// route nothing calls** (PR #157's review, F3). `AgentActionExecutor.preview(plan:)` has one
-    /// caller in `Sources` — `prepare`, which resolves on the line above it — and the one thing the
-    /// product calls a dry run goes through `prepare` too, so it refused the planted link exactly as
-    /// `prepare` did. The reachable route was the **nested** one: `previewNestedPlan` handed
-    /// `preview` an unresolved *stored routine*, and `.createZip` is not on
-    /// `StoredRoutine.forbiddenStepOperations`, so a saved routine carrying a `create_zip` reached
-    /// the generated branch with nothing resolved. That is closed by SONNY-218's half of the same
-    /// branch rather than by this one. The docx destinations were exposed too, and still are in the
-    /// sense that matters: they are never pinned into a step, so no second pass exists for them.
-    ///
-    /// **So the reason every site routes through here is not that each one leaks today.** It is that
+    /// **The reason every site routes through here is not that each one leaks today.** It is that
     /// three of the four were correct only by an ordering nothing states and no test holds, and the
     /// fourth was correct only because the two converters shipped today happen not to follow a
     /// dangling leaf link. Both are properties of the callers, re-derivable only by reading them

@@ -72,7 +72,7 @@ struct RunningAppAndRecentArtifactsTests {
         let artifact = try writeFile(named: "largest-files.zip", in: root)
         let folder = root.appendingPathComponent("pdfs", isDirectory: true)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        let routineFile = try writeFile(named: "routines.json", in: root)
+        let snippetFile = try writeFile(named: "snippets.json", in: root)
 
         let generated = AgentRunResult(
             plan: AgentPlan(
@@ -96,16 +96,16 @@ struct RunningAppAndRecentArtifactsTests {
 
         let automationStoreWrite = AgentRunResult(
             plan: AgentPlan(
-                summary: "Save routine.",
+                summary: "Save snippet.",
                 requiresConfirmation: true,
                 steps: [
-                    AgentStep(id: "routine", operation: .saveRoutine, description: "Save routine.")
+                    AgentStep(id: "snippet", operation: .saveSnippet, description: "Save snippet.")
                 ]
             ),
             previews: [
-                ActionPreview(title: "Routine", writes: [routineFile.path])
+                ActionPreview(title: "Snippet", writes: [snippetFile.path])
             ],
-            summary: "Saved routine."
+            summary: "Saved snippet."
         )
         #expect(try store.recordGeneratedArtifacts(from: automationStoreWrite) == 0)
         #expect(try store.loadAll().map(\.path) == [artifact.path])

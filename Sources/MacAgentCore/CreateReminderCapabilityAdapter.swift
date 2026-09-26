@@ -100,8 +100,7 @@ public struct CreateReminderCapabilityAdapter: CapabilityAdapter {
     ///
     /// The reason names the title and not the time, so it reads the same at every gate — an approval
     /// is matched to its reasons, and a reason that moved with the clock would never match. The time
-    /// reaches both approval panels through `RiskApprovalCopy.involvedResource` instead, which consent
-    /// does not compare (`AgentActionExecutor.involvedResource(in:metadata:)`, PR #244 F1).
+    /// reaches the approval through the preview instead.
     public func assessRisk(plan: AgentPlan, context: CapabilityExecutionContext) throws -> CapabilityRiskAssessment {
         let spec = try spec(in: plan, context: context)
         return CapabilityRiskAssessment(

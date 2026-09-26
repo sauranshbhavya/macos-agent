@@ -37,15 +37,6 @@ public struct RecentArtifactStore: @unchecked Sendable {
         self.encryption = encryption
     }
 
-    /// Where the shipping app keeps this store.
-    ///
-    /// The rule that makes this a named call rather than an initializer default is on
-    /// `ClipboardHistoryStore.defaultDirectory` (SONNY-350).
-    public static func realFileURL(fileManager: FileManager = .default) -> URL {
-        ClipboardHistoryStore.defaultDirectory(fileManager: fileManager)
-            .appendingPathComponent("recent-artifacts.json")
-    }
-
     @discardableResult
     public func record(path rawPath: String, recordedAt: Date = Date()) throws -> RecentArtifact? {
         let path = rawPath.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -78,24 +69,6 @@ public struct RecentArtifactStore: @unchecked Sendable {
             }
         }
         return recorded
-    }
-
-    /// Forgets one artifact. The file it points at is untouched — this store only ever held a note
-    /// about it, which is the same thing `LocalStoreClassification` says of the whole store.
-    ///
-    /// Added for Command Center's Memory section (SONNY-208), through the same `loadAll`/`write`
-    /// pair `record` uses. A missing id is a no-op, not an error.
-    ///
-    /// `now` is threaded for the same reason `record` threads `recordedAt`: `loadAll` applies the
-    /// age cap, so reading with one instant and writing back is an eviction pass — and a caller that
-    /// could not pin the instant could not tell a delete apart from an eviction.
-    public func delete(id: UUID, now: Date = Date()) throws {
-        let artifacts = try loadAll(now: now)
-        let remaining = artifacts.filter { $0.id != id }
-        guard remaining.count != artifacts.count else {
-            return
-        }
-        try write(remaining)
     }
 
     public func loadAll(now: Date = Date()) throws -> [RecentArtifact] {
@@ -142,14 +115,7 @@ public struct RecentArtifactStore: @unchecked Sendable {
 
     private func shouldRecordPreviewWrites(for plan: AgentPlan) -> Bool {
         plan.steps.contains { step in
-            [
-                .createZip,
-                .convertDocxToPDF,
-                .writeMarkdown,
-                .webToMarkdown,
-                .createLocalDraft,
-                .runRoutine
-            ].contains(step.operation)
+            [.createZip, .convertDocxToPDF, .createLocalDraft].contains(step.operation)
         }
     }
 

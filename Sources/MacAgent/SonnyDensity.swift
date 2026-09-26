@@ -43,26 +43,11 @@ enum SonnyDensity: String, CaseIterable, Identifiable {
         self = sliderValue.rounded() < 0.5 ? .regular : .comfortable
     }
 
-    /// A page's list rows (Tasks, the Insights recent-activity list drives off `scaled` instead —
-    /// see the "one-off heights" below): `TaskHistoryRow`, `CommandCenterGroupHeader`,
-    /// `JumpToPaletteRow`.
+    /// The Tasks page's rows and the sidebar's account row.
     var listRowHeight: CGFloat {
         switch self {
         case .regular: return 36
         case .comfortable: return 44
-        }
-    }
-
-    /// A row that shows a title and a detail line, one above the other — `TaskHistoryRow` today.
-    /// The texts inside keep the same sizes at both stops; only the air above and below them
-    /// grows, which is the whole point (founder, 2026-09-10: "the spacing between each list thing
-    /// is very, very tight, so maybe we can increase it a bit" — the Tasks rows were sitting in
-    /// `listRowHeight` (36/44), sized for a single line, with almost none of it left over for a
-    /// second). Single-line rows (`CommandCenterGroupHeader`, the Insights rows) are untouched.
-    var twoLineRowHeight: CGFloat {
-        switch self {
-        case .regular: return 48
-        case .comfortable: return 56
         }
     }
 
@@ -74,7 +59,7 @@ enum SonnyDensity: String, CaseIterable, Identifiable {
         }
     }
 
-    /// The account menu's rows, and `RoutineDetailStepRow`.
+    /// The account menu's rows.
     var compactRowHeight: CGFloat {
         switch self {
         case .regular: return 28
@@ -82,26 +67,9 @@ enum SonnyDensity: String, CaseIterable, Identifiable {
         }
     }
 
-    /// `TasksToolbarRow` and `CollectionHeader`.
-    var toolbarHeight: CGFloat {
-        switch self {
-        case .regular: return 36
-        case .comfortable: return 40
-        }
-    }
-
-    /// `WorkspaceCard`'s own inset.
-    var cardInset: CGFloat {
-        switch self {
-        case .regular: return 16
-        case .comfortable: return 20
-        }
-    }
-
-    /// The gap between rows inside a plain list (`TaskHistoryRow`, `RoutineRow`,
-    /// `StandingWatcherRow`, `MemoryRow`, `MemoryEntryRow`, `InsightsRecentActivityRow`,
-    /// `KeyboardShortcutRow`, `RoutineDetailStepRow`). Zero at Default — those rows already carry
-    /// their own divider — and a visible gap only once Comfortable asks for more air.
+    /// The gap between rows inside a plain list (`KeyboardShortcutRow`). Zero at Default — those
+    /// rows already carry their own divider — and a visible gap only once Comfortable asks for more
+    /// air.
     var rowGap: CGFloat {
         switch self {
         case .regular: return 0
@@ -109,25 +77,7 @@ enum SonnyDensity: String, CaseIterable, Identifiable {
         }
     }
 
-    /// The vertical gap between a page's header and the content below it.
-    var sectionGap: CGFloat {
-        switch self {
-        case .regular: return 16
-        case .comfortable: return 24
-        }
-    }
-
-    /// `WorkspaceCard`'s floor.
-    var cardMinHeight: CGFloat {
-        switch self {
-        case .regular: return 190
-        case .comfortable: return 210
-        }
-    }
-
-    /// Scales a one-off row height that has no named token of its own: `RoutineRow` (56),
-    /// `StandingWatcherRow` (44), `MemoryRow` (44), `MemoryEntryRow` (52), the Insights rows (32),
-    /// `KeyboardShortcutRow` (32).
+    /// Scales a one-off row height that has no named token of its own: `KeyboardShortcutRow` (32).
     func scaled(_ base: CGFloat) -> CGFloat {
         let factor: CGFloat
         switch self {

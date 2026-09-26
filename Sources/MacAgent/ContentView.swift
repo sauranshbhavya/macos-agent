@@ -72,9 +72,9 @@ struct PermissionReadinessRows: View {
 
 /// The system font (SF Pro) at a fixed scale. SF switches between its Text and Display optical
 /// sizes on its own at 20pt, so nothing here sets tracking by hand. Weight carries hierarchy;
-/// size steps are 11 / 12 / 13 / 15 / 20 / 22 / 26 and nothing in between.
+/// size steps are 11 / 12 / 13 / 15 / 20 / 22 and nothing in between.
 enum SonnyType {
-    /// Command Center page titles ("Tasks", "Insights", "Routines", "Workspaces", "Memory").
+    /// Command Center page titles ("Tasks", "Routines").
     static let pageTitle = system(22, weight: .semibold)
     /// Settings dialog's content-pane title ("Preferences", "Usage", ...).
     static let settingsContentTitle = system(20, weight: .semibold)
@@ -83,8 +83,6 @@ enum SonnyType {
     static let settingsSectionLabel = system(15, weight: .semibold)
     /// Sidebar "Sonny" wordmark.
     static let sidebarWordmark = system(13, weight: .semibold)
-    /// Insights hero numbers. Monospaced digits so a column of them lines up.
-    static let heroStat = system(26, weight: .semibold).monospacedDigit()
     /// Card and row titles that carry hierarchy inside a panel.
     static let headline = system(13, weight: .semibold)
     static let bodyEmphasis = system(13, weight: .medium)
@@ -93,9 +91,6 @@ enum SonnyType {
     static let caption = system(12)
     static let microEmphasis = system(11, weight: .medium)
     static let micro = system(11)
-    /// A small label above a block. Sentence case, no tracking, at most one per page.
-    static let eyebrow = system(11, weight: .medium)
-    static let avatar = system(13, weight: .medium)
     /// Shortcuts, identifiers and anything else that must line up character for character.
     static let mono = Font.system(size: 12, weight: .regular, design: .monospaced)
 
@@ -151,7 +146,6 @@ enum SonnyTheme {
     // Accent and semantics.
     static let accent = dynamic(dark: 0x5C84FE, light: 0x3B67E9)
     static let accentSubtle = accent.opacity(0.14)
-    static let accentBorder = accent.opacity(0.40)
     static let sidebarAccent = dynamic(dark: 0x2A6B5C, light: 0x1F594C)
     static let sidebarAccentSubtle = dynamic(dark: 0xE8DCC4, light: 0x123F36).opacity(0.14)
     static let sidebarBrandGold = dynamic(dark: 0xC49A45, light: 0x9B742C)
@@ -160,8 +154,6 @@ enum SonnyTheme {
     static let success = dynamic(dark: 0x4CC38A, light: 0x1E9E5F)
     static let warning = dynamic(dark: 0xE8B84A, light: 0xA8760A)
     static let danger = dynamic(dark: 0xE5484D, light: 0xD2353B)
-    /// Every non-peak bar in the Insights chart.
-    static let chartBarMuted = accent.opacity(0.22)
 
     /// The foreground colour at an opacity: white on dark, black on light. For a view that needs a
     /// step the named tokens do not have (the mode control's wireframe-literal track and dividers).
@@ -228,7 +220,6 @@ enum SonnyMetrics {
     static let navRowHeight: CGFloat = 30
     static let listRowHeight: CGFloat = 36
     static let compactRowHeight: CGFloat = 28
-    static let toolbarHeight: CGFloat = 36
     /// The floor a pointer can hit reliably; nothing interactive is shorter.
     static let controlSmall: CGFloat = 24
     static let controlRegular: CGFloat = 28
@@ -239,30 +230,13 @@ enum SonnyMetrics {
     static let iconEmptyState: CGFloat = 24
     /// The disclosure chevron beside a row or in a menu row: smaller than a button glyph on purpose.
     static let iconChevron: CGFloat = 9
-    /// The sidebar with its labels hidden: the mark, the icons and the avatar, each with a tooltip.
-    static let sidebarWidthCollapsed: CGFloat = 56
-    /// A collapsed sidebar row's selection fill, centred on its icon.
-    static let sidebarCollapsedRowWidth: CGFloat = 36
     /// The width of a Settings row's trailing control (the theme picker, the density slider): one
     /// number, so the controls in a section line up and cannot drift apart one literal at a time.
     static let settingsControlWidth: CGFloat = 180
-    /// The Tasks page with a task open: the list's share of the panel's width, the receipt taking
-    /// the rest. A share rather than a set of widths, so the proportion the founders asked for
-    /// (60/40, 2026-09-10) holds at every window size that can hold both; below that the receipt
-    /// keeps `taskReceiptMinWidth`, the floor its metadata row and its three buttons need, and the
-    /// list gives (`TasksSplitPresentation`). `tasksSplitRuleWidth` is the rule between the two,
-    /// the divider the draggable split used to draw. `TasksToolbarRow`'s two-row candidate is what
-    /// absorbs a list narrower than its one-row toolbar needs.
-    static let tasksListShare: CGFloat = 0.6
-    static let taskReceiptMinWidth: CGFloat = 360
-    static let tasksSplitRuleWidth: CGFloat = 1
     /// The hold-⌘ hint cap: shorter than a shortcuts-sheet cap (22) so it reads as a badge on the
-    /// control it names. `hintBadgeDrop` is how far beneath a collapsed-rail control the cap's
-    /// centre hangs — half its height plus a point, so it clears the icon above it and the one
-    /// below (`CommandKeyHintBadge.swift`).
+    /// control it names (`CommandKeyHintBadge.swift`).
     static let hintBadgeHeight: CGFloat = 14
     static let hintBadgeMinWidth: CGFloat = 12
-    static let hintBadgeDrop: CGFloat = 8
 }
 
 // MARK: - Motion
@@ -317,7 +291,7 @@ extension View {
         modifier(SonnySurfaceModifier(fill: SonnyTheme.collectionSurface, stroke: SonnyTheme.border, radius: SonnyRadius.card))
     }
 
-    /// A raised card inside a panel: a stat, a workspace, a memory row.
+    /// A raised card inside a panel.
     func sonnyCard(isHovered: Bool = false) -> some View {
         modifier(SonnySurfaceModifier(
             fill: isHovered ? SonnyTheme.surfaceRaised2 : SonnyTheme.surfaceRaised,
@@ -406,43 +380,6 @@ struct SonnyDialogCloseButton: View {
     }
 }
 
-/// The "more actions" menu a card or a row keeps its secondary and destructive actions in (founder
-/// ask, 2026-09-09): an ellipsis in a circle, the Mac convention, drawn as a small tertiary control
-/// so the row's one primary action stays the only thing that reads as a button. Callers pass menu
-/// content as they would to `Menu`; a destructive item takes `role: .destructive` and still confirms
-/// before it acts, as every delete in Command Center does. The menu style is `.button` with a plain
-/// button style rather than the deprecated borderless menu style, which the warnings count would
-/// flag; the indicator is hidden because the glyph already says what it is.
-struct SonnyOverflowMenu<Content: View>: View {
-    let accessibilityLabel: String
-    @ViewBuilder let content: () -> Content
-
-    init(accessibilityLabel: String = "More actions", @ViewBuilder content: @escaping () -> Content) {
-        self.accessibilityLabel = accessibilityLabel
-        self.content = content
-    }
-
-    var body: some View {
-        Menu {
-            content()
-        } label: {
-            Image(systemName: "ellipsis.circle")
-                .font(SonnyType.icon(SonnyMetrics.iconRow, weight: .medium))
-                .foregroundStyle(SonnyTheme.muted)
-                .frame(width: SonnyMetrics.controlSmall, height: SonnyMetrics.controlSmall)
-                .contentShape(RoundedRectangle(cornerRadius: SonnyRadius.control))
-        }
-        .menuStyle(.button)
-        .buttonStyle(.plain)
-        .menuIndicator(.hidden)
-        .fixedSize()
-        .sonnyPointerCursor()
-        .sonnyHoverHighlight(cornerRadius: SonnyRadius.control)
-        .accessibilityLabel(accessibilityLabel)
-        .help(accessibilityLabel)
-    }
-}
-
 /// The title row a sheet opens with: the title at the leading edge, the close control at the
 /// trailing edge, and one inset shared with `sonnyDialogFrame`.
 struct SonnyDialogHeader: View {
@@ -508,33 +445,9 @@ private struct SonnyDialogFrameModifier: ViewModifier {
     }
 }
 
-private struct SonnyDialogChromeModifier: ViewModifier {
-    let width: CGFloat
-    let height: CGFloat
-
-    func body(content: Content) -> some View {
-        content
-            .frame(width: width, height: height)
-            .background(SonnyTheme.ink)
-            .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.sheet))
-            .overlay(
-                RoundedRectangle(cornerRadius: SonnyRadius.sheet)
-                    .strokeBorder(SonnyTheme.border, lineWidth: 1)
-                    .allowsHitTesting(false)
-            )
-    }
-}
-
 extension View {
     func sonnyDialogFrame(_ size: SonnyDialogSize) -> some View {
         modifier(SonnyDialogFrameModifier(size: size))
-    }
-
-    /// The same chrome at a size the caller computes from its content, for the one sheet whose
-    /// height is a measured function of what it shows (the task detail, `TaskDetailPresentation`).
-    /// Width still comes from a named size so it lines up with its siblings.
-    func sonnyDialogFrame(width: CGFloat, height: CGFloat) -> some View {
-        modifier(SonnyDialogChromeModifier(width: width, height: height))
     }
 }
 

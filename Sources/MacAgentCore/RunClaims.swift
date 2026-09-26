@@ -98,16 +98,4 @@ public struct RunClaims: Equatable, Sendable {
     public mutating func recordWrite(_ path: String) {
         destinations.insert(DestinationKey.folded(path))
     }
-
-    /// Records a conversion from the destination *file* it produced — the folder is derived here, so
-    /// the "a conversion claims its destination's folder" rule has one home rather than one per
-    /// caller.
-    public mutating func recordConversion(ofSource sourcePath: String, to destinationPath: String) {
-        convertedSources.insert(
-            ConversionClaim(
-                source: sourcePath,
-                destinationFolder: URL(fileURLWithPath: destinationPath).deletingLastPathComponent().path
-            )
-        )
-    }
 }

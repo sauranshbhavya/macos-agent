@@ -141,8 +141,8 @@ public struct CapabilityExecutionContext {
     public var browserOpener: any BrowserOpening
     /// Puts the app the user was in back in front after an open (SONNY-451); see `FocusRestoring`.
     public var focusRestorer: any FocusRestoring
-    /// What the run's next unit does with the front, set by `AgentActionExecutor.executeChain` for
-    /// each unit of a chain and `nil` everywhere else (PR #238's F5). See `restoringFocus(afterOpening:log:_:)`.
+    /// What the run's next unit does with the front (PR #238's F5). `nil` in V2, where nothing chains
+    /// units; the V1 executor set it for each unit of a chain. See `restoringFocus(afterOpening:log:_:)`.
     public var focusHandoff: FocusHandoff?
     /// The alias table — which names mean the same app. Not a roster of what may be opened; that
     /// question moved to `installedAppResolver` when C12 dissolved the launch allowlist (SONNY-82).

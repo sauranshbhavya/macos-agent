@@ -97,10 +97,7 @@ public struct DocxConversionCapabilityAdapter: CapabilityAdapter {
             title: "Convert \(pending.count) DOCX files",
             details: details,
             writes: pending.map(\.destinationURL.path),
-            conversions: pending.map { "\($0.sourceURL.path) -> \($0.destinationURL.path)" },
-            convertedSources: pending.map {
-                ConvertedSource(sourcePath: $0.sourceURL.path, destinationPath: $0.destinationURL.path)
-            }
+            conversions: pending.map { "\($0.sourceURL.path) -> \($0.destinationURL.path)" }
         )
     }
 
@@ -108,20 +105,16 @@ public struct DocxConversionCapabilityAdapter: CapabilityAdapter {
     ///
     /// **Deliberately not a `CapabilityRiskEscalation`, and this adapter deliberately has no
     /// `assessRisk` override.** SONNY-28's review asked for that decision explicitly, so here it is
-    /// with its reasoning. Every sibling escalation — zip, draft, Markdown, workspace, routine,
-    /// snippet — fires because the capability is about to *overwrite* its single output. This
+    /// with its reasoning. Every sibling escalation — zip, draft, snippet — fires because the
+    /// capability is about to *overwrite* its single output. This
     /// capability never overwrites: a destination that already exists is skipped
     /// (`skippedBecausePDFExists`), and a destination another document of the same run claims is
     /// renamed onto a free name. With nothing overwritten there is nothing to raise a tier for, so
-    /// the asymmetry with the siblings is an invariant rather than a gap. The precedent for the
-    /// shape is `CreateWorkspaceCapabilityAdapter`'s scope-only-apps note: both approval panels
-    /// label an escalation as *what raised this above its default tier*, so a same-tier entry there
-    /// would render an informational line in warning colour under a heading that would then be false.
+    /// the asymmetry with the siblings is an invariant rather than a gap.
     ///
-    /// It rides the run summary because that is the one free-text channel that reaches a person
-    /// (`WidgetResultPanel`, via `AgentRunResult.summary`). The preview copy is added for symmetry
-    /// with the adapter's other details; `ActionPreview` has no renderer today, so the summary is
-    /// what the user actually reads.
+    /// It rides the run summary because that is the free-text channel that reaches a person (via
+    /// `AgentRunResult.summary`). The preview copy is added for symmetry with the adapter's other
+    /// details.
     private static func renamedOutputNote(for records: [DocxRecord]) -> String? {
         let renamed = records.filter(\.renamedToAvoidCollision)
         guard !renamed.isEmpty else {

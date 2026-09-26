@@ -103,23 +103,14 @@ enum FirstRunSequence {
 /// over.
 ///
 /// **Plain `UserDefaults`, following the Preferences rule in `.claude/rules/macagent-ui-conventions.md`**
-/// and `MemorySettingsStore`'s reasoning: two booleans about Sonny's own behaviour, not a word of
-/// the user's content, so there is nothing here for `LocalStorageEncryption` to protect and nothing
-/// for a decrypt failure to take away. It also has to survive **Delete Local Data**, for the same
-/// reason the memory switches do — a wipe that reset this would restart first run for a user who
-/// had already been through it.
+/// two booleans about Sonny's own behaviour, not a word of the user's content, so there is nothing
+/// here for `LocalStorageEncryption` to protect and nothing for a decrypt failure to take away.
 ///
-/// **The negative that follows, stated because the positive above reads as if something clears it**
-/// (PR #159's review, F6): *nothing in the product resets first run at all.*
-/// `LocalDataDeletionService`'s three doors all operate on file URLs, and no file in either target
+/// **Nothing in the product resets first run** (PR #159's review, F6): no file in either target
 /// removes a `UserDefaults` key by any route —
 /// `FirstRunSequenceTests.theSequencesStateSurvivesInUserDefaultsAndNotInALocalStore` asserts that
 /// as an empty population, with a positive control beside it so the zero is a measurement. So the
-/// only reset that exists is deleting these two keys by hand, or a fresh macOS user account, and
-/// `docs/sonny-manual-test-checklist.md` leads its first-run section with exactly that. That is
-/// deliberate: the one case where clearing the flag would change anything is a user who declined a
-/// step and then wiped, who would be re-asked for a permission they had refused because they
-/// deleted their task history.
+/// only reset that exists is deleting these two keys by hand, or a fresh macOS user account.
 ///
 /// **`userDefaults` has no default**, for SONNY-240's reason applied to something small: a default
 /// resolving to `.standard` is invisible at every call site that predates the parameter, and a test
@@ -167,9 +158,8 @@ struct FirstRunStore {
 /// Holds the one live answer to "is first run showing, and on what step" — observed by
 /// `CommandCenterView`, driven by `AppDelegate` at launch.
 ///
-/// **Its own object rather than a field on `AgentViewModel`**, for the reason `SonnyAccountModel`
-/// gives: the view model owns the run loop and every local store, and a launch-time sequence
-/// shares none of that.
+/// **Its own object rather than a field on `SonnyAppModel`**: the app model presents the kernel's
+/// tasks and stores, and a launch-time sequence shares none of that.
 ///
 /// **`begin` is separate from `refresh`, and the separation is the ticket's headline property in
 /// code.** Nothing is decided until `begin` is called, and `AppDelegate` calls it only after
@@ -358,9 +348,9 @@ struct FirstRunSequenceView: View {
                 model: accountModel,
                 isPresented: skipBinding,
                 // **No allowance during first run, in words rather than by a default** (SONNY-214).
-                // This step exists to get somebody signed in; a plan's remaining screen-control runs
-                // is not something they have any use for before they have run anything, and the
-                // figure is one request they do not need to wait on here. Account is where it shows.
+                // This step exists to get somebody signed in; a credit balance is not something they
+                // have any use for before they have run anything, and the figure is one request they
+                // do not need to wait on here. Account is where it shows.
                 creditBalance: nil,
                 refreshCreditBalance: nil,
                 // **And no auto-top-up control, for a sharper version of the same reason**

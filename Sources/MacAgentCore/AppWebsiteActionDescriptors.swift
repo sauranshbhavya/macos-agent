@@ -30,23 +30,6 @@ public struct LocalActionDescriptor: Equatable, Sendable {
 }
 
 public enum AppWebsiteActionDescriptors {
-    // Not planner-visible: `ToolRegistry.plannerDescription` composes `AgentTool`, never this
-    // descriptor. That is why these three strings could tell the truth about the open universe in
-    // SONNY-82 while the prompt the model reads waited for SONNY-83 — and it is also why they are
-    // easy to forget once the prompt has been fixed, which is what happened to `openWorkspace`'s
-    // below (PR #44 cycle-1 review, MEDIUM-2). Not planner-visible is not the same as not read.
-    public static let openApp = LocalActionDescriptor(
-        capabilityID: "local.apps.open-app",
-        displayName: "Open Mac app",
-        description: "Open any app installed on this Mac by human app name.",
-        supportedActions: [.openApp],
-        requiredPermissions: [CapabilityPermissionMetadata(requirement: .appOpening)],
-        defaultRiskTier: .tier1,
-        // Two failures where there were three. Membership was the one C12 dissolved, and with it the
-        // only case where Sonny refused an app the user actually had.
-        fallbackBehavior: "Fail clearly when the requested app is not installed."
-    )
-
     public static let openAppSearchURL = LocalActionDescriptor(
         capabilityID: "local.browser.open-app-search-url",
         displayName: "Open allowlisted search URL",
@@ -86,34 +69,6 @@ public enum AppWebsiteActionDescriptors {
         defaultRiskTier: .tier2,
         fallbackBehavior: "Create only a local file; escalate before replacing an existing draft."
     )
-
-    public static let openWorkspace = LocalActionDescriptor(
-        capabilityID: "local.workspaces.open",
-        displayName: "Open saved workspace",
-        description: "Open the apps and safe URLs saved in a named workspace.",
-        supportedActions: [.openWorkspace],
-        requiredPermissions: [
-            CapabilityPermissionMetadata(requirement: .appOpening),
-            CapabilityPermissionMetadata(requirement: .browserOpening)
-        ],
-        defaultRiskTier: .tier1,
-        // A workspace app Sonny cannot launch is not a failure: scope listing was decoupled from the
-        // launch catalog (SONNY-44), so such an entry is skipped and the open succeeds. What counts
-        // as unlaunchable narrowed with SONNY-82 — it was "outside `MacAppCatalog`" and is now
-        // "not installed on this Mac", which is why the wording below says so. The other two failures
-        // are unchanged: a missing workspace has nothing to open, and `SafeURL` is a capability bound
-        // rather than a user-declared boundary.
-        fallbackBehavior: "Skip any saved app that is not installed and open the rest. Fail clearly when the workspace is missing or contains an unsafe URL."
-    )
-
-    public static let all: [LocalActionDescriptor] = [
-        openApp,
-        openAppSearchURL,
-        openURL,
-        openGeneratedArtifact,
-        createLocalDraft,
-        openWorkspace
-    ]
 }
 
 public enum AppSearchURLCatalogError: Error, LocalizedError, Equatable {

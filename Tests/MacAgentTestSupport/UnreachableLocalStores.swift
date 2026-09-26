@@ -3,16 +3,9 @@ import MacAgentCore
 
 /// Local stores at a path this test process invents and nothing else knows (SONNY-350).
 ///
-/// **What this is for.** SONNY-350 made `fileURL` a required parameter of all thirteen local store
-/// initializers, so `RoutineStore()` no longer compiles and the real
-/// `~/Library/Application Support/Sonny/` location is reachable only by writing the words
-/// `realFileURL`. That closed the store initializers. It also broke every fixture that reached a
-/// store *without naming one* — not by constructing it, but by letting a **vendor** default it:
-/// `AgentActionExecutor`, `InstantCommandResolver`, `ClipboardHistoryMonitor` and `AgentRunner` each
-/// defaulted their store parameters to a real-path store, so a test about app switching that
-/// named only its `runningAppSwitcher` held six stores pointed at the developer's own data.
-/// Those defaults are gone too, and this is what the fixtures that never cared about a store pass
-/// instead.
+/// **What this is for.** `fileURL` is a required parameter of every local store initializer, and
+/// `InstantCommandResolver` takes its stores without defaults, so a fixture that never cared about a
+/// store passes one of these instead of one pointed at the developer's own data.
 ///
 /// **A fresh directory per call, and it is deliberately never created.** Every store on the shared
 /// pattern guards its reads on `fileManager.fileExists` and calls `createDirectory` before it
@@ -36,64 +29,11 @@ public enum UnreachableLocalStores {
             .appendingPathComponent(name)
     }
 
-    public static func clipboardHistory() -> ClipboardHistoryStore {
-        ClipboardHistoryStore(fileURL: fileURL("clipboard-history.json"))
-    }
-
     public static func snippets() -> SnippetStore {
         SnippetStore(fileURL: fileURL("snippets.json"))
     }
 
     public static func recentArtifacts() -> RecentArtifactStore {
         RecentArtifactStore(fileURL: fileURL("recent-artifacts.json"))
-    }
-
-    public static func shortcutRunHistory() -> ShortcutRunHistoryStore {
-        ShortcutRunHistoryStore(fileURL: fileURL("shortcuts-run-history.json"))
-    }
-
-}
-
-/// A standing-watcher observer that reaches no network, for the fixtures that have never heard of
-/// watchers (SONNY-236).
-///
-/// **The same argument as `UnreachableLocalStores` above, one parameter along.**
-/// `AgentViewModel.standingWatcherObserver` has no default, because a defaulted live observer would
-/// put every fixture one 30-second pulse away from a real HTTP request — the shape SONNY-240 removed
-/// from the store parameters, applied to something that fetches rather than writes. A test that
-/// actually exercises watching passes its own stub and asserts against it; everything else passes
-/// this.
-///
-/// **It throws rather than returning empty text, and that is the decision.** Empty text is a
-/// *reading*: it would digest to a real value, differ from any baseline, and drive the change
-/// machinery — so a fixture that accidentally ticked a watcher would exercise the promotion path
-/// with fabricated content and pass. A throw is what "this fixture cannot read pages" means, and it
-/// lands on the failure-tolerance path where nothing is claimed about the page at all.
-public struct UnreachableStandingWatcherObserver: StandingWatcherObserving {
-    public init() {}
-
-    public func readableText(at url: URL) async throws -> String {
-        throw UnreachableStandingWatcherObserverError.noNetworkInThisFixture(url)
-    }
-}
-
-public enum UnreachableStandingWatcherObserverError: Error, Equatable {
-    case noNetworkInThisFixture(URL)
-}
-
-public extension UnreachableLocalStores {
-
-    static func approvedApps() -> ApprovedAppStore {
-        ApprovedAppStore(fileURL: fileURL("approved-apps.json"))
-    }
-
-    /// Unfinished runs and standing watchers (SONNY-382).
-    ///
-    /// Needed here the day `CapabilityExecutionContext` and `AgentActionExecutor` gained the store,
-    /// for the same reason as the five above: every fixture that builds an executor now names this
-    /// store whether or not it has ever heard of a watcher, and the one thing none of them may name
-    /// is the real file.
-    static func resumableTasks() -> ResumableTaskStore {
-        ResumableTaskStore(fileURL: fileURL("resumable-tasks.json"))
     }
 }

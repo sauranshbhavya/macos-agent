@@ -83,8 +83,7 @@ public struct RedactedPayload: Equatable, Sendable {
     /// Every producer in this file fills it from ``ShellSurfaceDetector`` over the text it actually
     /// had, so the field is a true statement about *this* payload rather than a capture-only
     /// special case with an inert value on the other path. Which payload's verdict is acted on is
-    /// the runner's decision, not this type's: ``VisionSessionRunner`` reads the one built from the
-    /// capture it is about to act inside.
+    /// the caller's decision, not this type's.
     public let shellSurface: ShellSurfaceVerdict
 
     fileprivate init(

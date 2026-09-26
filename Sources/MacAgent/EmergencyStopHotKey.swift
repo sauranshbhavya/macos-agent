@@ -20,9 +20,7 @@ enum EmergencyStopHotKeyError: Error, LocalizedError {
 /// **Exists so the wiring can be tested without any test taking a real global shortcut** (PR #50
 /// review, F4). A test process that called `RegisterEventHotKey` would either steal `Ctrl-Opt-Esc`
 /// from the developer's machine for the duration of the suite or fail in CI — so no test may
-/// construct the real one, and that is exactly why removing the registration call from
-/// `visionSessionDidProgress` left the whole suite green while `Ctrl-Opt-Esc` silently never
-/// registered for any session.
+/// construct the real one.
 protocol EmergencyStopHotKeyRegistering: AnyObject {
     // `@MainActor` on the requirement rather than the protocol: isolating the whole protocol
     // isolates every conformer, and this class's `deinit` unregisters Carbon handles from a

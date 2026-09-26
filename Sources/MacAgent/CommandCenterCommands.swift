@@ -16,13 +16,4 @@ final class CommandCenterCommands: ObservableObject {
     /// its own hidden ⌘/ button for when it is key; this door is for the menu, which also answers
     /// ⌘/ while the widget is key and puts the item under Help's own search field.
     @Published var shortcutsRequests = 0
-    /// Set by the ⌘K jump-to palette (phase 5) when it activates a routine row: the id
-    /// (`StoredRoutine.id`, which is the routine's name) `RoutinesView` should open its detail
-    /// sheet for. Consumed the same two-door way `TasksFoundationView.consumeTaskDetailRequest`
-    /// consumes `taskDetailRequest` — an `onAppear` for a request that arrived while Routines was
-    /// not mounted, and an `onChange` for one that arrives while it is — and cleared either way.
-    @Published var routineToOpen: String?
-    /// The workspace-jump twin of `routineToOpen`, holding a `StoredWorkspace.name` for
-    /// `WorkspacesView` to resolve the same way its own card taps do.
-    @Published var workspaceToOpen: String?
 }

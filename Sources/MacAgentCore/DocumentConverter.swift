@@ -156,8 +156,8 @@ public struct MockDocumentConverter: DocumentConverting {
     /// environment and `FileManager.default`. They exist so the refuse-to-overwrite behavior below
     /// can be tested — `isAvailable` gated it behind a process-wide environment variable, and a test
     /// that has to `setenv` to reach a code path either runs serialized forever or leaks into every
-    /// other test in the process. Same shape `TavilySearchProvider` and `OpenAITranscriber` use for
-    /// their own environment reads, and `MicrosoftWordDocumentConverter` for its `fileManager`.
+    /// other test in the process. Same shape `MicrosoftWordDocumentConverter` uses for its
+    /// `fileManager`.
     ///
     /// The environment is now read once, when the converter is constructed, rather than on every
     /// `isAvailable` access. Nothing changes it mid-process, and reading it once makes a run

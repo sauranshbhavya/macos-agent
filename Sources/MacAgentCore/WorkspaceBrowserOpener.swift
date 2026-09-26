@@ -13,8 +13,7 @@ public protocol BrowserOpening {
 }
 
 public extension BrowserOpening {
-    /// Opens `url` in the system default browser. The shorthand every caller without a workspace
-    /// behind it uses — safe-URL opens, app search URLs, the Hacker News link.
+    /// Opens `url` in the system default browser. The shorthand for a caller that names no browser.
     @MainActor
     func open(_ url: URL) async throws {
         try await open(url, using: nil)
@@ -32,50 +31,11 @@ public enum BrowserOpeningError: Error, LocalizedError, Equatable {
     }
 }
 
-/// Which apps count as browsers when Sonny opens a workspace's URLs.
-///
-/// An explicit bundle-identifier set, deliberately not a heuristic **and deliberately not the open
-/// universe**: probing Launch Services for apps that declare an `http` handler would silently pull
-/// in every Electron app, mail client and PDF reader that registers one. C12 dissolved the *launch*
-/// allowlist; this set is a different question — not "may Sonny open it" but "will a URL sensibly
-/// land in it" — and it stays a fixed five. Bundle identifier rather than display name because that
-/// is the identity both the alias table and `InstalledAppResolver` resolve down to ("Google Chrome"
-/// and "Chrome" both land on `com.google.Chrome`), so there is one source of truth instead of two
-/// that can disagree.
-///
-/// **Arc, Firefox and Edge were dead weight until SONNY-82 and are now live.** They were listed here
-/// from the start on the theory that adding one to the launch catalog would make it browser-aware in
-/// the same edit — but the catalog never grew, and only catalog-resolved apps ever reached
-/// `firstBrowser`, so these three bundle identifiers were unreachable by construction. The
-/// dissolution reached them from the other direction: workspace and routine app resolution now goes
-/// through Launch Services, so a workspace listing Arc gets its URLs in Arc without this file
-/// changing at all.
-public enum WorkspaceBrowserCatalog {
-    public static let browserBundleIdentifiers: Set<String> = [
-        "com.apple.Safari",
-        "com.google.Chrome",
-        "company.thebrowser.Browser",
-        "org.mozilla.firefox",
-        "com.microsoft.edgemac"
-    ]
-
-    public static func isBrowser(_ app: MacApp) -> Bool {
-        browserBundleIdentifiers.contains(app.bundleIdentifier)
-    }
-
-    /// A workspace's browser: the *first* browser-capable app in its own apps list, so the order
-    /// the user saved decides. `nil` when the workspace names no browser at all — the caller then
-    /// keeps the pre-existing default-browser behavior.
-    public static func firstBrowser(in apps: [MacApp]) -> MacApp? {
-        apps.first(where: isBrowser)
-    }
-}
-
 /// Opens URLs through Launch Services.
 ///
 /// With a browser named, the URL goes to that app. Without one — or when that app turns out not to
-/// be installed or refuses to launch — it goes to the system default browser, because a workspace
-/// that opens its links in the wrong browser is a far better outcome than one that fails mid-open.
+/// be installed or refuses to launch — it goes to the system default browser, because a link opened
+/// in the wrong browser is a far better outcome than one that fails to open.
 /// The fallback is logged, never surfaced as a user-facing error.
 public struct WorkspaceBrowserOpener: BrowserOpening {
     /// Opens in the system default browser; `false` means Launch Services declined.

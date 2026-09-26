@@ -356,10 +356,6 @@ private struct OneWatchedPageExtractor: ReadableWebExtracting {
             sourceURL: sourceURL,
             retrievedAt: retrievedAt,
             title: "Status",
-            author: nil,
-            publishedDate: nil,
-            headings: [],
-            links: [],
             readableText: text
         )
     }

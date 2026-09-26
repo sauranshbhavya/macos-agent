@@ -15,12 +15,9 @@ public enum LocalStorageEncryptionError: Error, Equatable, LocalizedError {
     /// Exists because the raw failures here have no human-readable description at all. `AES.GCM`
     /// throws `CryptoKit.CryptoKitError`, which does not conform to `LocalizedError` in this
     /// codebase, so `localizedDescription` renders as "The operation couldn't be completed.
-    /// (CryptoKit.CryptoKitError error 3.)" — and that string is what `AgentViewModel`'s generic
-    /// catch sets as the task's error message and writes into task history. Naming decryption is not
-    /// cosmetic here: SONNY-30 made a store load failure reachable from the approval gate for the
-    /// first time, so this is the sentence a user actually meets. Wording matches
-    /// `publishLocalStorageLoadError`'s, which is the load/decrypt-only phrasing `CLAUDE.md` requires
-    /// (and which must never be reused for a *write* failure). (PR #41 review, SONNY-30 F1.)
+    /// (CryptoKit.CryptoKitError error 3.)", which is no sentence for a person. The wording is the
+    /// load/decrypt-only phrasing, and must never be reused for a *write* failure. (PR #41 review,
+    /// SONNY-30 F1.)
     case undecodableLocalData(underlying: String)
 
     public var errorDescription: String? {
@@ -33,11 +30,6 @@ public enum LocalStorageEncryptionError: Error, Equatable, LocalizedError {
             return "A local data file exists but could not be decrypted or decoded."
         }
     }
-
-    /// The sentence that ends the storage banner for one unreadable store, so a *task* that meets
-    /// one can end its failure with the same door (SONNY-449). One constant, two readers, so the
-    /// two cannot drift; the banner's plural form is built beside it in `AgentViewModel`.
-    public static let unreadableStoreWayOut = "Open Memory in Command Center to clear it."
 }
 
 public struct LocalStorageEncryptionKeyManager: LocalStorageKeyManaging, @unchecked Sendable {
@@ -151,44 +143,6 @@ public enum LocalStorageMigrationLog {
             Deferred plaintext-to-encrypted migration for \(store, privacy: .public): \
             \(error.localizedDescription, privacy: .public). The existing file is intact and \
             the migration retries on the next load.
-            """
-        )
-    }
-
-    /// A store's read door removed state it had no business carrying (SONNY-67, founder decision
-    /// 2026-08-21).
-    ///
-    /// **A quiet warning, never the UI, and that is the decision rather than an omission.** A user
-    /// whose `routines.json` was written by something other than Sonny has a problem this app cannot
-    /// explain to them and cannot fix; a banner would ask them to act on a fact they have no action
-    /// for, which is the class of copy the 2026-08-14 rule already forbids in the product. What it is
-    /// *for* is the case where somebody is looking: a support session, or a developer wondering why a
-    /// routine's pinned app is being re-resolved every run. Silence there was the only thing wrong
-    /// with stripping quietly.
-    ///
-    /// Named counts, no names or paths: the routine names are the user's content and the whole point
-    /// of `privacy: .public` on the rest is that these lines can be read from a log archive.
-    static func recordStrippedResolverPins(store: String, stepCount: Int) {
-        logger.warning(
-            """
-            Stripped executor-resolved app pins from \(stepCount, privacy: .public) step(s) while \
-            loading \(store, privacy: .public). Sonny never writes those fields into a stored \
-            routine, so the file was not written by Sonny. The routines themselves are intact and \
-            the pins are resolved again at run time.
-            """
-        )
-    }
-
-    /// The other deferred rewrite a store can owe: giving records written before an id field
-    /// existed one. Same failure semantics as the migration above and a separate sentence on
-    /// purpose — reusing that one would name the wrong upgrade, and this repository has already
-    /// paid once for a message describing something other than what happened.
-    static func recordDeferredIDBackfill(store: String, error: Error) {
-        logger.warning(
-            """
-            Deferred record-id backfill for \(store, privacy: .public): \
-            \(error.localizedDescription, privacy: .public). The existing file is intact and \
-            the backfill retries on the next load.
             """
         )
     }

@@ -4,8 +4,7 @@ import Foundation
 ///
 /// **Tier 0, and it asks nothing**: a read of the user's own data that changes nothing (founders'
 /// decision 2026-09-12). What it can raise is macOS's own Calendars prompt, once, at the first read —
-/// never at preview, which touches no calendar at all, and never from a routine, which may not carry
-/// this step (`StoredRoutine.forbiddenStepOperations`).
+/// never at preview, which touches no calendar at all.
 public struct ReadCalendarEventsCapabilityAdapter: CapabilityAdapter {
     public init() {}
 

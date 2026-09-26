@@ -61,15 +61,6 @@ public struct ClipboardHistoryStore: @unchecked Sendable {
         self.encryption = encryption
     }
 
-    /// Where the shipping app keeps this store.
-    ///
-    /// The rule that makes this a named call rather than an initializer default is on
-    /// `ClipboardHistoryStore.defaultDirectory` (SONNY-350).
-    public static func realFileURL(fileManager: FileManager = .default) -> URL {
-        Self.defaultDirectory(fileManager: fileManager)
-            .appendingPathComponent("clipboard-history.json")
-    }
-
     @discardableResult
     public func record(_ rawText: String, copiedAt: Date = Date()) throws -> ClipboardHistoryItem {
         let cleaned = trimmedAndCapped(rawText)
@@ -84,22 +75,6 @@ public struct ClipboardHistoryStore: @unchecked Sendable {
         items = capped(items.sorted { $0.copiedAt > $1.copiedAt }, now: copiedAt)
         try write(items)
         return item
-    }
-
-    /// Forgets one copied item.
-    ///
-    /// Added for Command Center's Memory section (SONNY-208), through the same `loadAll`/`write`
-    /// pair `record` uses. A missing id is a no-op, not an error.
-    ///
-    /// `now` is threaded for the same reason `record` threads `copiedAt` — see
-    /// `RecentArtifactStore.delete(id:now:)`, which has the identical shape and the identical cap.
-    public func delete(id: UUID, now: Date = Date()) throws {
-        let items = try loadAll(now: now)
-        let remaining = items.filter { $0.id != id }
-        guard remaining.count != items.count else {
-            return
-        }
-        try write(remaining)
     }
 
     public func loadAll(now: Date = Date()) throws -> [ClipboardHistoryItem] {
@@ -176,15 +151,6 @@ public struct ClipboardHistorySettingsStore: @unchecked Sendable {
         self.fileURL = fileURL
         self.fileManager = fileManager
         self.encryption = encryption
-    }
-
-    /// Where the shipping app keeps this store.
-    ///
-    /// The rule that makes this a named call rather than an initializer default is on
-    /// `ClipboardHistoryStore.defaultDirectory` (SONNY-350).
-    public static func realFileURL(fileManager: FileManager = .default) -> URL {
-        ClipboardHistoryStore.defaultDirectory(fileManager: fileManager)
-            .appendingPathComponent("clipboard-history-settings.json")
     }
 
     public func load() throws -> ClipboardHistorySettings {
@@ -266,25 +232,6 @@ public final class ClipboardHistoryMonitor {
         self.now = now
     }
 
-    /// The store this monitor records into.
-    ///
-    /// **Exposed rather than injected a second time, and the difference is hermeticity** (SONNY-208).
-    /// Command Center's Memory section has to read and delete clipboard entries, and `AgentViewModel`
-    /// holds the monitor but not the store. Giving the view model its own `ClipboardHistoryStore`
-    /// init parameter would mean a *defaulted* one resolving to the real
-    /// `~/Library/Application Support/Sonny/clipboard-history.json`, which every existing test
-    /// fixture would silently pick up — the exact trap the fixture's own comments record for the
-    /// vision journal. Reading it back off the already-injected monitor cannot diverge from what
-    /// recording writes.
-    public var historyStore: ClipboardHistoryStore { store }
-
-    /// Probes the backing history file so the UI can report a corrupt store once. `poll()` only
-    /// touches the store when the clipboard actually changes, so corruption would otherwise stay
-    /// invisible until the user's next copy — and then only as a silently dropped record.
-    public func verifyHistoryReadable() throws {
-        _ = try store.loadAll(now: now())
-    }
-
     /// Forgets what the pasteboard looked like, **without recording it**.
     ///
     /// Exists because pausing the poll timer is not enough to suppress clipboard history, and the
@@ -330,51 +277,6 @@ public final class ClipboardHistoryMonitor {
             return nil
         }
         return try store.record(text, copiedAt: now())
-    }
-}
-
-extension ClipboardHistoryStore {
-    /// `~/Library/Application Support/Sonny/`, the one directory every local store lives in — and
-    /// the root of every `realFileURL` in this module.
-    ///
-    /// **No local store initializer resolves this on its own any more, and that is the whole of
-    /// SONNY-350.** Each of the thirteen took `fileURL: URL? = nil` and fell back to this directory
-    /// when the argument was absent, so `RoutineStore()` compiled and wrote to the developer's own
-    /// data. A test process writes there under the deterministic key `LocalStorageEncryption`
-    /// substitutes for tests, so the file it leaves is one the packaged app cannot decrypt, and per
-    /// SONNY-239 cannot recover from either — every path into these stores loads before it writes.
-    /// It reached the founder's Mac twice: a storage banner on his first manual item, with 50 test
-    /// temp directories inside his real `output-locations.json` (SONNY-209).
-    ///
-    /// SONNY-240 removed the same shape one level up, from `AgentViewModel.init`'s store
-    /// parameters, which is why a fixture that *omits* a store no longer builds. This is the level
-    /// below: `fileURL` is required on every store, so a fixture that omits a *location* no longer
-    /// builds either, and the real path is reachable only by writing the words `realFileURL`.
-    ///
-    /// **Why the type system rather than a scan.** `LocalStoreInjectionScanTests` watched this door
-    /// by reading source text, and was evaded five times by reviewers looking for one afternoon
-    /// each — a typealias wrapper, `routineStore: .init()`, a backticked label, a block comment
-    /// between label and colon, and a store vendor that never constructs an `AgentViewModel` at all.
-    /// The last two are not fixable by a better pattern: contextual member lookup means `.init()`
-    /// genuinely has no type name to match, and a vendor with no `AgentViewModel` call has no
-    /// argument label to name. `RoutineStore()` and `.init()` are sugar that omit a name; a required
-    /// parameter and a named static member have none to omit, so the evasions stop being
-    /// expressible rather than being caught.
-    ///
-    /// **What this still does not prevent**, stated rather than left to be found: a call site can
-    /// write `RoutineStore(fileURL: RoutineStore.realFileURL())` and reach the real path anyway.
-    /// That is the point rather than a gap — the real path stays reachable, in words, and
-    /// `LocalStoreInjectionScanTests.onlyTheShippedConstantsTestsNameAStoresRealLocation` holds the
-    /// population of tests that write them. **That guard matches four spellings, not one** (PR #162
-    /// review F4): `realFileURL` is what this ticket added, but `LocalStore.<case>.fileURL()`,
-    /// `defaultDirectory(…)` and `LocalDataDeletionService.defaultStoreFileURLs()` all compile and
-    /// all resolve the same path, so a needle matching only the new one would read as complete while
-    /// three older doors stood open. Nothing holds the equivalent population in `Sources/`, where
-    /// `realFileURL` is public because `MacAgent` calls it.
-    public static func defaultDirectory(fileManager: FileManager) -> URL {
-        let base = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first ??
-            fileManager.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support")
-        return base.appendingPathComponent("Sonny", isDirectory: true)
     }
 }
 

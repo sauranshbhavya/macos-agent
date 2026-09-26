@@ -14,7 +14,7 @@ import Testing
 @Suite
 struct ClientVersionClientTests {
     private static let metaPath = "/v1/meta"
-    private static let planPath = "/v1/plan"
+    private static let transcriptionPath = "/v1/transcriptions"
 
     /// How long ``twoCallersAtOnceMakeOneRequest``'s stub handler waits for the second caller before
     /// answering the request it is holding.
@@ -38,10 +38,10 @@ struct ClientVersionClientTests {
     /// side, or a starved window turns back into a second request nobody can explain.
     private static let windowCeiling = SonnyBackendTimeouts.auth * 0.9
 
-    private func planRequest() -> SonnyBackendRequest {
+    private func transcriptionRequest() -> SonnyBackendRequest {
         SonnyBackendRequest(
             method: "POST",
-            path: Self.planPath,
+            path: Self.transcriptionPath,
             body: Data("{}".utf8),
             authentication: .bearer,
             idempotencyKey: UUID(),
@@ -103,10 +103,10 @@ struct ClientVersionClientTests {
         }
 
         for _ in 0..<5 {
-            _ = try await fixture.client.send(planRequest())
+            _ = try await fixture.client.send(transcriptionRequest())
         }
 
-        #expect(requests.count(path: Self.planPath) == 5)
+        #expect(requests.count(path: Self.transcriptionPath) == 5)
         #expect(requests.count(path: Self.metaPath) == 0)
     }
 
@@ -127,10 +127,10 @@ struct ClientVersionClientTests {
         }
 
         await #expect(throws: SonnyBackendError.self) {
-            _ = try await fixture.client.send(planRequest())
+            _ = try await fixture.client.send(transcriptionRequest())
         }
 
-        #expect(requests.count(path: Self.planPath) == 1)
+        #expect(requests.count(path: Self.transcriptionPath) == 1)
         #expect(requests.count(path: Self.metaPath) == 1)
         #expect(requests.recorded.count == 2)
     }
@@ -258,11 +258,11 @@ struct ClientVersionClientTests {
 
         await withTaskGroup(of: Void.self) { group in
             for _ in 0..<10 {
-                group.addTask { _ = try? await fixture.client.send(self.planRequest()) }
+                group.addTask { _ = try? await fixture.client.send(self.transcriptionRequest()) }
             }
         }
 
-        #expect(requests.count(path: Self.planPath) == 10)
+        #expect(requests.count(path: Self.transcriptionPath) == 10)
         #expect(requests.count(path: Self.metaPath) < 10)
         #expect(requests.count(path: Self.metaPath) >= 1)
     }
@@ -276,7 +276,7 @@ struct ClientVersionClientTests {
         defer { fixture.unregister() }
         fixture.register { [self] _ in walledOff(upgradeURL: "https://sonny.example.com/download") }
 
-        _ = try? await fixture.client.send(planRequest())
+        _ = try? await fixture.client.send(transcriptionRequest())
 
         let state = await fixture.client.clientVersionState()
         #expect(state == .tooOld(link: URL(string: "https://sonny.example.com/download")))
@@ -292,7 +292,7 @@ struct ClientVersionClientTests {
         defer { fixture.unregister() }
         fixture.register { [self] _ in walledOff(upgradeURL: raw) }
 
-        _ = try? await fixture.client.send(planRequest())
+        _ = try? await fixture.client.send(transcriptionRequest())
 
         #expect(await fixture.client.clientVersionState() == .tooOld(link: nil))
     }
@@ -334,7 +334,7 @@ struct ClientVersionClientTests {
         #expect(document.upgradeURL == "https://sonny.example.com/from-meta")
 
         stillServesThisBuild.isOn = false
-        _ = try? await fixture.client.send(planRequest())
+        _ = try? await fixture.client.send(transcriptionRequest())
 
         #expect(
             await fixture.client.clientVersionState()
@@ -384,7 +384,7 @@ struct ClientVersionClientTests {
             )
         }
 
-        _ = try await fixture.client.send(planRequest())
+        _ = try await fixture.client.send(transcriptionRequest())
 
         #expect(
             await fixture.client.clientVersionState()
@@ -410,7 +410,7 @@ struct ClientVersionClientTests {
             )
         }
 
-        _ = try? await fixture.client.send(planRequest())
+        _ = try? await fixture.client.send(transcriptionRequest())
 
         #expect(
             await fixture.client.clientVersionState()
@@ -429,7 +429,7 @@ struct ClientVersionClientTests {
             .reply(statusCode: 200, headers: ["Sonny-Deprecation": flag], body: Data("{}".utf8))
         }
 
-        _ = try await fixture.client.send(planRequest())
+        _ = try await fixture.client.send(transcriptionRequest())
 
         #expect(await fixture.client.clientVersionState() == .current)
     }
@@ -445,7 +445,7 @@ struct ClientVersionClientTests {
             .reply(statusCode: 200, headers: ["Sonny-Deprecation": flag], body: Data("{}".utf8))
         }
 
-        _ = try await fixture.client.send(planRequest())
+        _ = try await fixture.client.send(transcriptionRequest())
 
         #expect(await fixture.client.clientVersionState() == .updateAvailable(link: nil))
     }
@@ -467,11 +467,11 @@ struct ClientVersionClientTests {
                 : .reply(statusCode: 200, headers: [:], body: Data("{}".utf8))
         }
 
-        _ = try? await fixture.client.send(planRequest())
+        _ = try? await fixture.client.send(transcriptionRequest())
         #expect(await fixture.client.clientVersionState() != .current)
 
         refuses.isOn = false
-        _ = try await fixture.client.send(planRequest())
+        _ = try await fixture.client.send(transcriptionRequest())
 
         #expect(await fixture.client.clientVersionState() == .current)
     }
@@ -495,11 +495,11 @@ struct ClientVersionClientTests {
                 )
         }
 
-        _ = try await fixture.client.send(planRequest())
+        _ = try await fixture.client.send(transcriptionRequest())
         #expect(await fixture.client.clientVersionState() == .updateAvailable(link: nil))
 
         deprecates.isOn = false
-        _ = try? await fixture.client.send(planRequest())
+        _ = try? await fixture.client.send(transcriptionRequest())
 
         #expect(await fixture.client.clientVersionState() == .updateAvailable(link: nil))
     }
@@ -536,7 +536,7 @@ struct ClientVersionClientTests {
                 )
         }
 
-        _ = try? await fixture.client.send(planRequest())
+        _ = try? await fixture.client.send(transcriptionRequest())
         #expect(
             await fixture.client.clientVersionState()
                 == .tooOld(link: URL(string: "https://sonny.example.com/download")),
@@ -546,7 +546,7 @@ struct ClientVersionClientTests {
         // The operator lowers the minimum to at or below this build and leaves the recommendation
         // above it. Nothing relaunches; the next request is simply served.
         refuses.isOn = false
-        _ = try await fixture.client.send(planRequest())
+        _ = try await fixture.client.send(transcriptionRequest())
 
         #expect(
             await fixture.client.clientVersionState()
@@ -594,7 +594,7 @@ struct ClientVersionClientTests {
             return .reply(statusCode: statusCode, headers: headers, body: body)
         }
 
-        _ = try? await fixture.client.send(planRequest())
+        _ = try? await fixture.client.send(transcriptionRequest())
         let wall = await fixture.client.clientVersionState()
         #expect(
             wall == .tooOld(link: URL(string: "https://sonny.example.com/download")),
@@ -602,7 +602,7 @@ struct ClientVersionClientTests {
         )
 
         refuses.isOn = false
-        _ = try? await fixture.client.send(planRequest())
+        _ = try? await fixture.client.send(transcriptionRequest())
 
         #expect(await fixture.client.clientVersionState() == expected)
     }
@@ -634,11 +634,11 @@ struct ClientVersionClientTests {
                 )
         }
 
-        _ = try? await fixture.client.send(planRequest())
+        _ = try? await fixture.client.send(transcriptionRequest())
         #expect(await fixture.client.clientVersionState() != .current)
 
         refuses.isOn = false
-        _ = try? await fixture.client.send(planRequest())
+        _ = try? await fixture.client.send(transcriptionRequest())
 
         #expect(
             await fixture.client.clientVersionState()
@@ -657,7 +657,7 @@ struct ClientVersionClientTests {
         defer { fixture.unregister() }
         fixture.register { [self] _ in walledOff(upgradeURL: "https://sonny.example.com/download") }
 
-        _ = try? await fixture.client.send(planRequest())
+        _ = try? await fixture.client.send(transcriptionRequest())
 
         // Collected under a backstop rather than read with a bare `await next()`, for the reason the
         // test below now carries: a stream that stops yielding does not end, so an unbounded read is
@@ -707,11 +707,11 @@ struct ClientVersionClientTests {
 
         // Two identical healthy responses, then two identical deprecated ones. The stream should
         // carry exactly one element for the change, and nothing for the repeats.
-        _ = try await fixture.client.send(planRequest())
-        _ = try await fixture.client.send(planRequest())
+        _ = try await fixture.client.send(transcriptionRequest())
+        _ = try await fixture.client.send(transcriptionRequest())
         deprecates.isOn = true
-        _ = try await fixture.client.send(planRequest())
-        _ = try await fixture.client.send(planRequest())
+        _ = try await fixture.client.send(transcriptionRequest())
+        _ = try await fixture.client.send(transcriptionRequest())
 
         try await HangBackstop.waitOrAbandon(for: "the stream to carry the change") {
             collected.recorded.count >= 2

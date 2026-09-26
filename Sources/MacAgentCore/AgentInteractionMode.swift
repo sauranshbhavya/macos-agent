@@ -30,14 +30,7 @@ import Foundation
 ///    "Power buys the user nothing here" that stood here until row J is false.
 ///
 /// What still asks in every mode, Power included, is the standing consequence rule: a destructive or
-/// affects-others action asks, mid-loop included. Safe additionally asks before every action and
-/// shows each capture before it is sent.
-///
-/// The approval engine's input is `ApprovalContext.mode` — the whole enum, since SONNY-142 replaced
-/// the `safeMode: Bool` this used to fold into via `asksBeforeEveryAction`. The fold survives for
-/// the two sites that really are asking "does this posture ask before every action"; it is no longer
-/// what reaches the engine, because two booleans cannot express three modes and row J needs Normal
-/// and Power told apart.
+/// affects-others action asks. The kernel's `ActionGate` reads the whole mode.
 public enum AgentInteractionMode: String, Codable, CaseIterable, Equatable, Sendable {
     case safe
     case normal
@@ -48,22 +41,6 @@ public enum AgentInteractionMode: String, Codable, CaseIterable, Equatable, Send
         case .safe: return "Safe"
         case .normal: return "Normal"
         case .power: return "Power"
-        }
-    }
-
-    /// Whether this mode opts back into being asked about everything attended. Exhaustive with
-    /// no `default:` on purpose — a new mode must decide, or the build fails.
-    ///
-    /// **Not the engine's input, since SONNY-142.** `ApprovalContext` carries the whole mode now.
-    /// This survives for the two mid-loop sites that genuinely ask this question — Safe's capture
-    /// review and Safe's delegation question — and reading it as "the mode, as the engine sees it"
-    /// is what made Normal and Power indistinguishable for as long as it was.
-    public var asksBeforeEveryAction: Bool {
-        switch self {
-        case .safe:
-            return true
-        case .normal, .power:
-            return false
         }
     }
 

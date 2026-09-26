@@ -45,8 +45,6 @@ struct CalendarDayTests {
     func aPinnedDayResolvesToItselfWhateverTheClockSays() throws {
         let pinned = CalendarDay.pinned(try day("friday"), calendar: calendar)
         #expect(pinned == "2026-09-18")
-        #expect(CalendarDay.isPinned(pinned, calendar: calendar))
-        #expect(!CalendarDay.isPinned("friday", calendar: calendar))
         let aWeekLater = now.addingTimeInterval(7 * 24 * 3600)
         #expect(try CalendarDay.startOfDay(named: pinned, now: aWeekLater, calendar: calendar) == date(2026, 9, 18))
     }

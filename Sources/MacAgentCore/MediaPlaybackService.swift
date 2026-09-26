@@ -201,34 +201,6 @@ public struct SpotifyPlaybackDevice: Equatable, Sendable {
     }
 }
 
-public enum SpotifyProviderStatus: String, Codable, Equatable, Sendable {
-    case available
-    case outage
-    case rateLimited = "rate_limited"
-}
-
-public struct SpotifyPlaybackState: Equatable, Sendable {
-    public var isAuthorized: Bool
-    public var hasPremium: Bool
-    public var devices: [SpotifyPlaybackDevice]
-    public var candidates: [SpotifyTrackCandidate]
-    public var providerStatus: SpotifyProviderStatus
-
-    public init(
-        isAuthorized: Bool,
-        hasPremium: Bool,
-        devices: [SpotifyPlaybackDevice],
-        candidates: [SpotifyTrackCandidate],
-        providerStatus: SpotifyProviderStatus = .available
-    ) {
-        self.isAuthorized = isAuthorized
-        self.hasPremium = hasPremium
-        self.devices = devices
-        self.candidates = candidates
-        self.providerStatus = providerStatus
-    }
-}
-
 public enum SpotifyPlaybackAction: Equatable, Sendable {
     case play(uri: String, deviceID: String)
     case transferAndPlay(uri: String, deviceID: String)
@@ -296,104 +268,6 @@ public struct UnavailableSpotifyPlaybackProvider: SpotifyPlaybackProviding {
     }
 }
 
-public enum SpotifyPlaybackResolver {
-    public static func preview(
-        request: MediaPlaybackRequest,
-        state: SpotifyPlaybackState
-    ) -> MediaPlaybackRoutePreview {
-        switch resolve(request: request, state: state) {
-        case .started(let start):
-            switch start.action {
-            case .play:
-                return MediaPlaybackRoutePreview(
-                    route: .play,
-                    detail: "Spotify can play \(start.track.title) on \(start.device.name)."
-                )
-            case .transferAndPlay:
-                return MediaPlaybackRoutePreview(
-                    route: .transferPlayback,
-                    detail: "Spotify can transfer playback to \(start.device.name), then play \(start.track.title)."
-                )
-            }
-        case .blocked(let failure):
-            return MediaPlaybackRoutePreview(
-                route: .fallbackOpen,
-                detail: failure.detail,
-                failureReason: failure.reason
-            )
-        }
-    }
-
-    public static func resolve(
-        request: MediaPlaybackRequest,
-        state: SpotifyPlaybackState
-    ) -> SpotifyPlaybackResult {
-        let matchedTrack = bestTrack(for: request, in: state.candidates)
-        let targetDevice = playbackDevice(in: state.devices)
-        let blockers = MediaPlaybackBlockers(
-            authorizationBlocked: !state.isAuthorized,
-            subscriptionBlocked: !state.hasPremium,
-            activeDeviceBlocked: targetDevice == nil,
-            catalogMatchBlocked: matchedTrack == nil,
-            providerOutageBlocked: state.providerStatus != .available
-        )
-
-        if MediaPlaybackFailureDiagnosis.diagnose(blockers) != nil {
-            return .blocked(
-                SpotifyPlaybackFailure(
-                    blockers: blockers,
-                    detail: failureDetail(for: state.providerStatus),
-                    matchedTrack: matchedTrack
-                )
-            )
-        }
-
-        guard let matchedTrack, let targetDevice else {
-            return .blocked(
-                SpotifyPlaybackFailure(
-                    blockers: MediaPlaybackBlockers(providerOutageBlocked: true),
-                    detail: "Spotify playback could not be resolved."
-                )
-            )
-        }
-
-        let action: SpotifyPlaybackAction = targetDevice.isActive
-            ? .play(uri: matchedTrack.uri, deviceID: targetDevice.id)
-            : .transferAndPlay(uri: matchedTrack.uri, deviceID: targetDevice.id)
-        return .started(SpotifyPlaybackStart(action: action, track: matchedTrack, device: targetDevice))
-    }
-
-    public static func bestTrack(
-        for request: MediaPlaybackRequest,
-        in candidates: [SpotifyTrackCandidate]
-    ) -> SpotifyTrackCandidate? {
-        MediaSearchMatcher.best(
-            in: candidates,
-            request: request,
-            title: \.title,
-            artist: { $0.artists.joined(separator: " ") },
-            albumTitle: \.albumTitle,
-            durationMilliseconds: \.durationMilliseconds,
-            availableMarkets: \.availableMarkets
-        )
-    }
-
-    private static func playbackDevice(in devices: [SpotifyPlaybackDevice]) -> SpotifyPlaybackDevice? {
-        devices.first(where: \.isActive) ?? devices.first(where: \.isTransferable)
-    }
-
-    private static func failureDetail(for providerStatus: SpotifyProviderStatus) -> String {
-        switch providerStatus {
-        case .available:
-            return "Spotify playback requirements were not met."
-        case .outage:
-            return "Spotify playback is currently unavailable."
-        case .rateLimited:
-            return "Spotify playback is currently rate-limited."
-        }
-    }
-}
-
 public struct AppleMusicTrackCandidate: Equatable, Sendable {
     public var catalogID: String
     public var title: String
@@ -419,30 +293,6 @@ public struct AppleMusicTrackCandidate: Equatable, Sendable {
         self.durationMilliseconds = durationMilliseconds
         self.storefronts = storefronts
         self.url = url
-    }
-}
-
-public enum AppleMusicProviderStatus: String, Codable, Equatable, Sendable {
-    case available
-    case outage
-}
-
-public struct AppleMusicPlaybackState: Equatable, Sendable {
-    public var isAuthorized: Bool
-    public var hasSubscription: Bool
-    public var candidates: [AppleMusicTrackCandidate]
-    public var providerStatus: AppleMusicProviderStatus
-
-    public init(
-        isAuthorized: Bool,
-        hasSubscription: Bool,
-        candidates: [AppleMusicTrackCandidate],
-        providerStatus: AppleMusicProviderStatus = .available
-    ) {
-        self.isAuthorized = isAuthorized
-        self.hasSubscription = hasSubscription
-        self.candidates = candidates
-        self.providerStatus = providerStatus
     }
 }
 
@@ -507,90 +357,6 @@ public struct UnavailableAppleMusicPlaybackProvider: AppleMusicPlaybackProviding
                 detail: "Apple Music playback provider not configured."
             )
         )
-    }
-}
-
-public enum AppleMusicPlaybackResolver {
-    public static func preview(
-        request: MediaPlaybackRequest,
-        state: AppleMusicPlaybackState
-    ) -> MediaPlaybackRoutePreview {
-        switch resolve(request: request, state: state) {
-        case .started(let start):
-            return MediaPlaybackRoutePreview(
-                route: .play,
-                detail: "Apple Music can queue and play \(start.track.title)."
-            )
-        case .blocked(let failure):
-            return MediaPlaybackRoutePreview(
-                route: .fallbackOpen,
-                detail: failure.detail,
-                failureReason: failure.reason
-            )
-        }
-    }
-
-    public static func resolve(
-        request: MediaPlaybackRequest,
-        state: AppleMusicPlaybackState
-    ) -> AppleMusicPlaybackResult {
-        let matchedTrack = bestTrack(for: request, in: state.candidates)
-        let blockers = MediaPlaybackBlockers(
-            authorizationBlocked: !state.isAuthorized,
-            subscriptionBlocked: !state.hasSubscription,
-            catalogMatchBlocked: matchedTrack == nil,
-            providerOutageBlocked: state.providerStatus != .available
-        )
-
-        if MediaPlaybackFailureDiagnosis.diagnose(blockers) != nil {
-            return .blocked(
-                AppleMusicPlaybackFailure(
-                    blockers: blockers,
-                    detail: failureDetail(for: state.providerStatus),
-                    matchedTrack: matchedTrack
-                )
-            )
-        }
-
-        guard let matchedTrack else {
-            return .blocked(
-                AppleMusicPlaybackFailure(
-                    blockers: MediaPlaybackBlockers(providerOutageBlocked: true),
-                    detail: "Apple Music playback could not be resolved."
-                )
-            )
-        }
-
-        return .started(
-            AppleMusicPlaybackStart(
-                action: .queueAndPlay(catalogID: matchedTrack.catalogID),
-                track: matchedTrack
-            )
-        )
-    }
-
-    public static func bestTrack(
-        for request: MediaPlaybackRequest,
-        in candidates: [AppleMusicTrackCandidate]
-    ) -> AppleMusicTrackCandidate? {
-        MediaSearchMatcher.best(
-            in: candidates,
-            request: request,
-            title: \.title,
-            artist: \.artist,
-            albumTitle: \.albumTitle,
-            durationMilliseconds: \.durationMilliseconds,
-            availableMarkets: \.storefronts
-        )
-    }
-
-    private static func failureDetail(for providerStatus: AppleMusicProviderStatus) -> String {
-        switch providerStatus {
-        case .available:
-            return "Apple Music playback requirements were not met."
-        case .outage:
-            return "Apple Music playback is currently unavailable."
-        }
     }
 }
 

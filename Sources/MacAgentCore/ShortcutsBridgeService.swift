@@ -41,15 +41,6 @@ public struct ShortcutRunHistoryStore: @unchecked Sendable {
         self.encryption = encryption
     }
 
-    /// Where the shipping app keeps this store.
-    ///
-    /// The rule that makes this a named call rather than an initializer default is on
-    /// `ClipboardHistoryStore.defaultDirectory` (SONNY-350).
-    public static func realFileURL(fileManager: FileManager = .default) -> URL {
-        ClipboardHistoryStore.defaultDirectory(fileManager: fileManager)
-            .appendingPathComponent("shortcuts-run-history.json")
-    }
-
     public func hasCleanObservedSuccess(for shortcutName: String) throws -> Bool {
         try record(for: shortcutName)?.hasCleanObservedSuccess == true
     }
