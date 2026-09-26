@@ -108,6 +108,12 @@ final class SonnyAppModel: ObservableObject {
         Task { await watchClientVersion() }
     }
 
+    func stop() async {
+        pulse?.invalidate()
+        clipboardTimer?.invalidate()
+        await controller.shutDown()
+    }
+
     /// Clipboard history keeps what's copied, except while a private task runs: those copies are
     /// marked as seen and never kept, then and after it ends.
     func pollClipboard() {
@@ -116,12 +122,6 @@ final class SonnyAppModel: ObservableObject {
         } else {
             _ = try? clipboardMonitor.poll()
         }
-    }
-
-    func stop() async {
-        pulse?.invalidate()
-        clipboardTimer?.invalidate()
-        await controller.shutDown()
     }
 
     private func checkSchedulesAndWatchers() async {
