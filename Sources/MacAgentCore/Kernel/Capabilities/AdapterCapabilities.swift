@@ -19,7 +19,8 @@ public struct AdapterCapability: Capability {
     let steps: @Sendable ([String: JSONValue]) throws -> [AgentStep]
     /// What an adapter pinned the first time an action was prepared. The kernel prepares an action
     /// again just before it runs, and "in five minutes" must still mean five minutes from when Sonny
-    /// first read it, or every approval that took a minute would be voided as changed.
+    /// first read it, and a default file name made from the time must stay the one the person saw, or
+    /// every approval that took a moment would be voided as changed.
     let pins = PreparePins()
 
     struct Resolved: Sendable {
@@ -42,6 +43,7 @@ public struct AdapterCapability: Capability {
     @MainActor
     private func prepareOnMain(actionID: ActionID, args: [String: JSONValue], steps: [AgentStep]) throws -> PreparedAction {
         let context = self.context()
+        let requested = steps
         var steps = steps
         pins.apply(to: &steps, for: actionID)
         let plan = AgentPlan(summary: name, requiresConfirmation: false, steps: steps)
@@ -60,7 +62,7 @@ public struct AdapterCapability: Capability {
         } catch {
             throw Self.prepareError(error)
         }
-        pins.record(resolved.steps, for: actionID)
+        pins.record(requested: requested, resolved: resolved.steps, for: actionID)
         var effect = floor
         for escalation in risk.escalations {
             switch escalation.consequence {
@@ -136,29 +138,45 @@ public struct AdapterCapability: Capability {
     }
 }
 
-/// The instants adapters pin while resolving a step, kept per action so a second prepare of the same
-/// action reads the same ones. Only the most recent actions are kept.
+/// What adapters resolve from the clock while preparing a step, kept per action so a second prepare
+/// of the same action reads the same: a reminder's due time, and a default output path whose name
+/// carries a timestamp. Only the most recent actions are kept.
 final class PreparePins: @unchecked Sendable {
+    private struct Pinned {
+        var dueDates: [Date?]
+        /// Each step's output path as it was asked for, and what it resolved to.
+        var outputs: [(asked: String?, resolved: String?)]
+    }
+
     private let lock = NSLock()
-    private var dueDates: [ActionID: [Date?]] = [:]
+    private var pinned: [ActionID: Pinned] = [:]
     private var order: [ActionID] = []
     static let kept = 256
 
     func apply(to steps: inout [AgentStep], for action: ActionID) {
-        guard let pinned = lock.withLock({ dueDates[action] }), pinned.count == steps.count else { return }
-        for index in steps.indices where steps[index].resolvedReminderDueDate == nil {
-            steps[index].resolvedReminderDueDate = pinned[index]
+        guard let pins = lock.withLock({ pinned[action] }), pins.dueDates.count == steps.count else { return }
+        for index in steps.indices {
+            if steps[index].resolvedReminderDueDate == nil {
+                steps[index].resolvedReminderDueDate = pins.dueDates[index]
+            }
+            // The same request resolves to the same file, whatever the clock says now.
+            if steps[index].outputPath == pins.outputs[index].asked {
+                steps[index].outputPath = pins.outputs[index].resolved
+            }
         }
     }
 
-    func record(_ steps: [AgentStep], for action: ActionID) {
-        let due = steps.map(\.resolvedReminderDueDate)
-        guard due.contains(where: { $0 != nil }) else { return }
+    func record(requested: [AgentStep], resolved: [AgentStep], for action: ActionID) {
+        guard requested.count == resolved.count else { return }
+        let due = resolved.map(\.resolvedReminderDueDate)
+        let outputs = zip(requested, resolved).map { (asked: $0.outputPath, resolved: $1.outputPath) }
+        let movesAnOutput = outputs.contains { $0.asked != $0.resolved }
+        guard due.contains(where: { $0 != nil }) || movesAnOutput else { return }
         lock.withLock {
-            guard dueDates[action] == nil else { return }
-            dueDates[action] = due
+            guard pinned[action] == nil else { return }
+            pinned[action] = Pinned(dueDates: due, outputs: outputs)
             order.append(action)
-            if order.count > Self.kept { dueDates[order.removeFirst()] = nil }
+            if order.count > Self.kept { pinned[order.removeFirst()] = nil }
         }
     }
 }
