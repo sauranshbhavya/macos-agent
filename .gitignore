@@ -12,7 +12,9 @@ DerivedData/
 # ── Server half (server/, added by SONNY-126) ────────────────────────────────
 # Dependencies and build output. Both are reproducible from the lockfile and the
 # source, and node_modules in particular is large enough to make every diff unreadable.
-node_modules/
+# No trailing slash, so a worktree's node_modules that is a link to another checkout's is ignored
+# too. A committed link replaces the real folder in every checkout of that branch.
+node_modules
 server/dist/
 server/coverage/
 server/*.tsbuildinfo
