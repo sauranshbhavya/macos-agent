@@ -135,6 +135,8 @@ const FINISH_FOR_ERROR: Record<string, FinishBody> = {
   },
 };
 
+const FINISH_FOR_CANCEL: FinishBody = { status: "cancelled", summary: "Stopped.", reason: "cancelled" };
+
 export function wireMessageOf(taskId: string, message: StoredMessage): ServerTaskMessage {
   return {
     v: PROTOCOL_VERSION,
@@ -350,32 +352,48 @@ export class TaskRunner {
 
   private async cancel(task: TaskRecord, cancelSeq: number): Promise<void> {
     this.running.get(task.id)?.controller.abort(new Error("cancelled"));
-    await this.endWith(task, cancelSeq, [], {
-      status: "cancelled",
-      summary: "Stopped.",
-      reason: "cancelled",
-    });
+    await this.endWith(task, cancelSeq, [], FINISH_FOR_CANCEL);
   }
 
   private async runTurnIfDue(taskId: string): Promise<void> {
-    const { store, now } = this.deps;
-    const task = await store.task(taskId);
+    const task = await this.deps.store.task(taskId);
+    const kept = this.unstored.get(taskId);
     if (task === undefined || task.status !== "live") {
       this.screenshots.delete(taskId);
       this.unstored.delete(taskId);
+      // An answer that ended the task can be stored even though the store's reply was lost.
+      if (task !== undefined && kept !== undefined) await this.deliverStored(task, kept);
       return;
     }
+    // Registered before the transcript is read: a stop from here on aborts this turn, and one that
+    // came before is in the transcript this turn reads.
+    const controller = new AbortController();
+    this.running.set(taskId, { controller, accountId: task.accountId });
+    try {
+      await this.runTurn(task, kept, controller);
+    } finally {
+      if (this.running.get(taskId)?.controller === controller) this.running.delete(taskId);
+    }
+  }
+
+  private async runTurn(task: TaskRecord, kept: UnstoredTurn | undefined, controller: AbortController): Promise<void> {
+    const { store, now } = this.deps;
+    const taskId = task.id;
     const transcript = await store.transcript(taskId);
     const trigger = lastExchanged(transcript);
     if (trigger === undefined || trigger.direction !== "in") {
       this.unstored.delete(taskId);
+      // The store took the kept answer and only its reply was lost: it still has to reach the Mac.
+      if (kept !== undefined) await this.deliverStored(task, kept, transcript);
       return;
     }
-    const kept = this.unstored.get(taskId);
     if (kept !== undefined && kept.re === trigger.seq) {
       return this.storeTurn(task, kept.re, kept.entries, kept.end);
     }
     this.unstored.delete(taskId);
+    // A stop the store holds but whose end never got stored (the write failed, or the gateway
+    // restarted): the task ends, and no turn runs for a task the person stopped.
+    if (trigger.type === "task.cancel") return this.endWith(task, trigger.seq, [], FINISH_FOR_CANCEL);
 
     if (task.turns >= this.budgets.maxTurns) {
       return this.endWith(task, trigger.seq, [], FINISH_FOR_ERROR.budget!);
@@ -383,9 +401,8 @@ export class TaskRunner {
     if (now().getTime() - task.createdAt.getTime() > this.budgets.maxWallTimeMs) {
       return this.endWith(task, trigger.seq, [], FINISH_FOR_ERROR.budget!);
     }
+    if (controller.signal.aborted) return;
 
-    const controller = new AbortController();
-    this.running.set(taskId, { controller, accountId: task.accountId });
     let result: TurnResult;
     try {
       result = await this.deps.agentFor(task).turn(this.contextFor(task, transcript, controller.signal));
@@ -395,8 +412,6 @@ export class TaskRunner {
         return this.endWith(task, trigger.seq, error.notes, this.finishFor(error.cause, task));
       }
       return this.endWith(task, trigger.seq, [], this.finishFor(error, task));
-    } finally {
-      this.running.delete(taskId);
     }
     if (controller.signal.aborted) return;
 
@@ -425,6 +440,15 @@ export class TaskRunner {
       })),
     ];
     await this.storeTurn(task, trigger.seq, entries, end);
+  }
+
+  /** Delivers the messages of a kept answer that the store holds after all. */
+  private async deliverStored(task: TaskRecord, kept: UnstoredTurn, transcript?: StoredMessage[]): Promise<void> {
+    const ids = new Set(kept.entries.filter((entry) => entry.direction === "out").map((entry) => entry.msgId));
+    const stored = (transcript ?? (await this.deps.store.transcript(task.id))).filter(
+      (message) => message.direction === "out" && ids.has(message.msgId),
+    );
+    if (stored.length > 0) this.deps.deliver(task, stored.map((message) => wireMessageOf(task.id, message)));
   }
 
   /**
