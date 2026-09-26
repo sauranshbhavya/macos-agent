@@ -8,6 +8,7 @@ final class FakeMail: AppleScriptRunning, @unchecked Sendable {
     struct Draft: Equatable {
         var to: [String]
         var cc: [String]
+        var bcc: [String] = []
         var subject: String
         var body: String
     }
@@ -22,6 +23,15 @@ final class FakeMail: AppleScriptRunning, @unchecked Sendable {
 
     func edit(_ id: Int, _ change: (inout Draft) -> Void) {
         lock.withLock { change(&drafts[id]!) }
+    }
+
+    /// A message the person started in Mail themselves.
+    func personWrites(_ draft: Draft) -> Int {
+        lock.withLock {
+            nextID += 1
+            drafts[nextID] = draft
+            return nextID
+        }
     }
 
     func run(_ script: String, arguments: [String], timeout: TimeInterval) async throws -> String {
@@ -43,7 +53,7 @@ final class FakeMail: AppleScriptRunning, @unchecked Sendable {
             throw AppleScriptRunError.failed("Can't get outgoing message")
         }
         if script == MailCapabilities.readScript {
-            return [draft.subject, draft.body, draft.to.joined(separator: "\n"), draft.cc.joined(separator: "\n")]
+            return [draft.subject, draft.body, draft.to.joined(separator: "\n"), draft.cc.joined(separator: "\n"), draft.bcc.joined(separator: "\n")]
                 .joined(separator: MailCapabilities.separator)
         }
         if script == MailCapabilities.sendScript {
@@ -267,6 +277,39 @@ struct MailKernelTests {
         await tasks.decide(task: task, action: action, commit: commit.commitID, approved: true)
         let outcome = try await gateway.next("outcome")
         #expect(results(of: outcome).map(\.status) == [.stale])
+        #expect(fixture.mail.sent.isEmpty)
+    }
+
+    @Test
+    func theApprovalShowsABccThePersonAddedAndAddingOneAfterwardsVoidsIt() async throws {
+        let fixture = try CapabilityFixture()
+        let id = try await draft(fixture)
+        fixture.mail.edit(id) { $0.bcc = ["boss@example.com"] }
+        let gateway = ScriptedGateway()
+        let tasks = controller(gateway, fixture)
+        await tasks.launch()
+        let task = try await startedTask(tasks, TaskRequest(goal: "Send it", mode: .normal))
+        _ = try await gateway.next("task.start")
+        let action = ActionID()
+        await gateway.send(task, propose([call("send_mail", action, effect: .external, args: ["draft": .string(String(id))])]), re: 1)
+        let commit = try #require(await approval(tasks, task))
+        #expect(commit.preview.details.contains("Bcc: boss@example.com"))
+        fixture.mail.edit(id) { $0.bcc.append("everyone@example.com") }
+        await tasks.decide(task: task, action: action, commit: commit.commitID, approved: true)
+        let outcome = try await gateway.next("outcome")
+        #expect(results(of: outcome).map(\.status) == [.stale])
+        #expect(fixture.mail.sent.isEmpty)
+    }
+
+    @Test
+    func aMessageThePersonWasWritingIsNeverSent() async throws {
+        let fixture = try CapabilityFixture()
+        let theirs = fixture.mail.personWrites(.init(to: ["ex@example.com"], cc: [], subject: "Unsent thoughts", body: "Not ready."))
+        let send = try fixture.capability("send_mail")
+        let refused = await #expect(throws: CapabilityPrepareError.self) {
+            _ = try await send.prepare(actionID: ActionID(), args: ["draft": .string(String(theirs))])
+        }
+        #expect(refused == .invalidArguments("Sonny only sends a draft it wrote with compose_mail."))
         #expect(fixture.mail.sent.isEmpty)
     }
 
