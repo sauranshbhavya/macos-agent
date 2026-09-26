@@ -147,6 +147,19 @@ export class TaskAgent implements Agent {
           notes.push({ type: "tool.result", body: await this.serverTool(context, decision, toolNotes(view())) });
           continue;
         case "ask":
+          // A task on a schedule has nobody to answer: it stops and says what it needed, rather than
+          // holding the Mac while the question waits.
+          if (context.task.unattended) {
+            return {
+              notes,
+              messages: [
+                {
+                  type: "finish",
+                  body: { status: "failed", summary: `This needed your answer, so Sonny stopped: ${decision.question}`, reason: "refused" },
+                },
+              ],
+            };
+          }
           return { notes, messages: [{ type: "ask", body: { question: decision.question } }] };
         case "finish":
           return {

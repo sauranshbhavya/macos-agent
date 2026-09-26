@@ -214,6 +214,10 @@ export interface PlannerContext {
   readonly skillGuidance: string | undefined;
 }
 
+/** Told to the planner for a task that runs on a schedule, from the gateway's own task record. */
+export const UNATTENDED_RULE =
+  "This task runs on a schedule and nobody is at the Mac. Don't ask the person anything, and don't propose an action that would need their approval: do what can be done without them, then finish.";
+
 export class Planner {
   constructor(private readonly router: ModelRouter) {}
 
@@ -236,6 +240,7 @@ export class Planner {
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const user = [
         boundary.trusted(trusted),
+        ...(context.task.unattended ? [UNATTENDED_RULE] : []),
         `Operations on this Mac:\n${operations.map(catalogueLine).join("\n")}`,
         ...(extra.skillGuidance ? [extra.skillGuidance] : []),
         boundary.observed(situation.length ? situation.join("\n") : "No other context.", "context", "this-mac"),

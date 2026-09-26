@@ -8,7 +8,7 @@ import { parseTierChain } from "../src/agent/model/tiers.js";
 import { PromptBoundary } from "../src/agent/prompts/boundary.js";
 import type { ObservationBody, ServerTaskMessage } from "../src/agent/protocol.js";
 import { SCREEN_DECISION_SCHEMA_NAME } from "../src/agent/screen/prompt.js";
-import { PLANNER_DECISION_SCHEMA_NAME } from "../src/agent/planner/planner.js";
+import { PLANNER_DECISION_SCHEMA_NAME, UNATTENDED_RULE } from "../src/agent/planner/planner.js";
 import { RESEARCH_SCHEMA_NAME } from "../src/agent/tools/research.js";
 import { taskAgentFactory, type ServerTools } from "../src/agent/task-agent.js";
 import { PageRefused } from "../src/agent/tools/read-page.js";
@@ -127,14 +127,22 @@ function harness(router: ModelRouter, options: HarnessOptions = {}) {
     store,
     ledger,
     task,
-    async start(goal: string, priorTask?: string) {
+    async start(goal: string, priorTask?: string, options: { unattended?: boolean } = {}) {
       await runner.start(ACCOUNT, DEVICE, {
         v: 1,
         type: "task.start",
         id: randomUUID(),
         task,
         seq: 1,
-        body: { goal, origin: "composer", private: false, unattended: false, mode: "normal", context: {}, ...(priorTask ? { prior_task: priorTask } : {}) },
+        body: {
+          goal,
+          origin: options.unattended ? "schedule" : "composer",
+          private: false,
+          unattended: options.unattended ?? false,
+          mode: "normal",
+          context: {},
+          ...(priorTask ? { prior_task: priorTask } : {}),
+        },
       });
       return next();
     },
@@ -227,6 +235,28 @@ describe("the planner and its screen subagent", () => {
       body: { agent: "screen", actions: [{ effect: "navigate", operation: { name: "open_app", version: 1, args: { app: "Notes" } } }] },
     });
     expect(router.calls.filter((c) => c.schemaName === SCREEN_DECISION_SCHEMA_NAME)).toHaveLength(0);
+  });
+
+  it("ends a scheduled task that would have to ask, instead of waiting for nobody", async () => {
+    const router = scriptedRouter({ planner: [plan({ kind: "ask", question: "Which folder should I tidy?" })] });
+    const h = harness(router);
+    const finish = await h.start("Tidy my folder", undefined, { unattended: true });
+    expect(finish).toMatchObject({
+      type: "finish",
+      body: { status: "failed", reason: "refused", summary: "This needed your answer, so Sonny stopped: Which folder should I tidy?" },
+    });
+    // And the planner was told nobody is there.
+    const call = router.calls.find((c) => c.schemaName === PLANNER_DECISION_SCHEMA_NAME)!;
+    expect(call.user).toContain(UNATTENDED_RULE);
+  });
+
+  it("still asks the person when they started the task", async () => {
+    const router = scriptedRouter({ planner: [plan({ kind: "ask", question: "Which folder should I tidy?" })] });
+    const h = harness(router);
+    const ask = await h.start("Tidy my folder");
+    expect(ask).toMatchObject({ type: "ask", body: { question: "Which folder should I tidy?" } });
+    const call = router.calls.find((c) => c.schemaName === PLANNER_DECISION_SCHEMA_NAME)!;
+    expect(call.user).not.toContain(UNATTENDED_RULE);
   });
 
   it("retries an unusable step once on a stronger tier, telling the model why", async () => {
