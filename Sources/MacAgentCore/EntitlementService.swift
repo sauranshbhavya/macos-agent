@@ -508,7 +508,6 @@ public actor EntitlementService {
 /// whichever comes first (SONNY-442). `withTaskCancellationHandler`'s `onCancel` and the task's
 /// completion both race to resume one continuation, and the lock makes exactly one of them win;
 /// a cancellation that arrived before the continuation was armed resumes it the moment it is.
-/// The same shape `AgentViewModel.requestVisionActionApproval` uses for a stop during an approval.
 private final class RefreshWait: @unchecked Sendable {
     private let lock = NSLock()
     private var continuation: CheckedContinuation<Void, Never>?

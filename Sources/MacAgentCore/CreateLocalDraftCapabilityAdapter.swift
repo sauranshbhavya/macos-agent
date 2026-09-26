@@ -14,17 +14,6 @@ public struct CreateLocalDraftCapabilityAdapter: CapabilityAdapter {
         displayName: descriptor.displayName,
         description: descriptor.description,
         operations: descriptor.supportedActions,
-        plannerTools: [
-            AgentTool(
-                operation: .createLocalDraft,
-                name: "Create local draft",
-                description: "Create a local Markdown draft artifact in a whitelisted output path. This does not automate Notes, Mail, Calendar, or any other app UI.",
-                requiredFields: ["draftContent"],
-                sideEffects: ["write file"],
-                dryRunBehavior: "Show the draft file path without writing it.",
-                examples: ["Create a local draft called Follow-up with this text"]
-            )
-        ],
         requiredPermissions: descriptor.requiredPermissions,
         defaultRiskTier: descriptor.defaultRiskTier
     )
@@ -32,11 +21,9 @@ public struct CreateLocalDraftCapabilityAdapter: CapabilityAdapter {
     /// Resolves **the** draft step of the unit it is given — `firstIndex` is exact here, not a
     /// first-match approximation, because a unit holds at most one step per operation.
     ///
-    /// SONNY-35 filed this `firstIndex` as the defect: two `.createLocalDraft` steps in one plan and
-    /// only the first got a default path. The cause was one level up — `AgentActionExecutor` called
-    /// this once with the *whole* plan — and it is fixed there, by resolving unit by unit. Widening
-    /// this to a loop would be dead code that also has no correct answer to give: `draftSpec` reads
-    /// one step's title and content, so a second draft in the same call would take the first's name.
+    /// Widening this to a loop would have no correct answer to give: `draftSpec` reads one step's
+    /// title and content, so a second draft in the same call would take the first's name.
+    /// `AdapterCapabilities` builds one draft step per operation.
     public func resolveDefaultOutputs(in plan: AgentPlan, context: CapabilityExecutionContext) throws -> AgentPlan {
         var resolved = plan
         guard let index = resolved.steps.firstIndex(where: { $0.operation == .createLocalDraft }) else {

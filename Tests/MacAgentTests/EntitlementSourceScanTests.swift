@@ -126,8 +126,6 @@ struct EntitlementFreePathScanTests {
     /// the capabilities the founder's headline manual check exercises.
     static let freePaths = [
         "InstantCommandResolver.swift",
-        "RunRoutineCapabilityAdapter.swift",
-        "OpenWorkspaceCapabilityAdapter.swift",
         "SnippetExpansionCapabilityAdapter.swift",
         "CalculatorCapabilityAdapter.swift"
     ]

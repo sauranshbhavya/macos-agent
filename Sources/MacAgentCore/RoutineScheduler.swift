@@ -10,33 +10,6 @@ public enum RoutineScheduleDecision: Equatable, Sendable {
     case missed(occurrence: Date)
 }
 
-public struct OutstandingRoutine: Equatable, Sendable {
-    public var routine: StoredRoutine
-    public var decision: RoutineScheduleDecision
-
-    public init(routine: StoredRoutine, decision: RoutineScheduleDecision) {
-        self.routine = routine
-        self.decision = decision
-    }
-
-    /// The occurrence this decision is about. Both non-`notDue` cases carry one, and the caller
-    /// needs it for either outcome — a run and a skip both advance the baseline past it.
-    public var occurrence: Date? {
-        switch decision {
-        case .notDue:
-            return nil
-        case .due(let occurrence), .missed(let occurrence):
-            return occurrence
-        }
-    }
-}
-
-/// Pure date math: given schedules and a `now`, which routines have an outstanding occurrence.
-///
-/// Deliberately knows nothing about timers, execution, approval, or storage — everything here is a
-/// function of its arguments, so the awkward cases (DST, month ends, window boundaries) are
-/// testable without running anything. The calendar is injected rather than read from
-/// `Calendar.current` so tests mean the same thing on any machine.
 public enum RoutineScheduler {
     public static func decision(
         for schedule: RoutineSchedule,
@@ -67,24 +40,7 @@ public enum RoutineScheduler {
     /// Ordered rather than left in store order: `RoutineStore` hands back a dictionary, whose
     /// iteration order is not stable between loads, and a backlog should be worked through in the
     /// order it actually happened.
-    public static func outstanding(
-        in routines: [StoredRoutine],
-        now: Date,
-        calendar: Calendar = .current
-    ) -> [OutstandingRoutine] {
-        routines
-            .compactMap { routine -> OutstandingRoutine? in
-                guard let schedule = routine.schedule else {
-                    return nil
-                }
-                let decision = decision(for: schedule, now: now, calendar: calendar)
-                guard decision != .notDue else {
-                    return nil
-                }
-                return OutstandingRoutine(routine: routine, decision: decision)
-            }
-            .sorted { ($0.occurrence ?? .distantPast) < ($1.occurrence ?? .distantPast) }
-    }
+
 
     /// The next scheduled occurrence strictly after `now`. Drives the row's "Today, 9:00 AM" text.
     public static func nextOccurrence(

@@ -7,6 +7,7 @@ import { describeRouting, modelProvidersFrom } from "../src/model/providers.js";
 import {
   DEFAULT_ROUTE_CHAINS,
   meetsZeroRetentionBar,
+  modelRoutes,
   parseRouteChain,
   providerDataPolicies,
   withFailover,
@@ -14,6 +15,7 @@ import {
 import { ProviderRejected, ProviderTimedOut, ProviderUnavailable } from "../src/model/upstream.js";
 import { testConfig } from "./support/config.js";
 import { fakeEntitlementStore } from "./support/entitlement.js";
+import { transcriptionBody } from "./support/multipart.js";
 import { accessTokenFor } from "./support/tokens.js";
 import { signedInConnectionTo } from "./support/connection.js";
 import { WithoutOAuth } from "./support/without-oauth.js";
@@ -24,10 +26,13 @@ import { WithoutOAuth } from "./support/without-oauth.js";
  * Three layers, tested at three depths on purpose. `parseRouteChain` and `withFailover` are pure and
  * are driven directly, because that is the only way to reach an aborted signal or a chain of three.
  * `modelProvidersFrom` is driven with real adapters and `fetch` stubbed at the boundary, because the
- * thing worth asserting is which vendor endpoint a *configuration* reaches. And the two acceptance
- * criteria that are about a running server — a provider swap with no client change, and a failover
- * the client cannot see — go through `app.inject`, so the gate, the deadlines and the response
- * shape are all in the picture.
+ * thing worth asserting is which vendor endpoint a *configuration* reaches. And what is about a
+ * running server — the response naming no provider, and the log line saying who served — goes
+ * through `app.inject` on `POST /v1/transcriptions`, the one routed call the Mac still makes.
+ *
+ * **Every route now has exactly one provider with an adapter** (transcription: OpenAI; search:
+ * Tavily), so no valid configuration can fail a served request over to a second vendor. The
+ * combinator that would is still the one both routes go through, and it is held here directly.
  *
  * `.invalid` hostnames come from `testConfig`. RFC 2606 reserves the TLD and it resolves nowhere, so
  * a stub that fails to intercept produces a DNS failure rather than a real request to a real vendor.
@@ -56,8 +61,8 @@ class UnusedAuthProvider extends WithoutOAuth implements AuthProvider {
 
 const signedInConnection = signedInConnectionTo({ account: ACCOUNT, where: "from a model route" });
 
-/** Both text providers credentialled, so a chain is only ever shortened by configuration. */
-function bothProviders(overrides: Partial<Config> = {}): Config {
+/** Every provider credentialled, so a chain is only ever shortened by configuration. */
+function allProviders(overrides: Partial<Config> = {}): Config {
   return testConfig({
     credentials: [
       { provider: "openai", keys: ["sk-test-openai-key"] },
@@ -71,7 +76,7 @@ function bothProviders(overrides: Partial<Config> = {}): Config {
 
 function build(overrides: Partial<Config> = {}) {
   return buildApp(
-    bothProviders(overrides),
+    allProviders(overrides),
     { provider: new UnusedAuthProvider(), withConnection: signedInConnection },
     // SONNY-135's check runs on every authenticated route and is Postgres-backed, so a suite
     // with no database injects the fake store `support/entitlement.ts` documents. It answers
@@ -117,7 +122,7 @@ function buildLogging(overrides: Partial<Config> = {}): {
 } {
   const log = new CapturedLog();
   const app = buildApp(
-    bothProviders({ logLevel: "debug", ...overrides }),
+    allProviders({ logLevel: "debug", ...overrides }),
     { provider: new UnusedAuthProvider(), withConnection: signedInConnection },
     { logStream: log, entitlementStore: fakeEntitlementStore() },
   );
@@ -126,19 +131,18 @@ function buildLogging(overrides: Partial<Config> = {}): {
 
 const authorization = () => `Bearer ${accessTokenFor(SUPABASE_USER)}`;
 
-function planBody(overrides: Record<string, unknown> = {}): Record<string, unknown> {
-  return {
-    task_id: "task-1",
-    retention: "standard",
-    messages: [
-      { role: "system", text: "You plan a tiny macOS agent." },
-      { role: "user", text: "Open Safari" },
-    ],
-    response_schema_name: "agent_plan",
-    response_schema: { type: "object", additionalProperties: false },
-    reasoning_effort: "medium",
-    ...overrides,
-  };
+/** One recording, sent to `/v1/transcriptions` the way the Mac sends it. */
+function transcribe(app: ReturnType<typeof buildApp>) {
+  const body = transcriptionBody(
+    { task_id: "task-1", retention: "standard" },
+    Buffer.from("fake-audio-bytes"),
+  );
+  return app.inject({
+    method: "POST",
+    url: "/v1/transcriptions",
+    headers: { authorization: authorization(), "content-type": body.contentType },
+    payload: body.payload,
+  });
 }
 
 interface StubbedCall {
@@ -176,58 +180,56 @@ function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
-/** An OpenAI Responses reply and an Anthropic Messages reply, each shaped as its vendor answers. */
-const openAIReply = (text: string) => jsonResponse({ output_text: text });
-const anthropicReply = (text: string) =>
-  jsonResponse({ content: [{ type: "text", text }], stop_reason: "end_turn" });
+/** An OpenAI transcription reply and a Tavily search reply, each shaped as its vendor answers. */
+const transcriptionReply = (text: string) => jsonResponse({ text });
+const searchReply = () =>
+  jsonResponse({ results: [{ title: "Swift", url: "https://swift.org", content: "The language" }] });
 
-const textRequest = {
-  messages: [{ role: "user", text: "Open Safari" }] as const,
-  responseSchemaName: "agent_plan",
-  responseSchema: { type: "object" },
-  reasoningEffort: undefined,
-  verbosity: undefined,
-};
+const transcriptionRequest = () => ({
+  audio: Buffer.from("fake-audio-bytes"),
+  filename: "voice.m4a",
+  contentType: "audio/mp4",
+  signal: new AbortController().signal,
+});
+const searchRequest = () => ({
+  query: "swift",
+  maxResults: 5,
+  signal: new AbortController().signal,
+});
 
 afterEach(() => {
   vi.unstubAllGlobals();
 });
 
 describe("MODEL_ROUTE_* chains", () => {
+  it("names exactly the two routes whose provider is configuration", () => {
+    // Written out, so a route added or removed has to be written here too. Planning, research and
+    // screen steps are the agents' own model calls inside a task, chosen by `AGENT_MODEL_*`.
+    expect([...modelRoutes]).toEqual(["transcriptions", "search"]);
+    expect(Object.keys(DEFAULT_ROUTE_CHAINS).sort()).toEqual(["search", "transcriptions"]);
+  });
+
   it("defaults every route to the shipped chain when the variable is unset, empty or blank", () => {
     for (const raw of [undefined, "", "   "]) {
-      expect(parseRouteChain("plan", raw)).toEqual(["openai", "anthropic"]);
-      expect(parseRouteChain("synthesize", raw)).toEqual(["openai", "anthropic"]);
       expect(parseRouteChain("transcriptions", raw)).toEqual(["openai"]);
       expect(parseRouteChain("search", raw)).toEqual(["tavily"]);
     }
   });
 
-  it("keeps OpenAI first on the shipped text chains, which is what 'no flip logic' means here", () => {
-    // The ticket's never-touch list keeps the default planner a founder decision. Failover reaches
-    // the second entry only after the first has failed *this* request, so the primary is OpenAI on
-    // every request and nothing in the code can change that — only configuration can.
-    expect(DEFAULT_ROUTE_CHAINS.plan[0]).toBe("openai");
-    expect(DEFAULT_ROUTE_CHAINS.synthesize[0]).toBe("openai");
-  });
-
-  it("parses an ordered list, case-insensitively and trimmed", () => {
-    expect(parseRouteChain("plan", " Anthropic , OPENAI ,cerebras ")).toEqual([
-      "anthropic",
-      "openai",
-      "cerebras",
-    ]);
+  it("parses a value case-insensitively and trimmed, ignoring empty entries", () => {
+    expect(parseRouteChain("transcriptions", " OpenAI ")).toEqual(["openai"]);
+    expect(parseRouteChain("search", "TAVILY ,")).toEqual(["tavily"]);
   });
 
   it("refuses a provider this gateway does not know, naming the variable and the entry", () => {
-    expect(() => parseRouteChain("plan", "openai,mistral")).toThrow(ConfigError);
+    expect(() => parseRouteChain("transcriptions", "openai,mistral")).toThrow(ConfigError);
     try {
-      parseRouteChain("plan", "openai,mistral");
+      parseRouteChain("transcriptions", "openai,mistral");
       expect.unreachable("expected a ConfigError");
     } catch (error) {
-      expect((error as Error).message).toContain("MODEL_ROUTE_PLAN");
+      expect((error as Error).message).toContain("MODEL_ROUTE_TRANSCRIPTIONS");
       expect((error as Error).message).toContain('"mistral"');
-      expect((error as Error).message).toContain("openai, anthropic, cerebras, tavily, vision");
+      expect((error as Error).message).toContain("openai, anthropic, cerebras, tavily.");
     }
   });
 
@@ -243,26 +245,47 @@ describe("MODEL_ROUTE_* chains", () => {
       expect((error as Error).message).toContain("Providers that can serve it: openai");
     }
     expect(() => parseRouteChain("search", "tavily,openai")).toThrow(ConfigError);
-    expect(() => parseRouteChain("plan", "openai,tavily")).toThrow(ConfigError);
+    expect(() => parseRouteChain("transcriptions", "tavily")).toThrow(ConfigError);
   });
 
   it("refuses a repeated entry", () => {
     try {
-      parseRouteChain("plan", "openai,anthropic,openai");
+      parseRouteChain("transcriptions", "openai,OpenAI");
       expect.unreachable("expected a ConfigError");
     } catch (error) {
+      expect((error as Error).message).toContain("MODEL_ROUTE_TRANSCRIPTIONS");
       expect((error as Error).message).toContain("more than once");
     }
   });
 
   it("reaches Config through loadConfig, and a bad value is a startup failure", () => {
-    const config = loadConfig({ SONNY_ENV: "local", MODEL_ROUTE_PLAN: "cerebras,openai" });
-    expect(config.routeChains.plan).toEqual(["cerebras", "openai"]);
+    const config = loadConfig({ SONNY_ENV: "local", MODEL_ROUTE_TRANSCRIPTIONS: " OPENAI " });
+    expect(config.routeChains.transcriptions).toEqual(["openai"]);
     // Untouched variables keep the shipped default rather than inheriting the one that was set.
-    expect(config.routeChains.synthesize).toEqual(["openai", "anthropic"]);
+    expect(config.routeChains.search).toEqual(["tavily"]);
     expect(() => loadConfig({ SONNY_ENV: "local", MODEL_ROUTE_SEARCH: "openai" })).toThrow(
       ConfigError,
     );
+  });
+
+  it("starts a deployment whose environment still sets V1's deleted variables", () => {
+    // An operator's environment written for V1 still carries the text-route chains, the vision
+    // provider's settings and the content clock. Nothing reads them now, so they must neither stop
+    // the gateway starting nor reach a chain, a credential or a data policy.
+    const config = loadConfig({
+      SONNY_ENV: "local",
+      MODEL_ROUTE_PLAN: "cerebras,openai",
+      MODEL_ROUTE_SYNTHESIZE: "anthropic",
+      VISION_API_KEY: "not-a-real-key",
+      VISION_DATA_RETENTION: "30 days",
+      VISION_BASE_URL: "https://vision.invalid/v1",
+      CONTENT_RETENTION_DAYS: "0",
+      OPENAI_TEXT_MODEL: "a-v1-model",
+    });
+    expect(Object.keys(config.routeChains).sort()).toEqual(["search", "transcriptions"]);
+    expect(config.routeChains).toEqual(DEFAULT_ROUTE_CHAINS);
+    expect(config.credentials).toEqual([]);
+    expect(Object.keys(config.dataPolicies).sort()).toEqual(["anthropic", "cerebras", "openai", "tavily"]);
   });
 });
 
@@ -409,89 +432,49 @@ describe("withFailover", () => {
 });
 
 describe("modelProvidersFrom", () => {
-  it("sends a plan to whichever vendor endpoint the chain names first", async () => {
-    const openAICalls = stubUpstream(() => openAIReply("{}"));
-    const openAIFirst = modelProvidersFrom(bothProviders());
-    const first = await openAIFirst.plan!({ ...textRequest, signal: new AbortController().signal });
-    expect(openAICalls[0]!.url).toBe("https://openai.invalid/v1/responses");
-    expect(first.served).toEqual({ provider: "openai", failedOver: [] });
-    vi.unstubAllGlobals();
-
-    const anthropicCalls = stubUpstream(() => anthropicReply("{}"));
-    const anthropicFirst = modelProvidersFrom(
-      bothProviders({ routeChains: { ...DEFAULT_ROUTE_CHAINS, plan: ["anthropic", "openai"] } }),
-    );
-    const second = await anthropicFirst.plan!({
-      ...textRequest,
-      signal: new AbortController().signal,
-    });
-    expect(anthropicCalls[0]!.url).toBe("https://anthropic.invalid/v1/messages");
-    expect(second.served).toEqual({ provider: "anthropic", failedOver: [] });
+  it("sends a transcription to the vendor endpoint its chain names, and says who served", async () => {
+    const calls = stubUpstream(() => transcriptionReply("Open Safari"));
+    const result = await modelProvidersFrom(allProviders()).transcription!(transcriptionRequest());
+    expect(calls.map((call) => call.url)).toEqual(["https://openai.invalid/v1/audio/transcriptions"]);
+    expect(result.text).toBe("Open Safari");
+    expect(result.served).toEqual({ provider: "openai", failedOver: [] });
   });
 
-  it("routes the two text routes independently", async () => {
+  it("routes search on its own chain, independently of transcription", async () => {
+    // The agent's `web_search` tool reaches Tavily through this, with the gateway's key; the same
+    // configuration's transcription call reaches OpenAI. Neither route borrows the other's chain.
     const calls = stubUpstream((call) =>
-      call.url.includes("anthropic") ? anthropicReply("{}") : openAIReply("{}"),
+      call.url.includes("search") ? searchReply() : transcriptionReply("Open Safari"),
     );
-    const providersFor = modelProvidersFrom(
-      bothProviders({
-        routeChains: { ...DEFAULT_ROUTE_CHAINS, plan: ["openai"], synthesize: ["anthropic"] },
-      }),
-    );
-    await providersFor.plan!({ ...textRequest, signal: new AbortController().signal });
-    await providersFor.synthesize!({ ...textRequest, signal: new AbortController().signal });
+    const providersFor = modelProvidersFrom(allProviders());
+    const found = await providersFor.search!(searchRequest());
+    await providersFor.transcription!(transcriptionRequest());
     expect(calls.map((call) => call.url)).toEqual([
-      "https://openai.invalid/v1/responses",
-      "https://anthropic.invalid/v1/messages",
+      "https://search.invalid/search",
+      "https://openai.invalid/v1/audio/transcriptions",
     ]);
+    expect(calls[0]!.headers["authorization"]).toBe("Bearer tvly-test-search-key");
+    expect(found.items).toEqual([{ title: "Swift", url: "https://swift.org", snippet: "The language" }]);
+    expect(found.served).toEqual({ provider: "tavily", failedOver: [] });
   });
 
-  it("drops a chain entry this deployment holds no credential for", async () => {
-    const calls = stubUpstream(() => anthropicReply("{}"));
+  it("drops a chain entry this deployment holds no credential for, route by route", async () => {
+    // Search's only entry has a key and transcription's does not, so one route is served and the
+    // other is absent — it is not "tried and failed", and nothing is sent for it.
+    const calls = stubUpstream(() => searchReply());
     const providersFor = modelProvidersFrom(
-      testConfig({
-        credentials: [{ provider: "anthropic", keys: ["sk-ant-test-key"] }],
-        routeChains: { ...DEFAULT_ROUTE_CHAINS, plan: ["openai", "anthropic"] },
-      }),
+      testConfig({ credentials: [{ provider: "tavily", keys: ["tvly-test-search-key"] }] }),
     );
-    const result = await providersFor.plan!({
-      ...textRequest,
-      signal: new AbortController().signal,
-    });
-    // OpenAI is first in the chain and has no key, so it is not a candidate at all — it is not
-    // "tried and failed", and `failedOver` says so.
+    expect(providersFor.transcription).toBeUndefined();
+    const found = await providersFor.search!(searchRequest());
     expect(calls).toHaveLength(1);
-    expect(calls[0]!.url).toBe("https://anthropic.invalid/v1/messages");
-    expect(result.served).toEqual({ provider: "anthropic", failedOver: [] });
+    expect(found.served).toEqual({ provider: "tavily", failedOver: [] });
   });
 
   it("is undefined for a route whose every chain entry lacks a credential", () => {
     const providersFor = modelProvidersFrom(testConfig({ credentials: [] }));
-    expect(providersFor.plan).toBeUndefined();
-    expect(providersFor.synthesize).toBeUndefined();
     expect(providersFor.transcription).toBeUndefined();
     expect(providersFor.search).toBeUndefined();
-  });
-
-  it("falls over from a 503 primary to the second provider and says who served", async () => {
-    // The acceptance criterion, at the layer that composes real adapters: the primary fails, the
-    // request still succeeds, and what is recorded names the provider that actually served it.
-    const calls = stubUpstream((call) =>
-      call.url.includes("openai")
-        ? jsonResponse({ error: "overloaded" }, 503)
-        : anthropicReply('{"summary":"Open Safari."}'),
-    );
-    const providersFor = modelProvidersFrom(bothProviders());
-    const result = await providersFor.plan!({
-      ...textRequest,
-      signal: new AbortController().signal,
-    });
-    expect(calls.map((call) => call.url)).toEqual([
-      "https://openai.invalid/v1/responses",
-      "https://anthropic.invalid/v1/messages",
-    ]);
-    expect(result.outputText).toBe('{"summary":"Open Safari."}');
-    expect(result.served).toEqual({ provider: "anthropic", failedOver: ["openai"] });
   });
 });
 
@@ -518,11 +501,11 @@ describe("per-provider retention and training configuration", () => {
 
   it("refuses a value outside the set, naming the variable", () => {
     try {
-      providerDataPolicies({ VISION_DATA_RETENTION: "30 days" });
+      providerDataPolicies({ TAVILY_DATA_RETENTION: "30 days" });
       expect.unreachable("expected a ConfigError");
     } catch (error) {
       expect(error).toBeInstanceOf(ConfigError);
-      expect((error as Error).message).toContain("VISION_DATA_RETENTION");
+      expect((error as Error).message).toContain("TAVILY_DATA_RETENTION");
       expect((error as Error).message).toContain("unknown, none, retains");
     }
   });
@@ -560,8 +543,10 @@ describe("describeRouting", () => {
         },
       }),
     );
-    expect(description.routes.plan).toEqual(["openai", "anthropic (no credential)"]);
-    expect(description.routes.search).toEqual(["tavily (no credential)"]);
+    expect(description.routes).toEqual({
+      transcriptions: ["openai"],
+      search: ["tavily (no credential)"],
+    });
     const openai = description.providers.find((entry) => entry.provider === "openai");
     expect(openai).toEqual({
       provider: "openai",
@@ -580,7 +565,7 @@ describe("describeRouting", () => {
     // fields: a key that reached it through a field nobody thought about would still be a leak.
     const rendered = JSON.stringify(
       describeRouting(
-        bothProviders({
+        allProviders({
           credentials: [
             { provider: "openai", keys: ["sk-test-openai-key", "sk-test-openai-older"] },
             { provider: "anthropic", keys: ["sk-ant-test-key"] },
@@ -595,204 +580,30 @@ describe("describeRouting", () => {
   });
 });
 
-describe("the acceptance criteria, through a running server", () => {
-  it("serves the same plan request from OpenAI or from Anthropic by configuration alone", async () => {
-    // The first acceptance criterion. One request body, sent twice, byte-identical. Nothing about
-    // the client changes; only `MODEL_ROUTE_PLAN` does.
-    const body = planBody();
-
-    const openAICalls = stubUpstream(() => openAIReply('{"summary":"Planned by the first."}'));
-    const openAIApp = build({ routeChains: { ...DEFAULT_ROUTE_CHAINS, plan: ["openai"] } });
-    const openAIResponse = await openAIApp.inject({
-      method: "POST",
-      url: "/v1/plan",
-      headers: { authorization: authorization() },
-      payload: body,
-    });
-    expect(openAIResponse.statusCode).toBe(200);
-    expect(openAIResponse.json().output_text).toBe('{"summary":"Planned by the first."}');
-    expect(openAICalls.map((call) => call.url)).toEqual(["https://openai.invalid/v1/responses"]);
-    await openAIApp.close();
-    vi.unstubAllGlobals();
-
-    const anthropicCalls = stubUpstream(() =>
-      anthropicReply('{"summary":"Planned by the second."}'),
-    );
-    const anthropicApp = build({ routeChains: { ...DEFAULT_ROUTE_CHAINS, plan: ["anthropic"] } });
-    const anthropicResponse = await anthropicApp.inject({
-      method: "POST",
-      url: "/v1/plan",
-      headers: { authorization: authorization() },
-      payload: body,
-    });
-    expect(anthropicResponse.statusCode).toBe(200);
-    expect(anthropicResponse.json().output_text).toBe('{"summary":"Planned by the second."}');
-    expect(anthropicCalls.map((call) => call.url)).toEqual([
-      "https://anthropic.invalid/v1/messages",
-    ]);
-    await anthropicApp.close();
-  });
-
-  it("succeeds through a failover, and the response names no provider and no model", async () => {
-    const calls = stubUpstream((call) =>
-      call.url.includes("openai")
-        ? jsonResponse({ error: "overloaded" }, 503)
-        : anthropicReply('{"summary":"Open Safari."}'),
-    );
-    const app = build();
-    const response = await app.inject({
-      method: "POST",
-      url: "/v1/plan",
-      headers: { authorization: authorization() },
-      payload: planBody(),
-    });
-
-    expect(response.statusCode).toBe(200);
-    expect(calls).toHaveLength(2);
-    expect(response.json().output_text).toBe('{"summary":"Open Safari."}');
-
+describe("through a running server", () => {
+  it("answers a routed request with no provider and no model in the response", async () => {
     // §4.2: "The response names no provider and no model." Asserted on the raw payload rather than
     // on named fields, because a field nobody thought to check would carry it just as far.
+    const calls = stubUpstream(() => transcriptionReply("Open Safari"));
+    const app = build();
+    const response = await transcribe(app);
+
+    expect(response.statusCode).toBe(200);
+    expect(calls).toHaveLength(1);
+    expect(response.json().text).toBe("Open Safari");
     const raw = response.body.toLowerCase();
-    for (const vendor of ["openai", "anthropic", "cerebras", "tavily", "gpt-", "claude"]) {
+    for (const vendor of [
+      "openai",
+      "anthropic",
+      "cerebras",
+      "tavily",
+      "whisper",
+      "gpt-",
+      "claude",
+      "test-transcription-model",
+    ]) {
       expect(raw).not.toContain(vendor);
     }
-    await app.close();
-  });
-
-  it("answers 502 provider.unavailable when every provider in the chain fails", async () => {
-    stubUpstream(() => jsonResponse({ error: "overloaded" }, 503));
-    const app = build();
-    const response = await app.inject({
-      method: "POST",
-      url: "/v1/plan",
-      headers: { authorization: authorization() },
-      payload: planBody(),
-    });
-    expect(response.statusCode).toBe(502);
-    expect(response.json().error.code).toBe("provider.unavailable");
-    expect(response.json().error.retryable).toBe(true);
-    await app.close();
-  });
-
-  it("does not try the second provider when the first refuses the request", async () => {
-    const calls = stubUpstream(() => jsonResponse({ error: "bad request" }, 400));
-    const app = build();
-    const response = await app.inject({
-      method: "POST",
-      url: "/v1/plan",
-      headers: { authorization: authorization() },
-      payload: planBody(),
-    });
-    expect(calls).toHaveLength(1);
-    expect(response.statusCode).toBe(502);
-    expect(response.json().error.code).toBe("provider.rejected");
-    expect(response.json().error.retryable).toBe(false);
-    await app.close();
-  });
-
-  /**
-   * **The failure this feature most likely has to survive** (PR #143, F1). An expired or
-   * rotated-out key, an account out of credit, an account suspended: each is a fact about our
-   * relationship with a vendor, not about the user's request, which is the argument `429` has always
-   * rested on. Until PR #143's review these three were refusals, so an expired `OPENAI_API_KEY`
-   * answered `502 provider.rejected` with `retryable: false` on every request while a healthy
-   * Anthropic key sat configured and was never called.
-   */
-  it("fails over when the primary answers 401, 402 or 403 — and the request still succeeds", async () => {
-    for (const status of [401, 402, 403]) {
-      const calls = stubUpstream((call) =>
-        call.url.includes("openai")
-          ? jsonResponse({ error: "no" }, status)
-          : anthropicReply('{"summary":"Open Safari."}'),
-      );
-      const app = build();
-      const response = await app.inject({
-        method: "POST",
-        url: "/v1/plan",
-        headers: { authorization: authorization() },
-        payload: planBody(),
-      });
-
-      expect(response.statusCode, `status ${status}`).toBe(200);
-      expect(calls.map((call) => call.url)).toEqual([
-        "https://openai.invalid/v1/responses",
-        "https://anthropic.invalid/v1/messages",
-      ]);
-      expect(response.json().output_text).toBe('{"summary":"Open Safari."}');
-      await app.close();
-      vi.unstubAllGlobals();
-    }
-  });
-
-  /**
-   * The reviewer's probe shape, through the running app (PR #143, F2).
-   *
-   * A provider that writes headers and then stalls resolves the `fetch`; the route's deadline then
-   * aborts the read and `json()` rejects. Swallowed to `null`, that used to reach the client as
-   * `502 provider.rejected`, `retryable: false` — the code §9.3 reserves for "a retry would fail
-   * identically" — over a transient stall, and the app rendered *"Sonny couldn't do this one."*
-   */
-  it("reports a provider that stalls after headers as a timeout the client may retry", async () => {
-    vi.stubGlobal("fetch", async () => ({
-      ok: true,
-      status: 200,
-      json: async () => {
-        throw new DOMException("This operation was aborted", "AbortError");
-      },
-    }));
-    const app = build();
-    const response = await app.inject({
-      method: "POST",
-      url: "/v1/plan",
-      headers: { authorization: authorization() },
-      payload: planBody(),
-    });
-
-    expect(response.statusCode).toBe(504);
-    expect(response.json().error.code).toBe("provider.timeout");
-    expect(response.json().error.retryable).toBe(true);
-    await app.close();
-  });
-
-  it("fails over when the primary answers a complete body that is not JSON", async () => {
-    // An intermediary answering for the provider — a CDN or proxy error page under a 200. Transient,
-    // so another provider is worth trying; it used to be a non-retryable refusal.
-    const calls = stubUpstream((call) =>
-      call.url.includes("openai")
-        ? new Response("<html>502 Bad Gateway</html>", { status: 200 })
-        : anthropicReply('{"summary":"Open Safari."}'),
-    );
-    const app = build();
-    const response = await app.inject({
-      method: "POST",
-      url: "/v1/plan",
-      headers: { authorization: authorization() },
-      payload: planBody(),
-    });
-
-    expect(response.statusCode).toBe(200);
-    expect(calls).toHaveLength(2);
-    await app.close();
-  });
-
-  it("serves a plan from Cerebras when the chain names it, with no client change", async () => {
-    // The ticket's second acceptance criterion, server half: Cerebras is reachable the same way
-    // every other provider is, as a configuration entry rather than an environment variable on the
-    // user's own Mac.
-    const calls = stubUpstream(() =>
-      jsonResponse({ choices: [{ message: { content: '{"summary":"Open Safari."}' } }] }),
-    );
-    const app = build({ routeChains: { ...DEFAULT_ROUTE_CHAINS, plan: ["cerebras"] } });
-    const response = await app.inject({
-      method: "POST",
-      url: "/v1/plan",
-      headers: { authorization: authorization() },
-      payload: planBody(),
-    });
-    expect(response.statusCode).toBe(200);
-    expect(calls[0]!.url).toBe("https://cerebras.invalid/v1/chat/completions");
-    expect(response.json().output_text).toBe('{"summary":"Open Safari."}');
     await app.close();
   });
 });
@@ -800,27 +611,25 @@ describe("the acceptance criteria, through a running server", () => {
 describe("what the server records about who served (SONNY-132's third acceptance criterion)", () => {
   /**
    * **Three mutants survived a twenty-mutant battery and all three were here** (PR #143, F3):
-   * `recordServingProvider`'s body removed, the provider it records hard-coded to `"openai"`, and
-   * `app.ts`'s `model routing` line deleted. `result.served` was pinned six ways; the two places it
-   * becomes visible to a human were pinned zero ways — which is the half of the acceptance
-   * criterion that says "the recorded metering says which provider actually served it", and the
-   * line every `deploy.sh` demonstration and the founder's manual row 7 read.
+   * `recordServingProvider`'s body removed, the provider it records hard-coded, and `app.ts`'s
+   * `model routing` line deleted. `result.served` was pinned six ways; the two places it becomes
+   * visible to a human were pinned zero ways — the half of the acceptance criterion that says "the
+   * recorded metering says which provider actually served it", and the line every `deploy.sh`
+   * demonstration reads.
    */
-  it("records the provider that served an ordinary request, at debug", async () => {
-    stubUpstream(() => openAIReply("{}"));
+  it("records the provider that served an ordinary request, at debug, under the route's name", async () => {
+    stubUpstream(() => transcriptionReply("Open Safari"));
     const { app, log } = buildLogging();
-    await app.inject({
-      method: "POST",
-      url: "/v1/plan",
-      headers: { authorization: authorization() },
-      payload: planBody(),
-    });
+    await transcribe(app);
 
     const served = log.withMessage("model route served");
     expect(served).toHaveLength(1);
-    expect(served[0]!["route"]).toBe("plan");
+    expect(served[0]!["route"]).toBe("transcription");
     expect(served[0]!["provider"]).toBe("openai");
     expect(served[0]!["failedOver"]).toEqual([]);
+    // `debug`, not `warn`: the ordinary path is every request that has ever worked.
+    expect(served[0]!["level"]).toBe(20);
+    expect(log.withMessage("model route served after failover")).toHaveLength(0);
     // §2.3 makes `Sonny-Request-Id` the one string a user can be asked to quote for support, and
     // §11 joins the metering event on it. A record naming the provider but not the request is not
     // a record SONNY-133 can use, so the line has to carry the request id it was logged under.
@@ -829,75 +638,34 @@ describe("what the server records about who served (SONNY-132's third acceptance
   });
 
   /**
-   * The provider recorded is the one that *answered*, not the one the chain names first — which is
-   * the mutant that hard-coded `"openai"` and survived. Asserted on a request where the two differ.
-   */
-  it("records the provider that actually answered after a failover, at warn, with what was tried", async () => {
-    stubUpstream((call) =>
-      call.url.includes("openai")
-        ? jsonResponse({ error: "overloaded" }, 503)
-        : anthropicReply('{"summary":"Open Safari."}'),
-    );
-    const { app, log } = buildLogging();
-    await app.inject({
-      method: "POST",
-      url: "/v1/plan",
-      headers: { authorization: authorization() },
-      payload: planBody(),
-    });
-
-    expect(log.withMessage("model route served")).toHaveLength(0);
-    const failedOver = log.withMessage("model route served after failover");
-    expect(failedOver).toHaveLength(1);
-    expect(failedOver[0]!["provider"]).toBe("anthropic");
-    expect(failedOver[0]!["failedOver"]).toEqual(["openai"]);
-    // `warn`, not `debug`: a provider having a bad hour is worth noticing without anyone asking.
-    expect(failedOver[0]!["level"]).toBe(40);
-    await app.close();
-  });
-
-  it("records each text route under its own name, so metering can price them separately", async () => {
-    stubUpstream(() => openAIReply("{}"));
-    const { app, log } = buildLogging();
-    for (const url of ["/v1/plan", "/v1/research/synthesize"]) {
-      await app.inject({
-        method: "POST",
-        url,
-        headers: { authorization: authorization() },
-        payload: planBody(),
-      });
-    }
-    expect(log.withMessage("model route served").map((line) => line["route"])).toEqual([
-      "plan",
-      "research.synthesize",
-    ]);
-    await app.close();
-  });
-
-  /**
    * The startup line, which is the only surface the retention/training field is observable on and
-   * the line all four `deploy.sh` demonstrations read. Deleting it survived the suite.
+   * the line every `deploy.sh` demonstration reads. Deleting it survived the suite.
    */
   it("says what this deployment's routing resolved to, once, at startup", async () => {
     const { app, log } = buildLogging({
-      routeChains: { ...DEFAULT_ROUTE_CHAINS, plan: ["anthropic", "openai"] },
+      // No search key, so the line has to read the credentials rather than restate the defaults.
+      credentials: [
+        { provider: "openai", keys: ["sk-test-openai-key"] },
+        { provider: "anthropic", keys: ["sk-ant-test-key"] },
+        { provider: "cerebras", keys: ["csk-test-key"] },
+      ],
       dataPolicies: {
         ...providerDataPolicies({}),
-        anthropic: { retention: "none", training: "none" },
+        openai: { retention: "none", training: "none" },
       },
     });
     await app.ready();
 
     const routing = log.withMessage("model routing");
     expect(routing).toHaveLength(1);
-    expect((routing[0]!["routes"] as Record<string, unknown>)["plan"]).toEqual([
-      "anthropic",
-      "openai",
-    ]);
-    const anthropic = (routing[0]!["providers"] as Record<string, unknown>[]).find(
-      (entry) => entry["provider"] === "anthropic",
+    expect(routing[0]!["routes"]).toEqual({
+      transcriptions: ["openai"],
+      search: ["tavily (no credential)"],
+    });
+    const openai = (routing[0]!["providers"] as Record<string, unknown>[]).find(
+      (entry) => entry["provider"] === "openai",
     );
-    expect(anthropic).toMatchObject({
+    expect(openai).toMatchObject({
       configured: true,
       retention: "none",
       training: "none",

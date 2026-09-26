@@ -7,22 +7,27 @@ import type { Config } from "../src/config.js";
 import {
   BODY_LIMIT_BYTES, BODY_READ_DEADLINE_MS, DEADLINE_MS, MAXIMUM_AUDIO_DURATION_SECONDS,
 } from "../src/model/limits.js";
+import { modelProvidersFrom } from "../src/model/providers.js";
+import { ProviderTimedOut } from "../src/model/upstream.js";
 import { CLAIM_LEASE_SECONDS, type KeyStore } from "../src/idempotency/store.js";
-import { REQUEST_TIMEOUT_MS, clientErrorResponse } from "../src/app.js";
+import { DEFAULT_BODY_LIMIT_BYTES, REQUEST_TIMEOUT_MS, clientErrorResponse } from "../src/app.js";
 import { testConfig } from "./support/config.js";
 import { fakeEntitlementStore } from "./support/entitlement.js";
+import { transcriptionBody } from "./support/multipart.js";
 import { accessTokenFor } from "./support/tokens.js";
 import { signedInConnectionTo } from "./support/connection.js";
 import { WithoutOAuth } from "./support/without-oauth.js";
 
 /**
- * The four credential-bearing routes SONNY-130 moved behind this gateway.
+ * `POST /v1/transcriptions`, the one model route the Mac still calls directly, and the search
+ * adapter the agent's `web_search` tool calls (V2 plan phase 7).
  *
- * **Every test here drives the real app through `inject`, with `fetch` stubbed at the boundary.**
- * That is deliberate and it is what makes these tests worth the reading: the thing being asserted is
- * mostly what the *provider* receives and what the *client* receives, and a test that called an
- * adapter function directly would skip the gate, the body limits, the deadline wrapper, the schema
- * and the error mapping — which is where all four of this ticket's requirements actually live.
+ * **Every route test here drives the real app through `inject`, with `fetch` stubbed at the
+ * boundary.** That is deliberate and it is what makes these tests worth the reading: the thing being
+ * asserted is mostly what the *provider* receives and what the *client* receives, and a test that
+ * called an adapter function directly would skip the gate, the body limits, the deadline wrapper,
+ * the meta validation and the error mapping. The search adapter has no route of its own any more, so
+ * it is driven through `modelProvidersFrom` — the same call `app.ts` hands the agent.
  *
  * `https://openai.invalid` and `https://search.invalid` come from `testConfig`. `.invalid` is
  * reserved by RFC 2606 and resolves nowhere, so a stub that fails to intercept produces a DNS
@@ -54,21 +59,20 @@ class UnusedAuthProvider extends WithoutOAuth implements AuthProvider {
 /**
  * A connection that answers the gate's one attribution query and nothing else.
  *
- * These routes touch no database of their own — metering is SONNY-133's and the content store is
- * SONNY-134's — so anything else reaching this is a route doing something this ticket did not build.
- * It throws rather than returning empty rows, so that would be a red test rather than a silent one.
+ * The transcription route touches no database of its own — metering is SONNY-133's — so anything
+ * else reaching this is the route doing something it was not built to. It throws rather than
+ * returning empty rows, so that would be a red test rather than a silent one.
  */
 const signedInConnection = signedInConnectionTo({ account: ACCOUNT, where: "from a model route" });
 
+const CREDENTIALS: Config["credentials"] = [
+  { provider: "openai", keys: ["sk-test-openai-key", "sk-test-openai-older"] },
+  { provider: "tavily", keys: ["tvly-test-search-key"] },
+];
+
 function build(overrides: Partial<Config> = {}) {
   return buildApp(
-    testConfig({
-      credentials: [
-        { provider: "openai", keys: ["sk-test-openai-key", "sk-test-openai-older"] },
-        { provider: "tavily", keys: ["tvly-test-search-key"] },
-      ],
-      ...overrides,
-    }),
+    testConfig({ credentials: CREDENTIALS, ...overrides }),
     { provider: new UnusedAuthProvider(), withConnection: signedInConnection },
     // SONNY-135's check runs on every authenticated route and is Postgres-backed, so a suite
     // with no database injects the fake store `support/entitlement.ts` documents. It answers
@@ -80,21 +84,24 @@ function build(overrides: Partial<Config> = {}) {
 
 const authorization = () => `Bearer ${accessTokenFor(SUPABASE_USER)}`;
 
-/** The §4.2 body, complete. Individual tests drop or bend exactly one field. */
-function planBody(overrides: Record<string, unknown> = {}): Record<string, unknown> {
-  return {
-    task_id: "task-1",
-    retention: "standard",
-    messages: [
-      { role: "system", text: "You plan a tiny macOS agent." },
-      { role: "user", text: "Open Safari" },
-    ],
-    response_schema_name: "agent_plan",
-    response_schema: { type: "object", additionalProperties: false },
-    reasoning_effort: "medium",
-    verbosity: "low",
-    ...overrides,
-  };
+/** §4.4's `meta` part, complete. Individual tests drop or bend exactly one field. */
+function transcriptionMeta(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return { task_id: "task-1", retention: "standard", ...overrides };
+}
+
+/** Send one recording to `/v1/transcriptions`, authenticated unless told otherwise. */
+function transcribe(
+  app: ReturnType<typeof build>,
+  meta: unknown = transcriptionMeta(),
+  audio: Buffer = Buffer.from("fake-audio-bytes"),
+) {
+  const body = transcriptionBody(meta, audio);
+  return app.inject({
+    method: "POST",
+    url: "/v1/transcriptions",
+    headers: { authorization: authorization(), "content-type": body.contentType },
+    payload: body.payload,
+  });
 }
 
 interface StubbedCall {
@@ -148,415 +155,82 @@ function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
-/** §4.4's two-part body, built the way the Mac builds it. */
-function multipartBody(
-  meta: unknown,
-  audio: Buffer,
-  options: { filename?: string; contentType?: string } = {},
-): { payload: Buffer; contentType: string } {
-  const boundary = "SonnyTestBoundary-cbf29ce484222325";
-  const head = Buffer.from(
-    `--${boundary}\r\n` +
-      `Content-Disposition: form-data; name="meta"\r\n` +
-      `Content-Type: application/json\r\n\r\n` +
-      `${typeof meta === "string" ? meta : JSON.stringify(meta)}\r\n` +
-      `--${boundary}\r\n` +
-      `Content-Disposition: form-data; name="audio"; filename="${options.filename ?? "voice.m4a"}"\r\n` +
-      `Content-Type: ${options.contentType ?? "audio/mp4"}\r\n\r\n`,
-    "utf8",
-  );
-  const tail = Buffer.from(`\r\n--${boundary}--\r\n`, "utf8");
-  return {
-    payload: Buffer.concat([head, audio, tail]),
-    contentType: `multipart/form-data; boundary=${boundary}`,
-  };
-}
-
 afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe("POST /v1/plan and POST /v1/research/synthesize", () => {
-  it("forwards the client's messages verbatim, in order, with their roles", async () => {
-    // §4.2's hard requirement: "The server forwards the text; it never edits, re-wraps or re-orders
-    // it." The text carries row I's TRUSTED_USER_INSTRUCTION / UNTRUSTED_OBSERVED_CONTENT
-    // boundaries, so a server that reflowed them would dissolve the prompt-injection defence a long
-    // way from anywhere anyone would look for it.
-    const calls = stubUpstream(() => jsonResponse({ output_text: "{}" }));
-    const app = build();
-    const response = await app.inject({
-      method: "POST",
-      url: "/v1/plan",
-      headers: { authorization: authorization() },
-      payload: planBody({
-        messages: [
-          { role: "system", text: "SYSTEM ONE" },
-          { role: "user", text: "UNTRUSTED_OBSERVED_CONTENT_BEGIN ... END" },
-          { role: "user", text: "Open Safari" },
-        ],
-      }),
-    });
-
-    expect(response.statusCode).toBe(200);
-    expect(calls).toHaveLength(1);
-    const sent = calls[0]!.body as { input: { role: string; content: { text: string }[] }[] };
-    expect(sent.input.map((message) => message.role)).toEqual(["system", "user", "user"]);
-    expect(sent.input.map((message) => message.content[0]!.text)).toEqual([
-      "SYSTEM ONE",
-      "UNTRUSTED_OBSERVED_CONTENT_BEGIN ... END",
-      "Open Safari",
-    ]);
-    await app.close();
-  });
-
-  it("sends the gateway's own credential and the configured model, and the client sends neither", async () => {
-    // The ticket in one assertion: the credential and the model identifier are the server's, and
-    // nothing the client sent could have named either.
-    const calls = stubUpstream(() => jsonResponse({ output_text: "{}" }));
-    const app = build();
-    await app.inject({
-      method: "POST",
-      url: "/v1/plan",
-      headers: { authorization: authorization() },
-      payload: planBody(),
-    });
-
-    const call = calls[0]!;
-    expect(call.url).toBe("https://openai.invalid/v1/responses");
-    expect(call.method).toBe("POST");
-    // Index 0 of the credential list, never a later one — §rotation in `config.ts`.
-    expect(call.headers["authorization"]).toBe("Bearer sk-test-openai-key");
-    expect((call.body as { model: string }).model).toBe("test-text-model");
-    await app.close();
-  });
-
-  it("asks the provider to store nothing, on both routes that carry user content", async () => {
-    // SONNY-513, and the twin of `screen.test.ts`'s. This route fires on every ordinary command
-    // rather than only on screen control, so the content the Responses API's stateful default
-    // would have kept for thirty days is the user's own command text and the model's reply.
-    //
-    // Both routes are asserted here rather than only `/v1/plan`: they are separate registrations
-    // over one adapter, and a test covering one of them would keep passing if the other stopped
-    // sending the field. `toBe(false)` rather than a falsy check — `undefined` is the defect.
-    for (const url of ["/v1/plan", "/v1/research/synthesize"]) {
-      const calls = stubUpstream(() => jsonResponse({ output_text: "{}" }));
-      const app = build();
-      await app.inject({
-        method: "POST",
-        url,
-        headers: { authorization: authorization() },
-        payload: planBody(),
-      });
-
-      const body = calls[0]!.body as { store?: unknown };
-      expect(Object.hasOwn(body, "store"), `${url} sent no store field`).toBe(true);
-      expect(body.store, `${url} did not ask the provider to store nothing`).toBe(false);
-      await app.close();
-      vi.unstubAllGlobals();
-    }
-  });
-
-  it("maps response_schema onto the provider's structured-output mechanism, strictly", async () => {
-    const calls = stubUpstream(() => jsonResponse({ output_text: "{}" }));
-    const app = build();
-    await app.inject({
-      method: "POST",
-      url: "/v1/plan",
-      headers: { authorization: authorization() },
-      payload: planBody({
-        response_schema_name: "agent_plan",
-        response_schema: { type: "object", required: ["summary"] },
-      }),
-    });
-
-    const format = (calls[0]!.body as { text: { format: Record<string, unknown> } }).text.format;
-    expect(format).toEqual({
-      type: "json_schema",
-      name: "agent_plan",
-      strict: true,
-      schema: { type: "object", required: ["summary"] },
-    });
-    await app.close();
-  });
-
-  it("returns output_text and the provider's reported usage, naming no provider and no model", async () => {
-    stubUpstream(() =>
-      jsonResponse({
-        output_text: "{\"summary\":\"Open Safari.\"}",
-        usage: { input_tokens: 42, output_tokens: 18, total_tokens: 60 },
-      }),
-    );
-    const app = build();
-    const response = await app.inject({
-      method: "POST",
-      url: "/v1/plan",
-      headers: { authorization: authorization() },
-      payload: planBody(),
-    });
-
-    const body = response.json() as Record<string, unknown>;
-    // §4.2: "The response names no provider and no model." Asserted as an exact key set, in both
-    // directions, so a field added later has to be a decision rather than a leak.
-    expect(Object.keys(body).sort()).toEqual(["output_text", "request_id", "usage"]);
-    expect(body["output_text"]).toBe("{\"summary\":\"Open Safari.\"}");
-    expect(body["usage"]).toEqual({
-      input_tokens: 42,
-      output_tokens: 18,
-      total_tokens: 60,
-      audio_duration_seconds: null,
-      source: "reported",
-    });
-    expect(JSON.stringify(body).toLowerCase()).not.toContain("openai");
-    expect(JSON.stringify(body).toLowerCase()).not.toContain("test-text-model");
-    await app.close();
-  });
-
-  it("estimates usage and says so when the provider reports none", async () => {
-    // §4.2: "The server estimates only when the provider reported nothing, and says which it did."
-    // The arithmetic is `AIUsageEstimator`'s — four characters to a token — so a user's local
-    // summary does not step when their traffic moves behind the gateway.
-    stubUpstream(() => jsonResponse({ output_text: "12345678", usage: null }));
-    const app = build();
-    const response = await app.inject({
-      method: "POST",
-      url: "/v1/plan",
-      headers: { authorization: authorization() },
-      payload: planBody({ messages: [{ role: "user", text: "1234" }] }),
-    });
-
-    expect(response.json()["usage"]).toEqual({
-      input_tokens: 1,
-      output_tokens: 2,
-      total_tokens: 3,
-      audio_duration_seconds: null,
-      source: "estimated",
-    });
-    await app.close();
-  });
-
-  it("reads output_text out of the structured output array when the flat field is absent", async () => {
-    stubUpstream(() =>
-      jsonResponse({
-        output: [{ content: [{ type: "output_text", text: "{\"summary\":\"from the array\"}" }] }],
-      }),
-    );
-    const app = build();
-    const response = await app.inject({
-      method: "POST",
-      url: "/v1/plan",
-      headers: { authorization: authorization() },
-      payload: planBody(),
-    });
-
-    expect(response.json()["output_text"]).toBe("{\"summary\":\"from the array\"}");
-    await app.close();
-  });
-
-  it("gives /v1/research/synthesize its own 4 MiB limit, and /v1/plan does not get it", async () => {
-    // **The registration line, not the constant** (PR #139, F3). `BODY_LIMIT_BYTES.synthesize` was
-    // asserted by the numbers test above, but nothing asserted that the *synthesize route* was
-    // registered with it — swapping `BODY_LIMIT_BYTES.synthesize` for `BODY_LIMIT_BYTES.plan` at
-    // the `textRoute(...)` call survived the whole suite. §6.1 gives this route 4 MiB precisely
-    // because it carries the full readable text of every fetched page, so a route silently
-    // inheriting the 1 MiB default would fail exactly the research runs it exists for.
-    //
-    // One body, two routes, one accepted and one refused: that is the pair the constant cannot say.
-    const calls = stubUpstream(() => jsonResponse({ output_text: "{}" }));
-    const app = build();
-    // Comfortably over `plan`'s 1 MiB and comfortably under `synthesize`'s 4 MiB.
-    const big = planBody({ messages: [{ role: "user", text: "x".repeat(2_000_000) }] });
-
-    const accepted = await app.inject({
-      method: "POST",
-      url: "/v1/research/synthesize",
-      headers: { authorization: authorization() },
-      payload: big,
-    });
-    expect(accepted.statusCode).toBe(200);
-
-    const refused = await app.inject({
-      method: "POST",
-      url: "/v1/plan",
-      headers: { authorization: authorization() },
-      payload: big,
-    });
-    expect(refused.statusCode).toBe(413);
-    expect(refused.json()["error"]["code"]).toBe("request.too_large");
-
-    // Only the accepted one reached a provider.
-    expect(calls).toHaveLength(1);
-    await app.close();
-  });
-
-  it("lets /v1/transcriptions carry ten times what /v1/search may", async () => {
-    // The same shape for the other route that carries an oversized body, so both routes with a
-    // ceiling of their own are held by behaviour rather than by a constant.
-    //
-    // **The two ceilings are enforced by different mechanisms, and this test deliberately asserts
-    // neither** (PR #139's G2). `/v1/search` is bounded by its route `bodyLimit`; `/v1/transcriptions`
-    // is bounded by `@fastify/multipart`'s `limits.fileSize`, because registering that parser
-    // replaces the body parser for its content type and the route's own `bodyLimit` is then not
-    // consulted at all — measured, and recorded at the route. What a caller can observe is the pair
-    // below: the same number of bytes refused on one route and served on the other.
-    stubUpstream(() => jsonResponse({ results: [] }));
-    const app = build();
-
-    const refused = await app.inject({
-      method: "POST",
-      url: "/v1/search",
-      headers: { authorization: authorization() },
-      payload: { task_id: "t", retention: "standard", query: "x".repeat(2_000_000) },
-    });
-    expect(refused.statusCode).toBe(413);
-    expect(refused.json()["error"]["code"]).toBe("request.too_large");
-
-    // The same number of bytes goes through transcriptions, whose limit is ten times larger.
-    vi.unstubAllGlobals();
-    stubUpstream(() => jsonResponse({ text: "ok" }));
-    const audio = multipartBody({ task_id: "t", retention: "standard" }, Buffer.alloc(2_000_000, 0x41));
-    const accepted = await app.inject({
-      method: "POST",
-      url: "/v1/transcriptions",
-      headers: { authorization: authorization(), "content-type": audio.contentType },
-      payload: audio.payload,
-    });
-    expect(accepted.statusCode).toBe(200);
-    await app.close();
-  });
-
-  it("serves /v1/research/synthesize with the same body shape and the same provider", async () => {
-    const calls = stubUpstream(() => jsonResponse({ output_text: "{\"title\":\"Note\"}" }));
-    const app = build();
-    const response = await app.inject({
-      method: "POST",
-      url: "/v1/research/synthesize",
-      headers: { authorization: authorization() },
-      payload: planBody({ response_schema_name: "web_research_note" }),
-    });
-
-    expect(response.statusCode).toBe(200);
-    expect(response.json()["output_text"]).toBe("{\"title\":\"Note\"}");
-    expect(calls[0]!.url).toBe("https://openai.invalid/v1/responses");
-    await app.close();
-  });
-});
-
-describe("the fields §2.4 requires on every content-bearing request", () => {
-  it("refuses a request with no retention rather than defaulting it either way", async () => {
+describe("the fields §2.4 requires on a transcription's meta part", () => {
+  it("refuses a meta part with no retention rather than defaulting it either way", async () => {
     // §2.4.2, and the reason it is a rule: default to "standard" and a client that forgets the
-    // field silently stores content the user asked not to store; default to "none" and it silently
-    // loses the retention the founder decided to have. An omitted privacy field is a loud error.
-    const calls = stubUpstream(() => jsonResponse({ output_text: "{}" }));
+    // field silently keeps a replayable copy of a recording the user asked not to keep; default to
+    // "none" and it silently loses the retention the founder decided to have. An omitted privacy
+    // field is a loud error.
+    const calls = stubUpstream(() => jsonResponse({ text: "should never be reached" }));
     const app = build();
-    const body = planBody();
-    delete body["retention"];
+    const meta = transcriptionMeta();
+    delete meta["retention"];
 
-    const response = await app.inject({
-      method: "POST",
-      url: "/v1/plan",
-      headers: { authorization: authorization() },
-      payload: body,
-    });
+    const response = await transcribe(app, meta);
 
     expect(response.statusCode).toBe(400);
     expect(response.json()["error"]["code"]).toBe("request.invalid");
+    expect(response.json()["error"]["message"]).toBe("The meta part failed validation.");
     // And nothing was sent upstream, so the refusal costs nothing.
     expect(calls).toHaveLength(0);
     await app.close();
   });
 
   it("refuses a retention value that is neither standard nor none", async () => {
-    stubUpstream(() => jsonResponse({ output_text: "{}" }));
+    const calls = stubUpstream(() => jsonResponse({ text: "should never be reached" }));
     const app = build();
-    const response = await app.inject({
-      method: "POST",
-      url: "/v1/plan",
-      headers: { authorization: authorization() },
-      payload: planBody({ retention: "forever" }),
-    });
+
+    const response = await transcribe(app, transcriptionMeta({ retention: "forever" }));
 
     expect(response.statusCode).toBe(400);
     expect(response.json()["error"]["code"]).toBe("request.invalid");
+    expect(calls).toHaveLength(0);
     await app.close();
   });
 
-  it("refuses a request with no task_id, on all four routes", async () => {
-    stubUpstream(() => jsonResponse({ output_text: "{}" }));
+  it("refuses a meta part with no task_id", async () => {
+    const calls = stubUpstream(() => jsonResponse({ text: "should never be reached" }));
     const app = build();
-    const withoutTaskId = planBody();
-    delete withoutTaskId["task_id"];
+    const meta = transcriptionMeta();
+    delete meta["task_id"];
 
-    for (const url of ["/v1/plan", "/v1/research/synthesize"]) {
-      const response = await app.inject({
-        method: "POST",
-        url,
-        headers: { authorization: authorization() },
-        payload: withoutTaskId,
-      });
-      expect(response.statusCode, url).toBe(400);
-    }
+    const response = await transcribe(app, meta);
 
-    const search = await app.inject({
-      method: "POST",
-      url: "/v1/search",
-      headers: { authorization: authorization() },
-      payload: { retention: "standard", query: "swift" },
-    });
-    expect(search.statusCode).toBe(400);
-
-    const audio = multipartBody({ retention: "standard" }, Buffer.from("fake-audio"));
-    const transcription = await app.inject({
-      method: "POST",
-      url: "/v1/transcriptions",
-      headers: { authorization: authorization(), "content-type": audio.contentType },
-      payload: audio.payload,
-    });
-    expect(transcription.statusCode).toBe(400);
+    expect(response.statusCode).toBe(400);
+    expect(response.json()["error"]["message"]).toBe("The meta part failed validation.");
+    expect(calls).toHaveLength(0);
     await app.close();
   });
 
   it("refuses an unknown field rather than silently dropping it", async () => {
     // The mirror of §2.1's tolerance rule, which is about *responses*. A request field this server
     // drops in silence is a client believing it asked for something.
-    stubUpstream(() => jsonResponse({ output_text: "{}" }));
+    const calls = stubUpstream(() => jsonResponse({ text: "should never be reached" }));
     const app = build();
-    const response = await app.inject({
-      method: "POST",
-      url: "/v1/plan",
-      headers: { authorization: authorization() },
-      payload: planBody({ model: "gpt-5.5" }),
-    });
+
+    const response = await transcribe(app, transcriptionMeta({ model: "whisper-1" }));
 
     expect(response.statusCode).toBe(400);
+    expect(response.json()["error"]["message"]).toBe("The meta part failed validation.");
+    expect(calls).toHaveLength(0);
     await app.close();
   });
 });
 
-describe("POST /v1/search", () => {
-  it("clamps max_results to §4.3's 1–20 in both directions", async () => {
-    const calls = stubUpstream(() => jsonResponse({ results: [] }));
-    const app = build();
-    for (const requested of [5, 500, 0]) {
-      await app.inject({
-        method: "POST",
-        url: "/v1/search",
-        headers: { authorization: authorization() },
-        payload: { task_id: "t", retention: "standard", query: "swift", max_results: requested },
-      });
-    }
-    // And the default when the field is absent.
-    await app.inject({
-      method: "POST",
-      url: "/v1/search",
-      headers: { authorization: authorization() },
-      payload: { task_id: "t", retention: "standard", query: "swift" },
-    });
+describe("the search adapter the agent's web_search tool calls", () => {
+  /** The adapter exactly as `app.ts` hands it to the agent, over `testConfig`'s search host. */
+  function searchAdapter() {
+    const search = modelProvidersFrom(testConfig({ credentials: CREDENTIALS })).search;
+    if (search === undefined) throw new Error("the fixture configures a search credential");
+    return search;
+  }
 
-    expect(calls.map((call) => (call.body as { max_results: number }).max_results)).toEqual([
-      5, 20, 1, 5,
-    ]);
-    await app.close();
-  });
+  const search = (query = "swift") =>
+    searchAdapter()({ query, maxResults: 5, signal: new AbortController().signal });
 
   it("returns title, url and snippet, and drops entries whose URL is not http(s)", async () => {
     stubUpstream(() =>
@@ -570,72 +244,50 @@ describe("POST /v1/search", () => {
         ],
       }),
     );
-    const app = build();
-    const response = await app.inject({
-      method: "POST",
-      url: "/v1/search",
-      headers: { authorization: authorization() },
-      payload: { task_id: "t", retention: "standard", query: "swift", max_results: 5 },
-    });
 
-    const body = response.json() as Record<string, unknown>;
-    expect(Object.keys(body).sort()).toEqual(["request_id", "results"]);
-    expect(body["results"]).toEqual([
+    const result = await search();
+
+    expect(result.items).toEqual([
       { title: "Good", url: "https://example.com/good", snippet: "kept" },
       { title: "No snippet", url: "http://example.com/two", snippet: null },
     ]);
-    await app.close();
+    expect(result.served).toEqual({ provider: "tavily", failedOver: [] });
   });
 
-  it("sends the gateway's search credential to the configured search host", async () => {
+  it("sends the gateway's search credential, the query and the result count to the configured host", async () => {
     const calls = stubUpstream(() => jsonResponse({ results: [] }));
-    const app = build();
-    await app.inject({
-      method: "POST",
-      url: "/v1/search",
-      headers: { authorization: authorization() },
-      payload: { task_id: "t", retention: "standard", query: "swift" },
-    });
+
+    await search("swift 6 concurrency");
 
     expect(calls[0]!.url).toBe("https://search.invalid/search");
     expect(calls[0]!.headers["authorization"]).toBe("Bearer tvly-test-search-key");
-    await app.close();
+    expect(calls[0]!.body).toEqual({ query: "swift 6 concurrency", max_results: 5 });
   });
 
   it("answers an unreadable provider body with no results rather than a failed task", async () => {
     stubUpstream(() => new Response("<html>not json</html>", { status: 200 }));
-    const app = build();
-    const response = await app.inject({
-      method: "POST",
-      url: "/v1/search",
-      headers: { authorization: authorization() },
-      payload: { task_id: "t", retention: "standard", query: "swift" },
-    });
 
-    expect(response.statusCode).toBe(200);
-    expect(response.json()["results"]).toEqual([]);
-    await app.close();
+    const result = await search();
+
+    expect(result.items).toEqual([]);
   });
 
   /**
    * The other half of that boundary, and the sharper one (PR #143, cycle 2's N2).
    *
-   * **This route is where an unreported stall does the most damage, and it was the one route with
-   * no test holding the fix.** The line above is SONNY-130's ratified decision — a body that arrived
-   * and is not JSON answers no results, because a search that finds nothing is an ordinary outcome
-   * and failing a whole task over telemetry-grade malformation is worse. An *aborted read* used to
-   * be collapsed into that same answer by `response.json().catch(() => null)`, so a provider that
-   * accepted the connection and then stopped sending reported "nothing found": a research task
-   * proceeding with no sources and telling the user nothing, which is a wrong **answer** rather than
-   * a wrong error.
+   * A body that arrived and is not JSON answers no results, because a search that finds nothing is
+   * an ordinary outcome and failing a whole task over telemetry-grade malformation is worse. An
+   * *aborted read* used to be collapsed into that same answer by `response.json().catch(() => null)`,
+   * so a provider that accepted the connection and then stopped sending reported "nothing found": a
+   * research task proceeding with no sources and telling the user nothing, which is a wrong
+   * **answer** rather than a wrong error.
    *
-   * The two are separated by `readJSONBodyOrUnparsed`'s `error instanceof SyntaxError` predicate,
-   * and the reviewer probed that it is real on this runtime rather than rhetorical: undici rejects
-   * with a genuine `SyntaxError` on a complete non-JSON body and with an `AbortError` on an aborted
-   * read. This test and the one above it are the two sides, so reverting `tavily.ts` to the blanket
-   * swallow fails here — which it did not before, on the whole suite.
+   * The two are separated by `readJSONBodyOrUnparsed`'s `error instanceof SyntaxError` predicate:
+   * undici rejects with a genuine `SyntaxError` on a complete non-JSON body and with an `AbortError`
+   * on an aborted read. This test and the one above it are the two sides, so reverting `tavily.ts` to
+   * the blanket swallow fails here.
    */
-  it("answers a stalled read with a retryable timeout, never with an empty result list", async () => {
+  it("answers a stalled read with a timeout, never with an empty result list", async () => {
     vi.stubGlobal("fetch", async () => ({
       ok: true,
       status: 200,
@@ -643,21 +295,8 @@ describe("POST /v1/search", () => {
         throw new DOMException("This operation was aborted", "AbortError");
       },
     }));
-    const app = build();
-    const response = await app.inject({
-      method: "POST",
-      url: "/v1/search",
-      headers: { authorization: authorization() },
-      payload: { task_id: "t", retention: "standard", query: "swift" },
-    });
 
-    expect(response.statusCode).toBe(504);
-    expect(response.json().error.code).toBe("provider.timeout");
-    expect(response.json().error.retryable).toBe(true);
-    // Stated as its own assertion rather than left implied by the status: the defect this pins was
-    // a 200 carrying an empty list, and that is the shape a regression would take.
-    expect(response.json()["results"]).toBeUndefined();
-    await app.close();
+    await expect(search()).rejects.toBeInstanceOf(ProviderTimedOut);
   });
 });
 
@@ -665,7 +304,7 @@ describe("POST /v1/transcriptions", () => {
   it("forwards the audio bytes verbatim and returns the transcript with duration usage", async () => {
     const calls = stubUpstream(() => jsonResponse({ text: " Open Notes ", usage: { type: "duration", seconds: 2.5 } }));
     const app = build();
-    const audio = multipartBody(
+    const audio = transcriptionBody(
       { task_id: "task-9", retention: "standard" },
       Buffer.from("fake-audio-bytes"),
     );
@@ -706,7 +345,7 @@ describe("POST /v1/transcriptions", () => {
       }),
     );
     const app = build();
-    const audio = multipartBody({ task_id: "t", retention: "standard" }, Buffer.from("bytes"));
+    const audio = transcriptionBody({ task_id: "t", retention: "standard" }, Buffer.from("bytes"));
     const response = await app.inject({
       method: "POST",
       url: "/v1/transcriptions",
@@ -724,6 +363,41 @@ describe("POST /v1/transcriptions", () => {
     await app.close();
   });
 
+  it("estimates usage and says so when the provider reports none", async () => {
+    // §4.2: "The server estimates only when the provider reported nothing, and says which it did."
+    // A transcript's estimate is of the words that came back; nothing here can count the audio's
+    // input tokens, so that field stays empty rather than being guessed.
+    stubUpstream(() => jsonResponse({ text: "Open Safari and find the Swift 6 migration guide" }));
+    const app = build();
+    const response = await transcribe(app);
+
+    expect(response.statusCode).toBe(200);
+    const usage = response.json()["usage"] as Record<string, unknown>;
+    expect(usage["source"]).toBe("estimated");
+    expect(usage["input_tokens"]).toBeNull();
+    expect(usage["output_tokens"]).toBeGreaterThan(0);
+    expect(usage["total_tokens"]).toBe(usage["output_tokens"]);
+    expect(usage["audio_duration_seconds"]).toBeNull();
+    await app.close();
+  });
+
+  it("carries a recording twice the server's default body limit, because its ceiling is its own", async () => {
+    // **The two ceilings are enforced by different mechanisms, and this test deliberately asserts
+    // neither** (PR #139's G2). This route is bounded by `@fastify/multipart`'s `limits.fileSize`,
+    // because registering that parser replaces the body parser for its content type and the route's
+    // own `bodyLimit` is then not consulted at all — measured, and recorded at the route. What a
+    // caller can observe is that a recording larger than every other route may carry goes through.
+    stubUpstream(() => jsonResponse({ text: "ok" }));
+    const app = build();
+    const audio = Buffer.alloc(DEFAULT_BODY_LIMIT_BYTES * 2, 0x41);
+    expect(audio.byteLength).toBeLessThan(BODY_LIMIT_BYTES.transcriptions);
+
+    const accepted = await transcribe(app, transcriptionMeta(), audio);
+
+    expect(accepted.statusCode).toBe(200);
+    await app.close();
+  });
+
   it("refuses a recording over the route's byte ceiling with 413 request.too_large", async () => {
     // The server half of SONNY-130's audio limit. The client's half is a *duration* and refuses
     // long before this — `model/limits.ts` says why the two sides measure different units — so this
@@ -737,7 +411,7 @@ describe("POST /v1/transcriptions", () => {
     const calls = stubUpstream(() => jsonResponse({ text: "should never be reached" }));
     const app = build();
     const oversized = Buffer.alloc(BODY_LIMIT_BYTES.transcriptions + 1, 0x41);
-    const audio = multipartBody({ task_id: "t", retention: "standard" }, oversized);
+    const audio = transcriptionBody({ task_id: "t", retention: "standard" }, oversized);
 
     const response = await app.inject({
       method: "POST",
@@ -757,7 +431,7 @@ describe("POST /v1/transcriptions", () => {
     stubUpstream(() => jsonResponse({ text: "should never be reached" }));
     const app = build();
 
-    const noAudio = multipartBody({ task_id: "t", retention: "standard" }, Buffer.alloc(0));
+    const noAudio = transcriptionBody({ task_id: "t", retention: "standard" }, Buffer.alloc(0));
     const withoutAudio = await app.inject({
       method: "POST",
       url: "/v1/transcriptions",
@@ -807,7 +481,7 @@ describe("POST /v1/transcriptions", () => {
     // body. **The message differs from the other spelling's and that is asserted rather than
     // smoothed over** — a code-only assertion here passed while the multipart parse was collapsing
     // entirely and this branch was never reached, which is how the defect below was found.
-    const declared = multipartBody("not json at all", Buffer.from("bytes"));
+    const declared = transcriptionBody("not json at all", Buffer.from("bytes"));
     const asDeclaredJSON = await app.inject({
       method: "POST",
       url: "/v1/transcriptions",
@@ -851,7 +525,9 @@ describe("POST /v1/transcriptions", () => {
   it("refuses a meta part whose fields are wrong, distinguishably from one that is not JSON", async () => {
     stubUpstream(() => jsonResponse({ text: "should never be reached" }));
     const app = build();
-    const audio = multipartBody({ task_id: "t", retention: "forever" }, Buffer.from("bytes"));
+    // A task id that is only whitespace: present, so not the missing-field case above, and still
+    // not a task id once trimmed.
+    const audio = transcriptionBody({ task_id: "   ", retention: "standard" }, Buffer.from("bytes"));
     const response = await app.inject({
       method: "POST",
       url: "/v1/transcriptions",
@@ -900,7 +576,7 @@ describe("POST /v1/transcriptions", () => {
   it("treats an empty transcript as no transcript", async () => {
     stubUpstream(() => jsonResponse({ text: "   \n  " }));
     const app = build();
-    const audio = multipartBody({ task_id: "t", retention: "standard" }, Buffer.from("bytes"));
+    const audio = transcriptionBody({ task_id: "t", retention: "standard" }, Buffer.from("bytes"));
     const response = await app.inject({
       method: "POST",
       url: "/v1/transcriptions",
@@ -918,12 +594,7 @@ describe("how an upstream failure reaches the client", () => {
   it("maps a provider 5xx to 502 provider.unavailable, retryable", async () => {
     stubUpstream(() => new Response("upstream exploded", { status: 500 }));
     const app = build();
-    const response = await app.inject({
-      method: "POST",
-      url: "/v1/plan",
-      headers: { authorization: authorization() },
-      payload: planBody(),
-    });
+    const response = await transcribe(app);
 
     expect(response.statusCode).toBe(502);
     expect(response.json()["error"]["code"]).toBe("provider.unavailable");
@@ -937,12 +608,7 @@ describe("how an upstream failure reaches the client", () => {
     // keys off `code` rather than status.
     stubUpstream(() => new Response("bad request", { status: 400 }));
     const app = build();
-    const response = await app.inject({
-      method: "POST",
-      url: "/v1/plan",
-      headers: { authorization: authorization() },
-      payload: planBody(),
-    });
+    const response = await transcribe(app);
 
     expect(response.statusCode).toBe(502);
     expect(response.json()["error"]["code"]).toBe("provider.rejected");
@@ -956,15 +622,31 @@ describe("how an upstream failure reaches the client", () => {
     // are not — a lie the app repeats in its own words.
     stubUpstream(() => new Response("slow down", { status: 429 }));
     const app = build();
-    const response = await app.inject({
-      method: "POST",
-      url: "/v1/search",
-      headers: { authorization: authorization() },
-      payload: { task_id: "t", retention: "standard", query: "swift" },
-    });
+    const response = await transcribe(app);
 
+    expect(response.statusCode).toBe(502);
     expect(response.json()["error"]["code"]).toBe("provider.unavailable");
     await app.close();
+  });
+
+  /**
+   * **An expired, rotated-out or suspended key is a fact about our relationship with the vendor, not
+   * about the user's request** (PR #143, F1), the argument `429` has always rested on. Until that
+   * review these three were refusals, so an expired `OPENAI_API_KEY` answered
+   * `502 provider.rejected` with `retryable: false` on every request.
+   */
+  it("maps a provider 401, 402 or 403 to provider.unavailable, retryable", async () => {
+    for (const status of [401, 402, 403]) {
+      stubUpstream(() => jsonResponse({ error: "no" }, status));
+      const app = build();
+      const response = await transcribe(app);
+
+      expect(response.statusCode, `status ${status}`).toBe(502);
+      expect(response.json()["error"]["code"], `status ${status}`).toBe("provider.unavailable");
+      expect(response.json()["error"]["retryable"], `status ${status}`).toBe(true);
+      await app.close();
+      vi.unstubAllGlobals();
+    }
   });
 
   it("maps an aborted upstream call to 504 provider.timeout", async () => {
@@ -972,15 +654,46 @@ describe("how an upstream failure reaches the client", () => {
       throw new DOMException("The operation was aborted.", "AbortError");
     });
     const app = build();
-    const response = await app.inject({
-      method: "POST",
-      url: "/v1/plan",
-      headers: { authorization: authorization() },
-      payload: planBody(),
-    });
+    const response = await transcribe(app);
 
     expect(response.statusCode).toBe(504);
     expect(response.json()["error"]["code"]).toBe("provider.timeout");
+    expect(response.json()["error"]["retryable"]).toBe(true);
+    await app.close();
+  });
+
+  /**
+   * A provider that writes headers and then stalls resolves the `fetch`; the route's deadline then
+   * aborts the read and `json()` rejects (PR #143, F2). Swallowed to `null`, that used to reach the
+   * client as `502 provider.rejected`, `retryable: false` — the code §9.3 reserves for "a retry would
+   * fail identically" — over a transient stall.
+   */
+  it("maps a provider that stalls after headers to a timeout the client may retry", async () => {
+    vi.stubGlobal("fetch", async () => ({
+      ok: true,
+      status: 200,
+      json: async () => {
+        throw new DOMException("This operation was aborted", "AbortError");
+      },
+    }));
+    const app = build();
+    const response = await transcribe(app);
+
+    expect(response.statusCode).toBe(504);
+    expect(response.json()["error"]["code"]).toBe("provider.timeout");
+    expect(response.json()["error"]["retryable"]).toBe(true);
+    await app.close();
+  });
+
+  it("maps a complete body that is not JSON to provider.unavailable, retryable", async () => {
+    // An intermediary answering for the provider — a CDN or proxy error page under a 200. Transient,
+    // so a retry is worth making; it used to be a non-retryable refusal.
+    stubUpstream(() => new Response("<html>502 Bad Gateway</html>", { status: 200 }));
+    const app = build();
+    const response = await transcribe(app);
+
+    expect(response.statusCode).toBe(502);
+    expect(response.json()["error"]["code"]).toBe("provider.unavailable");
     expect(response.json()["error"]["retryable"]).toBe(true);
     await app.close();
   });
@@ -990,12 +703,7 @@ describe("how an upstream failure reaches the client", () => {
       throw new TypeError("fetch failed");
     });
     const app = build();
-    const response = await app.inject({
-      method: "POST",
-      url: "/v1/plan",
-      headers: { authorization: authorization() },
-      payload: planBody(),
-    });
+    const response = await transcribe(app);
 
     expect(response.statusCode).toBe(502);
     expect(response.json()["error"]["code"]).toBe("provider.unavailable");
@@ -1003,36 +711,27 @@ describe("how an upstream failure reaches the client", () => {
   });
 
   it("never returns the provider's own words to the client", async () => {
-    // §7.1's rule with the reason that matters on these four routes: a provider error body can
-    // carry the request back verbatim, and on these routes the request is the user's own command.
+    // §7.1's rule with the reason that matters on this route: a provider error body can carry the
+    // request back verbatim, and on this route the request is the user's own voice.
     stubUpstream(() =>
       new Response(
-        JSON.stringify({ error: { message: "Invalid prompt: 'delete my tax returns folder'" } }),
+        JSON.stringify({ error: { message: "Invalid audio: 'delete my tax returns folder'" } }),
         { status: 400 },
       ),
     );
     const app = build();
-    const response = await app.inject({
-      method: "POST",
-      url: "/v1/plan",
-      headers: { authorization: authorization() },
-      payload: planBody(),
-    });
+    const response = await transcribe(app);
 
+    expect(response.statusCode).toBe(502);
     expect(response.body).not.toContain("tax returns");
-    expect(response.body).not.toContain("Invalid prompt");
+    expect(response.body).not.toContain("Invalid audio");
     await app.close();
   });
 
   it("answers 502 provider.unavailable when this deployment holds no credential for the route", async () => {
-    const calls = stubUpstream(() => jsonResponse({ output_text: "{}" }));
+    const calls = stubUpstream(() => jsonResponse({ text: "should never be reached" }));
     const app = build({ credentials: [] });
-    const response = await app.inject({
-      method: "POST",
-      url: "/v1/plan",
-      headers: { authorization: authorization() },
-      payload: planBody(),
-    });
+    const response = await transcribe(app);
 
     // Not a 404: the route exists, and `resource.not_found` would tell the client "no such route",
     // which it does not retry and cannot explain.
@@ -1043,86 +742,50 @@ describe("how an upstream failure reaches the client", () => {
   });
 });
 
-describe("the four routes are authenticated", () => {
-  it("refuses every one of them with 401 when no token is presented", async () => {
-    // The gate's own population test covers classification; this is the behaviour, per route,
-    // because these four carry the user's command, their voice and their research.
-    const calls = stubUpstream(() => jsonResponse({ output_text: "{}" }));
+describe("the transcription route is authenticated", () => {
+  it("refuses a request with no token with 401, before any provider is called", async () => {
+    // The gate's own population test covers classification; this is the behaviour, because this
+    // route carries the user's voice.
+    const calls = stubUpstream(() => jsonResponse({ text: "should never be reached" }));
     const app = build();
-    for (const url of ["/v1/plan", "/v1/research/synthesize", "/v1/search", "/v1/transcriptions"]) {
-      const response = await app.inject({ method: "POST", url, payload: {} });
-      expect(response.statusCode, url).toBe(401);
-      expect(response.json()["error"]["code"], url).toBe("auth.unauthenticated");
-    }
+    const body = transcriptionBody(transcriptionMeta(), Buffer.from("fake-audio-bytes"));
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/transcriptions",
+      headers: { "content-type": body.contentType },
+      payload: body.payload,
+    });
+    expect(response.statusCode).toBe(401);
+    expect(response.json()["error"]["code"]).toBe("auth.unauthenticated");
     expect(calls).toHaveLength(0);
     await app.close();
   });
 });
 
 describe("the numbers this ticket is held to", () => {
-  it("carries contract §6.1's body limits", () => {
-    // Written as literals rather than derived, so a change to either is a change someone made on
-    // purpose — and so this file fails when the contract and the code disagree.
-    expect(BODY_LIMIT_BYTES).toEqual({
-      plan: 1_048_576,
-      synthesize: 4_194_304,
-      transcriptions: 10_485_760,
-      search: 1_048_576,
-      // SONNY-131's row. The table is asserted whole, so a fifth route has to be written here as
-      // well as beside its own route — which is the point of asserting it whole. Its derivation
-      // from the client's image ceiling is `test/screen.test.ts`', because that is where the
-      // ceiling's own behaviour lives.
-      screenAnalyze: 4_200_000,
-    });
+  it("carries contract §6.1's body limit for transcription", () => {
+    // Written as a literal rather than derived, so a change is a change someone made on purpose.
+    // Every other route takes `DEFAULT_BODY_LIMIT_BYTES`.
+    expect(BODY_LIMIT_BYTES).toEqual({ transcriptions: 10_485_760 });
   });
 
   it("carries §12's deadlines, and the ordering that makes them a rule", () => {
-    // **Five of §12's ten numbers, and the invariant that ties them to the other five** (PR #139,
-    // F2; the fifth row is SONNY-131's). Nothing read `DEADLINE_MS` before this: a mutant moving any
-    // of them survived the whole suite, because the values reach `withDeadlines` and nothing else
-    // looks at them.
+    // The table is asserted whole, so a row has to be written here as well as beside the routes
+    // that read it. `topUp`'s 24_000 is `TOPUP_CHARGE_TIMEOUT_MS` doubled, and `topup.test.ts` holds
+    // that derivation.
     expect(DEADLINE_MS).toEqual({
-      plan: { upstream: 60_000, total: 75_000 },
-      synthesize: { upstream: 90_000, total: 105_000 },
       transcriptions: { upstream: 60_000, total: 75_000 },
-      search: { upstream: 20_000, total: 25_000 },
-      screenAnalyze: { upstream: 90_000, total: 105_000 },
-      // §12's last row, which is five routes rather than one and which nothing enforced until
-      // SONNY-425. It is asserted here for the reason the other five are — the table is asserted
-      // whole, so a sixth row has to be written here as well as beside the routes that read it.
       auth: { upstream: 10_000, total: 15_000 },
-      // The charge route's own row (SONNY-430). It came out of the row above because that row's
-      // routes wait on a database and this one charges a card: three sequential provider calls of
-      // twelve seconds could run for thirty-six, against a row allowing fifteen. The 24_000 is
-      // `TOPUP_CHARGE_TIMEOUT_MS` doubled and `topup.test.ts` holds that derivation; this file's job
-      // is the one it has always had, which is that no row reaches the table without being written
-      // down twice.
       topUp: { upstream: 24_000, total: 30_000 },
     });
-    // **The invariant is the ordering, not a fixed gap** — a first draft of this test asserted
-    // fifteen seconds on every row and went red on `search`, whose margin is five. §12's table has
-    // both, and two of this branch's own doc comments claimed the constant until that failure.
-    // What must hold on every row is that the server leaves itself room beyond the upstream call to
-    // answer with a typed failure rather than being cut off mid-request.
+    // **The invariant is the ordering, not a fixed gap**: every row leaves the server room beyond
+    // the upstream call to answer with a typed failure rather than being cut off mid-request.
     for (const [route, deadlines] of Object.entries(DEADLINE_MS)) {
       expect(deadlines.upstream, route).toBeGreaterThan(0);
       expect(deadlines.total, route).toBeGreaterThan(deadlines.upstream);
     }
-    // The client half of every row lives in `SonnyBackendTimeouts` on the Swift side, each above the
-    // matching `total` here. `ModelRouteNumbersTests` asserts the five model routes against these
-    // same literals, so those two halves of §12's table cannot move independently without one of
-    // the two failing.
-    //
-    // **The other two rows are pinned on the Swift side as well, and this paragraph used to say the
-    // opposite** (PR #220's O2). It read that the `auth` row "is NOT paired by that test … no Swift
-    // assertion reaches it", which is false in both halves: `ModelRouteNumbersTests.swift:43` asserts
-    // `SonnyBackendTimeouts.auth == 20` and `:79` asserts `auth - 15 == 5`. The `topUp` row's client
-    // half is `SonnyBackendTimeouts.topUp`, 40 s, pinned by
-    // `ScreenControlAllowanceTests.swift:559` — a different suite from the one named above, which is
-    // the whole reason to say where rather than to say whether. So every row in this table has a
-    // Swift assertion behind its client half; what varies is which suite holds it. Said rather than
-    // implied, because this paragraph exists to stop a reader assuming a row is unpaired, and for two
-    // rows it was doing the opposite.
+    // The client half of each row lives in `SonnyBackendTimeouts` on the Swift side, each above the
+    // matching `total` here, and is pinned in the Swift test suite.
   });
 
   it("ANSWERS 408 on a stalled upload instead of holding the connection open", async () => {
@@ -1301,7 +964,7 @@ describe("the numbers this ticket is held to", () => {
 
     // Half two, and the one a user actually meets: the same key, carrying the complete body this
     // time, genuinely re-runs. Under the defect this answered 408 with zero upstream calls.
-    const good = multipartBody({ task_id: "t", retention: "standard" }, Buffer.from("real-audio"));
+    const good = transcriptionBody({ task_id: "t", retention: "standard" }, Buffer.from("real-audio"));
     const retried = await app.inject({
       method: "POST",
       url: "/v1/transcriptions",
@@ -1346,24 +1009,21 @@ describe("the numbers this ticket is held to", () => {
     // satisfy the line above and leave nothing for the process's own work between the two.
     expect(CLAIM_LEASE_SECONDS * 1000 - worstCaseMs).toBeGreaterThanOrEqual(15_000);
 
-    // And the JSON routes, which were already inside the lease: `synthesize` and `screenAnalyze` are
-    // the longest at 105 s, which is 75 s inside a 180 s lease. **They are no longer the reason the
-    // margin is 15 s** — the transcription row is, being the tight one — and this comment said they
-    // were while quoting the pre-F4 numbers.
+    // And every other row, each of which is further inside the lease than this one.
     for (const [route, deadlines] of Object.entries(DEADLINE_MS)) {
       expect(deadlines.total, route).toBeLessThanOrEqual(CLAIM_LEASE_SECONDS * 1000 - 15_000);
     }
   });
 
-  it("bounds a request's delivery at §12's longest CLIENT timeout, not at one of its server deadlines", () => {
+  it("bounds a request's delivery above the CLIENT timeouts, not at one of the server deadlines", () => {
     // **SONNY-322.** Fastify's default is `0`, which disables the bound; nothing else anywhere
     // bounds how long a caller may take to deliver a request, which is a connection-occupancy shape
     // available to an unauthenticated caller on the sign-in routes.
     //
-    // 120 s is §12's longest *client* timeout (`screen/analyze` and `research/synthesize`). Past it
-    // no Sonny client is still waiting for any answer, so a body still arriving then is one nobody
-    // will read. It is deliberately NOT one of §12's server deadlines: this bounds receiving the
-    // request and not running the handler, measured — with `requestTimeout: 2000` a handler that
+    // 120 s sits above every client timeout the Mac uses (the longest is transcription's 90 s). Past
+    // it no Sonny client is still waiting for any answer, so a body still arriving then is one
+    // nobody will read. It is deliberately NOT one of §12's server deadlines: this bounds receiving
+    // the request and not running the handler, measured — with `requestTimeout: 2000` a handler that
     // slept five seconds still returned 200.
     expect(REQUEST_TIMEOUT_MS).toBe(120_000);
 

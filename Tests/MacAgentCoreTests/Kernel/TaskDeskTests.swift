@@ -265,4 +265,61 @@ struct TaskDeskTests {
         #expect(await fixture.desk.ask("   \n") == nil)
         #expect(fixture.controller.tasks.isEmpty)
     }
+
+    @Test
+    func theFirstV2LaunchRemovesV1DataOnceAndLeavesV2Alone() throws {
+        let sonny = FileManager.default.temporaryDirectory.appendingPathComponent("sonny-\(UUID().uuidString)/Sonny")
+        let v2 = sonny.appendingPathComponent("V2")
+        try FileManager.default.createDirectory(at: v2, withIntermediateDirectories: true)
+        for old in ["task-history.json", "workspaces.json", "routines.json"] {
+            FileManager.default.createFile(atPath: sonny.appendingPathComponent(old).path, contents: Data("v1".utf8))
+        }
+        FileManager.default.createFile(atPath: v2.appendingPathComponent("history.json").path, contents: Data("v2".utf8))
+
+        #expect(KernelStores.removeV1Data(v2Folder: v2) == ["routines.json", "task-history.json", "workspaces.json"])
+        #expect(try FileManager.default.contentsOfDirectory(atPath: sonny.path) == ["V2"])
+        #expect(FileManager.default.fileExists(atPath: v2.appendingPathComponent("history.json").path))
+
+        // Once only: a file that appears later is not V1's, and stays.
+        FileManager.default.createFile(atPath: sonny.appendingPathComponent("later.json").path, contents: Data())
+        #expect(KernelStores.removeV1Data(v2Folder: v2).isEmpty)
+        #expect(FileManager.default.fileExists(atPath: sonny.appendingPathComponent("later.json").path))
+    }
+
+    @Test
+    func v1DataThatCouldNotBeRemovedIsTriedAgainOnTheNextLaunch() throws {
+        let sonny = FileManager.default.temporaryDirectory.appendingPathComponent("sonny-\(UUID().uuidString)/Sonny")
+        let v2 = sonny.appendingPathComponent("V2")
+        try FileManager.default.createDirectory(at: v2, withIntermediateDirectories: true)
+        for old in ["task-history.json", "routines.json"] {
+            FileManager.default.createFile(atPath: sonny.appendingPathComponent(old).path, contents: Data("v1".utf8))
+        }
+        let busy = RefusingFileManager(refusing: "routines.json")
+
+        #expect(KernelStores.removeV1Data(v2Folder: v2, fileManager: busy) == ["task-history.json"])
+        #expect(FileManager.default.fileExists(atPath: sonny.appendingPathComponent("routines.json").path))
+
+        busy.refusing = nil
+        #expect(KernelStores.removeV1Data(v2Folder: v2, fileManager: busy) == ["routines.json"])
+        #expect(try FileManager.default.contentsOfDirectory(atPath: sonny.path) == ["V2"])
+        #expect(KernelStores.removeV1Data(v2Folder: v2, fileManager: busy).isEmpty)
+    }
+}
+
+/// A file manager that can't remove one named item, the way a file in use or a permission error
+/// would stop it.
+private final class RefusingFileManager: FileManager, @unchecked Sendable {
+    var refusing: String?
+
+    init(refusing: String) {
+        self.refusing = refusing
+        super.init()
+    }
+
+    override func removeItem(at url: URL) throws {
+        if url.lastPathComponent == refusing {
+            throw CocoaError(.fileWriteNoPermission)
+        }
+        try super.removeItem(at: url)
+    }
 }

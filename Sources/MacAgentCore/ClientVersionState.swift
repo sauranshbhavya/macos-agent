@@ -28,12 +28,6 @@ public enum ClientVersionState: Equatable, Sendable {
         case .updateAvailable(let link), .tooOld(let link): return link
         }
     }
-
-    /// Whether this state has anything to say to the user at all.
-    public var isSomethingToSay: Bool {
-        if case .current = self { return false }
-        return true
-    }
 }
 
 /// The one place a server-supplied upgrade link is turned into something this app will open.

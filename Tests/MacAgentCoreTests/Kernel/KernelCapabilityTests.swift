@@ -68,7 +68,7 @@ struct CapabilityFixture {
             .resolvingSymlinksInPath()
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let whitelist = PathWhitelist(roots: [root])
-        let context = VisionTestContext.make(installed: [], whitelist: whitelist)
+        let context = CapabilityTestContext.make(installed: [], whitelist: whitelist)
         routines = RoutineGoalStore(fileURL: nil)
         mail = FakeMail()
         capabilities = StandardCapabilities.all(
@@ -118,6 +118,16 @@ struct KernelCapabilityTests {
 
         let again = try await fixture.capability("write_file").prepare(actionID: ActionID(), args: ["content": .string("other"), "path": .string(path)])
         #expect(again.effect == .destructive)
+    }
+
+    @Test
+    func aReminderWithNoTimeIsRefusedWithTheQuestionThePlannerShouldAsk() async throws {
+        let fixture = try CapabilityFixture()
+        let reminder = try fixture.capability("create_reminder")
+        let thrown = await #expect(throws: CapabilityPrepareError.self) {
+            _ = try await reminder.prepare(actionID: ActionID(), args: ["title": .string("call the bank")])
+        }
+        #expect(thrown == .invalidArguments("When should Sonny remind you?"))
     }
 
     @Test

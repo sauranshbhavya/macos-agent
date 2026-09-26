@@ -57,8 +57,7 @@ enum SonnyKernel {
             routines: stores.routines,
             watchers: stores.watchers,
             instant: { text in
-                let running = Set(NSWorkspace.shared.runningApplications.compactMap(\.bundleIdentifier))
-                guard case .plan(let plan)? = stores.instantResolver(runningApps: running).resolve(command: text) else { return nil }
+                guard case .plan(let plan)? = stores.instantResolver().resolve(command: text) else { return nil }
                 return InstantPath.actions(for: plan)
             },
             mode: {

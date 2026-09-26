@@ -8,9 +8,6 @@ public enum WebResearchError: Error, Equatable, LocalizedError {
     case invalidTextEncoding(String)
     case restrictedContent(String)
     case noReadableContent(String)
-    case searchProviderNotConfigured
-    case noSearchResults(String)
-    case allSourcesFailed([String], String)
 
     public var errorDescription: String? {
         switch self {
@@ -32,18 +29,6 @@ public enum WebResearchError: Error, Equatable, LocalizedError {
             // real-world one for a page the user can see fine in a browser, phrased as "may"
             // because a genuinely empty static page lands here too.
             return "No readable article content was found at \(url). The page may render its content with JavaScript, which Sonny does not run."
-        case .searchProviderNotConfigured:
-            return "Web search provider not configured."
-        case .noSearchResults(let query):
-            return "No web search results were found for \(query)."
-        case .allSourcesFailed(let urls, let firstReason):
-            // "None of the 1 source could be retrieved" is what a user met every time a single URL
-            // failed, which is the common case (SONNY-245). With one source there is also no "first"
-            // failure to distinguish from a second, so the reason follows directly.
-            guard urls.count > 1 else {
-                return "The source could not be retrieved, so no note was written. \(firstReason)"
-            }
-            return "None of the \(urls.count) sources could be retrieved, so no note was written. First failure: \(firstReason)"
         }
     }
 }
@@ -78,56 +63,13 @@ public struct ReadableWebPage: Equatable, Sendable {
     public var sourceURL: URL
     public var retrievedAt: Date
     public var title: String
-    public var author: String?
-    public var publishedDate: String?
-    public var headings: [String]
-    public var links: [ReadableWebLink]
-    public var images: [ReadableWebImage]
-    public var citations: [String]
     public var readableText: String
 
-    public init(
-        sourceURL: URL,
-        retrievedAt: Date,
-        title: String,
-        author: String? = nil,
-        publishedDate: String? = nil,
-        headings: [String] = [],
-        links: [ReadableWebLink] = [],
-        images: [ReadableWebImage] = [],
-        citations: [String] = [],
-        readableText: String
-    ) {
+    public init(sourceURL: URL, retrievedAt: Date, title: String, readableText: String) {
         self.sourceURL = sourceURL
         self.retrievedAt = retrievedAt
         self.title = title
-        self.author = author
-        self.publishedDate = publishedDate
-        self.headings = headings
-        self.links = links
-        self.images = images
-        self.citations = citations
         self.readableText = readableText
-    }
-}
-
-public struct ReadableWebLink: Equatable, Sendable {
-    public var text: String
-    public var url: URL
-
-    public init(text: String, url: URL) {
-        self.text = text
-        self.url = url
-    }
-}
-
-public struct ReadableWebImage: Equatable, Sendable {
-    public var altText: String?
-    public var url: URL
-
-    public init(altText: String? = nil, url: URL) {
-        self.altText = altText
-        self.url = url
     }
 }
 
@@ -143,31 +85,6 @@ public protocol RobotsTXTChecking {
 
 public protocol ReadableWebExtracting {
     func extract(html: String, sourceURL: URL, retrievedAt: Date) throws -> ReadableWebPage
-}
-
-public struct WebSearchResult: Equatable, Sendable {
-    public var title: String
-    public var url: URL
-    public var snippet: String?
-
-    public init(title: String, url: URL, snippet: String? = nil) {
-        self.title = title
-        self.url = url
-        self.snippet = snippet
-    }
-}
-
-@MainActor
-public protocol WebSearchProviding {
-    func search(query: String, limit: Int) async throws -> [WebSearchResult]
-}
-
-public struct UnavailableWebSearchProvider: WebSearchProviding {
-    public init() {}
-
-    public func search(query: String, limit: Int) async throws -> [WebSearchResult] {
-        throw WebResearchError.searchProviderNotConfigured
-    }
 }
 
 public struct PublicWebPageLoader {
@@ -445,23 +362,6 @@ public struct SwiftSoupReadableWebExtractor: ReadableWebExtracting {
             sourceURL: sourceURL,
             retrievedAt: retrievedAt,
             title: try title(in: document, content: content),
-            author: try firstNonEmpty([
-                metaContent(in: document, selector: "meta[name=author]"),
-                metaContent(in: document, selector: "meta[property=article:author]"),
-                text(in: document, selector: "[rel=author]"),
-                text(in: document, selector: ".byline"),
-                text(in: document, selector: ".author")
-            ]),
-            publishedDate: try firstNonEmpty([
-                metaContent(in: document, selector: "meta[property=article:published_time]"),
-                metaContent(in: document, selector: "meta[name=date]"),
-                attr(in: document, selector: "time[datetime]", name: "datetime"),
-                text(in: document, selector: "time")
-            ]),
-            headings: try uniqueTexts(in: content, selector: "h1, h2, h3", limit: 20),
-            links: try links(in: content, limit: 50),
-            images: try images(in: content, limit: 30),
-            citations: try uniqueTexts(in: content, selector: "blockquote, q, cite", limit: 20),
             readableText: readableText
         )
     }
@@ -584,52 +484,6 @@ public struct SwiftSoupReadableWebExtractor: ReadableWebExtracting {
             }
         }
         return lines
-    }
-
-    private func links(in element: Element, limit: Int) throws -> [ReadableWebLink] {
-        var result: [ReadableWebLink] = []
-        for link in try element.select("a[href]").array() {
-            guard let text = clean(try link.text()),
-                  let url = URL(string: try link.attr("abs:href")),
-                  result.contains(where: { $0.url == url }) == false else {
-                continue
-            }
-            result.append(ReadableWebLink(text: text, url: url))
-            if result.count == limit {
-                break
-            }
-        }
-        return result
-    }
-
-    private func images(in element: Element, limit: Int) throws -> [ReadableWebImage] {
-        var result: [ReadableWebImage] = []
-        for image in try element.select("img[src]").array() {
-            guard let url = URL(string: try image.attr("abs:src")),
-                  result.contains(where: { $0.url == url }) == false else {
-                continue
-            }
-            result.append(ReadableWebImage(altText: clean(try image.attr("alt")), url: url))
-            if result.count == limit {
-                break
-            }
-        }
-        return result
-    }
-
-    private func uniqueTexts(in element: Element, selector: String, limit: Int) throws -> [String] {
-        var seen: Set<String> = []
-        var values: [String] = []
-        for selected in try element.select(selector).array() {
-            guard let text = clean(try selected.text()), seen.insert(text).inserted else {
-                continue
-            }
-            values.append(text)
-            if values.count == limit {
-                break
-            }
-        }
-        return values
     }
 
     private func metaContent(in document: Document, selector: String) throws -> String? {

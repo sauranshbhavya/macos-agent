@@ -46,7 +46,7 @@ export const RESPONSE_TTL_SECONDS = 24 * 60 * 60;
  *
  * | route family                        | bounded by                                   | worst case |
  * |-------------------------------------|----------------------------------------------|-----------|
- * | the JSON routes                     | §12's total deadline (`model/limits.ts`)      | 105 s     |
+ * | the JSON routes (auth, account)     | §12's total deadline (`model/limits.ts`)      | 30 s      |
  * | `POST /v1/transcriptions`           | `BODY_READ_DEADLINE_MS` + its total deadline  | 165 s     |
  *
  * The transcription row is the one that used to be unbounded: its body is `multipart/form-data`,
@@ -54,10 +54,8 @@ export const RESPONSE_TTL_SECONDS = 24 * 60 * 60;
  * hook takes the claim and *outside* `withDeadlines`, which `routes/model.ts` applies to the upstream
  * call alone. `routes/model.ts` runs that read under `BODY_READ_DEADLINE_MS` (90 s) and destroys
  * the request stream when it elapses, so 90 s + 75 s = 165 s, fifteen seconds under this lease. **It
- * is the tighter of the two rows above and the one this lease is sized for**: the JSON routes sit 75
- * seconds inside it. (An earlier version of this sentence said "the same margin the JSON routes
- * already had", which was true when both were fifteen and stopped being true when this constant rose
- * to 180.) **`model/limits.ts` derives its 90 s from §12's client timeout for the route, not from
+ * is the tighter of the two rows above and the one this lease is sized for**: the JSON routes sit far
+ * inside it. **`model/limits.ts` derives its 90 s from §12's client timeout for the route, not from
  * this constant** — this one moved to make room for it, which is the opposite of what this sentence
  * used to say. `model.test.ts` asserts the inequality and the margin rather than all three numbers,
  * so a later change to one of them cannot quietly reopen this.
@@ -389,9 +387,7 @@ export async function meteringEventClaimed(
  * that is no longer there. Nothing reads it today; the point is that nothing should be able to read
  * a false value from it later (PR #142's review, recorded residual).
  *
- * Returns how many rows it cleared. **Nothing schedules this** — the gateway runs no timer and this
- * ticket adds none; it exists so that clearing is a call rather than a migration, and so a test can
- * drive it. Recorded as owed on a follow-up ticket rather than left implicit.
+ * Returns how many rows it cleared. `pruneAllExpiredResponses` runs it on the task retention timer.
  */
 export async function pruneExpiredResponses(client: pg.Client, limit = 1000): Promise<number> {
   const pruned = await client.query(
@@ -410,50 +406,38 @@ export async function pruneExpiredResponses(client: pg.Client, limit = 1000): Pr
 }
 
 /**
+ * Every stored response past its twenty-four hours, a batch at a time. The task retention sweep runs
+ * this, so a transcript kept to replay a retried request is gone a day later, and so is anything an
+ * account close failed to clear.
+ */
+export async function pruneAllExpiredResponses(client: pg.Client, batch = 1000): Promise<number> {
+  let total = 0;
+  for (;;) {
+    const pruned = await pruneExpiredResponses(client, batch);
+    total += pruned;
+    if (pruned < batch) return total;
+  }
+}
+
+/**
  * Drop the stored responses belonging to one account, keeping its rows and their metering claims.
  *
- * `DELETE /v1/account` is a privacy wipe, and this table is the one place in the gateway that holds
- * response *content* outside the route that produced it.
- *
- * **In the gateway it runs only inside `deleteContentForAccount`'s transaction, as the last statement
- * before the record** (SONNY-436; last rather than first since PR #242's review, F1, so the rows it
- * locks are held only to the commit). The database tests also call it directly. Both account wipes
- * and the closed-account sweep hand it to that function, and that function calls it on the client
- * inside its own `BEGIN`, so the count returned here is written to `sonny.content_deletion` by the
- * transaction that cleared the bodies. It issues one statement and
- * no `BEGIN` of its own, which is what lets it join the caller's transaction. Called on a connection
- * with no transaction open, it commits by itself — the shape that lost the count: a cancel before the
- * content transaction committed left the bodies gone with no row naming them, and the retry recorded
- * zero. This comment said nothing called it, which stopped being true when SONNY-134 wired it into
- * the account close and the sweep and SONNY-404 into `DELETE /v1/account/content` — three callers,
- * each of which ran it as a unit of its own.
+ * The account close (`DELETE /v1/account` in `routes/auth.ts`) calls it: this table holds response
+ * content for a day, and a closed account's should not wait out that day. Replies that expire on
+ * their own are cleared by `pruneAllExpiredResponses`. One statement and no `BEGIN` of its own, so it
+ * joins a caller's transaction when there is one.
  */
 export async function deleteStoredResponsesForAccount(
   client: pg.Client,
   accountScope: string,
-  /**
-   * Bound the clear to keys taken at or before this instant (SONNY-404, PR #207's F1). `claimed_at`
-   * is when the key was taken, which is the closest this table has to when the content happened.
-   * `undefined` is the account-close path and means every key.
-   */
-  claimedAtOrBefore?: Date,
 ): Promise<number> {
-  const cleared =
-    claimedAtOrBefore === undefined
-      ? await client.query(
-          `UPDATE sonny.idempotency_key
-              SET state = 'released', response_status = NULL, response_content_type = NULL,
-                  response_body = NULL, response_request_id = NULL, response_expires_at = NULL
-            WHERE account_scope = $1 AND response_body IS NOT NULL`,
-          [accountScope],
-        )
-      : await client.query(
-          `UPDATE sonny.idempotency_key
-              SET state = 'released', response_status = NULL, response_content_type = NULL,
-                  response_body = NULL, response_request_id = NULL, response_expires_at = NULL
-            WHERE account_scope = $1 AND response_body IS NOT NULL AND claimed_at <= $2`,
-          [accountScope, claimedAtOrBefore],
-        );
+  const cleared = await client.query(
+    `UPDATE sonny.idempotency_key
+        SET state = 'released', response_status = NULL, response_content_type = NULL,
+            response_body = NULL, response_request_id = NULL, response_expires_at = NULL
+      WHERE account_scope = $1 AND response_body IS NOT NULL`,
+    [accountScope],
+  );
   return cleared.rowCount ?? 0;
 }
 

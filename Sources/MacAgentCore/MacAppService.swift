@@ -13,33 +13,6 @@ public struct MacApp: Equatable, Sendable {
     }
 }
 
-/// The two ways naming an app can fail once membership is gone.
-///
-/// `appNotAllowed` — "«name» is not in the allowlisted app catalog." — was the third, and it was the
-/// launch gate itself: the refusal C12 dissolved (2026-08-12). It is deleted rather than deprecated,
-/// so that no path can reach the sentence. What is left is a request that named no app at all, and a
-/// request that named one this Mac does not have.
-///
-/// Renamed from `MacAppCatalogError` with that removal: the catalog no longer decides either of
-/// these. `missingAppName` is raised by the workspace create and edit paths for a blank entry as much
-/// as by the launch path, and `notInstalled` is Launch Services' answer, not a roster's.
-public enum MacAppError: Error, LocalizedError, Equatable {
-    case missingAppName
-    case notInstalled(String)
-
-    public var errorDescription: String? {
-        switch self {
-        case .missingAppName:
-            return "Opening an app requires an app name."
-        case .notInstalled(let appName):
-            // Plain and about the machine, not about Sonny's permissions — the old sentence told the
-            // user they had hit a policy, and after C12 there is no policy left to hit. Names what
-            // they typed, because a name that is merely misspelled reads back wrong here.
-            return "\(appName) isn't installed on this Mac."
-        }
-    }
-}
-
 /// The app **alias table**: which human names mean the same application.
 ///
 /// This type used to be the launch allowlist — "exactly one meaning — the allowlist of what Sonny may
@@ -153,42 +126,5 @@ public struct WorkspaceAppOpener: AppOpening {
                 }
             }
         }
-    }
-}
-
-@MainActor
-public protocol WorkspaceAppIconResolving {
-    /// Returns the app's real icon, or `nil` when the name resolves to nothing installed on this
-    /// machine. Graceful fallback, never an error: callers render a generic glyph.
-    ///
-    /// It used to be two failure modes — not in the allowlisted catalog, or not installed — and the
-    /// first is gone with the catalog's membership meaning (SONNY-82). A workspace listing Figma now
-    /// shows Figma's real icon on a Mac that has it, for the same reason it can now open it.
-    func icon(forAppName appName: String) -> NSImage?
-}
-
-@MainActor
-public final class WorkspaceAppIconResolver: WorkspaceAppIconResolving {
-    public static let shared = WorkspaceAppIconResolver()
-
-    private let resolver: any InstalledAppResolving
-    private var cache: [String: NSImage] = [:]
-
-    public init(resolver: any InstalledAppResolving = InstalledAppResolver.shared) {
-        self.resolver = resolver
-    }
-
-    public func icon(forAppName appName: String) -> NSImage? {
-        // The resolver's own `applicationURL` rather than a second Launch Services lookup: the icon
-        // shown and the bundle that would open have to be the same one.
-        guard let app = resolver.resolve(appName) else {
-            return nil
-        }
-        if let cached = cache[app.bundleIdentifier] {
-            return cached
-        }
-        let icon = NSWorkspace.shared.icon(forFile: app.applicationURL.path)
-        cache[app.bundleIdentifier] = icon
-        return icon
     }
 }

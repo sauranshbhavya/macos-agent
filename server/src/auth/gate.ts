@@ -225,7 +225,7 @@ export interface GateDeps {
  * covers every route in that context and its descendants, whenever they were added, and covers
  * nothing outside it.
  *
- * Seven wirings, each answered by a `POST /v1/plan` with no token (`401` = the gate ran):
+ * Seven wirings, each answered by a `POST` to a protected route with no token (`401` = the gate ran):
  *
  * | wiring                                            | result |
  * |---------------------------------------------------|--------|

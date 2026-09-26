@@ -4,8 +4,7 @@ import Foundation
 ///
 /// **Tier 0, and it asks nothing**: a read of the user's own data that changes nothing (founders'
 /// decision 2026-09-12). What it can raise is macOS's own Calendars prompt, once, at the first read —
-/// never at preview, which touches no calendar at all, and never from a routine, which may not carry
-/// this step (`StoredRoutine.forbiddenStepOperations`).
+/// never at preview, which touches no calendar at all.
 public struct ReadCalendarEventsCapabilityAdapter: CapabilityAdapter {
     public init() {}
 
@@ -18,17 +17,6 @@ public struct ReadCalendarEventsCapabilityAdapter: CapabilityAdapter {
         displayName: "Read calendar",
         description: "Read one day of the user's calendars through EventKit and answer with a short list.",
         operations: [.readCalendarEvents],
-        plannerTools: [
-            AgentTool(
-                operation: .readCalendarEvents,
-                name: "Read calendar events",
-                description: "List the events on the user's calendars for one day. Reads only and changes nothing. Set calendarDay to the day the user asked about, or null for today.",
-                requiredFields: [],
-                sideEffects: ["read calendars"],
-                dryRunBehavior: "Show which day would be read, without reading the calendar.",
-                examples: ["What's on my calendar today?", "What do I have on Friday?"]
-            )
-        ],
         requiredPermissions: [
             CapabilityPermissionMetadata(requirement: .calendarsAccess)
         ],
@@ -100,11 +88,7 @@ public struct ReadCalendarEventsCapabilityAdapter: CapabilityAdapter {
         return AgentRunResult(
             plan: plan,
             previews: [previewValue(day: day, context: context)],
-            summary: Self.summary(of: events, day: day, now: context.now(), calendar: context.calendar),
-            // **Outside-authored whenever an event is listed** (SONNY-491): its title is written by
-            // whoever sent the invitation, and most calendar services add one without the user
-            // acting. "Nothing on your calendar today." names no event and is Sonny's alone.
-            summaryProvenance: events.isEmpty ? .codeAuthored : .outsideAuthored
+            summary: Self.summary(of: events, day: day, now: context.now(), calendar: context.calendar)
         )
     }
 

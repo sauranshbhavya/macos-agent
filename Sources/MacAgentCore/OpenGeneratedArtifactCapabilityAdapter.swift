@@ -14,17 +14,6 @@ public struct OpenGeneratedArtifactCapabilityAdapter: CapabilityAdapter {
         displayName: descriptor.displayName,
         description: descriptor.description,
         operations: descriptor.supportedActions,
-        plannerTools: [
-            AgentTool(
-                operation: .openGeneratedArtifact,
-                name: "Open generated artifact",
-                description: "Open a specific whitelisted generated file, or open the most recent file produced earlier in the same chain when outputPath is null.",
-                requiredFields: [],
-                sideEffects: ["open file"],
-                dryRunBehavior: "Show the file that would open.",
-                examples: ["Open the generated Markdown", "Open the result"]
-            )
-        ],
         requiredPermissions: descriptor.requiredPermissions,
         defaultRiskTier: descriptor.defaultRiskTier
     )

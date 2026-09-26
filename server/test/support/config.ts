@@ -55,10 +55,6 @@ export function testConfig(overrides: Partial<Config> = {}): Config {
     logLevel: "fatal",
     trustProxy: false,
     rateLimitSalt: "test-salt",
-    // The shipped defaults, so a test that says nothing about retention gets the retention a
-    // deployment that says nothing about it gets. A test that cares about the clock overrides them.
-    contentRetentionDays: 30,
-    contentExpirySweepSeconds: 3600,
     // SONNY-211. Billing is off in the default test config, which is the shape of a deployment that
     // takes no payments: naming no provider mounts no webhook route. `billing.test.ts` overrides
     // these to mount it, so a test that says nothing about billing gets a server without one.
@@ -90,16 +86,11 @@ export function testConfig(overrides: Partial<Config> = {}): Config {
     creditPlans: TEST_CREDIT_PLANS,
     ...TEST_SUPABASE_CONFIG,
     openAIBaseUrl: "https://openai.invalid/v1",
-    openAITextModel: "test-text-model",
     openAITranscriptionModel: "test-transcription-model",
     searchBaseUrl: "https://search.invalid",
-    visionBaseUrl: "https://vision.invalid/v1",
-    visionModel: "test-vision-model",
     anthropicBaseUrl: "https://anthropic.invalid/v1",
-    anthropicTextModel: "test-anthropic-model",
     anthropicMaxOutputTokens: 4096,
     cerebrasBaseUrl: "https://cerebras.invalid/v1",
-    cerebrasTextModel: "test-cerebras-model",
     // The shipped defaults, so a test that says nothing about routing gets the routing a
     // deployment that says nothing about routing gets. A test that cares overrides `routeChains`.
     routeChains: DEFAULT_ROUTE_CHAINS,

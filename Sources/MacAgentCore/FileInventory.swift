@@ -81,13 +81,8 @@ enum DestinationKey {
     /// getting it wrong in the other direction loses the fix entirely on the volume nearly every user
     /// has.
     ///
-    /// Used by `RunClaims` — which folds every destination key it stores, at both of its two doors,
-    /// so `docxFiles` asks it rather than folding by hand (SONNY-165) — and by
-    /// `AgentActionExecutor`'s within-plan output-path disambiguation. The two keep separate
-    /// *policies*: the docx side must also avoid names that exist on disk, the executor side must
-    /// never consult disk or it would suppress the tier-3 "output already exists" escalation. But
-    /// they must agree on what "the same destination" means, and this is that agreement. Note that
-    /// folding is a pure string operation: the executor side still touches no disk.
+    /// Used by `RunClaims`, which folds every destination key it stores, so `docxFiles` asks it
+    /// rather than folding by hand (SONNY-165). Folding is a pure string operation.
     static func folded(_ path: String) -> String {
         path.folding(options: [.caseInsensitive], locale: nil)
     }

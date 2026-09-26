@@ -3,137 +3,13 @@ import MacAgentTestSupport
 import Testing
 @testable import MacAgentCore
 
-/// Renaming one file or folder, and refusing to rename many (SONNY-385).
-///
-/// **What this suite is about, in one line each.** A single rename works end to end on the real
-/// dispatch path. A rename onto a name already in use fails that item and says which file is in the
-/// way. A rename is not a move. And "rename all of these" comes back as a question with an answer
-/// field rather than as forty renames to the same name.
-///
-/// The approval is deliberately **not** here: `ConsequenceRuleTests` owns the claim that every
-/// escalation construction site is classified, and splitting the rename site out of that population
-/// would leave that file's own sentence untrue.
+/// Renaming one file or folder (SONNY-385), through the adapter body the kernel's `rename`
+/// operation runs. A rename works end to end, a rename onto a name already in use fails and says
+/// which file is in the way, and a rename is not a move. That a rename is `destructive`, and so
+/// asks first, is held in `KernelCapabilityTests`.
 @Suite
 @MainActor
 struct RenameTests {
-    // MARK: - The batch verb, and the trap SONNY-235 recorded
-
-    /// **The thing to get right first, because it is the one that fails silently** (SONNY-235's
-    /// `open_generated_artifact` record, and this ticket's own warning).
-    ///
-    /// A `[rename]` template declares an `itemField`, and rename has two fields an item could
-    /// plausibly be written into — the path and the new name. `PlanItemField` can only carry
-    /// `inputPath`, so the item lands on the path and every copy keeps the template's single
-    /// `newName`: forty steps renaming forty different files to one name. The first would succeed
-    /// and the other thirty-nine would collide with it, and the job would report thirty-nine
-    /// failures for a request that was never runnable.
-    ///
-    /// So the refusal is the door, and this asserts it lands **before any of that** — before the
-    /// folder is read, before the field check, and as a *question* rather than as a failure.
-    @Test
-    func aJobWhoseTemplateIsARenameIsRefusedWithAQuestionRatherThanExpanded() throws {
-        let root = try makeDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
-        try write("a", to: root.appendingPathComponent("a.pdf"))
-        try write("b", to: root.appendingPathComponent("b.pdf"))
-        let executor = makeExecutor(root: root)
-
-        let prepared = try executor.prepare(plan: renameJobPlan(folder: root))
-
-        #expect(
-            prepared.clarificationQuestion
-                == "What should each one be called? Sonny renames one file or folder at a time, so tell it the new names and it will do them."
-        )
-        // A clarification, not an expansion: the plan that comes back asks and does nothing, so the
-        // two files are still called what they were called.
-        #expect(prepared.plan.steps.map(\.operation) == [.clarify])
-        #expect(prepared.plan.itemJob == nil)
-        #expect(try FileManager.default.contentsOfDirectory(atPath: root.path).sorted() == ["a.pdf", "b.pdf"])
-    }
-
-    /// The refusal is asked **before the folder is read**, so a batch rename never looks at the
-    /// user's files on the way to being refused.
-    ///
-    /// Measured by pointing the job at a folder that does not exist. The control is the same job
-    /// with an ordinary verb, which fails with the whitelist's own not-found error — so the first
-    /// assertion is about the ordering rather than about the folder happening to be missing.
-    @Test
-    func theRenameRefusalArrivesBeforeTheFolderIsRead() throws {
-        let root = try makeDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
-        let missing = root.appendingPathComponent("not-a-folder")
-        let executor = makeExecutor(root: root)
-
-        let prepared = try executor.prepare(plan: renameJobPlan(folder: missing))
-        #expect(prepared.clarificationQuestion != nil)
-
-        // The control: an ordinary per-item verb over the same missing folder does reach the read,
-        // and fails there. Without this the assertion above would also pass if `prepare` had simply
-        // stopped answering.
-        #expect(throws: PathValidationError.notFound(missing.path)) {
-            _ = try executor.prepare(
-                plan: AgentPlan(
-                    summary: "Reveal each of these.",
-                    requiresConfirmation: true,
-                    steps: [AgentStep(id: "reveal", operation: .revealInFinder, description: "Reveal it.")],
-                    itemJob: PlanItemJob(
-                        source: .folder,
-                        folderPath: missing.path,
-                        itemKind: .files,
-                        fileExtensions: ["pdf"],
-                        itemField: .inputPath
-                    )
-                )
-            )
-        }
-    }
-
-    /// **Only the rename refusal converts into a question.** Every other `PlanItemJobError` is a job
-    /// that cannot run and has nothing to ask, so a blanket catch in `prepare` would turn each of
-    /// them into a question with no answer — and the user would be typing into a field that leads
-    /// nowhere.
-    ///
-    /// `start_watching` is the control because it is the other entry in the same table, refused
-    /// through the same door, on the same shape of plan.
-    @Test
-    func theWatcherRefusalStaysAFailureWhileTheRenameRefusalBecomesAQuestion() throws {
-        let root = try makeDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
-        try write("a", to: root.appendingPathComponent("a.pdf"))
-        let executor = makeExecutor(root: root)
-
-        #expect(try executor.prepare(plan: renameJobPlan(folder: root)).clarificationQuestion != nil)
-
-        #expect(
-            throws: PlanItemJobError.forbiddenStepOperation(
-                "Sonny will not start a watcher for each item — that would spend everything it can watch on copies of one page. Ask for the watcher on its own."
-            )
-        ) {
-            _ = try executor.prepare(
-                plan: AgentPlan(
-                    summary: "Watch each of these.",
-                    requiresConfirmation: true,
-                    steps: [
-                        AgentStep(
-                            id: "watch",
-                            operation: .startWatching,
-                            description: "Watch it.",
-                            targetURL: "https://example.com/page",
-                            watchSubject: "the price"
-                        )
-                    ],
-                    itemJob: PlanItemJob(
-                        source: .folder,
-                        folderPath: root.path,
-                        itemKind: .files,
-                        fileExtensions: ["pdf"],
-                        itemField: .inputPath
-                    )
-                )
-            )
-        }
-    }
-
     // MARK: - One rename, on the real dispatch path
 
     /// The whole point of the ticket: a plan the planner can emit renames the file.
@@ -548,7 +424,7 @@ struct RenameTests {
         let missing = root.appendingPathComponent("scan1.pdf")
         let executor = makeExecutor(root: root)
 
-        let assessment = try executor.assessRisk(plan: renamePlan(source: missing, to: "invoice.pdf"), scope: .unscoped)
+        let assessment = try executor.assessRisk(plan: renamePlan(source: missing, to: "invoice.pdf"))
         #expect(assessment.effectiveTier == .tier3)
 
         await #expect(throws: PathValidationError.notFound(missing.path)) {
@@ -557,36 +433,6 @@ struct RenameTests {
     }
 
     // MARK: - What the boundary is told a rename touches
-
-    /// The scope classifier names **both** paths, and the destination is the one no field of the step
-    /// holds — it is derived. A workspace whose file locations exclude the folder must escalate on
-    /// the file being written as well as on the file being read.
-    ///
-    /// The control is a step with no `newName`, where there is no destination to name and the
-    /// classification falls back to the source alone rather than to something invented.
-    @Test
-    func theScopeClassifierNamesTheFileBeingWrittenAsWellAsTheOneBeingRead() {
-        let step = AgentStep(
-            id: "rename",
-            operation: .rename,
-            description: "Rename it.",
-            inputPath: "~/Documents/Scans/scan1.pdf",
-            newName: "invoice-march.pdf"
-        )
-        #expect(
-            PlanScopedResources.classification(of: step).resources == [
-                .fileLocation("~/Documents/Scans/scan1.pdf"),
-                .fileLocation("~/Documents/Scans/invoice-march.pdf")
-            ]
-        )
-
-        var withoutName = step
-        withoutName.newName = nil
-        #expect(
-            PlanScopedResources.classification(of: withoutName).resources
-                == [.fileLocation("~/Documents/Scans/scan1.pdf")]
-        )
-    }
 
     // MARK: - Fixtures
 
@@ -606,31 +452,6 @@ struct RenameTests {
         )
     }
 
-    /// "Rename all of these": the job shape a planner would emit for the sentence the founders
-    /// decided to refuse. `.inputPath` is the only field `PlanItemField` can carry, which is the
-    /// whole trap.
-    private func renameJobPlan(folder: URL) -> AgentPlan {
-        AgentPlan(
-            summary: "Rename all of these.",
-            requiresConfirmation: true,
-            steps: [
-                AgentStep(
-                    id: "rename",
-                    operation: .rename,
-                    description: "Rename it.",
-                    newName: "invoice.pdf"
-                )
-            ],
-            itemJob: PlanItemJob(
-                source: .folder,
-                folderPath: folder.path,
-                itemKind: .files,
-                fileExtensions: ["pdf"],
-                itemField: .inputPath
-            )
-        )
-    }
-
     private func makeDirectory() throws -> URL {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("sonny-rename-\(UUID().uuidString)", isDirectory: true)
@@ -642,16 +463,7 @@ struct RenameTests {
         try Data(contents.utf8).write(to: url, options: .atomic)
     }
 
-    private func makeExecutor(root: URL) -> AgentActionExecutor {
-        AgentActionExecutor(
-            whitelist: PathWhitelist(roots: [root]),
-            routineStore: UnreachableLocalStores.routines(),
-            workspaceStore: UnreachableLocalStores.workspaces(),
-            clipboardHistoryStore: UnreachableLocalStores.clipboardHistory(),
-            snippetStore: UnreachableLocalStores.snippets(),
-            recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
-            shortcutRunHistoryStore: UnreachableLocalStores.shortcutRunHistory(),
-            resumableTaskStore: UnreachableLocalStores.resumableTasks()
-        )
+    private func makeExecutor(root: URL) -> PlanHarness {
+        PlanHarness(context: CapabilityTestContext.make(installed: [], whitelist: PathWhitelist(roots: [root])))
     }
 }

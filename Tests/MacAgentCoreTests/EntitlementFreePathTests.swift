@@ -33,38 +33,18 @@ struct EntitlementFreePathTests {
         // the reason row 12's whole architecture keeps the agent loop on the Mac.
         let root = try makeRoot()
         let snippets = SnippetStore(fileURL: root.appendingPathComponent("snippets.json"))
-        let routines = RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
-        let workspaces = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
         let artifacts = RecentArtifactStore(fileURL: root.appendingPathComponent("artifacts.json"))
 
         try snippets.save(StoredSnippet(trigger: "sig", expansion: "Sent from Sonny"))
-        try routines.save(StoredRoutine(
-            name: "morning",
-            steps: [AgentStep(
-                id: "open",
-                operation: .openApp,
-                description: "Open TextEdit.",
-                appName: "TextEdit"
-            )]
-        ))
-        try workspaces.save(StoredWorkspace(
-            name: "writing",
-            apps: ["TextEdit"],
-            urls: []
-        ))
-
         let resolver = InstantCommandResolver(
             snippetStore: snippets,
             recentArtifactStore: artifacts,
-            routineStore: routines,
-            workspaceStore: workspaces,
             shortcutCatalog: NoShortcuts(),
             installedAppResolver: NoInstalledApps()
         )
 
-        // A calculation, a snippet, a routine and a workspace — the four kinds of thing the founder's
-        // headline manual check names, each resolved to a plan with nothing signed in.
-        for command in ["calc 2 + 2", "sig", "run morning", "open writing"] {
+        // A calculation and a snippet, each resolved to a plan with nothing signed in.
+        for command in ["calc 2 + 2", "sig"] {
             guard case .plan = resolver.resolve(command: command) else {
                 Issue.record("\(command) did not resolve locally with no entitlement in reach")
                 continue
@@ -83,8 +63,6 @@ struct EntitlementFreePathTests {
         let resolver = InstantCommandResolver(
             snippetStore: snippets,
             recentArtifactStore: RecentArtifactStore(fileURL: root.appendingPathComponent("a.json")),
-            routineStore: RoutineStore(fileURL: root.appendingPathComponent("r.json")),
-            workspaceStore: WorkspaceStore(fileURL: root.appendingPathComponent("w.json")),
             shortcutCatalog: NoShortcuts(),
             installedAppResolver: NoInstalledApps()
         )

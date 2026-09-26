@@ -220,6 +220,13 @@ struct WidgetView: View {
     // MARK: Voice
 
     private var voiceControl: some View {
+        // Ticks only while recording, so VoiceOver on the mic button hears how long is left.
+        TimelineView(.animation(minimumInterval: 1, paused: !isRecording)) { context in
+            voiceControl(now: context.date)
+        }
+    }
+
+    private func voiceControl(now: Date) -> some View {
         HStack(spacing: 8) {
             if case .recording(let startedAt) = model.voice {
                 TimelineView(.periodic(from: startedAt, by: 1)) { context in
@@ -248,7 +255,7 @@ struct WidgetView: View {
             .widgetGlassCircle()
             .disabled(model.voice == .transcribing || composerIsBusy)
             .accessibilityLabel("Voice input")
-            .accessibilityValue(voiceValue)
+            .accessibilityValue(voiceValue(now: now))
         }
         .padding(.leading, isRecording ? 10 : 2)
         .padding(.trailing, 2)
@@ -261,11 +268,14 @@ struct WidgetView: View {
         return false
     }
 
-    private var voiceValue: String {
+    private func voiceValue(now: Date) -> String {
         switch model.voice {
-        case .idle: "Start listening"
-        case .recording: "Listening. Press to send."
-        case .transcribing: "Working out what you said"
+        case .idle:
+            "Start listening"
+        case .recording(let startedAt):
+            "Listening, \(VoiceRecordingCountdown.accessibilityValue(remaining: VoiceRecordingCountdown.remaining(startedAt: startedAt, now: now))). Press to send."
+        case .transcribing:
+            "Working out what you said"
         }
     }
 
@@ -275,7 +285,7 @@ struct WidgetView: View {
         switch model.clientVersion {
         case .current: nil
         case .updateAvailable: "A new version of Sonny is ready. Update when you can."
-        case .tooOld: "This version of Sonny is too old to reach its server. Please update Sonny."
+        case .tooOld: ClientVersionCopy.tooOldMessage
         }
     }
 

@@ -14,7 +14,9 @@ let accountModel = SonnyAccountModel.atItsRealKeychainLocation()
 let screenAccessModel = ScreenAccessOnboardingModel()
 let kernelStores: KernelStores
 do {
-    kernelStores = KernelStores(folder: try KernelStores.applicationSupportFolder())
+    let folder = try KernelStores.applicationSupportFolder()
+    KernelStores.removeV1Data(v2Folder: folder)
+    kernelStores = KernelStores(folder: folder)
 } catch {
     // Keeps Sonny usable this launch; what it saves goes to a folder macOS may clear.
     print("Sonny could not open Application Support (\(error.localizedDescription)); keeping its data in a temporary folder this launch.")
@@ -30,7 +32,7 @@ let appModel = SonnyAppModel(
 // previous one's credit figure.
 accountModel.sessionDidChange = { [weak appModel] in
     appModel?.refreshPermissions()
-    appModel?.forgetAllowance()
+    appModel?.forgetCredits()
 }
 // The plan row asks the account model's one entitlement service: a second would be a second clock
 // anchor and a second refresh guard.

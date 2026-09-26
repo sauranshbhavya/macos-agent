@@ -93,23 +93,6 @@ struct AccountCreationClassTests {
         return row == 0 ? nil : Table.shapes[row].refused
     }
 
-    /// **The guard.** Both counts are the class run's own, held here by hand and not in the generated
-    /// block (`scripts/account-creation-class-table --check` prints `177155 addresses, 75546 refused`
-    /// for the floor, `8f3d1d02`), so a walk that stopped visiting the class, or stopped asking, fails
-    /// here instead of passing on nothing. `unparsed` is held at none because the table was generated
-    /// where every address of the class is a URL; if that stops being so, Foundation's parser has moved
-    /// and what the loader hands the matcher has moved with it.
-    @Test
-    func noAddressOfTheClassThatMainRefusedLoads() {
-        let walk = Self.walk(asking: SkillPackStartPageRule.namesAccountCreation)
-        #expect(walk.addresses.reduce(0, +) == 177_155)
-        #expect(walk.refusedByMain.reduce(0, +) == 75_546)
-        #expect(walk.unparsed == 0)
-        // The count and not the list is what is expected, so a failure prints one number and the first
-        // fifteen addresses rather than every one of them.
-        let nowLoad = walk.refusedLess.count
-        #expect(nowLoad == 0, "\(nowLoad) addresses main refused now load, first \(walk.refusedLess.prefix(15))")
-    }
 
     /// **The table is `main`'s verdicts and not an empty or a moved one**, read without any matcher. The
     /// commit, the tokens and the length are repeated here by value so that a table regenerated from

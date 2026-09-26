@@ -17,17 +17,6 @@ public struct CreateReminderCapabilityAdapter: CapabilityAdapter {
         displayName: "Add reminder",
         description: "Add one reminder with an alert to the user's default Reminders list through EventKit.",
         operations: [.createReminder],
-        plannerTools: [
-            AgentTool(
-                operation: .createReminder,
-                name: "Add a reminder",
-                description: "Add one reminder with an alert to the user's Reminders. Set reminderTitle to what to remind them about, and exactly one of reminderMinutesFromNow or reminderTime, with calendarDay when they named a day. If the user named no time, ask a clarification question for when.",
-                requiredFields: ["reminderTitle"],
-                sideEffects: ["add reminder"],
-                dryRunBehavior: "Show the reminder and when it is due, without adding it.",
-                examples: ["Remind me in 5 minutes to call the bank", "Remind me tomorrow at 9am to send the invoice"]
-            )
-        ],
         requiredPermissions: [
             CapabilityPermissionMetadata(requirement: .remindersAccess)
         ],
@@ -111,8 +100,7 @@ public struct CreateReminderCapabilityAdapter: CapabilityAdapter {
     ///
     /// The reason names the title and not the time, so it reads the same at every gate — an approval
     /// is matched to its reasons, and a reason that moved with the clock would never match. The time
-    /// reaches both approval panels through `RiskApprovalCopy.involvedResource` instead, which consent
-    /// does not compare (`AgentActionExecutor.involvedResource(in:metadata:)`, PR #244 F1).
+    /// reaches the approval through the preview instead.
     public func assessRisk(plan: AgentPlan, context: CapabilityExecutionContext) throws -> CapabilityRiskAssessment {
         let spec = try spec(in: plan, context: context)
         return CapabilityRiskAssessment(

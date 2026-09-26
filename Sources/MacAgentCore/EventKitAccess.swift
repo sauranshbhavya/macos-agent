@@ -177,8 +177,7 @@ public struct UnavailableEventKitStore: EventKitAccessing {
     }
 }
 
-/// The live seam, over one `EKEventStore`. Named at exactly one construction site —
-/// `AgentViewModel.atItsRealStoreLocations()` — and pinned there by `EventKitWiringTests`.
+/// The live seam, over one `EKEventStore`.
 @MainActor
 public final class EventKitStore: EventKitAccessing {
     private let store = EKEventStore()

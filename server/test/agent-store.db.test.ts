@@ -9,6 +9,7 @@ import { creditBalance } from "../src/credit/balance.js";
 import { parseCreditCatalogue } from "../src/credit/catalogue.js";
 import { postgresCreditStore } from "../src/credit/store.js";
 import type { WithConnection } from "../src/db/connection.js";
+import { claimKey, completeClaim, pruneAllExpiredResponses } from "../src/idempotency/store.js";
 import { TEST_CREDIT_PLANS_WITH_RATES } from "./support/agent.js";
 import {
   afterAllUnderHangBackstop,
@@ -26,6 +27,7 @@ describeDb("V2 tasks in Postgres", () => {
   let account: string;
   const withConnection: WithConnection = (work) => work(client);
   const store = postgresTaskStore(withConnection);
+  const pruneReplies = () => withConnection((c) => pruneAllExpiredResponses(c));
   const at = new Date("2026-09-10T12:00:00Z");
   const DEVICE = "d0d0d0d0-1111-4222-8333-444455556666";
 
@@ -62,6 +64,7 @@ describeDb("V2 tasks in Postgres", () => {
   beforeEachUnderHangBackstop(async () => {
     await client.query("TRUNCATE sonny.agent_task CASCADE");
     await client.query("TRUNCATE sonny.agent_model_call");
+    await client.query("TRUNCATE sonny.idempotency_key");
     const { rows } = await client.query<{ id: string }>("INSERT INTO sonny.account DEFAULT VALUES RETURNING id");
     account = rows[0]!.id;
     await store.touchDevice(DEVICE, account, at);
@@ -134,7 +137,7 @@ describeDb("V2 tasks in Postgres", () => {
     });
 
     const nextDay = new Date(at.getTime() + TASK_ABANDON_AFTER_MS);
-    expect(await sweepTasksOnce({ store, ledger, now: () => nextDay })).toMatchObject({ deleted: 0, abandoned: 1 });
+    expect(await sweepTasksOnce({ store, ledger, pruneReplies, now: () => nextDay })).toMatchObject({ deleted: 0, abandoned: 1 });
     expect((await store.task(idle.id))?.status).toBe("failed");
     // The abandoned task's Mac is replayed an end when it reconnects.
     const [finish] = await store.outboundAfter(idle.id, 0);
@@ -143,9 +146,56 @@ describeDb("V2 tasks in Postgres", () => {
     expect(await store.task(ended.id)).toBeDefined();
 
     const monthLater = new Date(at.getTime() + TASK_RETENTION_MS);
-    expect(await sweepTasksOnce({ store, ledger, now: () => monthLater })).toMatchObject({ deleted: 1 });
+    expect(await sweepTasksOnce({ store, ledger, pruneReplies, now: () => monthLater })).toMatchObject({ deleted: 1 });
     expect(await store.task(ended.id)).toBeUndefined();
     expect(await count("agent_message", ended.id)).toBe(0);
+  });
+
+  itUnderHangBackstop("clears a stored reply once its day is up and keeps a fresh one", async () => {
+    const ledger = postgresModelCallLedger({
+      withConnection,
+      catalogue: parseCreditCatalogue(TEST_CREDIT_PLANS_WITH_RATES),
+      defaultCapUnits: 1000,
+    });
+    const storeReply = async (key: string): Promise<void> => {
+      const outcome = await claimKey(client, {
+        accountScope: account,
+        key,
+        route: "POST /v1/transcriptions",
+        fingerprint: `POST /v1/transcriptions\nsha256:${key}`,
+      });
+      if (outcome.kind !== "claimed") throw new Error(`claim refused: ${outcome.kind}`);
+      await completeClaim(
+        client,
+        { accountScope: account, key, token: outcome.token },
+        {
+          status: 200,
+          body: Buffer.from('{"text":"call the bank"}', "utf8"),
+          contentType: "application/json; charset=utf-8",
+          requestId: "r",
+        },
+      );
+    };
+    const old = randomUUID();
+    const fresh = randomUUID();
+    await storeReply(old);
+    await storeReply(fresh);
+    await client.query(
+      `UPDATE sonny.idempotency_key SET response_expires_at = now() - interval '1 second'
+        WHERE account_scope = $1 AND idempotency_key = $2`,
+      [account, old],
+    );
+
+    expect(await sweepTasksOnce({ store, ledger, pruneReplies, now: () => at })).toMatchObject({ prunedReplies: 1 });
+    const { rows } = await client.query<{ idempotency_key: string; kept: boolean }>(
+      `SELECT idempotency_key, response_body IS NOT NULL AS kept
+         FROM sonny.idempotency_key WHERE account_scope = $1 ORDER BY idempotency_key`,
+      [account],
+    );
+    expect(Object.fromEntries(rows.map((row) => [row.idempotency_key, row.kept]))).toEqual({
+      [old]: false,
+      [fresh]: true,
+    });
   });
 
   itUnderHangBackstop("holds credits, settles them by tokens, and refuses a hold the balance can't cover", async () => {
@@ -187,8 +237,9 @@ describeDb("V2 tasks in Postgres", () => {
 
     // The account's balance route reads the same spend.
     const facts = await postgresCreditStore(withConnection).factsFor(account, at);
-    const balance = creditBalance({ catalogue, planKey: facts.planKey, draw: facts.draw, agentCredits: facts.agentCredits!, toppedUpCredits: facts.toppedUpCredits, now: at });
-    expect(balance.credits.drawn).toBe(507.5);
+    expect(facts.agentCredits).toBe(507.5);
+    const balance = creditBalance({ catalogue, planKey: facts.planKey, agentCredits: facts.agentCredits, toppedUpCredits: facts.toppedUpCredits, now: at });
+    expect(balance.credits).toEqual({ allowance: 1000, drawn: 507.5, remaining: 492.5, toppedUp: 0 });
   });
 
   itUnderHangBackstop("releases a hold its process died holding, charging nothing", async () => {

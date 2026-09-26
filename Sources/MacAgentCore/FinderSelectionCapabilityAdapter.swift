@@ -12,17 +12,6 @@ public struct FinderSelectionCapabilityAdapter: CapabilityAdapter {
         displayName: "Read Finder selection",
         description: "Read selected Finder items and validate them against the path whitelist.",
         operations: [.getFinderSelection],
-        plannerTools: [
-            AgentTool(
-                operation: .getFinderSelection,
-                name: "Read Finder selection",
-                description: "Read selected Finder files and folders, validate that every path is inside the Desktop/Documents whitelist, and show them as context.",
-                requiredFields: [],
-                sideEffects: ["ask Finder for selection"],
-                dryRunBehavior: "Show selected Finder items without modifying them.",
-                examples: ["What is selected in Finder?", "Show my Finder selection"]
-            )
-        ],
         requiredPermissions: [
             CapabilityPermissionMetadata(requirement: .finderAutomation),
             CapabilityPermissionMetadata(requirement: .desktopDocumentsAccess)
@@ -56,10 +45,7 @@ public struct FinderSelectionCapabilityAdapter: CapabilityAdapter {
         return AgentRunResult(
             plan: plan,
             previews: previews,
-            summary: FinderSelectionSummary.sentence(naming: selection.map(\.name)),
-            // A file's name is written by whoever saved it — a download, an attachment, a colleague's
-            // share — and this sentence quotes those names (SONNY-491).
-            summaryProvenance: .outsideAuthored
+            summary: FinderSelectionSummary.sentence(naming: selection.map(\.name))
         )
     }
 
@@ -76,19 +62,16 @@ public struct FinderSelectionCapabilityAdapter: CapabilityAdapter {
 /// It used to be a count — "Finder selection contains 1 whitelisted item(s)." — and the founders'
 /// pass read exactly that back: something is selected, and nothing says what. The paths were in
 /// the preview's details, which the result panel does not show. So the summary names the items,
-/// in the shape the executor already uses for a list it cannot show whole
-/// (`AgentActionExecutor`'s clarification lists: five named, then "and N more"). "Whitelisted" was
-/// an internal word and is gone from the sentence; the whitelist check itself is untouched.
+/// five named, then "and N more". "Whitelisted" was an internal word and is gone from the
+/// sentence; the whitelist check itself is untouched.
 ///
 /// **The count leads, and the names stop at a character budget, because the widget's result panel
-/// shows three lines** (SONNY-441, PR #228's F1). `WidgetResultPanel` caps its summary at
-/// `.lineLimit(3)` in a 472 pt panel with 18 pt of padding, at SF Pro 13; five names in the shape
-/// macOS gives screenshots ran to four lines, and the part that fell off the end was ", and 2
-/// more." — the one thing a clipped panel must not lose is how many items there are. So a
-/// selection of more than one item opens with its total, which no clipping can reach, and names
-/// are added only while the whole sentence stays within `characterBudget`, which
-/// `FinderSelectionSentenceFitsTheWidgetTests` measures against the panel's real width and type
-/// with AppKit's own layout. The first name is always given, however long.
+/// shows three lines** (SONNY-441, PR #228's F1). Five names in the shape macOS gives screenshots
+/// ran to four lines in V1's result panel, and the part that fell off the end was ", and 2 more." —
+/// the one thing a clipped panel must not lose is how many items there are. So a selection of more
+/// than one item opens with its total, which no clipping can reach, and names are added only while
+/// the whole sentence stays within `characterBudget`. The first name is always given, however
+/// long.
 public enum FinderSelectionSummary {
     /// The most items named before the rest is counted, whatever their length.
     public static let namedItemLimit = 5

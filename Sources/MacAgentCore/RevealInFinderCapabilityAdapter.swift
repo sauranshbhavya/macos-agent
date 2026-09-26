@@ -5,9 +5,7 @@ public struct RevealInFinderCapabilityAdapter: CapabilityAdapter {
     ///
     /// The live implementation is `NSWorkspace.activateFileViewerSelecting`, and after SONNY-395 it
     /// exists at exactly one place in the repository — the `finderRevealer:` argument
-    /// `AgentViewModel.atItsRealStoreLocations()` passes, which
-    /// `LocalStoreInjectionScanTests.theRealStoreFactoryHandsTheAppTheLiveFinderReveal` holds.
-    /// No line under `Sources/MacAgentCore` names that call, which is what
+    /// `SonnyKernel.makeDesk` passes. No line under `Sources/MacAgentCore` names that call, which is what
     /// `noLineInTheCoreNamesTheFinderRevealCall` asserts.
     ///
     /// **That is the narrow claim, and the wider one this used to make was false** (PR #193 review,
@@ -95,17 +93,6 @@ public struct RevealInFinderCapabilityAdapter: CapabilityAdapter {
         displayName: "Reveal in Finder",
         description: "Reveal a whitelisted path in Finder.",
         operations: [.revealInFinder],
-        plannerTools: [
-            AgentTool(
-                operation: .revealInFinder,
-                name: "Reveal path in Finder",
-                description: "Reveal a specific whitelisted path in Finder, or reveal the most recent file produced earlier in the same chain when outputPath is null.",
-                requiredFields: [],
-                sideEffects: ["open Finder"],
-                dryRunBehavior: "Show the path that would be revealed.",
-                examples: ["Reveal the zip in Finder", "Show the generated Markdown in Finder"]
-            )
-        ],
         requiredPermissions: [
             CapabilityPermissionMetadata(requirement: .desktopDocumentsAccess),
             CapabilityPermissionMetadata(requirement: .appOpening)

@@ -39,19 +39,15 @@ struct OpenAITranscriberTests {
         let audioURL = try Self.writeAudio("fake-audio")
         defer { try? FileManager.default.removeItem(at: audioURL) }
 
-        let recorder = TaskUsageRecorder()
-        let result = try await Self.transcriber(fixture, usageRecorder: recorder)
+        let result = try await Self.transcriber(fixture)
             .transcribe(audioFileURL: audioURL, recordedDuration: 4)
 
         #expect(result.text == "Open Safari")
         #expect(result.usage?.tokenSource == .reported)
         #expect(result.usage?.tokenCounts.totalTokens == 16)
+        #expect(result.usage?.tokenCounts.inputTokens == 12)
+        #expect(result.usage?.tokenCounts.outputTokens == 4)
         #expect(result.usage?.model == "transcriptions")
-        let summary = recorder.snapshot()
-        #expect(summary.requestCount == 1)
-        #expect(summary.reportedInputTokens == 12)
-        #expect(summary.reportedOutputTokens == 4)
-        #expect(summary.reportedTotalTokens == 16)
 
         let sent = try recorded.only
         #expect(sent.method == "POST")
@@ -141,16 +137,12 @@ struct OpenAITranscriberTests {
         let audioURL = try Self.writeAudio("fake-audio")
         defer { try? FileManager.default.removeItem(at: audioURL) }
 
-        let recorder = TaskUsageRecorder()
-        let result = try await Self.transcriber(fixture, usageRecorder: recorder)
+        let result = try await Self.transcriber(fixture)
             .transcribe(audioFileURL: audioURL, recordedDuration: 2.5)
 
         #expect(result.text == "Open Notes")
         #expect(result.usage?.audioDurationSeconds == 2.5)
-        let summary = recorder.snapshot()
-        #expect(summary.requestCount == 1)
-        #expect(summary.reportedTotalTokens == 0)
-        #expect(summary.audioDurationSeconds == 2.5)
+        #expect(result.usage?.tokenCounts.totalTokens == nil)
     }
 
     // MARK: - The audio limit
@@ -341,15 +333,7 @@ struct OpenAITranscriberTests {
         }
     }
 
-    /// **A stop is not a failure** (SONNY-320), asserted on the type rather than on the route.
-    ///
-    /// The other three routes' versions of this test double as evidence that a user pressing stop
-    /// sees the right thing. This one cannot, and saying so is the point: nothing can cancel a
-    /// transcription today — `AgentViewModel.stopVoiceRecordingAndTranscribe` runs it in an
-    /// unstructured `Task` that nothing stores — and the `catch` that would receive one calls
-    /// `setError` without consulting `SonnyBackendError.isCancellation`. Both are SONNY-327's.
-    /// What this pins is the half that lives here: the wrapper does not hide a cancellation from the
-    /// caller that eventually asks, so the day the route becomes stoppable it has one less bug.
+    /// A request cancelled underneath surfaces as `.backend(.cancelled)`, not as some other failure.
     @Test
     @MainActor
     func aStopWhileATranscriptionIsInFlightIsACancellationRatherThanAFailure() async throws {
@@ -372,28 +356,15 @@ struct OpenAITranscriberTests {
             Issue.record("Expected the stopped request to surface as TranscriptionError.backend(.cancelled).")
         } catch let error as TranscriptionError {
             #expect(error == .backend(.cancelled))
-            #expect(SonnyBackendError.isCancellation(error), "a stop is not a failure to report")
             #expect(recorded.all.count == 1)
         }
-
-        #expect(!SonnyBackendError.isCancellation(TranscriptionError.backend(.offline)))
-        #expect(!SonnyBackendError.isCancellation(TranscriptionError.backend(.notSignedIn)))
-        #expect(!SonnyBackendError.isCancellation(TranscriptionError.missingText))
-        #expect(!SonnyBackendError.isCancellation(TranscriptionError.recordingTooLong(maximumSeconds: 180)))
     }
 
     // MARK: - Fixtures
 
     @MainActor
-    private static func transcriber(
-        _ fixture: SignedInBackendFixture,
-        usageRecorder: any TaskUsageRecording = NoopTaskUsageRecorder.shared
-    ) -> OpenAITranscriber {
-        OpenAITranscriber(
-            client: fixture.client,
-            taskContext: ModelRouteFixtures.standardContext,
-            usageRecorder: usageRecorder
-        )
+    private static func transcriber(_ fixture: SignedInBackendFixture) -> OpenAITranscriber {
+        OpenAITranscriber(client: fixture.client, taskContext: ModelRouteFixtures.standardContext)
     }
 
     private static func writeAudio(_ contents: String) throws -> URL {

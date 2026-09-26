@@ -48,7 +48,7 @@ struct ClientNamesNoProviderScanTests {
         let sources = try shippingSources()
         #expect(sources.count > 50, "the scan read \(sources.count) files, which is too few to be the tree")
         #expect(sources.contains { $0.path == "MacAgent/SonnyAppModel.swift" })
-        #expect(sources.contains { $0.path == "MacAgentCore/OpenAIPlanner.swift" })
+        #expect(sources.contains { $0.path == "MacAgentCore/SonnyBackendClient.swift" })
     }
 
     /// `SONNY_PLANNER` is gone, which is the ticket's fourth requirement made checkable.

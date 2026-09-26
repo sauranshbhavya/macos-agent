@@ -103,16 +103,6 @@ public extension FocusRestoring {
         return result
     }
 
-    /// Gives back an app a carry was still holding when its run ended, by the rule an open's own
-    /// restore uses (PR #238's delta review, N1): nothing when it is already in front, nothing asked
-    /// for an app that has quit, and `onRestore` only for a real switch.
-    @MainActor
-    func giveBack(_ noted: NotedFrontmost, onRestore: (RunningApp) -> Void = { _ in }) async {
-        if await restored(noted) {
-            onRestore(noted.app)
-        }
-    }
-
     /// Brings `before` back if the open moved the front; `true` only when Launch Services switched
     /// to one of the instances noted with it. Nothing moved — the opened app was already in front —
     /// is `false` with no call.
@@ -132,9 +122,9 @@ public extension FocusRestoring {
 /// The app the user was in, handed from an open step to the screen-control session that runs right
 /// after it in the same run (PR #238's F5).
 ///
-/// One per chain run, made by `AgentActionExecutor.executeChain` and reached through
-/// `CapabilityExecutionContext.focusHandoff`. It holds the first app it is given and hands it out
-/// once, so a later open in the same run cannot replace the app the user was really in.
+/// Reached through `CapabilityExecutionContext.focusHandoff`, which nothing sets in V2: the V1
+/// executor made one per chain run. It holds the first app it is given and hands it out once, so a
+/// later open in the same run cannot replace the app the user was really in.
 @MainActor
 public final class FocusCarry {
     private var held: NotedFrontmost?

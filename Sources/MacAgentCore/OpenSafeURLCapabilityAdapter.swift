@@ -12,17 +12,6 @@ public struct OpenSafeURLCapabilityAdapter: CapabilityAdapter {
         displayName: descriptor.displayName,
         description: descriptor.description,
         operations: descriptor.supportedActions,
-        plannerTools: [
-            AgentTool(
-                operation: .openURL,
-                name: "Open web URL",
-                description: "Open a safe http or https URL in the default browser.",
-                requiredFields: ["targetURL"],
-                sideEffects: ["open browser"],
-                dryRunBehavior: "Show the URL that would open.",
-                examples: ["Open GitHub", "Open https://gmail.com"]
-            )
-        ],
         requiredPermissions: descriptor.requiredPermissions,
         defaultRiskTier: descriptor.defaultRiskTier
     )

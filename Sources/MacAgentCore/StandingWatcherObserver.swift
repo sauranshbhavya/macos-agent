@@ -2,12 +2,9 @@ import Foundation
 
 /// How a standing watcher reads the page it is watching.
 ///
-/// **A seam, and the reason it exists is that nothing else in this repository has one.**
-/// `AgentActionExecutor` builds its own `PublicWebPageLoader` internally and defaults it to
-/// `.live()`, so no fixture controls it — which is fine for an executor a test drives deliberately
-/// and is not fine for something a 30-second timer calls. A watcher check runs from a pulse nobody
-/// asked for, so a fixture that never heard of watchers must not be one network request away from
-/// the real internet.
+/// **A seam, so no fixture is one network request away from the real internet.** A watcher check
+/// runs from a 30-second pulse nobody asked for, so a fixture that never heard of watchers must be
+/// able to hand in an observer that never fetches.
 ///
 /// **`@MainActor` because `PublicWebPageLoader.load` is.** That isolation is the loader's own
 /// (`SafeURL` validation, the robots check and the fetch all run there), and re-declaring the
@@ -22,7 +19,7 @@ public protocol StandingWatcherObserving {
     func readableText(at url: URL) async throws -> String
 }
 
-/// The shipped observer: a direct public-page fetch, the same one row 12's research capability uses.
+/// The shipped observer: a direct public-page fetch.
 ///
 /// **This is the whole reason a watcher can be free** (founder decision 2026-08-31). It goes through
 /// `PublicWebPageLoader`, which validates the URL, honours `robots.txt`, refuses a redirect onto a

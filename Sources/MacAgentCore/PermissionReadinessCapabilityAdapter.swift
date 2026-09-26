@@ -12,20 +12,6 @@ public struct PermissionReadinessCapabilityAdapter: CapabilityAdapter {
         displayName: "Permission readiness",
         description: "Show current readiness status without prompting for permissions.",
         operations: [.showPermissionReadiness],
-        plannerTools: [
-            AgentTool(
-                operation: .showPermissionReadiness,
-                name: "Show permission readiness",
-                // **Names no provider** (SONNY-136, founder decision 2026-08-19). This read "OpenAI
-                // key" and the row it referred to is gone; the planner is given the tool's real
-                // subject instead, which is the Sonny account.
-                description: "Show readiness for the Sonny account, microphone, hotkey, Finder/Word automation, Desktop/Documents access, Accessibility, Screen Recording, Calendars, and Reminders.",
-                requiredFields: [],
-                sideEffects: [],
-                dryRunBehavior: "Show permission readiness without requesting new permissions.",
-                examples: ["Check Sonny permissions", "Show readiness panel"]
-            )
-        ],
         requiredPermissions: [],
         defaultRiskTier: .tier0
     )

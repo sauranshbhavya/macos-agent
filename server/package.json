@@ -18,8 +18,6 @@
     "revocations": "node dist/revocations.js",
     "billing-debts": "node dist/billing-debts.js",
     "usage": "node dist/usage.js",
-    "support": "node dist/support.js",
-    "snapshots": "node dist/snapshots.js",
     "entitlements": "node dist/entitlements.js",
     "check:secrets": "./scripts/check-secrets.sh",
     "test:db": "DATABASE_URL=${DATABASE_URL:-postgres://postgres:postgres@localhost:55433/postgres} vitest run"

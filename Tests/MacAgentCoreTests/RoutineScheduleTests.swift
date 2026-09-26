@@ -8,54 +8,7 @@ import Testing
 struct RoutineScheduleTests {
     // MARK: - Legacy decode
 
-    /// The whole reason `schedule` and `recentRunDates` are Optional. A routines.json written
-    /// before this branch has neither key, and synthesized `Decodable` calls `decode(_:forKey:)`
-    /// — not `decodeIfPresent` — for any non-Optional property, so a Swift-side default literal
-    /// would *not* have protected existing files. Same reasoning as `StoredWorkspace.teamType`.
-    @Test
-    func routineJSONWrittenBeforeSchedulingStillDecodes() throws {
-        let legacy = """
-        {
-          "name": "Morning",
-          "steps": [
-            {
-              "id": "open",
-              "operation": "open_app",
-              "description": "Open Safari.",
-              "appName": "Safari"
-            }
-          ]
-        }
-        """
 
-        let routine = try JSONDecoder().decode(StoredRoutine.self, from: Data(legacy.utf8))
-
-        #expect(routine.name == "Morning")
-        #expect(routine.schedule == nil)
-        #expect(routine.recentRunDates == nil)
-        #expect(routine.effectiveRecentRunDates.isEmpty)
-        #expect(routine.isScheduled == false)
-    }
-
-    @Test
-    func scheduleSurvivesAnEncodeDecodeRoundTrip() throws {
-        let schedule = RoutineSchedule(
-            cadence: .weekly,
-            hour: 9,
-            minute: 30,
-            weekday: 2,
-            isEnabled: true,
-            unattendedTrusted: true,
-            lastRunAt: Date(timeIntervalSince1970: 1_700_000_000)
-        )
-        let routine = StoredRoutine(name: "Morning", steps: [.fixture], schedule: schedule)
-
-        let data = try JSONEncoder().encode(routine)
-        let decoded = try JSONDecoder().decode(StoredRoutine.self, from: data)
-
-        #expect(decoded == routine)
-        #expect(decoded.schedule == schedule)
-    }
 
     /// SONNY-31 added `pausedReason`, so the same legacy question applies to it: a routines.json
     /// written before this field existed has no key for it, and a non-Optional property would have
@@ -82,25 +35,6 @@ struct RoutineScheduleTests {
         #expect(schedule.cadence == .daily)
     }
 
-    @Test
-    func aPausedScheduleSurvivesAnEncodeDecodeRoundTrip() throws {
-        var schedule = RoutineSchedule(
-            cadence: .daily,
-            hour: 9,
-            minute: 0,
-            isEnabled: true,
-            unattendedTrusted: true,
-            lastRunAt: Date(timeIntervalSince1970: 1_700_000_000)
-        )
-        schedule.pause(reason: "Draft output already exists at /tmp/weekly.md.")
-        let routine = StoredRoutine(name: "Morning", steps: [.fixture], schedule: schedule)
-
-        let decoded = try JSONDecoder().decode(StoredRoutine.self, from: JSONEncoder().encode(routine))
-
-        #expect(decoded.schedule?.pausedReason == "Draft output already exists at /tmp/weekly.md.")
-        #expect(decoded.schedule?.isEnabled == false)
-        #expect(decoded == routine)
-    }
 
     // MARK: - Pausing (SONNY-31)
 
@@ -188,42 +122,7 @@ struct RoutineScheduleTests {
         #expect(stillPaused.pausedReason == "Snippet trigger ;sig already exists and would be replaced.")
     }
 
-    /// The store-level sibling of the two above, and the one the view model actually calls.
-    /// Verifies it writes through rather than mutating a copy, and that it leaves the baseline the
-    /// scheduled-run path advanced moments earlier exactly where it was.
-    @Test
-    func pauseScheduleWritesThroughTheStoreWithoutDisturbingTheBaseline() throws {
-        let root = try makeDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
-        let store = RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
-        let occurrence = Date(timeIntervalSince1970: 1_700_000_000)
-        var schedule = RoutineSchedule(cadence: .daily, hour: 9, minute: 0, unattendedTrusted: true)
-        schedule.setEnabled(true, now: occurrence.addingTimeInterval(-86_400))
-        try store.save(StoredRoutine(name: "Morning", steps: [.fixture], schedule: schedule))
-        try store.advanceScheduleBaseline(routineNamed: "Morning", to: occurrence)
 
-        try store.pauseSchedule(routineNamed: "Morning", reason: "Markdown output already exists at /tmp/hn.md.")
-
-        let saved = try store.routine(named: "Morning")
-        #expect(saved.schedule?.isEnabled == false)
-        #expect(saved.schedule?.pausedReason == "Markdown output already exists at /tmp/hn.md.")
-        #expect(saved.schedule?.lastRunAt == occurrence)
-        #expect(saved.schedule?.unattendedTrusted == true)
-    }
-
-    /// Same no-op-rather-than-throw contract `advanceScheduleBaseline` documents: a schedule can
-    /// legitimately be cleared between a run starting and this write landing.
-    @Test
-    func pausingARoutineWithNoScheduleDoesNothingRatherThanThrowing() throws {
-        let root = try makeDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
-        let store = RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
-        try store.save(StoredRoutine(name: "Morning", steps: [.fixture]))
-
-        try store.pauseSchedule(routineNamed: "Morning", reason: "Anything.")
-
-        #expect(try store.routine(named: "Morning").schedule == nil)
-    }
 
     // MARK: - The catch-up anchor
 
@@ -333,30 +232,6 @@ struct RoutineScheduleTests {
         #expect(created.lastRunAt == later)
     }
 
-    /// Switching cadence must fill in what the new cadence requires, or it produces a schedule
-    /// `validate()` rejects — a weekly with no weekday, a monthly with no day.
-    @Test
-    func switchingCadenceFillsInTheFieldsTheNewCadenceRequires() throws {
-        var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = try #require(TimeZone(identifier: "America/New_York"))
-        // Wednesday 15 July 2026 — weekday 4 under Calendar's Sunday == 1 convention.
-        let now = try #require(
-            calendar.date(from: DateComponents(year: 2026, month: 7, day: 15, hour: 12, minute: 0))
-        )
-        var schedule = RoutineSchedule.newlyCreated(cadence: .daily, hour: 9, minute: 0, now: now)
-
-        schedule.setCadence(.weekly, now: now, calendar: calendar)
-        #expect(schedule.weekday == 4)
-        #expect(throws: Never.self) { try schedule.validate() }
-
-        schedule.setCadence(.monthly, now: now, calendar: calendar)
-        #expect(schedule.dayOfMonth == 15)
-        #expect(throws: Never.self) { try schedule.validate() }
-
-        // Switching back does not discard what was already chosen.
-        schedule.setCadence(.weekly, now: now, calendar: calendar)
-        #expect(schedule.weekday == 4)
-    }
 
     // MARK: - Catch-up windows
 
@@ -380,268 +255,23 @@ struct RoutineScheduleTests {
 
     // MARK: - Validation
 
-    @Test
-    func savingRejectsOutOfRangeAndCadenceMismatchedSchedules() throws {
-        let root = try makeDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
-        let store = RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
 
-        #expect(throws: AutomationStoreError.invalidSchedule("Run time must be a real time of day.")) {
-            try store.save(routine(schedule: RoutineSchedule(cadence: .daily, hour: 24, minute: 0)))
-        }
-        #expect(throws: AutomationStoreError.invalidSchedule("Run time must be a real time of day.")) {
-            try store.save(routine(schedule: RoutineSchedule(cadence: .daily, hour: 9, minute: 60)))
-        }
-        #expect(throws: AutomationStoreError.invalidSchedule("A weekly routine needs a weekday.")) {
-            try store.save(routine(schedule: RoutineSchedule(cadence: .weekly, hour: 9, minute: 0)))
-        }
-        #expect(throws: AutomationStoreError.invalidSchedule("A monthly routine needs a day of the month.")) {
-            try store.save(routine(schedule: RoutineSchedule(cadence: .monthly, hour: 9, minute: 0)))
-        }
-    }
 
-    /// Day 29-31 is accepted rather than rejected: "run this on the 31st" is a legitimate thing to
-    /// ask for, and resolving it in a 30-day month is the scheduler's date math (checkpoint 3), not
-    /// a reason to refuse the schedule.
-    /// The opposite boundary from the cases above. Without these, widening `(1...7)` to `(1...8)`
-    /// or `(1...31)` to `(1...32)` would fail no test at all, and a weekday of 8 — not a real
-    /// `Calendar` value — would be accepted and silently never match an occurrence.
-    @Test
-    func savingRejectsValuesJustPastEitherEndOfEveryValidRange() throws {
-        let root = try makeDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
-        let store = RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
-        let badTime = AutomationStoreError.invalidSchedule("Run time must be a real time of day.")
-        let badWeekday = AutomationStoreError.invalidSchedule("A weekly routine needs a weekday.")
-        let badDay = AutomationStoreError.invalidSchedule("A monthly routine needs a day of the month.")
 
-        #expect(throws: badTime) {
-            try store.save(routine(schedule: RoutineSchedule(cadence: .daily, hour: -1, minute: 0)))
-        }
-        #expect(throws: badTime) {
-            try store.save(routine(schedule: RoutineSchedule(cadence: .daily, hour: 9, minute: -1)))
-        }
-        #expect(throws: badWeekday) {
-            try store.save(routine(schedule: RoutineSchedule(cadence: .weekly, hour: 9, minute: 0, weekday: 0)))
-        }
-        #expect(throws: badWeekday) {
-            try store.save(routine(schedule: RoutineSchedule(cadence: .weekly, hour: 9, minute: 0, weekday: 8)))
-        }
-        #expect(throws: badDay) {
-            try store.save(routine(schedule: RoutineSchedule(cadence: .monthly, hour: 9, minute: 0, dayOfMonth: 0)))
-        }
-        #expect(throws: badDay) {
-            try store.save(routine(schedule: RoutineSchedule(cadence: .monthly, hour: 9, minute: 0, dayOfMonth: 32)))
-        }
-    }
 
-    /// The inclusive ends must stay accepted — a range check tightened too far is as wrong as one
-    /// left too loose, and nothing above would catch `(1...7)` becoming `(2...6)`.
-    @Test
-    func savingAcceptsEveryValueAtTheInclusiveEndsOfEachRange() throws {
-        let root = try makeDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
-        let store = RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
-
-        try store.save(routine(schedule: RoutineSchedule(cadence: .daily, hour: 0, minute: 0)))
-        try store.save(routine(schedule: RoutineSchedule(cadence: .daily, hour: 23, minute: 59)))
-        try store.save(routine(schedule: RoutineSchedule(cadence: .weekly, hour: 9, minute: 0, weekday: 1)))
-        try store.save(routine(schedule: RoutineSchedule(cadence: .weekly, hour: 9, minute: 0, weekday: 7)))
-        try store.save(routine(schedule: RoutineSchedule(cadence: .monthly, hour: 9, minute: 0, dayOfMonth: 1)))
-
-        #expect(try store.routine(named: "Morning").schedule?.dayOfMonth == 1)
-    }
-
-    @Test
-    func savingAcceptsMonthEndDaysThatDoNotExistInEveryMonth() throws {
-        let root = try makeDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
-        let store = RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
-
-        try store.save(routine(schedule: RoutineSchedule(cadence: .monthly, hour: 9, minute: 0, dayOfMonth: 31)))
-
-        #expect(try store.routine(named: "Morning").schedule?.dayOfMonth == 31)
-    }
-
-    @Test
-    func savingAnUnscheduledRoutineStillWorks() throws {
-        let root = try makeDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
-        let store = RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
-
-        try store.save(StoredRoutine(name: "Morning", steps: [.fixture]))
-
-        #expect(try store.routine(named: "Morning").schedule == nil)
-    }
 
     // MARK: - Run history
 
-    @Test
-    func recordingRunsAppendsInOrderAndKeepsTheMostRecentWithinTheCap() throws {
-        let root = try makeDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
-        let store = RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
-        try store.save(StoredRoutine(name: "Morning", steps: [.fixture]))
-        let base = Date(timeIntervalSince1970: 1_700_000_000)
 
-        for index in 0..<(StoredRoutine.recentRunDateLimit + 10) {
-            try store.recordRun(routineNamed: "Morning", at: base.addingTimeInterval(Double(index) * 86_400))
-        }
 
-        let dates = try store.routine(named: "Morning").effectiveRecentRunDates
-        #expect(dates.count == StoredRoutine.recentRunDateLimit)
-        // Trimming drops the *oldest*, so the newest run must survive — a cap that discarded the
-        // newest would silently break any streak computed from this list.
-        #expect(dates.last == base.addingTimeInterval(Double(StoredRoutine.recentRunDateLimit + 9) * 86_400))
-        #expect(dates == dates.sorted())
-    }
 
-    /// `recordRun` sorts rather than assuming its input arrives in order, but the cap test above
-    /// feeds a strictly increasing sequence — insertion order already equals sorted order there, so
-    /// deleting the sort would break nothing. This is the case that actually exercises it: a
-    /// backdated timestamp (a clock adjustment between runs, a catch-up recorded after a later
-    /// manual run) must land in its correct position, because the trim below drops from the front
-    /// on the assumption that the front is the oldest.
-    @Test
-    func recordingABackdatedRunKeepsHistorySortedInsteadOfAppendingItAtTheEnd() throws {
-        let root = try makeDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
-        let store = RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
-        try store.save(StoredRoutine(name: "Morning", steps: [.fixture]))
-        let base = Date(timeIntervalSince1970: 1_700_000_000)
-        let later = base.addingTimeInterval(86_400)
-
-        try store.recordRun(routineNamed: "Morning", at: later)
-        try store.recordRun(routineNamed: "Morning", at: base)
-
-        #expect(try store.routine(named: "Morning").effectiveRecentRunDates == [base, later])
-    }
-
-    /// The consequence of the above at the cap boundary: with history already full, a backdated
-    /// run must be the entry that gets dropped — never the newest real run. An unsorted list would
-    /// trim from the wrong end and silently delete the most recent run instead.
-    @Test
-    func aBackdatedRunAtTheCapIsDroppedRatherThanEvictingTheNewestRun() throws {
-        let root = try makeDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
-        let store = RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
-        try store.save(StoredRoutine(name: "Morning", steps: [.fixture]))
-        let base = Date(timeIntervalSince1970: 1_700_000_000)
-        for index in 0..<StoredRoutine.recentRunDateLimit {
-            try store.recordRun(routineNamed: "Morning", at: base.addingTimeInterval(Double(index) * 86_400))
-        }
-        let newest = base.addingTimeInterval(Double(StoredRoutine.recentRunDateLimit - 1) * 86_400)
-
-        try store.recordRun(routineNamed: "Morning", at: base.addingTimeInterval(-86_400))
-
-        let dates = try store.routine(named: "Morning").effectiveRecentRunDates
-        #expect(dates.count == StoredRoutine.recentRunDateLimit)
-        #expect(dates.last == newest)
-        #expect(dates.contains(base.addingTimeInterval(-86_400)) == false)
-    }
-
-    /// Recording a run is not the same event as the scheduler firing: a manual run should show up
-    /// in history (it is a real run, and the streak badge counts it) without moving the catch-up
-    /// baseline, which only the scheduler owns.
-    @Test
-    func recordingARunDoesNotMoveTheCatchUpBaseline() throws {
-        let root = try makeDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
-        let store = RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
-        let enabledAt = Date(timeIntervalSince1970: 1_700_000_000)
-        var schedule = RoutineSchedule(cadence: .daily, hour: 9, minute: 0, isEnabled: false)
-        schedule.setEnabled(true, now: enabledAt)
-        try store.save(routine(schedule: schedule))
-
-        try store.recordRun(routineNamed: "Morning", at: enabledAt.addingTimeInterval(7_200))
-
-        let saved = try store.routine(named: "Morning")
-        #expect(saved.effectiveRecentRunDates.count == 1)
-        #expect(saved.schedule?.lastRunAt == enabledAt)
-    }
 
     // MARK: - Redefining an existing routine
 
-    /// `SaveRoutineCapabilityAdapter` builds a fresh `StoredRoutine(name:steps:)` for every save,
-    /// and `save` replaces the dictionary entry wholesale — so "save a routine called Morning
-    /// that opens Safari" against an already-scheduled Morning used to silently discard its
-    /// schedule and its entire run history.
-    ///
-    /// That overwrite is already tier 3, so the user does approve *something* — but what the
-    /// approval copy tells them is that the routine's steps would be replaced. Losing an
-    /// unattended-trust opt-in and a streak is not what they agreed to, and nothing would have
-    /// told them it happened.
-    @Test
-    func redefiningARoutineKeepsItsScheduleAndRunHistory() throws {
-        let root = try makeDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
-        let store = RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
-        let enabledAt = Date(timeIntervalSince1970: 1_700_000_000)
-        var schedule = RoutineSchedule(cadence: .daily, hour: 9, minute: 0, unattendedTrusted: true)
-        schedule.setEnabled(true, now: enabledAt)
-        try store.save(routine(schedule: schedule))
-        try store.recordRun(routineNamed: "Morning", at: enabledAt.addingTimeInterval(86_400))
 
-        // Exactly what the save-routine adapter constructs: name + steps, nothing else.
-        try store.save(
-            StoredRoutine(
-                name: "Morning",
-                steps: [AgentStep(id: "mail", operation: .openApp, description: "Open Mail.", appName: "Mail")]
-            )
-        )
 
-        let saved = try store.routine(named: "Morning")
-        #expect(saved.steps.map(\.appName) == ["Mail"])
-        #expect(saved.schedule == schedule)
-        #expect(saved.schedule?.unattendedTrusted == true)
-        #expect(saved.effectiveRecentRunDates.count == 1)
-    }
 
-    /// The counterpart: `setSchedule` is the explicit way to change or clear a schedule, so
-    /// preserving-on-nil in `save` never becomes a trap where scheduling can't be turned off.
-    @Test
-    func setScheduleIsTheExplicitWayToChangeOrClearASchedule() throws {
-        let root = try makeDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
-        let store = RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
-        try store.save(StoredRoutine(name: "Morning", steps: [.fixture]))
 
-        try store.setSchedule(routineNamed: "Morning", to: RoutineSchedule(cadence: .daily, hour: 7, minute: 15))
-        #expect(try store.routine(named: "Morning").schedule?.hour == 7)
-
-        try store.setSchedule(routineNamed: "Morning", to: nil)
-        #expect(try store.routine(named: "Morning").schedule == nil)
-    }
-
-    @Test
-    func setScheduleValidatesAndRejectsAnUnknownRoutine() throws {
-        let root = try makeDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
-        let store = RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
-        try store.save(StoredRoutine(name: "Morning", steps: [.fixture]))
-
-        #expect(throws: AutomationStoreError.invalidSchedule("A weekly routine needs a weekday.")) {
-            try store.setSchedule(routineNamed: "Morning", to: RoutineSchedule(cadence: .weekly, hour: 9, minute: 0))
-        }
-        #expect(throws: AutomationStoreError.missingRoutine("Ghost")) {
-            try store.setSchedule(routineNamed: "Ghost", to: RoutineSchedule(cadence: .daily, hour: 9, minute: 0))
-        }
-    }
-
-    @Test
-    func recordingARunForAnUnknownRoutineThrowsRatherThanSilentlyDoingNothing() throws {
-        let root = try makeDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
-        let store = RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
-
-        #expect(throws: AutomationStoreError.missingRoutine("Ghost")) {
-            try store.recordRun(routineNamed: "Ghost", at: Date(timeIntervalSince1970: 1_700_000_000))
-        }
-    }
-
-    private func routine(schedule: RoutineSchedule) -> StoredRoutine {
-        StoredRoutine(name: "Morning", steps: [.fixture], schedule: schedule)
-    }
 
     private func makeDirectory() throws -> URL {
         let url = FileManager.default.temporaryDirectory

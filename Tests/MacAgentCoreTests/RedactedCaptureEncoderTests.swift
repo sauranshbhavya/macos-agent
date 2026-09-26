@@ -66,7 +66,7 @@ struct RedactedCaptureEncoderTests {
 
     /// The media type describes the bytes, rather than being a label attached beside them. A payload
     /// that said `.png` over JPEG bytes would produce a `data:image/png;base64,…` URL carrying a
-    /// JPEG, which is the exact bug the hardcoded literal in `OpenCodeVisionModelClient` was.
+    /// JPEG, which is the exact bug a hardcoded media type once was.
     @Test
     func theDeclaredMediaTypeMatchesWhatTheBytesActuallyAre() async throws {
         let service = LocalRedactionService(textRecognizer: StubRecognizer())
@@ -89,10 +89,8 @@ struct RedactedCaptureEncoderTests {
 
     /// The payload's reported dimensions are the encoded image's own, not the capture's.
     ///
-    /// This is the contract the whole acting path rests on: `VisionSessionPromptBuilder` tells the
-    /// model these numbers, and `VisionPointResolver` scales the model's answer by them. A payload
-    /// that reported the capture's dimensions after resampling would put every click off by the
-    /// resample factor.
+    /// A model is told these numbers and a click is scaled by them, so a payload that reported the
+    /// capture's dimensions after resampling would put every click off by the resample factor.
     @Test
     func theReportedDimensionsAreTheEncodedImagesOwnAtEveryLadderRung() async throws {
         let png = ImageFixtures.uniformNoisePNG(width: 500, height: 300)
@@ -152,8 +150,8 @@ struct RedactedCaptureEncoderTests {
     /// captures collapses from 0.79–0.90 at full resolution to 0.03–0.10 at half, and that is with a
     /// *lossless* encoding — the loss is the resolution, not the compression. A rung below the floor
     /// would be trading a clear refusal for a picture nothing can read. The refusal itself belongs to
-    /// the client that owns the wire limit, so the encoder returns the smallest it managed and
-    /// `OpenCodeVisionModelClient` declines it with its own message.
+    /// the client that owns the wire limit, so the encoder returns the smallest it managed and that
+    /// client declines it with its own message.
     @Test
     func theLadderStopsAtHalfScaleRatherThanSendingSomethingUnreadable() async throws {
         let png = ImageFixtures.uniformNoisePNG(width: 800, height: 600)

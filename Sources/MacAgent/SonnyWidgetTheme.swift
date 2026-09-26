@@ -38,15 +38,12 @@ private struct WidgetVisualEffectBackground: NSViewRepresentable {
 // and do not reuse WidgetTheme/WidgetType outside the floating widget itself.
 
 enum WidgetTheme {
-    static let panelBase = Color(red: 0x1A / 255, green: 0x1A / 255, blue: 0x1A / 255)
     static let hairline = Color(red: 0xA6 / 255, green: 0xA6 / 255, blue: 0xA6 / 255)
 
     /// §3.1: per-action accents, not one universal accent — do not reuse SonnyTheme.accent here.
     static let primaryAction = Color(red: 0x00 / 255, green: 0x91 / 255, blue: 0xFF / 255)
-    static let secondaryCircular = Color(red: 0xFF / 255, green: 0x92 / 255, blue: 0x30 / 255)
     static let allowAction = Color(red: 0x30 / 255, green: 0xD1 / 255, blue: 0x58 / 255)
     static let errorGlyph = Color(red: 0xFF / 255, green: 0x74 / 255, blue: 0x74 / 255)
-    static let taskFailureRetry = Color(red: 0xFF / 255, green: 0x38 / 255, blue: 0x3C / 255)
     static let neutralButtonFill = Color(red: 0x99 / 255, green: 0x99 / 255, blue: 0x99 / 255).opacity(0.17)
     /// The voice-countdown's last-thirty-seconds colour (phase 11, the voice lane). Mirrors
     /// `SonnyTheme.warning`'s dark reading (`0xE8B84A`) — System B has no warning accent of its own
@@ -83,10 +80,6 @@ enum WidgetTheme {
     /// seventeen call sites; 28 matches System A's own `SonnyMetrics.controlRegular` floor without
     /// importing that token, since System B may not reach into System A's set.
     static let controlSize: CGFloat = 28
-    /// The corner radius on the Safe-mode capture-review thumbnail.
-    static let thumbnailRadius: CGFloat = 8
-    /// The corner radius on `WidgetNoticeStrip`.
-    static let noticeRadius: CGFloat = 16
 }
 
 enum WidgetType {
@@ -201,10 +194,6 @@ private struct WidgetTintedButtonBackground<S: InsettableShape>: ViewModifier {
 }
 
 extension View {
-    func widgetCircularBackground(tint: Color? = nil) -> some View {
-        modifier(WidgetTintedButtonBackground(shape: Circle(), tint: tint))
-    }
-
     func widgetCapsuleBackground(tint: Color?) -> some View {
         modifier(WidgetTintedButtonBackground(shape: Capsule(), tint: tint))
     }

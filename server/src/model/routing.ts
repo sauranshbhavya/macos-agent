@@ -7,29 +7,9 @@ import { errorBody } from "../errors.js";
 import { ProviderRejected, ProviderTimedOut, ProviderUnavailable } from "./upstream.js";
 
 /**
- * The two things every model route does around its provider call: bound it in time, and turn what it
- * threw into one of §7.2's codes (SONNY-131).
- *
- * **These are copies, and the originals are still in `routes/model.ts`.** Say that plainly, because
- * the first version of this header did not (PR #144, F3): it argued that copying "would have given
- * §12's deadline behaviour and §7.2's failure mapping two implementations that can drift" and then
- * said "so they are here" — which reads as if the duplication had been avoided. It was created, on
- * purpose, and it is real:
- *
- * ```
- * git grep -n "function withDeadlines"      -- server/src   ->  routing.ts:32, routes/model.ts:143
- * git grep -n "function sendUpstreamFailure" -- server/src   ->  routing.ts:67, routes/model.ts:95
- * ```
- *
- * **Why a copy rather than a move.** Both were private declarations inside `routes/model.ts`, which
- * is on SONNY-131's never-touch list — it is "the four text routes" — so deleting them there was not
- * that ticket's to do. **SONNY-316** is the ticket that points the four text routes at this file and
- * deletes the originals, and until it lands there are genuinely two implementations of §12's
- * deadline wrapper and §7.2's failure mapping. **Do not edit one of them and assume the other
- * followed.**
- *
- * Nothing here is new behaviour: the bodies are byte-identical to SONNY-130's, so `SONNY-316` is a
- * deletion rather than a merge.
+ * Deadlines and failure mapping shared by the HTTP routes: `withDeadlines` and `sendUpstreamFailure`
+ * for a route that calls a provider (transcription, and the timeout arm of the auth routes), and a
+ * request-scoped database budget for the account routes (`underTotalDeadline`).
  */
 
 /**
@@ -67,7 +47,7 @@ export async function withDeadlines<T>(
 }
 
 /**
- * Every upstream failure a model route can produce, as §7.2 names it.
+ * Every upstream failure a provider call can produce, as §7.2 names it.
  *
  * **Keyed on the thrown type, never on a status this gateway saw.** §9.3 states the client-side
  * version of the same rule and gives the reason: several statuses carry more than one code with
@@ -134,14 +114,10 @@ const TRANSACTION_CONTROL: ReadonlySet<string> = new Set(["BEGIN", "COMMIT", "RO
  * statements land inside whatever transaction the next request has open. **A deadline around work
  * that holds a database connection is never a race that abandons.**
  *
- * **Nor is it the cooperative poll `DELETE /v1/account` uses, and that is a measurement rather than
- * a taste.** That route's work is a *loop* of provider calls, so a signal read between calls is a
- * real bound. The four content-deletion routes' work is not shaped that way: every path they drive
- * in `content/store.ts` — `taskOwnership`, `deleteContentForTask`, `deleteContentForTasks`,
- * `clearScreenshotsForTask`, `deleteContentForAccount` and `deleteStoredResponsesForAccount` — is a
- * fixed sequence of set-based statements with no loop anywhere, so the time is spent *inside* a
- * statement and the gaps between them are where it is not. A poll between statements would be a
- * bound that cannot fire on the one failure mode this work actually has.
+ * **Nor is it the cooperative poll `DELETE /v1/account` uses.** That route's work is a *loop* of
+ * provider calls, so a signal read between calls is a real bound. Database work is a sequence of
+ * set-based statements, so the time is spent *inside* a statement, and a poll between statements
+ * would be a bound that cannot fire.
  *
  * **So the bound is Postgres's own `statement_timeout`, which is the one instrument that ends a
  * running statement.** A cancelled statement rejects with `57014`, the store's own `catch` rolls
@@ -151,7 +127,7 @@ const TRANSACTION_CONTROL: ReadonlySet<string> = new Set(["BEGIN", "COMMIT", "RO
  * **The budget is a deadline and not a duration, which is what makes it §12's *total*.** A
  * per-statement timeout of 15 s over a six-statement handler is a 90-second bound wearing §12's
  * number, so the remaining budget is recomputed before every statement and an exhausted one is
- * refused without a round trip. The cost is one extra round trip per statement; these are deletion
+ * refused without a round trip. The cost is one extra round trip per statement; these are account
  * routes rather than a hot path, and the alternative is a promise the table does not make.
  *
  * **Transaction control is exempt from both the bound and the refusal, and that is the whole of the
@@ -193,10 +169,7 @@ export async function withDatabaseDeadline<T>(
         // `expiresAt` — would otherwise be handed to the backend as a licence to run forever, and
         // the request would answer its ordinary 200 with §12's promise silently switched off. The
         // shipped guard was already right and nothing held it: the loosened mutant survived the
-        // whole suite. `refuses a remainder of exactly zero…` in `content.test.ts` is what holds it
-        // now, on a frozen clock, and it asserts the empty statement list as well as the throw —
-        // the throw alone cannot tell a refusal apart from a `TO 0` that failed for some other
-        // reason.
+        // whole suite.
         if (remaining <= 0) {
           throw new ProviderTimedOut("the route's total deadline elapsed");
         }
@@ -204,8 +177,7 @@ export async function withDatabaseDeadline<T>(
         // fresh review, F1). A remainder wider than the pool's ten seconds handed to Postgres here is
         // a statement Postgres lets run for the whole remainder, so a caller whose statements §12
         // derives a ten-second bound for passes `perStatement` and each statement takes the smaller
-        // of the two. The deletion routes pass none and keep their recorded composition, where the
-        // innermost `SET` governs in either direction.
+        // of the two.
         const statementBudget =
           deadline.perStatement === undefined ? remaining : Math.min(remaining, deadline.perStatement);
         // Interpolated because `SET` takes no bind parameter, and safe because the value is this
@@ -228,7 +200,7 @@ export async function withDatabaseDeadline<T>(
     // **Session-level, so it outlives this lease unless it is cleared.** The reset is best-effort
     // and its own failure is never allowed to replace the outcome above: a connection too broken to
     // accept `RESET` is one whose next user will fail on its own terms, and masking a completed
-    // deletion's answer with that would be the worse of the two.
+    // request's answer with that would be the worse of the two.
     if (applied) {
       try {
         await client.query("RESET statement_timeout");
@@ -243,10 +215,9 @@ export async function withDatabaseDeadline<T>(
  * §12's total deadline for the request under way, carried to every lease a handler's stores take
  * (SONNY-434).
  *
- * **Why a request scope and not a wrapper at the route, which is what the four content-deletion
- * routes have.** Those handlers lease a connection themselves and hand the bounded client to store
- * functions that take one. The three account routes — `GET /v1/account/entitlements`, and the read
- * and the consent switch in `routes/credits.ts` — never hold a client: `EntitlementStore` and
+ * **Why a request scope and not a wrapper around a leased client.** The three account routes —
+ * `GET /v1/account/entitlements`, and the read and the consent switch in `routes/credits.ts` — never
+ * hold a client: `EntitlementStore` and
  * `CreditStore` lease *internally* by construction, which is SONNY-300's seam and the reason their
  * transactions cannot be merged with anything. So the handler has no client to wrap, and the
  * alternative — a store built per request over one leased client — reshapes every store factory and

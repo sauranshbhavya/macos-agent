@@ -34,7 +34,6 @@ import { DEADLINE_MS } from "../model/limits.js";
 import { sendUpstreamFailure, withDeadlines } from "../model/routing.js";
 import { ProviderTimedOut } from "../model/upstream.js";
 import { requireSupabaseJwtPolicy, type Config } from "../config.js";
-import { deleteContentForAccount, type DeletionOutcome } from "../content/store.js";
 import { deleteStoredResponsesForAccount } from "../idempotency/store.js";
 import type { WithConnection } from "../db/connection.js";
 
@@ -107,8 +106,8 @@ function providerUnavailable(
  * 15 s total deadline, and no route here applied either. A sign-in whose provider call stalled was
  * bounded only by `app.ts`'s server-wide delivery bound of 120 s — which SONNY-322 documents as
  * bounding *receipt* of a request rather than a handler, and as landing tens of seconds late — so
- * the contract's row was a promise the code did not keep. `routes/model.ts` and `routes/screen.ts`
- * have applied the same wrapper since SONNY-130 and SONNY-131.
+ * the contract's row was a promise the code did not keep. `routes/model.ts` has applied the same
+ * wrapper since SONNY-130.
  *
  * **Why the answers here are not all the wrapper's.** `model/routing.ts`'s `sendUpstreamFailure`
  * maps all three upstream failures for a model route, and this file cannot use it that way: each
@@ -508,7 +507,7 @@ export function registerAuth(app: FastifyInstance, config: Config, deps: AuthDep
    * review, finding 1). The root idempotency hook claims a row in `sonny.idempotency_key` for every
    * `POST` that carries an `Idempotency-Key`, and the Mac sends a fresh one on this call, so each
    * keyed call costs a pooled connection, an insert and a stored response of about 217 bytes. The
-   * content sweep clears the payload after §9.2's twenty-four hours and keeps the row. That is the
+   * task retention sweep clears the payload after §9.2's twenty-four hours and keeps the row. That is the
    * standing `POST /v1/auth/refresh` already has — public, no per-source limit, the same row — and it
    * is why "no rate limit because a flood costs nothing" was the wrong reason to give. Whether this
    * route should take `oauth/google`'s per-source bucket is SONNY-318's, which owns the growth of
@@ -721,32 +720,13 @@ export function registerAuth(app: FastifyInstance, config: Config, deps: AuthDep
    * path in this file already excludes `deleted_at IS NOT NULL`, so no sign-in, no link and no
    * refresh can resurrect it.
    *
-   * **The content half is SONNY-134's and has now landed.** This comment used to end "it does not
-   * claim to have deleted content … until [the retention ticket] lands a closed account's content is
-   * retained and unreachable", which was true when SONNY-127 wrote it and stopped being true on
-   * 2026-08-28. What the wipe reaches is enumerated rather than described in general, because a
-   * privacy wipe is exactly the place a summary hides a gap:
+   * **What the close removes on the gateway**: the account's V2 tasks (`sonny.agent_task`, and
+   * their messages by cascade) and the replies `sonny.idempotency_key` kept to replay a retried
+   * request. The key rows and their metering claims survive, so the same key cannot be metered twice.
    *
-   * - **`sonny.retained_content`** — every request and response body, every capture, every recording
-   *   the account ever sent, on the content clock or not.
-   * - **`sonny.training_snapshot_member`** — the copies training reads from. This is the half that
-   *   cannot be retrofitted: a member carries a copy rather than a pointer, so deleting the live
-   *   content alone would leave the account's data in a sealed training set with nothing pointing at
-   *   it. `sonny.content_deletion` records which snapshots lost rows.
-   * - **`sonny.idempotency_key`'s stored responses** — SONNY-319, filed by SONNY-300 and closed
-   *   here. That table holds one response body per key for twenty-four hours, which makes it the one
-   *   place in this gateway holding response content outside the route that produced it, and the
-   *   ticket asked whether a wipe must take those immediately or may leave them to expire. It takes
-   *   them: a wipe that left a day of response bodies behind would be a wipe with an asterisk. The
-   *   rows themselves and their `metering_claimed_at` claims survive, which is what makes taking the
-   *   payloads free — a deleted claim would hand the same key a second metering event.
-   *
-   * **What it deliberately does not reach is usage**, and that is requirement 8's own wording
-   * ("content, usage history where the law or the promise requires it, and snapshot lineage") read
-   * against §10.3's two clocks. `sonny.metering_event` holds no content at all — 0012's header and
-   * its own column-set test are what make that checkable rather than asserted — and it is the record
-   * of what this account was billed for. Deleting a screenshot is what the user asked for; erasing
-   * the accounting is not, and would leave a real financial record unanswerable.
+   * **What it deliberately does not reach is usage.** `sonny.metering_event` and
+   * `sonny.agent_model_call` hold no content, and they are the record of what this account was
+   * billed for.
    *
    * **Note the client-side counterpart, and do not conflate the three.** `LocalDataDeletionService`
    * wipes the Mac's local stores and deliberately leaves the Keychain encryption key alone.
@@ -870,46 +850,20 @@ export function registerAuth(app: FastifyInstance, config: Config, deps: AuthDep
       );
     }
 
-    // **The wipe, after the close and after the drain** — see this handler's doc comment for what it
-    // reaches and what it deliberately does not.
-    //
-    // **After the close, so nothing can arrive behind it.** Every content-bearing route is
-    // authenticated and the gate refuses a closed account, so once `deleted_at` is committed no
-    // further content can be written for this account and the wipe cannot race a request that is
-    // still storing something. Running it before the close would leave exactly that window.
-    //
-    // **It catches and continues, for the reason the drain above catches and continues, and the
-    // failure is recoverable for the same kind of reason.** A throw here would be a 500 after a
-    // committed close — and the caller cannot retry, because `accountForSupabaseUser` no longer
-    // attributes them to the account and the gate answers 401. That is the exact permanent failure
-    // PR #87's third round removed from the revocation path, and reintroducing it on the content
-    // path would be worse: the account would be closed, its content still stored, and no request
-    // able to reach it.
-    //
-    // So what makes this safe is not this call succeeding. It is that content belonging to a closed
-    // account is **swept**: `sweepClosedAccountContent` runs on the same timer as the content clock
-    // and takes anything a wipe like this one could not. That also covers the accounts closed before
-    // this branch existed, which SONNY-127's own comment recorded as "retained and unreachable".
-    //
-    // **And what the sweep records is true because the wipe is one transaction** (SONNY-436). The
-    // stored-response clear used to commit here on its own before the content transaction opened, so
-    // a failure between the two left the bodies gone with no row naming them — and the sweep, finding
-    // the content still there, recorded `stored_responses: 0` beside bodies this request had removed.
-    // Handed to `deleteContentForAccount` instead, the clear rolls back with the rest, and whichever
-    // of this request or the sweep commits the wipe counts what it cleared.
-    let wiped: DeletionOutcome | undefined;
+    // **The wipe, after the close and after the drain**, so nothing can be stored for the account
+    // behind it: the gate refuses a closed account. It catches and continues, like the drain above,
+    // because the close is committed and the caller can no longer retry. What the wipe misses is not
+    // lost: the task retention sweep deletes a task 30 days after it ends, and clears a kept reply
+    // once its day is up.
+    let tasksDeleted: number | undefined;
+    let storedResponses: number | undefined;
     try {
-      wiped = await deleteContentForAccount(
-        client,
-        accountId,
-        deleteStoredResponsesForAccount,
-        "account",
-      );
+      tasksDeleted = (await client.query("DELETE FROM sonny.agent_task WHERE account_id = $1", [accountId])).rowCount ?? 0;
+      storedResponses = await deleteStoredResponsesForAccount(client, accountId);
     } catch (error) {
       request.log.error(
         { err: error, requestId: request.id },
-        "account closed, but its retained content could not be deleted in this request; " +
-          "the closed-account sweep will take it",
+        "account closed, but its tasks could not be deleted in this request; the retention sweep will take them",
       );
     }
 
@@ -934,10 +888,8 @@ export function registerAuth(app: FastifyInstance, config: Config, deps: AuthDep
         revoked: outcome.revoked,
         owed: outcome.failed,
         // `undefined` where the wipe failed, which is a different fact from zero and reads as one.
-        contentRows: wiped?.contentRows,
-        snapshotRows: wiped?.snapshotRows,
-        snapshots: wiped?.snapshotsTouched,
-        storedResponses: wiped?.storedResponses,
+        tasksDeleted,
+        storedResponses,
       },
       "account closed",
     );

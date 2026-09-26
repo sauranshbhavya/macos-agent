@@ -18,7 +18,6 @@ public struct SnippetExpansionCapabilityAdapter: CapabilityAdapter {
         // with no consumer. The front door is the instant resolver's exact-trigger match, and
         // `PlannerBoundaryTests` asserts that door stays open for exactly the operations excluded
         // from the planner's schema — so this emptiness is checked, not merely intended.
-        plannerTools: [],
         requiredPermissions: [],
         defaultRiskTier: .tier0
     )

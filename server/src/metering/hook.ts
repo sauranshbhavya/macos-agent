@@ -1,7 +1,6 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { Config } from "../config.js";
-import { noteContent } from "../content/hook.js";
-import { detailOf, type UpstreamUsage } from "../model/upstream.js";
+import type { UpstreamUsage } from "../model/upstream.js";
 import {
   meteredRouteFor,
   modelForRoute,
@@ -89,10 +88,6 @@ export interface MeteringFacts {
   readonly upstreamAttempted?: true;
   readonly upstreamDurationMs?: number;
   readonly usage?: UpstreamUsage | undefined;
-  readonly imageBytes?: number;
-  readonly imagePixelWidth?: number;
-  readonly imagePixelHeight?: number;
-  readonly imageMediaType?: string;
   readonly taskId?: string;
   readonly retention?: "standard" | "none";
   readonly sessionId?: string;
@@ -173,33 +168,6 @@ export async function meteredUpstreamCall<T>(
   const startedAt = performance.now();
   try {
     return await work();
-  } catch (error) {
-    // **The provider's error body is deposited here, in the one place every provider call in this
-    // gateway passes through** (SONNY-134). §10.3 requires it to land in the content store on the
-    // content clock rather than in an unclassified log, and this function is the single seam that
-    // can see it: the adapters have no request, and the obvious alternative — capturing it in
-    // `sendUpstreamFailure` — would mean editing **two** copies of that function and trusting them
-    // to stay in step, which is the exact drift `model/routing.ts` carries a warning about. A
-    // capture that exists on four routes and not the fifth is worse than none, because it reads
-    // like coverage.
-    //
-    // **Depositing is not storing.** `content/hook.ts` writes nothing for a request that did not
-    // declare `retention: "standard"`, so an incognito run's provider error body is deposited on a
-    // draft that is discarded — which is the guarantee a log line could never have made about the
-    // same bytes.
-    const detail = detailOf(error);
-    if (detail !== undefined) {
-      noteContent(request, {
-        providerErrorStatus: detail.status,
-        // Contract §10.3: "Provider request IDs are kept for correlation." Kept even when the body
-        // could not be read, because it is a header and it is what a vendor support ticket needs.
-        ...(detail.providerRequestId === null
-          ? {}
-          : { providerRequestId: detail.providerRequestId }),
-        ...(detail.body === null ? {} : { providerErrorBody: detail.body }),
-      });
-    }
-    throw error;
   } finally {
     noteMetering(request, { upstreamDurationMs: Math.round(performance.now() - startedAt) });
   }
@@ -220,9 +188,9 @@ const MAXIMUM_CLIENT_VERSION_LENGTH = 100;
 /**
  * The longest client-minted identifier this server stores, in characters.
  *
- * The same 200 the routes' own `zod` schemas enforce (`identifierField`). Bounded here as well
- * because these are read off the *unvalidated* body — a request refused at validation still gets an
- * event, and its `task_id` has been through nothing.
+ * The same 200 `routes/model.ts` enforces on `task_id`. Bounded here as well because these are read
+ * off the *unvalidated* body — a request refused at validation still gets an event, and its
+ * `task_id` has been through nothing.
  */
 const MAXIMUM_IDENTIFIER_LENGTH = 200;
 
@@ -261,9 +229,9 @@ function errorCodeOf(status: number, payload: unknown): string | undefined {
  * value is type-checked and bounded, so a body that carries a number where a string belongs
  * contributes nothing rather than a surprise.
  *
- * `/v1/transcriptions` is the one route this cannot serve: §4.4's body is `multipart/form-data`,
- * consumed inside the handler, so `request.body` is undefined there and the handler deposits its
- * `meta` part instead.
+ * A well-formed `/v1/transcriptions` body is `multipart/form-data`, consumed inside the handler, so
+ * `request.body` is undefined there and the handler deposits its `meta` part instead; this reads a
+ * body only when a caller sent JSON the route then refused.
  */
 function clientFieldsOf(body: unknown): MeteringFacts {
   if (typeof body !== "object" || body === null) return {};
@@ -432,8 +400,8 @@ export function registerMetering(
     //
     // **That shape is unreachable on every deployment this repository builds, and it is said plainly
     // rather than dressed up as a prevented failure** — the standard `idempotency/hook.ts` sets for
-    // its own `!deps` branch, which is the only thing that produces it. All five metered routes are
-    // authenticated, so a deployment serving one has `auth`, and a deployment with `auth` has a key
+    // its own `!deps` branch, which is the only thing that produces it. The metered route is
+    // authenticated, so a deployment serving it has `auth`, and a deployment with `auth` has a key
     // store. The two values are kept apart because the distinction is real and free, not because a
     // test can drive the second.
     const claim = request.idempotency;
@@ -463,10 +431,11 @@ export function registerMetering(
       outputTokens: tokenCount(usage?.outputTokens),
       totalTokens: tokenCount(usage?.totalTokens),
       tokenSource: usage?.source ?? null,
-      imageBytes: facts.imageBytes ?? null,
-      imagePixelWidth: facts.imagePixelWidth ?? null,
-      imagePixelHeight: facts.imagePixelHeight ?? null,
-      imageMediaType: facts.imageMediaType ?? null,
+      // No metered route carries an image any more; the columns stay for the rows already written.
+      imageBytes: null,
+      imagePixelWidth: null,
+      imagePixelHeight: null,
+      imageMediaType: null,
       audioDurationSeconds: tokenCount(usage?.audioDurationSeconds),
       requestBytes: declaredRequestBytes(request),
       responseBytes: draft.responseBytes,

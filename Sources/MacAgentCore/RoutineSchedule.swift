@@ -112,17 +112,8 @@ extension RoutineActivation: Codable {
 
 /// When a saved routine runs on its own, and whether it is allowed to do so unattended.
 ///
-/// `unattendedTrusted` is the per-routine trust opt-in that lets a run of this routine bypass the
-/// every-run tier-2 gate — originally scheduled triggers only, and manual dispatches too since
-/// SONNY-54 (the name predates that widening; it is a persisted coding key, so it keeps the old
-/// spelling). Running a saved routine is *itself* tier 2 by default, independent of its steps
-/// (`RunRoutineCapabilityAdapter.defaultRiskTier`), so without an explicit exception every
-/// scheduled run would simply stall waiting for an approval nobody is there to give, and every
-/// manual run would re-confirm on each invocation. It is deliberately per-routine rather than a
-/// blanket policy, and it is never a tier-3+ exception: that backstop lives in `AgentRunner`,
-/// which re-assesses at execute time and requires the approved tier to be at least the effective
-/// tier, so a trusted run can only ever carry a tier-2 approval and structurally cannot execute a
-/// tier-3+ plan.
+/// `unattendedTrusted` is V1's per-routine trust opt-in for its every-run tier-2 gate. It is still
+/// a persisted coding key, and nothing in V2 reads it.
 public struct RoutineSchedule: Codable, Equatable, Sendable {
     public var cadence: RoutineCadence
     public var hour: Int
@@ -231,28 +222,6 @@ public struct RoutineSchedule: Codable, Equatable, Sendable {
         }
         schedule.setEnabled(isEnabled, now: now)
         return schedule
-    }
-
-    /// Switches cadence, filling in whatever the new cadence requires.
-    ///
-    /// Weekly needs a weekday and monthly needs a day of the month; carrying over a nil from the
-    /// previous cadence would produce a schedule `validate()` rejects. Defaulting from `now` means
-    /// switching to Weekly gives "today's weekday", which is the least surprising answer and is
-    /// always in range.
-    public mutating func setCadence(_ newCadence: RoutineCadence, now: Date, calendar: Calendar = .current) {
-        cadence = newCadence
-        switch newCadence {
-        case .daily:
-            break
-        case .weekly:
-            if weekday == nil {
-                weekday = calendar.component(.weekday, from: now)
-            }
-        case .monthly:
-            if dayOfMonth == nil {
-                dayOfMonth = calendar.component(.day, from: now)
-            }
-        }
     }
 
     /// Flips `isEnabled`, re-anchoring the catch-up baseline on every off → on transition.
@@ -378,24 +347,4 @@ public struct RoutineSchedule: Codable, Equatable, Sendable {
         try container.encode(activation, forKey: .activation)
     }
 
-    /// Checked at the single choke point every write goes through (`RoutineStore.save`), the same
-    /// way `SnippetStore.save` validates a trigger — not in `init`, which `Decodable` bypasses.
-    func validate() throws {
-        guard (0...23).contains(hour), (0...59).contains(minute) else {
-            throw AutomationStoreError.invalidSchedule("Run time must be a real time of day.")
-        }
-
-        switch cadence {
-        case .daily:
-            break
-        case .weekly:
-            guard let weekday, (1...7).contains(weekday) else {
-                throw AutomationStoreError.invalidSchedule("A weekly routine needs a weekday.")
-            }
-        case .monthly:
-            guard let dayOfMonth, (1...31).contains(dayOfMonth) else {
-                throw AutomationStoreError.invalidSchedule("A monthly routine needs a day of the month.")
-            }
-        }
-    }
 }

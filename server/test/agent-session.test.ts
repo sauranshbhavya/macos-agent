@@ -38,6 +38,7 @@ afterEach(async () => {
 });
 
 const DEVICE = "d0d0d0d0-1111-4222-8333-444455556666";
+const noReplies = () => Promise.resolve(0);
 
 describe("a V2 session", () => {
   it("refuses an upgrade with no token", async () => {
@@ -394,7 +395,7 @@ describe("task retention", () => {
     await h.app.agentRunner!.idle();
     const touched = (await h.store.task(task))!.updatedAt;
     const later = new Date(touched.getTime() + TASK_ABANDON_AFTER_MS);
-    expect(await sweepTasksOnce({ store: h.store, ledger: h.ledger, now: () => later })).toMatchObject({ abandoned: 1 });
+    expect(await sweepTasksOnce({ store: h.store, ledger: h.ledger, pruneReplies: noReplies, now: () => later })).toMatchObject({ abandoned: 1 });
 
     const back = await mac(h.url);
     back.setSeq(task, 1);
@@ -415,11 +416,11 @@ describe("task retention", () => {
     const ended = (await h.store.task(task))!.endedAt!;
 
     const almost = new Date(ended.getTime() + TASK_RETENTION_MS - 1000);
-    await sweepTasksOnce({ store: h.store, ledger: h.ledger, now: () => almost });
+    await sweepTasksOnce({ store: h.store, ledger: h.ledger, pruneReplies: noReplies, now: () => almost });
     expect(await h.store.task(task)).toBeDefined();
 
     const after = new Date(ended.getTime() + TASK_RETENTION_MS);
-    expect(await sweepTasksOnce({ store: h.store, ledger: h.ledger, now: () => after })).toMatchObject({ deleted: 1 });
+    expect(await sweepTasksOnce({ store: h.store, ledger: h.ledger, pruneReplies: noReplies, now: () => after })).toMatchObject({ deleted: 1 });
     expect(await h.store.task(task)).toBeUndefined();
   });
 });

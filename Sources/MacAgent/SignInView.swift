@@ -4,18 +4,8 @@ import SwiftUI
 
 /// Sign-in state for the whole app, held once and observed by Command Center.
 ///
-/// **Its own object rather than another field on `AgentViewModel`.** The view model owns the run
-/// loop and every local store; an account session shares none of that, and adding it there
-/// would put one more required parameter on an initializer that already has no defaults at all,
-/// and would land in every one of its fixtures — which exist only because SONNY-240 removed every
-/// default from it.
-///
-/// (**Two numerals came out of that sentence, both stale, both for the same reason** — SONNY-326.
-/// It read "a *sixteenth* required parameter on an initializer whose *fifteen* fixtures". A
-/// required-parameter count moves whenever a store or a dependency is added, and a fixture count
-/// moves whenever a fixture file is — both are ordinary work, both had already happened, and
-/// neither number carried the argument. The argument is that the cost is paid at *every*
-/// construction site, and that holds at any count.)
+/// **Its own object rather than a field on `SonnyAppModel`**: the app model presents the kernel's
+/// tasks and stores, and an account session shares none of that.
 ///
 /// **`restore()` is what makes the app come back signed in.** It reads the Keychain and touches no
 /// network, so it works on a launch with no connection — and, the case this ticket exists for, on
@@ -104,26 +94,20 @@ final class SonnyAccountModel: ObservableObject {
     /// Called after this Mac's session changes — a sign-in that succeeded, or a sign-out that
     /// cleared it (SONNY-136, PR #153's F4).
     ///
-    /// **It exists because the readiness row was stale in both directions, and the direction that
-    /// matters is the second one.** `AgentViewModel.modelAccessReadiness` is refreshed only by
-    /// `refreshPermissions()`, whose call sites are all Command Center `onAppear`s and the Refresh
-    /// button — and sign-in is a *sheet* over Command Center, so the window's `onAppear` does not
-    /// re-fire when it closes. Signing in then left the "show permission readiness" tool answering
-    /// *"Sign in to Sonny in Command Center."* for a signed-in user; signing out left it answering
-    /// *"Signed in."* for a session that no longer exists, which is PR #139's F10 in its own words —
-    /// readiness that is not readiness — reappearing at the surface this ticket was assigned to fix.
+    /// **It exists because the readiness rows go stale otherwise.** Sign-in is a *sheet* over
+    /// Command Center, so the window's `onAppear` does not re-fire when it closes, and a readiness
+    /// row refreshed only there would keep saying "sign in" to a signed-in user, or "signed in" to a
+    /// session that no longer exists.
     ///
-    /// **A callback rather than this type reaching for the view model.** `SonnyAccountModel` knows
-    /// about a client and a service and nothing about the agent; giving it a reference to
-    /// `AgentViewModel` would invert that for one notification. `main.swift` owns both objects and
-    /// is where the two are already joined by the shared client, so it is where this is wired.
+    /// **A callback rather than this type reaching for the app model.** `SonnyAccountModel` knows
+    /// about a client and a service and nothing about the kernel; `main.swift` owns both objects and
+    /// is where they are already joined by the shared client, so it is where this is wired.
     ///
-    /// Not called by `restore()`: that runs at launch, before any window exists, and the view model
-    /// refreshes on the first `onAppear` anyway.
+    /// Not called by `restore()`: that runs at launch, before any window exists.
     var sessionDidChange: (@MainActor () -> Void)?
 
     /// The one backend client this process holds, exposed so `main.swift` can hand the *same* one to
-    /// `AgentViewModel` (SONNY-130).
+    /// the kernel (SONNY-130).
     ///
     /// **One client, not two, and the reason is the refresh guard.** `SonnyBackendClient` holds the
     /// single-flight generation counter that makes ten concurrent `401 auth.token_expired`s cause
@@ -164,9 +148,8 @@ final class SonnyAccountModel: ObservableObject {
 
     /// The shipping app's one request for the real Keychain and the real host resolution.
     ///
-    /// Mirrors `AgentViewModel.atItsRealStoreLocations()` exactly, including why it exists: one
-    /// named place where the real locations are allowed, rather than several where they arrive by
-    /// silence. `SignInSurfaceTests.onlyMainAsksForTheRealKeychain` holds `Sources/` as the
+    /// One named place where the real locations are allowed, rather than several where they arrive
+    /// by silence. `SignInSurfaceTests.onlyMainAsksForTheRealKeychain` holds `Sources/` as the
     /// population — exact equality on `["SignInView.swift": 1, "main.swift": 1]`, so it fails in
     /// both directions — and only `main.swift` may call it. (This named
     /// `SignInReleaseSwitchScanTests`, whose population is the five staging-pointer tokens and not
@@ -549,7 +532,7 @@ final class SonnyAccountModel: ObservableObject {
 /// and the number it is about from being one request apart. What this carries is only what the
 /// allowance cannot say — whether a write is in flight, why the last one failed, and how to make the
 /// next one.
-struct ScreenControlAutoTopUpControl {
+struct CreditAutoTopUpControl {
     let isBusy: Bool
     let failure: BillingSettingFailure?
     let set: (Bool) async -> Void
@@ -559,26 +542,16 @@ struct SignInDialogView: View {
     @ObservedObject var model: SonnyAccountModel
     @Binding var isPresented: Bool
 
-    /// The screen-control allowance to show beside the plan, or `nil` for none (SONNY-214, moved
-    /// here from Insights by the founder decision of 2026-09-02).
-    ///
-    /// **Passed in rather than read from a second copy of the state.** It lives on the one
-    /// `AgentViewModel` both surfaces observe — the widget's in-task line reads the same property —
-    /// which is `.claude/rules/macagent-ui-conventions.md`'s shared-state rule: new published state
-    /// goes on that instance and never gets a second, independently-coded path per surface.
-    ///
-    /// **Both parameters are required and first run passes `nil` in words.** A default would let a
-    /// third host of this dialog silently show no figure, and where the line does *not* belong is a
-    /// decision worth being able to read at the call site.
-    let screenControlAllowance: ScreenControlAllowance?
-    let refreshScreenControlAllowance: (() async -> Void)?
+    /// The credit balance to show beside the plan, or `nil` for none: a failed read shows no line.
+    let creditBalance: CreditBalance?
+    let refreshCreditBalance: (() async -> Void)?
     /// The auto-top-up control's write half, or `nil` where the control does not belong (SONNY-215).
     ///
     /// **Its *read* half is deliberately absent from this type**: whether the setting is on comes off
-    /// `screenControlAllowance.autoTopUp`, which is the same object the row above renders, so the
+    /// `creditBalance.autoTopUp`, which is the same object the row above renders, so the
     /// switch and the number beside it can never be one request apart. A `Bool` here would be a
     /// second copy of a fact the view already holds.
-    let screenControlAutoTopUp: ScreenControlAutoTopUpControl?
+    let creditAutoTopUp: CreditAutoTopUpControl?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -631,7 +604,7 @@ struct SignInDialogView: View {
         //
         // (This read "it is the one of these three that goes to the network on every open", which
         // was true only of `FirstRunSequence`, the one host that passes
-        // `refreshScreenControlAllowance: nil` — and that is not where the Account row is read.
+        // `refreshCreditBalance: nil` — and that is not where the Account row is read.
         // PR #206's F4.)
         .task { await model.refreshPaymentState() }
         .onChange(of: model.step) { _, step in
@@ -648,10 +621,10 @@ struct SignInDialogView: View {
         // The allowance is read on the same two occasions and for the same reason (SONNY-214). Its
         // own read rather than folded into the subscription's, so neither waits on the other: they
         // are two requests to two routes, and a slow one must not hold the other's row off screen.
-        .task { await refreshScreenControlAllowance?() }
+        .task { await refreshCreditBalance?() }
         .onChange(of: model.step) { _, step in
             guard step == .signedIn else { return }
-            Task { await refreshScreenControlAllowance?() }
+            Task { await refreshCreditBalance?() }
         }
     }
 
@@ -783,14 +756,14 @@ struct SignInDialogView: View {
             }
 
             subscriptionRow
-            screenControlUsageRow
-            screenControlAutoTopUpRow
-            screenControlLastTopUpRow
+            creditUsageRow
+            creditAutoTopUpRow
+            creditLastTopUpRow
         }
         .padding(.top, SonnySpacing.md)
     }
 
-    /// Whether Sonny may buy more runs when these run out (SONNY-215).
+    /// Whether Sonny may buy more credits when these run out (SONNY-215).
     ///
     /// **Directly under the usage row, and that placement is what the label leans on.** The control's
     /// name says "when *these* run out", and "these" is the figure on the line above — the same
@@ -808,14 +781,14 @@ struct SignInDialogView: View {
     /// `SonnyToggle`, flat opaque fills and no shadow. Nothing here is borrowed from the widget's
     /// material.
     @ViewBuilder
-    private var screenControlAutoTopUpRow: some View {
-        if let allowance = screenControlAllowance,
-           let control = screenControlAutoTopUp,
+    private var creditAutoTopUpRow: some View {
+        if let allowance = creditBalance,
+           let control = creditAutoTopUp,
            allowance.autoTopUp.isOffered {
             // **The price is on the control itself** (SONNY-215's F6, founder decision option B). A
             // switch that authorises a standing charge names the amount; nothing beside it explains
             // why, which is the line the no-explanatory-copy rule draws and the founder held.
-            let label = ScreenControlUsagePresentation.autoTopUpLabel(price: allowance.autoTopUp.price)
+            let label = CreditPresentation.autoTopUpLabel(price: allowance.autoTopUp.price)
             SettingsAdaptiveControlRow {
                 Text(label)
                     .font(SonnyType.body)
@@ -859,18 +832,18 @@ struct SignInDialogView: View {
     ///
     /// **A record, not a setting**, which is why it is its own row below the switch rather than a
     /// second line inside it: it stays true after the switch is turned off, and it is about money
-    /// rather than about runs.
+    /// rather than about credits.
     ///
     /// **Rendered whenever there is a charge to show, including when the setting is off and even
     /// when this deployment stopped offering top-ups.** A user who was charged is owed the record
     /// whatever the switch says now — hiding it behind `isOffered`, as the switch above is, would
     /// make a receipt disappear because a configuration changed.
     @ViewBuilder
-    private var screenControlLastTopUpRow: some View {
-        if let charge = screenControlAllowance?.lastTopUp,
-           let line = ScreenControlUsagePresentation.lastTopUpLine(charge) {
+    private var creditLastTopUpRow: some View {
+        if let charge = creditBalance?.lastTopUp,
+           let line = CreditPresentation.lastTopUpLine(charge) {
             SettingsAdaptiveControlRow {
-                Text(ScreenControlUsagePresentation.lastTopUpLabel)
+                Text(CreditPresentation.lastTopUpLabel)
                     .font(SonnyType.body)
                     .foregroundStyle(SonnyTheme.muted)
                     .fixedSize(horizontal: false, vertical: true)
@@ -879,33 +852,21 @@ struct SignInDialogView: View {
                     .font(SonnyType.body)
                     .foregroundStyle(SonnyTheme.text)
                     .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityLabel("\(ScreenControlUsagePresentation.lastTopUpLabel), \(line)")
+                    .accessibilityLabel("\(CreditPresentation.lastTopUpLabel), \(line)")
             }
         }
     }
 
-    /// How many screen-control runs the plan has left, beside the plan itself (SONNY-214).
-    ///
-    /// **Here, and deliberately not on Insights.** It was built there first, against a founder
-    /// decision of 2026-07-24 that nobody in the chain had read: that page refuses
-    /// usage/quota-consumption metrics outright, on stated product-strategy grounds — cancellation
-    /// anxiety in heavy users, "am I getting my money's worth" doubt in light ones. The ruling of
-    /// 2026-09-02 moved the line here instead of overriding that decision, so both stand: Insights
-    /// stays encouraging, and the figure appears where somebody is already thinking about their
-    /// plan. The widget's in-task line is a different surface and did not move.
-    ///
-    /// **Absent, not zeroed, when there is no figure** — the same rule the subscription row above
-    /// follows and the same one `ScreenControlAllowanceService` states: a failed read is a failure
-    /// and never a number, because zero locks a user out of what they paid for and any positive
-    /// number promises runs the server never granted.
+    /// How many credits the plan has left, beside the plan itself. Absent, not zeroed, when there is
+    /// no figure: a failed read is a failure and never a number.
     @ViewBuilder
-    private var screenControlUsageRow: some View {
-        if let screenControlAllowance {
+    private var creditUsageRow: some View {
+        if let creditBalance {
             // Formatted once and read twice — the visible line and the screen reader's must be the
             // same sentence, and two calls are two places for them to stop being.
-            let line = ScreenControlUsagePresentation.usageLine(screenControlAllowance)
+            let line = CreditPresentation.usageLine(creditBalance)
             SettingsAdaptiveControlRow {
-                Text(ScreenControlUsagePresentation.label)
+                Text(CreditPresentation.label)
                     .font(SonnyType.body)
                     .foregroundStyle(SonnyTheme.muted)
                     .fixedSize(horizontal: false, vertical: true)
@@ -914,7 +875,7 @@ struct SignInDialogView: View {
                     .font(SonnyType.body)
                     .foregroundStyle(SonnyTheme.text)
                     .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityLabel("\(ScreenControlUsagePresentation.label), \(line)")
+                    .accessibilityLabel("\(CreditPresentation.label), \(line)")
             }
         }
     }

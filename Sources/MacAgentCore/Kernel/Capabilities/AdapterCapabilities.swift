@@ -17,6 +17,10 @@ public struct AdapterCapability: Capability {
     let previewOnly: Bool
     let context: @MainActor @Sendable () -> CapabilityExecutionContext
     let steps: @Sendable ([String: JSONValue]) throws -> [AgentStep]
+    /// What an adapter pinned the first time an action was prepared. The kernel prepares an action
+    /// again just before it runs, and "in five minutes" must still mean five minutes from when Sonny
+    /// first read it, or every approval that took a minute would be voided as changed.
+    let pins = PreparePins()
 
     struct Resolved: Sendable {
         let plan: AgentPlan
@@ -38,17 +42,25 @@ public struct AdapterCapability: Capability {
     @MainActor
     private func prepareOnMain(actionID: ActionID, args: [String: JSONValue], steps: [AgentStep]) throws -> PreparedAction {
         let context = self.context()
+        var steps = steps
+        pins.apply(to: &steps, for: actionID)
         let plan = AgentPlan(summary: name, requiresConfirmation: false, steps: steps)
         let resolved: AgentPlan
         let previews: [ActionPreview]
         let risk: CapabilityRiskAssessment
         do {
             resolved = try adapter.resolveDefaultOutputs(in: plan, context: context)
+            // An adapter that needs a detail the arguments didn't give turns the step into a
+            // question. Nothing runs; the question goes back as the reason, so the planner can ask it.
+            if let question = resolved.steps.first(where: { $0.operation == .clarify })?.question {
+                throw CapabilityPrepareError.invalidArguments(question)
+            }
             previews = try adapter.preview(plan: resolved, context: context)
             risk = try adapter.assessRisk(plan: resolved, context: context)
         } catch {
             throw Self.prepareError(error)
         }
+        pins.record(resolved.steps, for: actionID)
         var effect = floor
         for escalation in risk.escalations {
             switch escalation.consequence {
@@ -82,8 +94,12 @@ public struct AdapterCapability: Capability {
 
     @MainActor
     private func executeOnMain(_ resolved: Resolved) async -> CapabilityOutcome {
+        let context = self.context()
         do {
-            let result = try await adapter.execute(plan: resolved.plan, context: context(), log: { _, _ in })
+            let result = try await adapter.execute(plan: resolved.plan, context: context, log: { _, _ in })
+            // The files Sonny made (a zip, converted PDFs, a written file) are what "recent files"
+            // lists. The action already happened, so a list that can't be updated doesn't fail it.
+            _ = try? context.recentArtifactStore.recordGeneratedArtifacts(from: result)
             return .done(Self.evidence(summary: result.summary, previews: result.previews))
         } catch {
             return .failed(.executionError, Self.userMessage(error))
@@ -108,6 +124,7 @@ public struct AdapterCapability: Capability {
     }
 
     static func prepareError(_ error: Error) -> CapabilityPrepareError {
+        if let already = error as? CapabilityPrepareError { return already }
         let message = userMessage(error)
         switch error {
         case is PathValidationError:
@@ -115,6 +132,33 @@ public struct AdapterCapability: Capability {
             return .targetRefused(message)
         default:
             return .invalidArguments(message)
+        }
+    }
+}
+
+/// The instants adapters pin while resolving a step, kept per action so a second prepare of the same
+/// action reads the same ones. Only the most recent actions are kept.
+final class PreparePins: @unchecked Sendable {
+    private let lock = NSLock()
+    private var dueDates: [ActionID: [Date?]] = [:]
+    private var order: [ActionID] = []
+    static let kept = 256
+
+    func apply(to steps: inout [AgentStep], for action: ActionID) {
+        guard let pinned = lock.withLock({ dueDates[action] }), pinned.count == steps.count else { return }
+        for index in steps.indices where steps[index].resolvedReminderDueDate == nil {
+            steps[index].resolvedReminderDueDate = pinned[index]
+        }
+    }
+
+    func record(_ steps: [AgentStep], for action: ActionID) {
+        let due = steps.map(\.resolvedReminderDueDate)
+        guard due.contains(where: { $0 != nil }) else { return }
+        lock.withLock {
+            guard dueDates[action] == nil else { return }
+            dueDates[action] = due
+            order.append(action)
+            if order.count > Self.kept { dueDates[order.removeFirst()] = nil }
         }
     }
 }
@@ -303,7 +347,7 @@ public enum StandardCapabilities {
         now: @escaping @Sendable () -> Date = { Date() }
     ) -> KernelCapabilities {
         KernelCapabilities(
-            [OpenAppCapability(), SaveRoutineCapability(store: routines, now: now)]
+            [OpenAppCapability(focus: { context().focusRestorer }), SaveRoutineCapability(store: routines, now: now)]
                 + AdapterCapabilities.all(context: context, finderRevealer: finderRevealer)
                 + MailCapabilities.all(runner: appleScript)
         )

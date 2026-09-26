@@ -517,7 +517,7 @@ import Testing
         // initiated, so it can wipe the local session from a background refresh, and that is worth
         // one test naming it rather than being a surprise to whoever meets it next.
         //
-        // **It is pre-existing rather than this ticket's**: `refreshScreenControlAllowance` already
+        // **It is pre-existing rather than this ticket's**: `refreshCreditBalance` already
         // does the identical thing on the identical sheet. Asserted here because this branch adds a
         // second unprompted authenticated read to that surface, so the population grew.
         let signer = Signer()

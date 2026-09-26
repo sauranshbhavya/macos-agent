@@ -9,58 +9,15 @@ import Foundation
 ///
 /// | Route | Server total deadline | Client timeout |
 /// |---|---|---|
-/// | screen/analyze, research/synthesize | 105 s | 120 s |
-/// | plan, transcriptions | 75 s | 90 s |
-/// | search | 25 s | 30 s |
-/// | auth, account, meta, health, delete | 15 s | 20 s |
+/// | transcriptions | 75 s | 90 s |
+/// | auth, account, meta, health | 15 s | 20 s |
 ///
-/// SONNY-128 declared only the last row, because a constant for a route nobody sends is a number
-/// that goes stale before anything reads it. SONNY-130 added the four it built beside it, and
-/// SONNY-131 the vision row — so the table is complete and every row is a route something sends.
-///
-/// Each of these sits above the server's own total deadline for the same route
-/// (`server/src/model/limits.ts`), which is the whole of §12's governing rule. **The margin is not
-/// a constant, and this comment said it was fifteen seconds until PR #139's F2** — it is fifteen on
-/// the four long routes and **five** on `search` and on the auth row, straight from §12's table.
-/// `ModelRouteNumbersTests` holds both halves of that table as literals, so neither side can move
-/// without the other failing.
+/// Each sits above the server's own total deadline for the same route (`server/src/model/limits.ts`),
+/// which is §12's governing rule; `ModelRouteNumbersTests` holds both halves as literals.
 public enum SonnyBackendTimeouts {
     public static let auth: TimeInterval = 20
-    public static let plan: TimeInterval = 90
-    public static let researchSynthesis: TimeInterval = 120
     public static let transcription: TimeInterval = 90
-    public static let search: TimeInterval = 30
-    /// §12's longest client budget, shared with `researchSynthesis` (SONNY-131).
-    ///
-    /// **What the margin buys is a retry, and nothing else the user can see** — which is worth
-    /// stating exactly, because the sentence that stood here claimed more and had it backwards
-    /// (PR #144, F7). A slow iteration that ends as the server's typed `504 provider.timeout` is
-    /// retried once by `SonnyBackendClient` (`SonnyBackendErrorCode.providerTimeout.maximumAttempts`
-    /// is 2); one that ends as this client's own transport timeout is not retried at all
-    /// (`attemptCeiling` returns `nil` for `.timedOut`). 120 s against the server's 105 s total is
-    /// the fifteen seconds §12 gives the long routes, and that fifteen seconds is what makes the
-    /// first outcome reachable instead of the second.
-    ///
-    /// **The user sees the same sentence either way, and that is a real gap rather than a nuance.**
-    /// Traced end to end at this head: server upstream (90 s) and server total (105 s) both arrive as
-    /// `504 provider.timeout` → `SignInFailure.backendUnreachable`; the client's own 120 s arrives as
-    /// `SonnyBackendError.timedOut` → the same case; and `SonnyBackendCopy.sentence` answers all
-    /// three with **"Sonny couldn't finish this one. Try again."**, which
-    /// `VisionSessionInterrupted` then suffixes with the step count. So the old claim — that the
-    /// client "cannot tell apart" a transport timeout from a dead network — is inverted twice over:
-    /// a dead network is `SonnyBackendError.offline`, which is the one case that *does* get its own
-    /// sentence ("You're offline. Everything Sonny does on this Mac still works."), and the two that
-    /// share one are the two the comment said were distinguishable.
-    ///
-    /// **One sentence for three deadline outcomes is defensible here and is not this file's to
-    /// change.** All three mean the same thing to a person — Sonny waited and gave up — and none
-    /// suggests a different action, so three sentences would be three ways to say "try again" and
-    /// would breach the standing rule that the product does not explain itself. What is *not*
-    /// defensible is a comment implying the app already distinguishes them. Making the unreachable
-    /// states distinguishable where it genuinely matters is SONNY-136's, and a dated comment on that
-    /// ticket says this route currently collapses three into one.
-    public static let screenAnalyze: TimeInterval = 120
-    /// The budget for buying more screen-control runs — **forty seconds** (SONNY-215).
+    /// The budget for buying more credits — **forty seconds** (SONNY-215).
     ///
     /// **Longer than `auth` because the gateway makes two sequential provider calls behind it**, not
     /// because a database read got slower. An off-session charge is a draft order and then a
@@ -126,52 +83,6 @@ public struct SonnyBackendRequest: Sendable, Equatable {
         self.idempotencyKey = idempotencyKey
         self.timeout = timeout
         self.isRetrySafe = isRetrySafe
-    }
-}
-
-/// The body of `DELETE /v1/tasks` (SONNY-404, contract §4.6.1).
-///
-/// Snake-cased field name, matching the wire exactly, so the encoder needs no key strategy and the
-/// shape a reader sees here is the shape §4.6.1 documents.
-struct SonnyBulkTaskDeletionRequest: Encodable, Sendable {
-    // swiftlint:disable:next identifier_name
-    let task_ids: [String]
-}
-
-/// What `DELETE /v1/tasks` answered (SONNY-404, contract §4.6.1).
-///
-/// **Decoded leniently, and that is §8.1's rule rather than laziness.** A field this client cannot
-/// read is a field the gateway may have renamed or a body a proxy mangled, and either way the safe
-/// reading of "how many of these ids belong to somebody else" is *none of them known to be
-/// foreign* — which settles the obligation. The alternative, treating an unreadable body as
-/// "possibly foreign", would keep every bulk obligation forever the first time a response shape
-/// moved. `requests_deleted` is on the wire and deliberately not read here, for the reason
-/// SONNY-333 gives about the single-task delete: nothing renders it.
-public struct SonnyBulkTaskDeletion: Sendable, Equatable {
-    /// Submitted ids this account owns, or that the gateway has never heard of. Both are settled.
-    public let tasksDeleted: Int
-    /// Submitted ids the gateway knows under a *different* account.
-    public let tasksNotFound: Int
-
-    public init(tasksDeleted: Int, tasksNotFound: Int) {
-        self.tasksDeleted = tasksDeleted
-        self.tasksNotFound = tasksNotFound
-    }
-
-    static func decode(_ data: Data) -> SonnyBulkTaskDeletion {
-        struct Body: Decodable {
-            // swiftlint:disable:next identifier_name
-            let tasks_deleted: Int?
-            // swiftlint:disable:next identifier_name
-            let tasks_not_found: Int?
-        }
-        guard let body = try? JSONDecoder().decode(Body.self, from: data) else {
-            return SonnyBulkTaskDeletion(tasksDeleted: 0, tasksNotFound: 0)
-        }
-        return SonnyBulkTaskDeletion(
-            tasksDeleted: body.tasks_deleted ?? 0,
-            tasksNotFound: body.tasks_not_found ?? 0
-        )
     }
 }
 
@@ -321,12 +232,10 @@ public actor SonnyBackendClient: GatewayCredentials {
 
     /// `tokenStore` has no default, deliberately.
     ///
-    /// SONNY-240 removed every defaulted local store from `AgentViewModel.init` because a default
-    /// nobody writes is a default nobody can see, and a fixture that inherited one wrote to the
-    /// developer's own `~/Library`. The Keychain is the same hazard one step worse: every packaged
-    /// build on a Mac shares one Keychain, so a test or a fixture that let this default would read
-    /// and *delete* the founder's real session. `session` keeps the `= .shared` default the six
-    /// provider clients already use, because a URLSession touches nothing shared on disk.
+    /// A default nobody writes is a default nobody can see (SONNY-240), and the Keychain is the
+    /// worst place for one: every packaged build on a Mac shares one Keychain, so a test or a
+    /// fixture that let this default would read and *delete* the founder's real session. `session`
+    /// keeps its `= .shared` default, because a URLSession touches nothing shared on disk.
     public init(
         environment: SonnyBackendEnvironment?,
         tokenStore: any SonnyAccountTokenStoring,
@@ -993,102 +902,10 @@ public actor SonnyBackendClient: GatewayCredentials {
         meta = document
     }
 
-    // MARK: - Task deletions (SONNY-404, contract §4.6.1 and §4.6.2)
-
-    /// **Why these two live on the client while SONNY-333's single-task delete lives on
-    /// `SonnyTaskDeletionService`.** That one is a bare `send` whose body is deliberately never
-    /// decoded — nothing on this Mac consumes `requests_deleted`. These two own a response shape:
-    /// the bulk delete's answer decides whether a queued obligation is finished, and a call whose
-    /// caller must read its body is a call with a decoder, which is what this region is. They sit
-    /// together because the two routes arrived together and a reader looking for one wants the other
-    /// beside it.
-
-    /// `DELETE /v1/tasks` — several tasks in one request (contract §4.6.1).
-    ///
-    /// **The count of ids the gateway knows under another account is the whole reason this returns
-    /// anything.** §4.6 answers a single foreign id with a `404`, which
-    /// `SonnyTaskDeletionService` reads as "not deliverable by this session, never not deliverable"
-    /// and keeps. The batch cannot say that with a status code without stranding every id beside the
-    /// foreign one, so it says it with a number and the caller applies the same rule.
-    public func deleteTasks(ids: [String]) async throws -> SonnyBulkTaskDeletion {
-        let response = try await send(SonnyBackendRequest(
-            method: "DELETE",
-            path: "/v1/tasks",
-            body: try JSONEncoder().encode(SonnyBulkTaskDeletionRequest(task_ids: ids)),
-            authentication: .bearer,
-            // §9.3's "naturally idempotent" row, which this route joins: a second delete of the same
-            // ids succeeds having removed nothing. A key would stand in for a lost response that
-            // costs nothing to ask for again.
-            idempotencyKey: nil,
-            // §12's `auth, account, meta, health, delete` row.
-            timeout: SonnyBackendTimeouts.auth,
-            isRetrySafe: true
-        ))
-        return SonnyBulkTaskDeletion.decode(response.data)
-    }
-
-    /// `DELETE /v1/tasks/{task_id}/screenshots` — that task's screenshots and nothing else
-    /// (contract §4.6.2).
-    ///
-    /// The body is not decoded, for the reason SONNY-333 gives about the single-task delete: nothing
-    /// on this Mac consumes `screenshots_deleted`, and decoding a field no caller reads invites a
-    /// later one to cache on it. A `200` is the whole answer — including the `200` a task the
-    /// gateway never stored gets, which §4.6 makes a success rather than a `404`.
-    public func deleteTaskScreenshots(id: String) async throws {
-        _ = try await send(SonnyBackendRequest(
-            method: "DELETE",
-            path: SonnyTaskDeletionService.path(forTaskID: id) + "/screenshots",
-            body: nil,
-            authentication: .bearer,
-            idempotencyKey: nil,
-            timeout: SonnyBackendTimeouts.auth,
-            isRetrySafe: true
-        ))
-    }
-
-    /// `DELETE /v1/account/content` — everything this account has stored, account left open
-    /// (contract §4.6.3).
-    ///
-    /// **The account is not on the wire**, which is the whole safety property of this call: the
-    /// gateway takes it from the token the gate already verified, so there is no id here to get
-    /// wrong and no way for this Mac to name somebody else's account.
-    ///
-    /// The body is not decoded, for the reason the two calls above give about their own counts:
-    /// nothing on this Mac renders `requests_deleted`, and the wipe's words turn on whether the call
-    /// succeeded rather than on what it took.
-    /// `before` is the instant the wipe was pressed, and the route deletes only content at or
-    /// before it (SONNY-404, PR #207's F1). An obligation the queue delivers days later would
-    /// otherwise reach content the press never covered — the user signs in, works for a week, and
-    /// a launch sweep takes it all.
-    public func deleteAccountContent(before cutoff: Date) async throws {
-        _ = try await send(SonnyBackendRequest(
-            method: "DELETE",
-            path: "/v1/account/content?before=" + Self.iso8601(cutoff),
-            body: nil,
-            authentication: .bearer,
-            // §9.3's naturally-idempotent family, which this route joins: a second call finds
-            // nothing and succeeds.
-            idempotencyKey: nil,
-            timeout: SonnyBackendTimeouts.auth,
-            isRetrySafe: true
-        ))
-    }
-
-    /// The one instant format this client puts on a wire, per §2.1.
-    ///
-    /// Built per call rather than held statically: `ISO8601DateFormatter` is not `Sendable`, and a
-    /// shared one behind an actor would be a mutable box reachable from a nonisolated context. This
-    /// runs once per account-wipe delivery, which is at most a handful of times per launch.
-    static func iso8601(_ instant: Date) -> String {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime]
-        return formatter.string(from: instant)
-    }
-
     // MARK: - Clock
 
-    /// `public` since SONNY-404 (PR #207's cycle-3, G1): the whole wipe's cutoff is compared against
-    /// the gateway's own timestamps, so it has to be this clock rather than the Mac's.
+    /// The gateway's clock as this client last observed it, for anything compared against the
+    /// gateway's own timestamps.
     public func serverNow() -> Date { now().addingTimeInterval(serverClockOffset) }
 
     /// The last instant a server reported, paired with the monotonic reading it arrived at.

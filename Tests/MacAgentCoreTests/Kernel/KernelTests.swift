@@ -663,7 +663,7 @@ struct InstantPathTests {
 
     @Test
     func aPlanWithAStepThatHasNoV2FormGoesToTheGateway() {
-        let plan = AgentPlan(summary: "x", requiresConfirmation: false, steps: [AgentStep(id: "1", operation: .openWorkspace, description: "w")])
+        let plan = AgentPlan(summary: "x", requiresConfirmation: false, steps: [AgentStep(id: "1", operation: .rename, description: "w")])
         #expect(InstantPath.actions(for: plan) == nil)
     }
 }

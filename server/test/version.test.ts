@@ -402,7 +402,7 @@ describe("a client below the minimum supported version", () => {
     // makes auth.token_expired the one 401 a client answers by refreshing and retrying — so with
     // the auth gate first this client loops forever and never learns the one fact that ends it.
     const app = buildApp(armed());
-    const protectedRoute = { method: "POST" as const, url: "/v1/plan" };
+    const protectedRoute = { method: "POST" as const, url: "/v1/transcriptions" };
     const modern = await app.inject({
       ...protectedRoute,
       headers: { "sonny-client-version": "3.0.0" },
@@ -453,7 +453,7 @@ describe("a client above the minimum but below the recommended version", () => {
     const app = buildApp(armed());
     const unauthenticated = await app.inject({
       method: "POST",
-      url: "/v1/plan",
+      url: "/v1/transcriptions",
       headers: { "sonny-client-version": "2.5.0" },
       payload: {},
     });
@@ -529,7 +529,7 @@ describe("a deployment that has said nothing about versions", () => {
     // The gate adds no hook at all when disarmed, so nothing about the auth gate, the not-found
     // handler or the error envelope moves.
     const app = buildApp(testConfig());
-    const unauthenticated = await app.inject({ method: "POST", url: "/v1/plan", payload: {} });
+    const unauthenticated = await app.inject({ method: "POST", url: "/v1/transcriptions", payload: {} });
     expect(unauthenticated.statusCode).toBe(401);
     expect(unauthenticated.json().error.code).toBe("auth.unauthenticated");
     const missing = await get(app, "/v1/nothing-here", "0.0.1");

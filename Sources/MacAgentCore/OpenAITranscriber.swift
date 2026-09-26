@@ -7,7 +7,7 @@ import Foundation
 /// sentence naming the variable was the environment-variable surface, and that surface belonged to
 /// the ticket that owns it. Removing the sentence and keeping the case would have left an enum case
 /// nothing can construct and nothing can throw, so both went together.
-public enum TranscriptionError: Error, LocalizedError, Equatable, CarriesBackendError {
+public enum TranscriptionError: Error, LocalizedError, Equatable {
     case unreadableAudioFile(String)
     case missingText
     /// The recording is longer than Sonny will transcribe. **This is the client half of SONNY-130's
@@ -16,29 +16,6 @@ public enum TranscriptionError: Error, LocalizedError, Equatable, CarriesBackend
     /// A call to Sonny's backend failed. The user sees `SonnyBackendCopy`'s sentence, never the
     /// server's own `message` (§7.1).
     case backend(SonnyBackendError)
-
-    /// ``CarriesBackendError``: so a cancellation raised inside the shared client is still
-    /// recognisable after this type wraps it (SONNY-320), the same one line the other two text
-    /// wrappers carry.
-    ///
-    /// **What this route does not yet have is anything that presses stop**, stated here rather than
-    /// left for a reader to assume from the conformance. `AgentViewModel.stopVoiceRecordingAndTranscribe`
-    /// runs the transcription in an unstructured `Task { }` that nothing stores, so
-    /// `cancelCurrentRun`'s `currentTask?.cancel()` cannot reach it — the product question of
-    /// whether it should, and what surface would offer the press, is SONNY-332's.
-    ///
-    /// **The caller now asks, which is the half that is done** (SONNY-327). This used to say the
-    /// route's own `catch` called `setError(error.localizedDescription)` without consulting
-    /// ``SonnyBackendError/isCancellation(_:)`` at all, and it did; the non-success exit is now the
-    /// single seam `AgentViewModel.deliverTranscriptionError(_:)`, which consults it. So a
-    /// cancellation that becomes raisable renders as a stop rather than as the `.cancelled`
-    /// sentence below. The conformance is still right and still belongs here: the population
-    /// SONNY-320 fixed is the error type, and a type that answers the question wrongly is a trap for
-    /// the caller that eventually asks it.
-    public var backendError: SonnyBackendError? {
-        guard case .backend(let error) = self else { return nil }
-        return error
-    }
 
     public var errorDescription: String? {
         switch self {
@@ -124,16 +101,10 @@ public struct TranscriptionResult: Equatable, Sendable {
 public struct OpenAITranscriber: Sendable {
     private let client: SonnyBackendClient
     private let taskContext: BackendTaskContext
-    private let usageRecorder: any TaskUsageRecording
 
-    public init(
-        client: SonnyBackendClient,
-        taskContext: BackendTaskContext,
-        usageRecorder: any TaskUsageRecording = NoopTaskUsageRecorder.shared
-    ) {
+    public init(client: SonnyBackendClient, taskContext: BackendTaskContext) {
         self.client = client
         self.taskContext = taskContext
-        self.usageRecorder = usageRecorder
     }
 
     /// Transcribe a recording, refusing one that ran past `VoiceRecordingLimit`.
@@ -149,10 +120,9 @@ public struct OpenAITranscriber: Sendable {
         audioFileURL: URL,
         recordedDuration: TimeInterval?
     ) async throws -> TranscriptionResult {
-        // **Refused before a byte is sent**, which is the shape §6.2 asks for and the shape
-        // `VisionModelClient` already uses for its own oversize payloads: a refusal the user can act
-        // on, rather than a 413 they cannot explain and cannot fix by retrying. Checked before the
-        // file is even read, so an over-length recording costs nothing at all.
+        // **Refused before a byte is sent**, which is the shape §6.2 asks for: a refusal the user can
+        // act on, rather than a 413 they cannot explain and cannot fix by retrying. Checked before
+        // the file is even read, so an over-length recording costs nothing at all.
         if let recordedDuration, VoiceRecordingLimit.isTooLong(recordedDuration) {
             throw TranscriptionError.recordingTooLong(
                 maximumSeconds: Int(VoiceRecordingLimit.maximumDurationSeconds)
@@ -193,7 +163,6 @@ public struct OpenAITranscriber: Sendable {
                 kind: .transcription,
                 model: SonnyModelRoute.transcription.usageModelName
             )
-        usageRecorder.record(usage)
         return TranscriptionResult(text: text, usage: usage)
     }
 

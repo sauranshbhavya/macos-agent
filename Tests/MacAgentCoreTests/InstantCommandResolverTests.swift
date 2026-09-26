@@ -20,9 +20,7 @@ struct InstantCommandResolverTests {
     func resolverBuildsCalculatorPlanForExplicitAndBareInputs() throws {
         let resolver = InstantCommandResolver(
             snippetStore: UnreachableLocalStores.snippets(),
-            recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
-            routineStore: UnreachableLocalStores.routines(),
-            workspaceStore: UnreachableLocalStores.workspaces()
+            recentArtifactStore: UnreachableLocalStores.recentArtifacts()
         )
 
         guard case .plan(let explicitPlan) = resolver.resolve(command: "calc 2 + 2") else {
@@ -46,9 +44,7 @@ struct InstantCommandResolverTests {
     func resolverClarifiesEmptyCalculatorCommand() throws {
         let resolver = InstantCommandResolver(
             snippetStore: UnreachableLocalStores.snippets(),
-            recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
-            routineStore: UnreachableLocalStores.routines(),
-            workspaceStore: UnreachableLocalStores.workspaces()
+            recentArtifactStore: UnreachableLocalStores.recentArtifacts()
         )
 
         guard case .clarify(let plan) = resolver.resolve(command: "calculate") else {
@@ -60,61 +56,6 @@ struct InstantCommandResolverTests {
         #expect(plan.steps[0].question == "What would you like me to calculate?")
     }
 
-    @Test
-    func instantCalculatorBypassesPlannerButUsesRunnerRiskPipeline() async throws {
-        let resolver = InstantCommandResolver(
-            snippetStore: UnreachableLocalStores.snippets(),
-            recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
-            routineStore: UnreachableLocalStores.routines(),
-            workspaceStore: UnreachableLocalStores.workspaces()
-        )
-        guard case .plan(let plan) = resolver.resolve(command: "calc 2 + 2 * 3") else {
-            Issue.record("Expected calculator command to resolve locally.")
-            return
-        }
-
-        let logStore = AgentLogStore()
-        let usageRecorder = TaskUsageRecorder()
-        let runner = AgentRunner(
-            planner: FailingPlanner(),
-            executor: AgentActionExecutor(
-                routineStore: UnreachableLocalStores.routines(),
-                workspaceStore: UnreachableLocalStores.workspaces(),
-                usageRecorder: usageRecorder,
-                clipboardHistoryStore: UnreachableLocalStores.clipboardHistory(),
-                snippetStore: UnreachableLocalStores.snippets(),
-                recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
-                shortcutRunHistoryStore: UnreachableLocalStores.shortcutRunHistory(),
-                resumableTaskStore: UnreachableLocalStores.resumableTasks(),
-            ),
-            logStore: logStore
-        )
-
-        let prepared = try runner.prepare(plan: plan, source: .instantResolver)
-        #expect(prepared.previews.first?.title == "Calculate")
-        #expect(prepared.previews.first?.details.contains("Result: 8") == true)
-
-        let request = try runner.approvalRequest(
-            for: prepared,
-            logAssessment: true,
-            scope: .unscoped,
-            context: ApprovalContext(mode: .normal, appControl: .notApplicable)
-        )
-        #expect(request.assessment.effectiveTier == .tier0)
-        #expect(request.requirement == .autoRun)
-
-        let result = try await runner.execute(
-            prepared,
-            confirmationMessage: "Instant calculator auto-run",
-            scope: .unscoped,
-            context: ApprovalContext(mode: .normal, appControl: .notApplicable)
-        )
-        #expect(result.summary == "2 + 2 * 3 = 8.")
-        #expect(usageRecorder.snapshot().requestCount == 0)
-        #expect(logStore.events.contains { $0.phase == .plan && $0.message == "Resolved command locally" })
-        #expect(logStore.events.contains { $0.phase == .risk && $0.message.contains("risk.assessed: Tier 0") })
-    }
-
     /// The sign a person types at the end of a sum (SONNY-281). `2 + 2` was answered here and
     /// `2 + 2 =` was not — the trailing sign fell outside the bare-arithmetic rule's character set,
     /// and the sum reached a planner that has no calculator to offer. The rule now reads the sum the
@@ -123,9 +64,7 @@ struct InstantCommandResolverTests {
     func bareArithmeticWithATrailingEqualsSignResolvesToTheCalculator() throws {
         let resolver = InstantCommandResolver(
             snippetStore: UnreachableLocalStores.snippets(),
-            recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
-            routineStore: UnreachableLocalStores.routines(),
-            workspaceStore: UnreachableLocalStores.workspaces()
+            recentArtifactStore: UnreachableLocalStores.recentArtifacts()
         )
 
         for command in ["2 + 2 =", "2 + 2 = ", "2+2=", "2 + 2 = ?", "2 + 2?"] {
@@ -399,8 +338,6 @@ struct InstantCommandResolverTests {
         InstantCommandResolver(
             snippetStore: UnreachableLocalStores.snippets(),
             recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
-            routineStore: UnreachableLocalStores.routines(),
-            workspaceStore: UnreachableLocalStores.workspaces(),
             shortcutCatalog: NoShortcuts(),
             installedAppResolver: NoInstalledApps()
         )
@@ -415,9 +352,3 @@ private struct NoInstalledApps: InstalledAppResolving {
     func resolve(_ rawName: String?) -> InstalledApp? { nil }
 }
 
-private struct FailingPlanner: Planning {
-    func plan(command: String, priorTaskContext: PriorTaskContext?) async throws -> AgentPlan {
-        Issue.record("Planner should not be called for an instant calculator command.")
-        throw PlannerError.noPlannerRan
-    }
-}

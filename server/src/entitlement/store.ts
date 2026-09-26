@@ -76,8 +76,8 @@ export interface SpendAmount {
  * **One metered call is one unit, and that is a consequence of what this repository is allowed to
  * decide rather than a pricing choice.**
  *
- * A cost-weighted cap needs a credit weight — how many units a thousand tokens or a megapixel of
- * screenshot is worth — and credit weights are SONNY-212's, explicitly on this ticket's never-touch
+ * A cost-weighted cap needs a credit weight — how many units a thousand tokens is worth — and credit
+ * weights are SONNY-212's, explicitly on this ticket's never-touch
  * list. What is left that this gateway can measure honestly, today, is the call itself. So the cap
  * counts calls, and `SPEND_CAP_UNITS` is a per-period ceiling on metered calls.
  *
@@ -85,8 +85,7 @@ export interface SpendAmount {
  * one is worse than no bound.** It bounds the founder's exposure to a leaked token: that token can
  * make at most `cap_units` metered calls in a period, each of them bounded in turn by §6.1's body
  * limits and §12's deadlines. It does **not** bound the money, because a call's cost varies by
- * route, by model and by payload size — a `/v1/search` and a twelve-iteration screen-control session
- * are the same number of units here and are nowhere near the same number of dollars.
+ * route, by model and by payload size, and every call is the same number of units here.
  *
  * **This function is the seam that closes that gap.** When SONNY-212 sets credit weights, this is
  * where they land: the reservation becomes a weighted estimate, the settle becomes a weighted actual

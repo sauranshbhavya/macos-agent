@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { CreditCatalogue } from "../../src/credit/catalogue.js";
+import { parseCreditCatalogue, type CreditCatalogue } from "../../src/credit/catalogue.js";
 import type { CreditFacts } from "../../src/credit/store.js";
 
 /**
@@ -13,11 +13,26 @@ import type { CreditFacts } from "../../src/credit/store.js";
  * about keys generated microseconds earlier.
  */
 
-/** A catalogue with one tier per allowance given, keyed by values nothing could have hard-coded. */
+/** One credit per thousand tokens at the fast tier and more above it, so a test can compute charges by eye. */
+export const TEST_TOKEN_RATES = {
+  fast: { inputPerThousand: 1, outputPerThousand: 1 },
+  standard: { inputPerThousand: 2, outputPerThousand: 4 },
+  strong: { inputPerThousand: 10, outputPerThousand: 20 },
+} as const;
+
+/** A `CREDIT_PLANS` document: the given fields over the test token rates. */
+export function creditPlansDocument(fields: Readonly<Record<string, unknown>>): string {
+  return JSON.stringify({ tokenRates: TEST_TOKEN_RATES, ...fields });
+}
+
+/**
+ * A catalogue with one tier per allowance given, keyed by values nothing could have hard-coded.
+ *
+ * **Built through `parseCreditCatalogue`**, so every fixture is a catalogue a deployment could
+ * actually start with rather than an object the parser never saw.
+ */
 export function catalogueOf(input: {
-  readonly runCredits: number;
   readonly monthlyCredits: readonly number[];
-  readonly weights?: CreditCatalogue["weights"];
   /**
    * Which tier is the default. **Defaults to the first, and that default was a hole**
    * (PR #182's review, F3): every catalogue in the suite had `defaultPlan === plans[0]`, so
@@ -43,12 +58,7 @@ export function catalogueOf(input: {
       `catalogueOf: defaultIndex ${defaultIndex} names no tier among ${plans.length}`,
     );
   }
-  return {
-    runCredits: input.runCredits,
-    defaultPlan: fallback.key,
-    weights: input.weights ?? { perSession: 0, perIteration: 1, perMegapixel: 0 },
-    plans,
-  };
+  return parseCreditCatalogue(creditPlansDocument({ defaultPlan: fallback.key, plans }));
 }
 
 /**
@@ -57,12 +67,10 @@ export function catalogueOf(input: {
  * **Fixture numbers and not allowances**, exactly as `spendCapUnits` in the same file is a fixture
  * ceiling and not a plan's: `config.ts` carries the distinction and SONNY-212 owns the real ones,
  * which live outside this repository. The values are round so that a test reading a response can
- * check the arithmetic by eye — one run is ten credits, a tier includes a hundred runs.
+ * check the arithmetic by eye — tier A includes a thousand credits a month, tier B five thousand.
  */
-export const TEST_CREDIT_PLANS = JSON.stringify({
-  runCredits: 10,
+export const TEST_CREDIT_PLANS = creditPlansDocument({
   defaultPlan: "test-plan-a",
-  weights: { perSession: 0, perIteration: 1, perMegapixel: 0 },
   plans: [
     { key: "test-plan-a", monthlyCredits: 1000 },
     { key: "test-plan-b", monthlyCredits: 5000 },
@@ -77,8 +85,8 @@ export const TEST_CREDIT_PLANS = JSON.stringify({
  * get one — `offered: false`, and a charge route that refuses. A fixture where every app could
  * charge would make "this deployment sells none" a case nothing exercised.
  *
- * One pack is 500 credits — 50 runs at this catalogue's ten per run, half a tier-A month — and three
- * attempts a period, so a test about the bound has two failures to make before it reaches it.
+ * One pack is 500 credits — half a tier-A month — and three attempts a period, so a test about the
+ * bound has two failures to make before it reaches it.
  */
 export const TEST_CREDIT_PLANS_WITH_TOP_UP = JSON.stringify({
   ...(JSON.parse(TEST_CREDIT_PLANS) as Record<string, unknown>),
@@ -95,15 +103,15 @@ export const TEST_CREDIT_PLANS_WITH_TOP_UP = JSON.stringify({
 /**
  * An in-memory `CreditStore`.
  *
- * **It is not a model of the draw and must never become one.** It returns whatever a test told it
- * to; it reads no events, knows nothing about routes and does no arithmetic — the arithmetic is
- * `balance.ts`'s and is tested directly, and *which rows count* is the one thing a fake cannot say
- * anything about, so `credit.db.test.ts` proves it against a real Postgres. A fake that appeared to
- * exclude the unpaid routes is how a suite comes to believe it has tested an exclusion.
+ * **It is not a model of what an account spent and must never become one.** It returns whatever a
+ * test told it to; it reads no model calls and does no arithmetic — the arithmetic is `balance.ts`'s
+ * and is tested directly, and *which rows count* is the one thing a fake cannot say anything about,
+ * so `credit.db.test.ts` proves it against a real Postgres.
  */
 export function fakeCreditStore(facts: {
   planKey?: string | undefined;
-  draw?: { sessions: number; iterations: number; pixels: number };
+  /** What this period's model calls spent. `0` unless a test says otherwise. */
+  agentCredits?: number;
   /** What this period's granted top-ups added (SONNY-215). */
   toppedUpCredits?: number;
   /** How many attempts this period has already carried, granted or not. */
@@ -147,7 +155,7 @@ export function fakeCreditStore(facts: {
       askedAbout.push(accountId);
       return Promise.resolve({
         planKey: facts.planKey,
-        draw: facts.draw ?? { sessions: 0, iterations: 0, pixels: 0 },
+        agentCredits: facts.agentCredits ?? 0,
         toppedUpCredits: facts.toppedUpCredits ?? 0,
         topUpAttemptsThisPeriod: facts.topUpAttemptsThisPeriod ?? 0,
         autoTopUpOptedInAt: optedInAt,

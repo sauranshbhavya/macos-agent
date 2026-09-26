@@ -3,9 +3,9 @@ import Foundation
 /// The cap on standing watchers, in one place because it is one decision.
 ///
 /// **Watchers are free and capped** (founder decision 2026-08-31, recorded on SONNY-236 beside
-/// SONNY-212's credit model). They draw nothing from the paid allowance, so "screen-control runs
-/// left" stays the single number a user tracks; what stops the runaway case the founders were
-/// worried about — ten watchers started, forgotten, polling for a week — is this, and nothing else.
+/// SONNY-212's credit model). They draw nothing from the credit balance, so it stays the single
+/// number a user tracks; what stops the runaway case the founders were worried about — ten watchers
+/// started, forgotten, polling for a week — is this, and nothing else.
 /// So these five numbers are the whole of the containment, and the ticket's own sentence about
 /// metering watcher checks is superseded by that decision rather than deleted.
 ///
@@ -96,8 +96,8 @@ public struct StandingWatcherLimits: Equatable, Sendable {
     public var maxConsecutiveFailures: Int
 
     /// The shipped values. `noProductionPathBuildsItsOwnStandingWatcherLimits` pins that nothing in
-    /// `Sources/` constructs any others — the injectability below is for tests, the same way
-    /// `ResumableTaskStore.idleExpiry` is, and is not a second way to change what ships.
+    /// `Sources/` constructs any others — the injectability below is for tests, and is not a second
+    /// way to change what ships.
     public static let standard = StandingWatcherLimits(
         maxActive: 5,
         checkInterval: 15 * 60,
@@ -107,8 +107,7 @@ public struct StandingWatcherLimits: Equatable, Sendable {
         checkTimeout: 60
     )
 
-    /// Every field floored, for the reason `ResumableTaskStore.init` gives for flooring its own two:
-    /// a zero here is not a small limit, it is a broken watcher. A `maxActive` of 0 refuses every
+    /// Every field floored, because a zero here is not a small limit, it is a broken watcher. A `maxActive` of 0 refuses every
     /// watcher including the first; a `checkInterval` of 0 turns the shared 30-second pulse into a
     /// fetch every 30 seconds against somebody else's server; a `maxLifetime` of 0 ends a watcher
     /// before its first check.
@@ -142,18 +141,8 @@ public struct StandingWatcherLimits: Equatable, Sendable {
 /// created is the better product and was declined for v1, because the consequence rule cannot
 /// express "approved earlier, for later" and this ticket's constraints forbid changing that rule to
 /// fit. **So there is deliberately no route to acting here, switched off or otherwise** — no
-/// operation to dispatch, no plan, no executor reference. An unreachable capability in the tree is
+/// operation to dispatch and no plan. An unreachable capability in the tree is
 /// a thing a later session finds and turns on.
-///
-/// **This is not a `ResumableTask`, and it shares that type's store rather than its shape.** Both
-/// live in `resumable-tasks.json`, which is the thirteenth local store and stays the thirteenth
-/// (SONNY-210 built it; SONNY-235 and this ticket extend it, and neither adds a fourteenth). What
-/// they do not share is a record: an unfinished task is a plan with steps left to run, and under the
-/// notify-only decision a watcher has no plan at all. Putting a waking condition *on* `ResumableTask`
-/// — which that type's own comment anticipated on 2026-08-22, before the decision — would produce
-/// records for which `isResumable` is false, `mayBeOfferedForResume` is meaningless and the Memory
-/// row's "unfinished task" count is wrong, and would leave roughly fifteen surfaces each needing a
-/// filter nobody can see is missing.
 ///
 /// **A stopped watcher is deleted rather than kept.** Its four ends — the page changed, the lifetime
 /// ran out, the page proved unwatchable, the page proved unreachable — all reach the user as a
@@ -286,8 +275,8 @@ public struct StandingWatcher: Codable, Equatable, Sendable, Identifiable {
     }
 
     /// Written out rather than synthesized so a decoded record runs through the same subject cap and
-    /// the same count floors a written one does. `ResumableTask` states the reason this shape exists:
-    /// a rule the decode path skips is a rule that holds in one direction only.
+    /// the same count floors a written one does: a rule the decode path skips is a rule that holds
+    /// in one direction only.
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.init(

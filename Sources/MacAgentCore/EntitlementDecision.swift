@@ -11,8 +11,6 @@ import Foundation
 public enum EntitlementDecision: Equatable, Sendable {
     case entitled
     case refused(EntitlementRefusal)
-
-    public var isEntitled: Bool { self == .entitled }
 }
 
 public enum EntitlementRefusal: CaseIterable, Equatable, Sendable {

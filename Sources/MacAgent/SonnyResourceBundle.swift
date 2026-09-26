@@ -27,20 +27,4 @@ enum SonnyResourceBundle {
         return nil
     }
 
-    /// Every shipped pack that passes the loader's rules.
-    ///
-    /// An empty catalogue when the bundle cannot be found: the Skills page then lists nothing and no
-    /// command carries a pack, which is the app without skills rather than a crash. A pack the loader
-    /// refuses is logged by file name and left out; `SkillPackTests` refuses to let one ship.
-    static func skillPackCatalog() -> SkillPackCatalog {
-        guard let bundle = resolved(), let resourceURL = bundle.resourceURL else {
-            print("Sonny could not locate its resource bundle — no skill packs are available.")
-            return .empty
-        }
-        let catalogue = SkillPackCatalog.load(from: resourceURL)
-        for failure in catalogue.failures {
-            print("Sonny did not load skill pack \(failure.fileName): \(failure.error)")
-        }
-        return catalogue
-    }
 }

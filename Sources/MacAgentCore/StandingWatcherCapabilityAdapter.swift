@@ -5,14 +5,14 @@ import Foundation
 /// **This adapter creates a watcher; it never checks one.** Executing reads the page once, stores
 /// that reading as the baseline, and returns. Everything afterwards — the fifteen-minute cadence,
 /// the two-reading rule, the four endings and the notification — belongs to
-/// `AgentViewModel.checkStandingWatchers` and `StandingWatcherEvaluator`, and runs on a pulse with
-/// no plan and no run behind it (SONNY-236). So what this step's approval is actually about is one
-/// public GET now and one record in `resumable-tasks.json`, plus the standing consequence of a page
-/// being fetched again on a timer for as long as the watcher lives.
+/// `TaskDesk.checkWatchers` and `StandingWatcherEvaluator`, and runs on a pulse with no task behind
+/// it (SONNY-236). So what this step's approval is actually about is one public GET now and one
+/// record in the watcher store, plus the standing consequence of a page being fetched again on a
+/// timer for as long as the watcher lives.
 ///
 /// **There is no route to acting here, switched off or otherwise** (founder decision 2026-08-31,
 /// SONNY-236). A watcher notifies and does nothing else, so this adapter writes a record with no
-/// plan, no steps and no executor reference, and nothing downstream can dispatch one. That is the
+/// plan and no steps, and nothing downstream can dispatch one. That is the
 /// same sentence `StandingWatcher`'s own doc comment makes, restated at the only door that creates
 /// one, because an unreachable capability in the tree is a thing a later session finds and turns on.
 ///
@@ -34,17 +34,6 @@ public struct StandingWatcherCapabilityAdapter: CapabilityAdapter {
         displayName: "Watch a page for a change",
         description: "Watch one public web page and notify the user when its readable text changes.",
         operations: [.startWatching],
-        plannerTools: [
-            AgentTool(
-                operation: .startWatching,
-                name: "Watch a page for a change",
-                description: "Watch one public http/https page and tell the user when it changes. Sonny only notifies; it cannot act on the change.",
-                requiredFields: ["targetURL", "watchSubject"],
-                sideEffects: ["read one public web page", "write local watcher record"],
-                dryRunBehavior: "Show the page and what is being watched for, without starting anything.",
-                examples: ["Tell me when https://example.com/status changes"]
-            )
-        ],
         requiredPermissions: [CapabilityPermissionMetadata(requirement: .networkAccess)],
         // Tier 2, the same as saving a routine, and for the same reason: this writes one file inside
         // Sonny's own store and reaches nobody. It is deliberately not tier 3 — nothing is
@@ -68,7 +57,7 @@ public struct StandingWatcherCapabilityAdapter: CapabilityAdapter {
                 details: [
                     "Watching for: \(spec.subject)",
                     // **Each number comes from whatever actually decides it, which is not one
-                    // place** (SONNY-236's R2). `AgentViewModel.checkStandingWatchers` drives the
+                    // place** (SONNY-236's R2). `TaskDesk.checkWatchers` drives the
                     // evaluator on its `.standard` default, so `.standard` is what a cadence and a
                     // lifetime honestly are; the *cap on how many* is enforced by
                     // `ResumableTaskStore.saveWatcher` against the store's own injected `limits`,
@@ -102,14 +91,6 @@ public struct StandingWatcherCapabilityAdapter: CapabilityAdapter {
     ) async throws -> AgentRunResult {
         let previews = try preview(plan: plan, context: context)
         let spec = try watchSpec(plan, context: context)
-        // Refused out loud rather than saved anyway or dropped quietly, the rule
-        // `SaveRoutineCapabilityAdapter` states: the user asked for this by name, so a silent no-op
-        // would report a watcher that does not exist. The row this names is "Unfinished tasks",
-        // which is the row `resumable-tasks.json` has — watchers share that file by SONNY-236's
-        // decision, and that row's own copy already names watchers.
-        guard context.allowsRecording(to: .resumableTasks) else {
-            throw MemoryDisabledError(category: .resumableTasks)
-        }
 
         log(.act, "Reading \(spec.url.absoluteString)")
         // The one fetch this step makes. A failure here fails the step rather than starting a

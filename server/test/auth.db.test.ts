@@ -1,5 +1,7 @@
+import { randomUUID } from "node:crypto";
 import pg from "pg";
 import { describe, expect } from "vitest";
+import { postgresTaskStore } from "../src/agent/tasks/postgres-store.js";
 import { buildApp } from "../src/app.js";
 import type { Config } from "../src/config.js";
 import {
@@ -10,6 +12,7 @@ import { ProviderRejected, ProviderUnavailable, type AuthProvider, type Verified
 import { drainOwedRevocations, owedRevocationCount } from "../src/auth/revocation.js";
 import { normalizeEmail } from "../src/auth/identity.js";
 import type { WithConnection } from "../src/db/connection.js";
+import { claimKey, completeClaim } from "../src/idempotency/store.js";
 import { DEADLINE_MS } from "../src/model/limits.js";
 import { ProviderTimedOut } from "../src/model/upstream.js";
 import { accessTokenFor } from "./support/tokens.js";
@@ -873,6 +876,88 @@ describeDb("the auth endpoints", () => {
       await app.inject({ method: "POST", url: "/v1/auth/email/start", payload: { email: "gone@example.com" } });
       const again = await app.inject({ method: "POST", url: "/v1/auth/email/verify", payload: { email: "gone@example.com", code: "1" } });
       expect(again.json().user.id).not.toBe(accountId);
+      await app.close();
+    });
+
+    itUnderHangBackstop("takes the closed account's tasks and stored replies with it, and nobody else's", async () => {
+      // What an account leaves on the gateway is its tasks, transcripts and all, and the replies kept
+      // to replay an idempotent request. Both go at
+      // close. Another account's are the control, so a DELETE with no WHERE cannot pass.
+      const app = build();
+      await app.inject({ method: "POST", url: "/v1/auth/email/start", payload: { email: "tasks@example.com" } });
+      const closing = (await app.inject({ method: "POST", url: "/v1/auth/email/verify", payload: { email: "tasks@example.com", code: "1" } })).json().user.id as string;
+      const other = (await client.query<{ id: string }>("INSERT INTO sonny.account DEFAULT VALUES RETURNING id")).rows[0]!.id;
+
+      const tasks = postgresTaskStore(async (work) => work(client));
+      const taskOf = async (accountId: string, deviceId: string): Promise<string> => {
+        await tasks.touchDevice(deviceId, accountId, PINNED_NOW);
+        const id = randomUUID();
+        expect(
+          await tasks.createTask(
+            {
+              id, accountId, deviceId, isPrivate: false, unattended: false, goal: "Open Notes",
+              origin: "composer", mode: "normal", priorTask: null,
+              start: { msgId: randomUUID(), body: { goal: "Open Notes" } },
+            },
+            PINNED_NOW,
+          ),
+        ).toBe("created");
+        return id;
+      };
+      const closingTasks = [await taskOf(closing, randomUUID()), await taskOf(closing, randomUUID())];
+      const otherTask = await taskOf(other, randomUUID());
+
+      // One stored reply each, through the store's own claim and completion.
+      const storeReply = async (accountScope: string): Promise<void> => {
+        const key = randomUUID();
+        const claimed = await claimKey(client, {
+          accountScope, key, route: "POST /v1/transcriptions", fingerprint: "sha256:aaa",
+        });
+        if (claimed.kind !== "claimed") throw new Error("the key was not claimable");
+        await completeClaim(client, { accountScope, key, token: claimed.token }, {
+          status: 200, body: Buffer.from('{"text":"hello"}'), contentType: "application/json", requestId: "r",
+        });
+      };
+      await storeReply(closing);
+      await storeReply(other);
+      // The billing record of a model call, which carries no key to the task and outlives it.
+      await client.query(
+        `INSERT INTO sonny.agent_model_call
+           (step_id, account_id, task_id, agent, tier, period_start, status, credits_held)
+         VALUES ($1, $2, $3, 'planner', 'fast', $4, 'held', 1)`,
+        [randomUUID(), closing, closingTasks[0], PINNED_NOW],
+      );
+
+      const count = async (sql: string, id: string): Promise<number> =>
+        Number((await client.query<{ n: string }>(sql, [id])).rows[0]!.n);
+      const tasksOf = (id: string) => count("SELECT count(*) AS n FROM sonny.agent_task WHERE account_id = $1", id);
+      const messagesOf = (id: string) =>
+        count(
+          "SELECT count(*) AS n FROM sonny.agent_message m JOIN sonny.agent_task t ON t.id = m.task_id WHERE t.account_id = $1",
+          id,
+        );
+      const repliesOf = (id: string) =>
+        count("SELECT count(*) AS n FROM sonny.idempotency_key WHERE account_scope = $1 AND response_body IS NOT NULL", id);
+      expect([await tasksOf(closing), await repliesOf(closing)]).toEqual([2, 1]);
+      expect(await messagesOf(closing)).toBeGreaterThan(0);
+
+      const response = await app.inject({ method: "DELETE", url: "/v1/account", headers: signedIn() });
+      expect(response.statusCode).toBe(204);
+
+      expect(await tasksOf(closing)).toBe(0);
+      const orphaned = await client.query(
+        "SELECT count(*) AS n FROM sonny.agent_message WHERE task_id = ANY($1::uuid[])",
+        [closingTasks],
+      );
+      expect(Number(orphaned.rows[0].n)).toBe(0);
+      expect(await repliesOf(closing)).toBe(0);
+      expect(await count("SELECT count(*) AS n FROM sonny.agent_model_call WHERE account_id = $1", closing)).toBe(1);
+
+      // The other account is exactly as it was.
+      expect(await tasksOf(other)).toBe(1);
+      expect(await messagesOf(other)).toBeGreaterThan(0);
+      expect((await tasks.task(otherTask))?.accountId).toBe(other);
+      expect(await repliesOf(other)).toBe(1);
       await app.close();
     });
 

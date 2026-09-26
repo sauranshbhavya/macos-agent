@@ -40,8 +40,8 @@ import {
 export const environments = ["local", "staging", "production"] as const;
 export type Environment = (typeof environments)[number];
 
-/** The providers whose credentials this gateway holds. From row 12's plan §4.4. */
-export const providers = ["openai", "anthropic", "cerebras", "tavily", "vision"] as const;
+/** The providers whose credentials this gateway holds. */
+export const providers = ["openai", "anthropic", "cerebras", "tavily"] as const;
 export type Provider = (typeof providers)[number];
 
 /**
@@ -102,37 +102,6 @@ const schema = z.object({
   RATE_LIMIT_SALT: nonEmpty.optional(),
 
   /**
-   * How long retained request and response content is kept, in days (SONNY-134). Contract §10.3.
-   *
-   * **Thirty, confirmed by the founder on 2026-08-28** — the short end of the 30–90 range his
-   * retention decision of 2026-08-16 names, and the number this repository's prose had already been
-   * assuming in three places while nothing had settled it. It is configurable because the range is
-   * the founder's to move within, and it is bounded at both ends because neither a zero nor a value
-   * outside the disclosed range should be reachable by a typo in an environment file.
-   *
-   * **Changing it never reaches content already stored.** `sonny.retained_content.expires_at` is
-   * written from this value at insert, so a row carries the window it was kept under; raising the
-   * setting applies to what arrives afterwards and cannot silently extend the life of a screenshot
-   * a user was told would be gone in thirty days. `content/record.ts` states the same thing beside
-   * the function that computes it.
-   *
-   * The *other* clock has no variable here at all, deliberately: derived metrics and usage are kept
-   * indefinitely (§10.3), and a number naming their lifetime would be a lifetime nothing enforces.
-   */
-  CONTENT_RETENTION_DAYS: z.coerce.number().int().min(1).max(365).default(30),
-
-  /**
-   * How often the running gateway sweeps expired content, in seconds.
-   *
-   * Hourly by default, which is far more often than a thirty-day clock needs and is chosen for what
-   * it does to the *evidence*: a sweep logs every pass, so an operator reading a fresh deployment's
-   * output sees within the hour whether expiry runs at all, rather than inferring it from an absence
-   * of complaints a month later. The floor of sixty seconds exists so a misconfiguration cannot turn
-   * this into a busy loop against the database.
-   */
-  CONTENT_EXPIRY_SWEEP_SECONDS: z.coerce.number().int().min(60).max(86_400).default(3600),
-
-  /**
    * The Ed25519 private key the entitlement claim is signed with (SONNY-135), as base64 of its
    * PKCS#8 DER:
    *
@@ -178,22 +147,23 @@ const schema = z.object({
   SPEND_CAP_UNITS: z.coerce.number().int().min(0).optional(),
 
   /**
-   * The plan catalogue: every tier, every allowance and every credit weight this deployment bills
+   * The plan catalogue: every tier, every allowance and every token rate this deployment bills
    * against, as one JSON document (SONNY-212).
    *
-   * **No default, and this is the variable the whole of row 13's pricing arrives through.** Twelve
-   * files under `server/src` promise that the numbers land on SONNY-212 rather than in them, and
-   * this is where they land — outside the repository. An operator writes it; nothing here writes a
-   * tier name, an allowance or a weight.
+   * **No default.** An operator writes it; nothing in this repository writes a tier name, an
+   * allowance or a rate.
    *
    * The shape, parsed and argued in `credit/catalogue.ts`:
    *
    * ```json
    * {
-   *   "runCredits": <credits one screen-control run is worth>,
    *   "defaultPlan": "<the key an account with no plan falls to>",
-   *   "weights": { "perSession": <n>, "perIteration": <n>, "perMegapixel": <n> },
-   *   "plans": [{ "key": "<opaque key>", "monthlyCredits": <n> }]
+   *   "plans": [{ "key": "<opaque key>", "monthlyCredits": <n> }],
+   *   "tokenRates": {
+   *     "fast":     { "inputPerThousand": <n>, "outputPerThousand": <n> },
+   *     "standard": { "inputPerThousand": <n>, "outputPerThousand": <n> },
+   *     "strong":   { "inputPerThousand": <n>, "outputPerThousand": <n> }
+   *   }
    * }
    * ```
    *
@@ -202,9 +172,8 @@ const schema = z.object({
    * true today is exactly the kind that becomes a release-time input.
    *
    * Required wherever an authenticated route is mounted, for `SPEND_CAP_UNITS`' reason: an unset
-   * catalogue has no safe reading. Treating it as "no allowance" locks every user out of the one
-   * paid feature and treating it as "unlimited" is SONNY-16's leaked-token cost with a mechanism in
-   * front of it doing nothing.
+   * catalogue has no safe reading. Treating it as "no allowance" locks every user out and treating
+   * it as "unlimited" is SONNY-16's leaked-token cost with a mechanism in front of it doing nothing.
    */
   CREDIT_PLANS: nonEmpty.optional(),
 
@@ -295,103 +264,31 @@ const schema = z.object({
   SUPABASE_JWT_AUDIENCE: nonEmpty.default("authenticated"),
 
   /**
-   * Where the model routes send, and what they ask for (SONNY-130).
-   *
-   * **These four have defaults and the credentials above do not, and the difference is the point.**
-   * A credential with a default is a weakness that works everywhere and is never noticed. An
-   * endpoint and a model identifier are neither secret nor guessable-wrong: the defaults are exactly
-   * what the Mac app compiled in before this gateway existed, so a deployment that sets none of them
-   * behaves as the app used to, and one that sets them moves every user's traffic in a redeploy.
-   *
-   * That second half is SONNY-130's sixth requirement doing its job. The client is not allowed to
-   * name a provider, a model or an endpoint, so all three are here — which is what turns SONNY-110's
-   * move to a paid zero-retention route into a configuration change rather than an app release.
+   * Provider endpoints and the transcription model. Defaulted, because none of them is a secret, and
+   * configuration rather than code so that moving providers is a redeploy, not an app release. The
+   * V2 agents' models are not here: they come from `AGENT_MODEL_*` (`agent/model/tiers.ts`).
    */
   OPENAI_BASE_URL: nonEmpty.default("https://api.openai.com/v1"),
-  OPENAI_TEXT_MODEL: nonEmpty.default("gpt-5.5"),
   OPENAI_TRANSCRIPTION_MODEL: nonEmpty.default("gpt-4o-mini-transcribe"),
+  /** Tavily's endpoint, used by the V2 agents' web search tool. */
   SEARCH_BASE_URL: nonEmpty.default("https://api.tavily.com"),
-
-  /**
-   * The second provider's endpoint and model (SONNY-132), on the same terms as OpenAI's above: a
-   * default that is neither secret nor guessable-wrong, so a deployment that sets only
-   * `ANTHROPIC_API_KEY` works, and one that wants a different model changes one variable.
-   *
-   * `ANTHROPIC_MAX_OUTPUT_TOKENS` has no counterpart on the OpenAI side because the Messages API
-   * **requires** `max_tokens` on every request — there is no server-side default to inherit. 16000
-   * is the value the API's own guidance gives for a non-streaming request: high enough for a plan or
-   * a research note, low enough to stay inside the HTTP timeouts a non-streaming call has.
-   *
-   * **What that reasoning does not account for, stated rather than left to be discovered** (PR #143,
-   * F10). `max_tokens` bounds thinking **plus** answer, and the configured default model runs
-   * adaptive thinking when `thinking` is omitted, which it is here. So the effective ceiling on the
-   * *answer* is lower than 16000 by an amount nothing in this file controls and nothing in this
-   * branch measured — **this is hedged, not measured**, because no live round was run against a real
-   * key. Hitting it is a `stop_reason: "max_tokens"`, which the adapter refuses rather than handing
-   * the client a half-written JSON object; that refusal is a `provider.rejected`, so it does not
-   * fail over. Latent today: the client hard-codes `reasoning_effort: "medium"`
-   * (`SonnyModelGateway.swift`), and it becomes live if `/v1/research/synthesize` produces a long
-   * note or the effort the client sends ever rises. The first real Anthropic round is where this
-   * gets a number; raise this variable rather than re-deriving the reasoning if a plan ever comes
-   * back truncated.
-   */
   ANTHROPIC_BASE_URL: nonEmpty.default("https://api.anthropic.com/v1"),
-  ANTHROPIC_TEXT_MODEL: nonEmpty.default("claude-opus-5"),
+  /**
+   * The ceiling on `max_tokens` for an Anthropic call. The Messages API requires `max_tokens` on
+   * every request, and it bounds thinking plus answer; an agent call asks for less and gets the
+   * smaller of the two.
+   */
   ANTHROPIC_MAX_OUTPUT_TOKENS: z.coerce.number().int().min(1).max(200_000).default(16_000),
-
-  /**
-   * Cerebras's endpoint and model, moved off the Mac (SONNY-132).
-   *
-   * The defaults are exactly what `CerebrasPlanner` compiled in —
-   * `https://api.cerebras.ai/v1/chat/completions` and `gpt-oss-120b` — so the provider behaves as
-   * it did when it was reachable by `SONNY_PLANNER=cerebras`, with the credential now held here
-   * instead of in the user's own environment.
-   */
   CEREBRAS_BASE_URL: nonEmpty.default("https://api.cerebras.ai/v1"),
-  CEREBRAS_TEXT_MODEL: nonEmpty.default("gpt-oss-120b"),
 
   /**
-   * Which provider serves which route, in order (SONNY-132) — spec §16.5's "model routing
-   * controlled server-side", as four variables rather than a code path.
-   *
-   * Each is a comma-separated provider list: the first entry serves, and the rest are what
-   * `withFailover` tries when it answers `provider.unavailable`. Unset means
-   * `provider-router.ts`'s `DEFAULT_ROUTE_CHAINS`, which reproduces SONNY-130's behaviour on any deployment
-   * holding only an OpenAI key. Parsed and validated by `parseRouteChain`, which refuses an unknown
-   * provider, a provider with no adapter for that route, and a repeated entry — each by name, at
-   * startup, because none of those values is a secret and none of them can be fixed without knowing
-   * which one is wrong.
+   * Which providers serve transcription and web search, in order: a comma-separated list where the
+   * first entry serves and the rest are tried when it answers `provider.unavailable`. Unset means
+   * `DEFAULT_ROUTE_CHAINS` in `model/provider-router.ts`. `parseRouteChain` refuses an unknown
+   * provider, one with no adapter for the route, and a repeated entry, by name, at startup.
    */
-  MODEL_ROUTE_PLAN: z.string().trim().default(""),
-  MODEL_ROUTE_SYNTHESIZE: z.string().trim().default(""),
   MODEL_ROUTE_TRANSCRIPTIONS: z.string().trim().default(""),
   MODEL_ROUTE_SEARCH: z.string().trim().default(""),
-  /**
-   * Where `POST /v1/screen/analyze` sends, and what it asks for (SONNY-131).
-   *
-   * Same rule as the four above, and the same defaults-for-these-and-not-for-credentials split: these
-   * two are exactly what the Mac app compiled in before this gateway existed — `defaultEndpoint` and
-   * `defaultModel` on `OpenCodeVisionModelClient`, plus the `SONNY_VISION_MODEL` override that the
-   * contract's §1.3 says becomes server configuration — so a deployment that sets neither behaves as
-   * the app used to.
-   *
-   * **This pair is the one SONNY-110 moves**, and making it a redeploy rather than an app release is
-   * the whole reason the Mac's vision client no longer names a provider, a model or an endpoint.
-   *
-   * **What that ticket is has changed twice, so read it rather than this comment for the current
-   * answer.** It was filed to reach a "paid zero-retention provider"; the requirement widened on
-   * 2026-08-16 to no retention *and* no training rights; and on **2026-09-04** the founders decided
-   * Azure OpenAI as configured ships v1, which stopped it being a release blocker and turned it into
-   * a configuration verification. That verification was done on 2026-09-17 and is recorded on the
-   * ticket — it found that Microsoft's current terms state no retention period at all, so the
-   * bounded window the decision assumed is not one Azure documents. Nothing here asserts which
-   * provider ships; these two variables are what makes that a redeploy whichever way it lands.
-   *
-   * The credential is `VISION_API_KEY`, read by `providerCredentials` below — `vision` has been in
-   * the `providers` list since SONNY-126, waiting for this route.
-   */
-  VISION_BASE_URL: nonEmpty.default("https://opencode.ai/zen/go/v1"),
-  VISION_MODEL: nonEmpty.default("gpt-5.6-luna"),
   /**
    * The project's **anon / publishable** key, sent as the `apikey` header on every non-admin call
    * the sign-in adapter makes (SONNY-307).
@@ -568,8 +465,6 @@ export interface Config {
   readonly logLevel: z.infer<typeof schema>["LOG_LEVEL"];
   readonly trustProxy: boolean | string[];
   readonly rateLimitSalt: string;
-  readonly contentRetentionDays: number;
-  readonly contentExpirySweepSeconds: number;
   readonly entitlementSigningKey: string | undefined;
   readonly entitlementSigningKeyId: string | undefined;
   readonly spendCapUnits: number | undefined;
@@ -580,17 +475,12 @@ export interface Config {
   readonly supabaseJwtIssuer: string | undefined;
   readonly supabaseJwtAudience: string;
   readonly openAIBaseUrl: string;
-  readonly openAITextModel: string;
   readonly openAITranscriptionModel: string;
   readonly searchBaseUrl: string;
-  readonly visionBaseUrl: string;
-  readonly visionModel: string;
   readonly anthropicBaseUrl: string;
-  readonly anthropicTextModel: string;
   readonly anthropicMaxOutputTokens: number;
   readonly cerebrasBaseUrl: string;
-  readonly cerebrasTextModel: string;
-  /** Which providers serve which route, in order. `MODEL_ROUTE_*`, validated at startup. */
+  /** Which providers serve transcription and search, in order. `MODEL_ROUTE_*`, validated at startup. */
   readonly routeChains: Readonly<Record<ModelRoute, readonly Provider[]>>;
   /**
    * Which models serve each V2 agent tier, `AGENT_MODEL_FAST|STANDARD|STRONG`, each a
@@ -630,9 +520,8 @@ export interface Config {
  * gap. Stopping at a gap rather than scanning a fixed range is deliberate: a typo'd `_4` with no
  * `_3` present should not silently become the second credential.
  *
- * Absent entirely is allowed and yields no entry for that provider. **This ticket builds no route
- * that calls a provider**, so requiring all five here would make the server unstartable for no
- * reason; the ticket that adds a provider route is where its credential becomes mandatory.
+ * Absent entirely is allowed and yields no entry for that provider: a route or agent tier whose
+ * provider has no key simply has no candidate, and a health-only deployment needs none.
  */
 export function providerCredentials(env: NodeJS.ProcessEnv): readonly ProviderCredentials[] {
   return providers
@@ -842,8 +731,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     logLevel: value.LOG_LEVEL,
     trustProxy: parseTrustedProxies(value.TRUSTED_PROXIES),
     rateLimitSalt: value.RATE_LIMIT_SALT ?? "",
-    contentRetentionDays: value.CONTENT_RETENTION_DAYS,
-    contentExpirySweepSeconds: value.CONTENT_EXPIRY_SWEEP_SECONDS,
     entitlementSigningKey: value.ENTITLEMENT_SIGNING_KEY,
     entitlementSigningKeyId: value.ENTITLEMENT_SIGNING_KEY_ID,
     spendCapUnits: value.SPEND_CAP_UNITS,
@@ -854,19 +741,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     supabaseJwtIssuer: value.SUPABASE_JWT_ISSUER,
     supabaseJwtAudience: value.SUPABASE_JWT_AUDIENCE,
     openAIBaseUrl: value.OPENAI_BASE_URL,
-    openAITextModel: value.OPENAI_TEXT_MODEL,
     openAITranscriptionModel: value.OPENAI_TRANSCRIPTION_MODEL,
     searchBaseUrl: value.SEARCH_BASE_URL,
-    visionBaseUrl: value.VISION_BASE_URL,
-    visionModel: value.VISION_MODEL,
     anthropicBaseUrl: value.ANTHROPIC_BASE_URL,
-    anthropicTextModel: value.ANTHROPIC_TEXT_MODEL,
     anthropicMaxOutputTokens: value.ANTHROPIC_MAX_OUTPUT_TOKENS,
     cerebrasBaseUrl: value.CEREBRAS_BASE_URL,
-    cerebrasTextModel: value.CEREBRAS_TEXT_MODEL,
     routeChains: {
-      plan: parseRouteChain("plan", value.MODEL_ROUTE_PLAN),
-      synthesize: parseRouteChain("synthesize", value.MODEL_ROUTE_SYNTHESIZE),
       transcriptions: parseRouteChain("transcriptions", value.MODEL_ROUTE_TRANSCRIPTIONS),
       search: parseRouteChain("search", value.MODEL_ROUTE_SEARCH),
     },
@@ -1104,15 +984,15 @@ export function requireSpendCapUnits(config: Config): number {
  *
  * **`requireSpendCapUnits`' shape and `requireEntitlementSigningKey`'s parse-at-startup rule, in one
  * function**, because this variable needs both: it may not be absent, and a value that is present
- * and malformed must fail here rather than on the first user who asks how many runs they have left.
+ * and malformed must fail here rather than on the first user who asks how many credits they have.
  * `parseCreditCatalogue` is what refuses; this adds the name of the variable to fix.
  */
 export function requireCreditCatalogue(config: Config): CreditCatalogue {
   if (config.creditPlans === undefined) {
     throw new ConfigError(
       "CREDIT_PLANS is required wherever an authenticated route is mounted: it carries every tier, " +
-        "allowance and credit weight this deployment bills against, and an unset one has no safe " +
-        "reading -- no allowance locks every user out of screen control, and unlimited is an " +
+        "allowance and token rate this deployment bills against, and an unset one has no safe " +
+        "reading -- no allowance locks every user out, and unlimited is an " +
         "uncapped bill. This repository sets no plan, no price and no allowance of its own. See " +
         "server/.env.example for the expected shape.",
     );

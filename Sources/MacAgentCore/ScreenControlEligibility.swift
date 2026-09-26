@@ -51,8 +51,7 @@ public struct ScreenControlVerdict: Equatable, Sendable {
     /// macOS. `NSRunningApplication`, `SCShareableContent` and `NSWorkspace` all key on the bundle's
     /// own spelling, so a session pointed at `com.apple.safari` found no window, activated nothing,
     /// and failed on its first iteration with "no on-screen window was found". Anything comparing
-    /// this against another identifier normalizes *both sides* — see
-    /// `VisionSessionContainment.checkIterationStart`.
+    /// this against another identifier normalizes *both sides*.
     public let bundleIdentifier: String
     public let displayName: String
     /// `nil` exactly when Sonny may control this app. There is no third state: ``isEligible`` is
@@ -76,8 +75,7 @@ public struct ScreenControlVerdict: Equatable, Sendable {
 /// per-app *consent store*: a durable grant per app, minted by the first vision approval, revocable
 /// in Settings. The founder superseded that on 2026-08-14 — Sonny may control any installed app
 /// without asking, in Normal and Power alike, and Safe mode's "ask before every action" is the only
-/// thing that still prompts. So there is no grant to store, no revocation to observe and no consent
-/// field on `ApprovalContext`. What survives is the half that was never about consent at all: the
+/// thing that still prompts. What survives is the half that was never about consent at all: the
 /// terminal ban, which no user was ever going to be offered a choice about.
 ///
 /// **The list is the tested guarantee.** Model-side "this looks like a shell" recognition is

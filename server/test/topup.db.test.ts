@@ -59,7 +59,6 @@ function claimOf(overrides: { readonly maxPerPeriod?: number; readonly periodSta
     provider: PROVIDER,
     periodStart: overrides.periodStart ?? PERIOD,
     consentedAt: CONSENTED,
-    runsLeftAtTrigger: 0,
     creditsRemainingAtTrigger: 4,
     maxPerPeriod: overrides.maxPerPeriod ?? 3,
   };
@@ -167,7 +166,7 @@ describeDb("the bound on how many charges a period can carry", () => {
     await client.query("TRUNCATE sonny.credit_topup");
     await client.query("TRUNCATE sonny.auto_topup_consent");
     await client.query("TRUNCATE sonny.entitlement");
-    await client.query("TRUNCATE sonny.metering_event");
+    await client.query("TRUNCATE sonny.agent_model_call");
   });
 
   itUnderHangBackstop("numbers each attempt and refuses once the period is full", async () => {
@@ -183,14 +182,25 @@ describeDb("the bound on how many charges a period can carry", () => {
     // ordinary answer the route turns into a refusal, not a fault.
     expect(fourth).toBeUndefined();
 
-    const { rows } = await client.query<{ attempt_no: number; outcome: string }>(
-      "SELECT attempt_no, outcome FROM sonny.credit_topup WHERE account_id = $1 ORDER BY attempt_no",
+    const { rows } = await client.query<{
+      attempt_no: number;
+      outcome: string;
+      consented_at: Date;
+      credits_remaining_at_trigger: number;
+    }>(
+      `SELECT attempt_no, outcome, consented_at, credits_remaining_at_trigger
+         FROM sonny.credit_topup WHERE account_id = $1 ORDER BY attempt_no`,
       [ACCOUNT],
     );
     expect(rows.map((row) => row.attempt_no)).toEqual([1, 2, 3]);
     // **Every claimed row reads `attempted` until it is settled**, which is what makes a crashed
     // charge path consume its slot rather than loop.
     expect(new Set(rows.map((row) => row.outcome))).toEqual(new Set(["attempted"]));
+    // And each row carries the claim's own justification, each value in its own column.
+    for (const row of rows) {
+      expect(row.consented_at).toEqual(CONSENTED);
+      expect(row.credits_remaining_at_trigger).toBe(4);
+    }
   });
 
   itUnderHangBackstop("lets exactly one of two racing claims win the same slot", async () => {
@@ -291,8 +301,8 @@ describeDb("the bound on how many charges a period can carry", () => {
       client.query(
         `INSERT INTO sonny.credit_topup
                 (account_id, provider, period_start, attempt_no, outcome, credits, consented_at,
-                 runs_left_at_trigger, credits_remaining_at_trigger)
-         VALUES ($1, $2, $3, 1, 'granted', 500, NULL, 0, 0)`,
+                 credits_remaining_at_trigger)
+         VALUES ($1, $2, $3, 1, 'granted', 500, NULL, 0)`,
         [ACCOUNT, PROVIDER, PERIOD],
       ),
     ).rejects.toThrow(/consented_at/);
@@ -479,7 +489,7 @@ describeDb("an order this gateway made and did not resolve (PR #196's F1)", () =
 
 describeDb("what a granted top-up does to the number a user reads", () => {
   let client: pg.Client;
-  const catalogue = catalogueOf({ runCredits: 10, monthlyCredits: [1000] });
+  const catalogue = catalogueOf({ monthlyCredits: [1000] });
 
   beforeAllUnderHangBackstop(async () => {
     client = new pg.Client({ connectionString: url });
@@ -493,7 +503,7 @@ describeDb("what a granted top-up does to the number a user reads", () => {
     await client.query("TRUNCATE sonny.credit_topup");
     await client.query("TRUNCATE sonny.auto_topup_consent");
     await client.query("TRUNCATE sonny.entitlement");
-    await client.query("TRUNCATE sonny.metering_event");
+    await client.query("TRUNCATE sonny.agent_model_call");
   });
 
   /** The real store over this suite's one connection. */
@@ -523,19 +533,17 @@ describeDb("what a granted top-up does to the number a user reads", () => {
     const after = await store().factsFor(ACCOUNT, AT);
     expect(after.toppedUpCredits).toBe(500);
     expect(after.topUpAttemptsThisPeriod).toBe(1);
-    // Through the arithmetic the route uses: a thousand-credit tier that bought five hundred more is
-    // a hundred and fifty runs, and the draw is untouched.
+    // Through the arithmetic the route uses: a thousand-credit tier that bought five hundred more has
+    // fifteen hundred to spend, and what was spent is untouched.
+    expect(after.agentCredits).toBe(before.agentCredits);
     const balance = creditBalance({
       catalogue,
       planKey: undefined,
-      draw: after.draw,
+      agentCredits: after.agentCredits,
       toppedUpCredits: after.toppedUpCredits,
       now: AT,
     });
-    expect(balance.credits.allowance).toBe(1500);
-    expect(balance.credits.toppedUp).toBe(500);
-    expect(balance.runsIncluded).toBe(150);
-    expect(balance.credits.drawn).toBe(0);
+    expect(balance.credits).toEqual({ allowance: 1500, drawn: 0, remaining: 1500, toppedUp: 500 });
   });
 
   itUnderHangBackstop("counts only granted rows, so a decline buys nothing", async () => {
@@ -994,12 +1002,12 @@ describeDb("two attempts that finalize one order answer from the row (SONNY-435)
       billingCustomerFor: async () => "cust",
       attempts: postgresTopUpAttemptStore(async (work) => work(client)),
     };
-    // Exhausted: a thousand iterations at one credit each is the whole allowance, so the attempt
-    // has a reason to buy, and `periodStart` is derived from `now` exactly as the route's is.
+    // Exhausted: a thousand credits spent is the whole allowance, so the attempt has a reason to
+    // buy, and `periodStart` is derived from `now` exactly as the route's is.
     const balance = creditBalance({
-      catalogue: catalogueOf({ runCredits: 10, monthlyCredits: [1000] }),
+      catalogue: catalogueOf({ monthlyCredits: [1000] }),
       planKey: undefined,
-      draw: { sessions: 0, iterations: 1000, pixels: 0 },
+      agentCredits: 1000,
       toppedUpCredits: 0,
       now: AT,
     });

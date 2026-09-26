@@ -29,9 +29,9 @@ struct RecordedBackendRequestsTests {
     @Test
     func onlyReturnsTheOneRequestWhenThereIsExactlyOne() throws {
         let recorded = RecordedBackendRequests()
-        recorded.append(request(path: "/v1/plan"))
+        recorded.append(request(path: "/v1/transcriptions"))
 
-        #expect(try recorded.only.path == "/v1/plan")
+        #expect(try recorded.only.path == "/v1/transcriptions")
         #expect(recorded.all.count == 1)
     }
 
@@ -40,8 +40,8 @@ struct RecordedBackendRequestsTests {
     @Test
     func onlyRefusesASecondRequestRatherThanReturningTheFirstOfTwo() throws {
         let recorded = RecordedBackendRequests()
-        recorded.append(request(path: "/v1/plan"))
-        recorded.append(request(path: "/v1/plan"))
+        recorded.append(request(path: "/v1/transcriptions"))
+        recorded.append(request(path: "/v1/transcriptions"))
 
         withKnownIssue("`only` must refuse two requests — that is the whole of what its name claims") {
             _ = try recorded.only
@@ -51,7 +51,7 @@ struct RecordedBackendRequestsTests {
         // that genuinely wants the first of several should be saying. Nothing was taken away; a
         // claim was made checkable.
         #expect(recorded.all.count == 2)
-        #expect(recorded.all.first?.path == "/v1/plan")
+        #expect(recorded.all.first?.path == "/v1/transcriptions")
     }
 
     /// The empty case, which is the one the old message could actually print for — kept so the
@@ -76,16 +76,16 @@ struct RecordedBackendRequestsTests {
     @Test
     func theRefusalNamesHowManyItSawAndWhichPathsTheyWere() throws {
         let recorded = RecordedBackendRequests()
-        recorded.append(request(path: "/v1/plan"))
-        recorded.append(request(path: "/v1/research/synthesize"))
+        recorded.append(request(path: "/v1/transcriptions"))
+        recorded.append(request(path: "/v1/account/credits"))
 
         try withKnownIssue {
             _ = try recorded.only
         } matching: { issue in
             let text = String(describing: issue)
             return text.contains("2")
-                && text.contains("/v1/plan")
-                && text.contains("/v1/research/synthesize")
+                && text.contains("/v1/transcriptions")
+                && text.contains("/v1/account/credits")
         }
     }
 

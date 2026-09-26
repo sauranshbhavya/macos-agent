@@ -23,8 +23,8 @@ import type { FastifyRequest } from "fastify";
  * which is only another way of saying the whole audio body is buffered in memory — the thing
  * `limits.fileSize` exists to avoid. Measured at fastify 5.6.1 / `@fastify/multipart` 9.2.1:
  * `Transform` at the default mark → timeout at 2 MB; the same at an 8 MiB mark → 200; the same body
- * with no tee at all → 200 in 13 ms. It surfaced as `model.test.ts`'s
- * `lets /v1/transcriptions carry ten times what /v1/search may` timing out.
+ * with no tee at all → 200 in 13 ms. It surfaced as a `model.test.ts` transcription body-size test
+ * timing out.
  *
  * So nothing here touches the request stream. The digest is taken at `preHandler` from
  * `request.body` — what Fastify's own parser produced — which is available for every content type

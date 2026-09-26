@@ -14,6 +14,7 @@ import type { ClientMessage, ServerMessage } from "../../src/agent/protocol.js";
 import { memoryTaskStore } from "../../src/agent/tasks/store.js";
 import { testConfig } from "./config.js";
 import { signedInConnectionTo } from "./connection.js";
+import { creditPlansDocument } from "./credit.js";
 import { fakeEntitlementStore } from "./entitlement.js";
 import { accessTokenFor } from "./tokens.js";
 import { WithoutOAuth } from "./without-oauth.js";
@@ -21,19 +22,11 @@ import { WithoutOAuth } from "./without-oauth.js";
 export const AGENT_ACCOUNT = "0b9c3a52-7c55-4f1e-8d3c-0000000000a1";
 export const AGENT_USER = "5a1d2c3b-0000-4000-8000-0000000000a1";
 
-/** One credit per thousand tokens at every tier, so a test can compute charges by eye. */
-export const TEST_TOKEN_RATES = {
-  fast: { inputPerThousand: 1, outputPerThousand: 1 },
-  standard: { inputPerThousand: 2, outputPerThousand: 4 },
-  strong: { inputPerThousand: 10, outputPerThousand: 20 },
-};
+export { TEST_TOKEN_RATES } from "./credit.js";
 
-export const TEST_CREDIT_PLANS_WITH_RATES = JSON.stringify({
-  runCredits: 10,
+export const TEST_CREDIT_PLANS_WITH_RATES = creditPlansDocument({
   defaultPlan: "test-plan-a",
-  weights: { perSession: 0, perIteration: 1, perMegapixel: 0 },
   plans: [{ key: "test-plan-a", monthlyCredits: 1000 }],
-  tokenRates: TEST_TOKEN_RATES,
 });
 
 export class QuietAuthProvider extends WithoutOAuth implements AuthProvider {

@@ -2,8 +2,8 @@
  * One model call as the agents make it: a system prompt, one user prompt, optional images, and a
  * strict JSON schema the answer must follow.
  *
- * OpenAI's Responses API takes the images; the Anthropic and Cerebras adapters the text routes
- * already use serve text-only calls. The router skips a text-only model for a call with images.
+ * OpenAI's Responses API takes the images; the Anthropic and Cerebras text adapters (`model/`) serve
+ * text-only calls. The router skips a text-only model for a call with images.
  */
 import { acceptedKeys, type Config } from "../../config.js";
 import { makeAnthropicTextAdapter } from "../../model/anthropic.js";
@@ -133,7 +133,7 @@ export function openAIAgentModel(settings: {
   };
 }
 
-/** One of the text routes' adapters, serving a call that carries no image. */
+/** A text adapter from `model/`, serving a call that carries no image. */
 export function textOnlyAgentModel(adapter: TextAdapter): AgentModelEntry["call"] {
   return async (request) => {
     const messages = [

@@ -12,26 +12,6 @@ public struct LargestFilesZipCapabilityAdapter: CapabilityAdapter {
         displayName: "Largest files zip",
         description: "Select the largest regular files in a whitelisted folder and create a zip archive.",
         operations: [.scanSelectLargestFiles, .createZip],
-        plannerTools: [
-            AgentTool(
-                operation: .scanSelectLargestFiles,
-                name: "Scan and select largest files",
-                description: "Recursively scan a whitelisted folder, skip symlinks, and select the largest regular files. Defaults to the 3 largest when count is omitted.",
-                requiredFields: ["inputPath"],
-                sideEffects: [],
-                dryRunBehavior: "Show the selected files and sizes.",
-                examples: ["Find the 3 largest files in ~/Desktop/MacAgentDemo"]
-            ),
-            AgentTool(
-                operation: .createZip,
-                name: "Create zip archive",
-                description: "Create a timestamped zip archive from the selected largest files.",
-                requiredFields: ["inputPath"],
-                sideEffects: ["write file"],
-                dryRunBehavior: "Show the zip path without writing it.",
-                examples: ["Zip the selected files"]
-            )
-        ],
         requiredPermissions: [
             CapabilityPermissionMetadata(requirement: .desktopDocumentsAccess)
         ],
@@ -41,12 +21,9 @@ public struct LargestFilesZipCapabilityAdapter: CapabilityAdapter {
     /// Resolves **the** zip step of the unit it is given — `firstIndex` is exact here, not a
     /// first-match approximation, because a unit holds at most one step per operation.
     ///
-    /// SONNY-35 filed this `firstIndex` as the defect, and it is the one of its two named sites that
-    /// could never have been fixed adapter-side: a second `create_zip`'s default folder comes from
-    /// *its own* pair's scan step, and a call handed the whole plan cannot tell that pair from the
-    /// first — `spec(in:)` would answer with the first scan's folder for both. The fix is in
-    /// `AgentActionExecutor.resolveDefaultOutputs(in:)`, which now resolves unit by unit so each pair
-    /// arrives here on its own.
+    /// A call handed a plan with two scan-and-zip pairs could not tell them apart — `spec(in:)`
+    /// would answer with the first scan's folder for both — so each pair must arrive here on its
+    /// own. `AdapterCapabilities` builds one pair per operation.
     public func resolveDefaultOutputs(in plan: AgentPlan, context: CapabilityExecutionContext) throws -> AgentPlan {
         var resolvedPlan = try FinderSelectionResolver.pinningSelectedDirectoryInput(
             in: plan,
@@ -156,19 +133,6 @@ public struct LargestFilesZipCapabilityAdapter: CapabilityAdapter {
             // follows a leaf symlink — `ProcessZipArchiver` hands the path to `/usr/bin/zip`, which
             // opens it. The user-named branch three lines above always validated; this one now does
             // the same thing by the same call.
-            //
-            // **What that was worth is smaller than the ticket says, and measuring it is what says
-            // so.** Against a tree carrying the pre-fix composition, a dangling link planted at this
-            // exact generated name is still refused by both `prepare` and `execute`, and its target
-            // is never created: `resolveDefaultOutputs` pins this path into the step's `outputPath`,
-            // and the next pass through `spec` therefore takes the validated branch above. **The
-            // route that really was exposed is the nested one, and this comment named the wrong one
-            // first** (PR #157's review, F3): it said "the dry run", but the product's dry run calls
-            // `prepare`, which resolves. What reaches this branch unresolved is a *stored routine*
-            // previewed through `previewNestedPlan` — `.createZip` is not on
-            // `StoredRoutine.forbiddenStepOperations` — and SONNY-218 is what closed that door, in
-            // this same branch. What this line buys is that the property no longer depends on being
-            // asked twice by whichever caller happens to ask.
             outputURL = try context.whitelist.validateOutputFile(
                 named: "largest-files-\(Timestamp.fileSafe(context.now())).zip",
                 in: folder

@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import { retentionOf } from "../content/hook.js";
+import { retentionOf } from "../retention.js";
 import { errorBody } from "../errors.js";
 import { fingerprintOf } from "./fingerprint.js";
 import { UNAUTHENTICATED_SCOPE, type KeyStore, type StoredResponse } from "./store.js";
@@ -11,8 +11,8 @@ import { UNAUTHENTICATED_SCOPE, type KeyStore, type StoredResponse } from "./sto
  * **One app-level pair of hooks, never per-route wiring**, and that is the same reasoning
  * `auth/gate.ts` gives for the gate: a route added by a later ticket whose author does not think
  * about idempotency would otherwise be a route where a client retry double-bills, serving correctly
- * and passing its own tests. `registerModelRoutes` (SONNY-130), SONNY-131's vision route and
- * SONNY-132's router inherit this by existing on this instance. Coverage is *encapsulation*, not
+ * and passing its own tests. The transcription route and the account routes inherit this by
+ * existing on this instance. Coverage is *encapsulation*, not
  * registration order — `gate.ts`'s docstring carries the seven wirings that were measured, and this
  * is installed on the same root instance for the same reason.
  *
@@ -43,10 +43,9 @@ import { UNAUTHENTICATED_SCOPE, type KeyStore, type StoredResponse } from "./sto
  *
  * **Two: an incognito response body is not stored, so a repeat of an incognito call re-runs**
  * (SONNY-134, 2026-08-28, PR #148's review, F1). §10.1 promises that a run marked "Don't save this
- * task" is not stored, and a response body kept here for twenty-four hours is stored — the model's
- * reply, one of the four named content types, outside the content clock and outside what a per-task
- * delete can reach. Between that promise and §9.2's replay, the promise wins: it is the one the user
- * was given.
+ * task" is not stored, and a response body kept here for twenty-four hours is stored — a
+ * transcript of the user's voice. Between that promise and §9.2's replay, the promise wins: it is
+ * the one the user was given.
  *
  * **What the deviation costs, stated rather than implied.** Only §9.2's *second* row changes, and
  * only for `retention: "none"` — the claim, the lease, the fencing token and the fingerprint are all
@@ -346,16 +345,12 @@ export function registerIdempotency(app: FastifyInstance, deps?: IdempotencyDeps
      * **An incognito run's response body is never stored here** (SONNY-134, PR #148's review, F1).
      *
      * This table keeps the served response for twenty-four hours, which makes it the one place in
-     * the gateway holding response content outside the route that produced it — and until this line
-     * it had no notion of `retention` at all. Measured against a real Postgres: `POST /v1/plan` with
-     * `retention: "none"` and an `Idempotency-Key` left `sonny.retained_content` empty, correctly,
-     * and left **the model's reply verbatim** in this table, outside the content clock, outside
-     * consent, and outside what a per-task delete can reach. §10.1's rule is "enforced where the
-     * storing happens, not at the call site", and this is a place where storing happens; the three
-     * layers in `content/hook.ts` all guard a different table.
+     * the gateway holding HTTP response content outside the route that produced it — a transcript,
+     * on `/v1/transcriptions`. §10.1's rule is "enforced where the storing happens, not at the call
+     * site", and this is a place where storing happens.
      *
      * **Explicit `"none"` and nothing else.** A request that declared no retention at all — every
-     * auth route, and a content route refused before its body could be read — keeps §9.2's replay
+     * auth route, and a transcription refused before its body could be read — keeps §9.2's replay
      * exactly as before. Widening this to "anything that is not `standard`" would silently strip the
      * guarantee from the four auth routes, which carry no content and never had a retention field
      * to declare.

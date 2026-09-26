@@ -5,150 +5,54 @@ import Testing
 /// The standing watcher's own mechanism (row 13, SONNY-236): what it keeps, what "changed" means,
 /// and the cap that ends it.
 ///
-/// **The two halves are asserted apart on purpose.** The store half is about two collections sharing
-/// one file without either one losing the other's records; the evaluator half is a pure state
+/// **The two halves are asserted apart on purpose.** The store half is about keeping and capping
+/// the records; the evaluator half is a pure state
 /// machine with no clock, no network and no disk, so every awkward case in it — the ad slot, the
 /// unreachable page, the expiry that lands between checks — is reachable by calling a function.
 @MainActor
 struct StandingWatcherTests {
-    // MARK: - The file's two collections
+    // MARK: - The store
 
-    /// The migration: files written before watchers existed are a bare JSON array, and they still
-    /// read.
+    /// A file whose watcher list is corrupt fails as itself rather than reading as empty.
     ///
-    /// **The control is the second half.** A decode returning zero tasks looks identical to a decode
-    /// of an empty file, so the assertion that matters is that the legacy tasks came back *with their
-    /// content*, not that nothing threw.
+    /// Driven at the decoder rather than through the store, because what is under test is the
+    /// file's shape and nothing about encryption or files.
     @Test
-    func aLegacyBareArrayFileReadsAsTasksWithNoWatchers() throws {
-        let root = try makeDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
-        let url = root.appendingPathComponent("resumable-tasks.json")
-        let encryption = testEncryption()
-        // Written as the shape the store used to write: the array itself, not a container.
-        let legacy = try encryption.encode([sampleTask(id: "old", command: "Zip my three largest files")], encoder: prettySorted)
-        try legacy.write(to: url)
-        let store = makeStore(root: root)
-
-        let tasks = try store.loadAll(now: .fixture)
-        let watchers = try store.loadWatchers()
-
-        #expect(tasks.count == 1)
-        let task = try #require(tasks.first)
-        #expect(task.command == "Zip my three largest files")
-        #expect(task.id == "old")
-        #expect(watchers.isEmpty)
-    }
-
-    /// The other direction, and the reason the decode asks about *shape* rather than catching a
-    /// failure: a container whose watcher list is corrupt must fail as itself, not be re-read as a
-    /// legacy array and fail with a message about the wrong format.
-    ///
-    /// Driven at the decoder rather than through the store, because what is under test is
-    /// `ResumableTaskFile.init(from:)`'s branch and nothing about encryption or files.
-    @Test
-    func aContainerWithACorruptWatcherFailsRatherThanReadingAsALegacyArray() throws {
+    func aFileWithACorruptWatcherFailsToDecode() throws {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
-        let corrupt = Data(#"{"tasks":[],"watchers":[{"id":"w1"}]}"#.utf8)
+        let corrupt = Data(#"{"watchers":[{"id":"w1"}]}"#.utf8)
 
         #expect(throws: (any Error).self) {
-            _ = try decoder.decode(ResumableTaskFile.self, from: corrupt)
+            _ = try decoder.decode(StandingWatcherFile.self, from: corrupt)
         }
 
-        // The control: the same container shape with a well-formed watcher decodes, so the throw
-        // above is about the corrupt record rather than about the container never decoding at all.
+        // The control: the same shape with a well-formed watcher decodes, so the throw above is
+        // about the corrupt record rather than about the file never decoding at all.
         let sound = Data(#"""
-        {"tasks":[],"watchers":[{"id":"w1","subject":"the pricing page","url":"https://example.com/watched","createdAt":"2023-11-14T22:13:20Z","baselineDigest":"base","unstableReadings":0,"consecutiveFailures":0}]}
+        {"watchers":[{"id":"w1","subject":"the pricing page","url":"https://example.com/watched","createdAt":"2023-11-14T22:13:20Z","baselineDigest":"base","unstableReadings":0,"consecutiveFailures":0}]}
         """#.utf8)
-        let file = try decoder.decode(ResumableTaskFile.self, from: sound)
+        let file = try decoder.decode(StandingWatcherFile.self, from: sound)
         #expect(file.watchers.map(\.id) == ["w1"])
-        #expect(file.tasks.isEmpty)
     }
 
-    /// A container written before watchers existed — `{"tasks":[...]}` with no `watchers` key — reads
-    /// as no watchers rather than failing, which would take every unfinished task in the file with it.
+    /// A watcher round trips through the file.
     @Test
-    func aContainerWithNoWatchersKeyReadsAsNoWatchers() throws {
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        let file = try decoder.decode(ResumableTaskFile.self, from: Data(#"{"tasks":[]}"#.utf8))
-        #expect(file.watchers.isEmpty)
-    }
-
-    /// Both collections survive a round trip through one file.
-    @Test
-    func tasksAndWatchersRoundTripTogether() throws {
+    func aWatcherRoundTrips() throws {
         let root = try makeDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
         let store = makeStore(root: root)
-
-        try store.save(sampleTask(id: "t1", command: "Zip my three largest files"), now: .fixture)
-        try store.saveWatcher(sampleWatcher(id: "w1", subject: "the pricing page"))
-
-        #expect(try store.loadAll(now: .fixture).map(\.id) == ["t1"])
-        #expect(try store.loadWatchers().map(\.id) == ["w1"])
-        #expect(try store.loadWatchers().map(\.subject) == ["the pricing page"])
-    }
-
-    /// **The invariant the shared file exists to be at risk of.** A task write happens on every unit
-    /// boundary of every run; if it dropped the watchers beside it, every standing watcher would end
-    /// the first time the user ran anything — and end silently, because nothing fails and the user is
-    /// simply never told again.
-    @Test
-    func aTaskWriteKeepsTheWatchersBesideIt() throws {
-        let root = try makeDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
-        let store = makeStore(root: root)
-        try store.saveWatcher(sampleWatcher(id: "w1", subject: "the pricing page"))
-
-        try store.save(sampleTask(id: "t1", command: "Zip my three largest files"), now: .fixture)
-        try store.save(sampleTask(id: "t2", command: "Convert the report"), now: .fixture)
-        try store.delete(id: "t1", now: .fixture)
-
-        #expect(try store.loadWatchers().map(\.id) == ["w1"])
-    }
-
-    /// And the mirror: a watcher write must not drop the unfinished tasks beside it.
-    @Test
-    func aWatcherWriteKeepsTheTasksBesideIt() throws {
-        let root = try makeDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
-        let store = makeStore(root: root)
-        try store.save(sampleTask(id: "t1", command: "Zip my three largest files"), now: .fixture)
 
         try store.saveWatcher(sampleWatcher(id: "w1", subject: "the pricing page"))
         try store.saveWatcher(sampleWatcher(id: "w2", subject: "the invoice folder page"))
         try store.deleteWatcher(id: "w2")
 
-        #expect(try store.loadAll(now: .fixture).map(\.id) == ["t1"])
-    }
-
-    /// The Memory row's door (SONNY-236, founder decision 2026-08-31): a row labelled *Unfinished
-    /// tasks* removes unfinished tasks and leaves everything else in the file alone.
-    ///
-    /// **The control is `deleteAll()` in the same test**, because "the watchers survived" is only
-    /// meaningful beside a door that takes them: without it the assertion is equally satisfied by a
-    /// delete that does nothing at all.
-    @Test
-    func deletingEveryTaskKeepsTheWatchersAndTheWholeFileDoorTakesBoth() throws {
-        let root = try makeDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
-        let store = makeStore(root: root)
-        try store.save(sampleTask(id: "t1", command: "Zip my three largest files"), now: .fixture)
-        try store.saveWatcher(sampleWatcher(id: "w1", subject: "the pricing page"))
-
-        try store.deleteAllTasks()
-        #expect(try store.loadAll(now: .fixture).isEmpty)
         #expect(try store.loadWatchers().map(\.id) == ["w1"])
-
-        try store.deleteAll()
-        #expect(try store.loadAll(now: .fixture).isEmpty)
-        #expect(try store.loadWatchers().isEmpty)
+        #expect(try store.loadWatchers().map(\.subject) == ["the pricing page"])
     }
 
-    /// The cap refuses rather than evicting — the opposite of what `capped(_:)` does to tasks, and
-    /// deliberately so: the user said the sentence that created each of these.
+    /// The cap refuses rather than evicting, deliberately: the user said the sentence that created
+    /// each of these.
     @Test
     func theCapRefusesASixthWatcherAndKeepsTheFiveThatExist() throws {
         let root = try makeDirectory()
@@ -201,24 +105,21 @@ struct StandingWatcherTests {
         #expect(try store.loadWatchers().map(\.id) == ["old", "new"])
     }
 
-    /// **`loadWatchers` filters nothing, and `loadAll` filtering is the control.** An idle task is
-    /// dropped on read because nobody is waiting to hear about it; an expired watcher owes the user a
-    /// sentence, so it has to survive the read that would otherwise have hidden it.
+    /// **`loadWatchers` filters nothing.** An expired watcher owes the user a sentence, so it has to
+    /// survive the read that would otherwise have hidden it.
     @Test
-    func anExpiredWatcherStillLoadsWhileAnIdleTaskDoesNot() throws {
+    func anExpiredWatcherStillLoads() throws {
         let root = try makeDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
-        let store = makeStore(root: root, idleExpiry: 60)
-        try store.save(sampleTask(id: "t1", command: "Zip my three largest files"), now: .fixture)
-        try store.saveWatcher(sampleWatcher(id: "w1", subject: "the pricing page"))
+        let store = makeStore(root: root)
+        let longAgo = Date.fixture.addingTimeInterval(-StandingWatcherLimits.standard.maxLifetime * 2)
+        try store.saveWatcher(sampleWatcher(id: "w1", subject: "the pricing page", createdAt: longAgo))
 
-        let wellPast = Date.fixture.addingTimeInterval(60 * 60 * 24 * 365)
-        #expect(try store.loadAll(now: wellPast).isEmpty)
         #expect(try store.loadWatchers().map(\.id) == ["w1"])
     }
 
     /// Deleting a watcher that is not there changes nothing and does not rewrite the file — the
-    /// no-op rule every delete in this store follows.
+    /// no-op rule.
     @Test
     func deletingAnUnknownWatcherRewritesNothing() throws {
         let root = try makeDirectory()
@@ -253,7 +154,7 @@ struct StandingWatcherTests {
     }
 
     /// A subject longer than the cap is trimmed on the way in **and on the way back out of a
-    /// decode**, the rule `ResumableTask` states for its own command.
+    /// decode**.
     @Test
     func anOverlongSubjectIsCappedThroughBothDoors() throws {
         let long = String(repeating: "a", count: StandingWatcher.maxSubjectCharacters + 50)
@@ -782,11 +683,6 @@ struct StandingWatcherTests {
 
     /// And nothing in `Sources/` builds a `StandingWatcherLimits` of its own — the shipped cap is
     /// `.standard` and the initializer exists for tests.
-    ///
-    /// A separate arm from `noProductionPathPassesAnIdleExpiryOrCapToTheResumableStore`, which asks
-    /// about arguments at this store's construction sites: this asks about a *different* needle over
-    /// a different population — any construction of the limits value anywhere — and the two would
-    /// each miss what the other catches.
     @Test
     func noProductionPathBuildsItsOwnStandingWatcherLimits() throws {
         let sources = URL(fileURLWithPath: #filePath)
@@ -824,22 +720,6 @@ struct StandingWatcherTests {
 
     // MARK: - Fixtures
 
-    private func sampleTask(id: String, command: String) -> ResumableTask {
-        ResumableTask(
-            id: id,
-            command: command,
-            plan: AgentPlan(
-                summary: "Work out a number.",
-                requiresConfirmation: false,
-                steps: [
-                    AgentStep(id: "calc", operation: .calculateUtility, description: "Add them up.", searchQuery: "2 + 2")
-                ]
-            ),
-            startedAt: .fixture,
-            updatedAt: .fixture
-        )
-    }
-
     private func sampleWatcher(
         id: String,
         subject: String,
@@ -873,24 +753,12 @@ struct StandingWatcherTests {
         )
     }
 
-    private func makeStore(
-        root: URL,
-        idleExpiry: TimeInterval = ResumableTaskStore.defaultIdleExpiry,
-        limits: StandingWatcherLimits = .standard
-    ) -> ResumableTaskStore {
+    private func makeStore(root: URL, limits: StandingWatcherLimits = .standard) -> ResumableTaskStore {
         ResumableTaskStore(
-            fileURL: root.appendingPathComponent("resumable-tasks.json"),
+            fileURL: root.appendingPathComponent("watchers.json"),
             encryption: testEncryption(),
-            idleExpiry: idleExpiry,
             limits: limits
         )
-    }
-
-    private var prettySorted: JSONEncoder {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        encoder.dateEncodingStrategy = .iso8601
-        return encoder
     }
 }
 

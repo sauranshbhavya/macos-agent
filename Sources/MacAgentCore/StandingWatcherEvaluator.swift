@@ -52,7 +52,7 @@ public enum StandingWatcherEvaluator {
     /// this is the one place in the feature where hiding a difference is the expensive direction.
     ///
     /// SHA-256 rather than the text itself, for two reasons that both matter: the record stays a
-    /// fixed small size whatever page it watches, and `resumable-tasks.json` does not accumulate the
+    /// fixed small size whatever page it watches, and the watcher store does not accumulate the
     /// readable text of every page the user has ever watched. The store is encrypted either way; not
     /// storing the content at all is better than storing it well.
     public static func digest(of readableText: String) -> String {

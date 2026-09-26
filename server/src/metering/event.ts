@@ -1,47 +1,22 @@
 import type { Config } from "../config.js";
 
 /**
- * What the server records per call — contract §11 — as a type, a route map and one pure decision
- * (SONNY-133).
+ * What the server records per HTTP model call — contract §11 — as a type, a route map and one pure
+ * decision (SONNY-133).
  *
- * **This module produces the measurement and never a price.** The ticket's never-touch list is one
- * line: no price, no plan, no tier, no credit weight, and no number that implies one. Everything
- * here is a token count, a byte count, a pixel count, a duration or an outcome — a quantity a
- * provider or a clock produced. SONNY-17 reads those and sets the credit weight; nothing in
- * `src/metering/` should ever be able to answer "what did that cost in money".
- *
- * **Where the shape came from, since two proposals were on the table.** SONNY-131 proposed a
- * vision-specific event on SONNY-133 (2026-08-28), and contract §11 is the shape twelve tickets were
- * written against. **The proposal is adopted in substance and amended in vocabulary**, and both
- * halves are worth stating because the ticket asked which:
- *
- * - **Adopted:** one event per iteration and never per session, `session_id` as the GROUP BY key,
- *   the pixel dimensions as the thing vision cost is actually derived from, a token count that may
- *   be absent and must never be read as zero, and nothing on the event reaching the client.
- * - **Amended:** its four outcome values become §11's five. `served` → `ok`, `provider_failed` →
- *   `provider_error`, `refused_before_upstream` → `refused`, `client_cancelled` unchanged, plus
- *   `server_error` for this gateway's own bug, which the proposal's four had nowhere to put. The
- *   distinction the proposal insisted on — that a refusal before any upstream call must not read
- *   like a provider failure — is the whole reason `outcomeFor` below takes `upstreamAttempted`.
- * - **Corrected by its own author, and acted on:** the proposal said `AIUsageCallKind`'s raw values
- *   are persisted in `CompletedTaskRecord`. Nothing persists them (PR #144's F2, corrected on this
- *   ticket the same day). So there is no legacy shape on the Mac to stay compatible with, no
- *   migration owed on the client, and the raw values are not frozen by anything. This table is the
- *   first thing that persists usage anywhere, and its `route` column carries the route's own name
- *   rather than the enum's.
+ * **This module produces the measurement and never a price.** Everything here is a token count, a
+ * byte count, a duration or an outcome. Credits are charged elsewhere, by tokens, on the V2 agents'
+ * own ledger (`agent/credits.ts`).
  */
 
-/** §11's `route` enum, exactly. */
-export const meteredRoutes = [
-  "plan",
-  "research.synthesize",
-  "transcription",
-  "search",
-  "screen.analyze",
-] as const;
+/**
+ * The routes a metering row is written for. Only `transcription` remains: it is the Mac's one direct
+ * model route. The model calls inside a task are recorded as `sonny.agent_model_call` rows instead.
+ */
+export const meteredRoutes = ["transcription"] as const;
 export type MeteredRoute = (typeof meteredRoutes)[number];
 
-/** §11's `outcome` enum, exactly. The migration's header maps SONNY-131's four onto these five. */
+/** §11's `outcome` enum, exactly. */
 export const meteringOutcomes = [
   "ok",
   "provider_error",
@@ -59,17 +34,12 @@ export type MeteringOutcome = (typeof meteringOutcomes)[number];
  * think about metering ships something that serves correctly, passes its own tests and is free. The
  * hook reads this map, so a route is metered by being in it — and
  * `everyPostRouteIsEitherMeteredOrDeclaredUnmetered` walks the built app's real route table, so a
- * sixth content-bearing route fails that test until somebody classifies it either way.
+ * new `POST` fails that test until somebody classifies it either way.
  *
- * The five keys are §2.4's five model routes. `POST /v1/transcriptions` maps to `transcription`
- * because §11's enum is singular there.
+ * `POST /v1/transcriptions` maps to `transcription` because §11's enum is singular there.
  */
 export const METERED_ROUTES: ReadonlyMap<string, MeteredRoute> = new Map([
-  ["POST /v1/plan", "plan" as const],
-  ["POST /v1/research/synthesize", "research.synthesize" as const],
   ["POST /v1/transcriptions", "transcription" as const],
-  ["POST /v1/search", "search" as const],
-  ["POST /v1/screen/analyze", "screen.analyze" as const],
 ]);
 
 /**
@@ -159,11 +129,11 @@ export interface OutcomeInput {
  * 2. **Success is success.** Any 2xx or 3xx is `ok`, whatever else was going on.
  * 3. **This gateway's own failure beats a provider's**, because `server.error` is a 500 and a naive
  *    status test would file every 5xx together.
- * 4. **Nothing spent is `refused`.** A validation 400, a 413 over the image ceiling, and the
+ * 4. **Nothing spent is `refused`.** A validation 400, a 413 over the body limit, and the
  *    `502 provider.unavailable` a route with no configured adapter answers — all of them before any
- *    upstream call. SONNY-131's proposal is emphatic about this last one and it is the least
- *    obvious: without the `upstreamAttempted` gate, a deployment missing a credential would record a
- *    provider failure per request against a provider it never called.
+ *    upstream call. The last is the least obvious: without the `upstreamAttempted` gate, a
+ *    deployment missing a credential would record a provider failure per request against a provider
+ *    it never called.
  *
  *    **A `409 idempotency.conflict` would land here too, and the hook never asks** (corrected
  *    2026-08-28, PR #147's review, F5 — this list named it as if it did). Both 409 paths leave
@@ -191,39 +161,17 @@ export function outcomeFor(input: OutcomeInput): MeteringOutcome {
 }
 
 /**
- * The model identifier this deployment serves `route` with when `provider` answers.
- *
- * **Read from the same `Config` the adapter was built from, rather than threaded back through the
- * router.** `ProviderAttribution` (SONNY-132) carries the provider that served and the ones that
- * did not, and nothing on the wire back from an adapter carries a model — adding one would mean
- * changing `TextResult`, `TranscriptionResult`, `SearchResult` and `VisionResult`, plus the router
- * that wraps them, to arrive at exactly the answer this function already has. The configuration
- * cannot change inside one request, so the two are the same value.
- *
- * **`undefined` for search is correct rather than a gap**: Tavily is a search API and has no model.
- * §11 lists `model` as a plain string; the column is nullable for this row and for a refusal that
- * never reached a provider.
+ * The model identifier this deployment serves `route` with when `provider` answers, read from the
+ * same `Config` the adapter was built from. `undefined` when no provider answered or the provider is
+ * one this gateway has no model setting for.
  */
 export function modelForRoute(
   config: Config,
   route: MeteredRoute,
   provider: string | undefined,
 ): string | undefined {
-  if (provider === undefined) return undefined;
-  switch (provider) {
-    case "openai":
-      return route === "transcription" ? config.openAITranscriptionModel : config.openAITextModel;
-    case "anthropic":
-      return config.anthropicTextModel;
-    case "cerebras":
-      return config.cerebrasTextModel;
-    case "vision":
-      return config.visionModel;
-    // Tavily has no model, and a provider name this gateway does not know has no model here either
-    // — the honest answer in both cases is that the field is empty rather than a guess.
-    default:
-      return undefined;
-  }
+  if (route === "transcription" && provider === "openai") return config.openAITranscriptionModel;
+  return undefined;
 }
 
 /**

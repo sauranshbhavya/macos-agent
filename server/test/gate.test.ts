@@ -94,23 +94,6 @@ describe("which routes the gate challenges", () => {
     const protectedRoutes = routes.filter((route) => !isPublicRoute(route.method, route.url));
     expect(protectedRoutes.map((route) => `${route.method} ${route.url}`).sort()).toEqual([
       "DELETE /v1/account",
-      // SONNY-404's account-scoped sibling, challenged for the sharpest reason on this list after
-      // the account close itself: an unauthenticated caller reaching it would delete every task an
-      // account has ever stored, and it carries no identifier at all — the account it acts on is
-      // the one the gate established, which is exactly why the gate has to have run.
-      "DELETE /v1/account/content",
-      // SONNY-404's two, arriving the same way and challenged for the same reason as the route
-      // above them. The bulk one is the sharpest of the three: an unauthenticated caller reaching
-      // it would delete a whole account's retained content in one request, and it carries its ids
-      // in a body rather than a path, which is not a difference the gate cares about — the hook
-      // runs before the body is parsed at all.
-      "DELETE /v1/tasks",
-      // SONNY-134's, and it arrives here the same way as every other: `routes/tasks.ts` mentions
-      // auth nowhere. It is the one route a user can call to destroy their own retained content,
-      // so being challenged is not a formality — an unauthenticated caller could otherwise delete
-      // any task whose client-minted id they could guess.
-      "DELETE /v1/tasks/:task_id",
-      "DELETE /v1/tasks/:task_id/screenshots",
       // SONNY-135's, arriving the same way as everything below it — and it is also the route that
       // found the scan's own defect: its path sits *under* `DELETE /v1/account`, so Fastify prints
       // it as a child node and the parser read it as `GET /entitlements`, a path nothing serves.
@@ -120,21 +103,21 @@ describe("which routes the gate challenges", () => {
       // reading one user's balance by presenting nothing at all.
       "GET /v1/account/credits",
       "GET /v1/account/entitlements",
+      // The V2 session's WebSocket upgrade (Fastify adds the `HEAD`), mounted now that a catalogue
+      // always carries token rates. It carries every task, and the gate runs on the upgrade request
+      // like any other (`agent/session/route.ts`).
+      "GET /v2/session",
       "HEAD /v1/account/credits",
       "HEAD /v1/account/entitlements",
+      "HEAD /v2/session",
       // SONNY-215's charge, arriving the same way and challenged for the sharpest reason on this
       // list: it **spends the user's money**. An unauthenticated caller reaching it would be buying
       // a stranger a top-up. Its consent route sorts to the bottom, being the one `PUT` here.
       "POST /v1/account/credits/top-up",
       "POST /v1/auth/signout",
-      // SONNY-130's four. They appear here by *not* being listed in `PUBLIC_ROUTES`, which is the
-      // whole of what deny-by-default means — no line in the four routes' own file mentions auth.
-      "POST /v1/plan",
-      "POST /v1/research/synthesize",
-      // SONNY-131's, and it arrives here the same way — by not being listed in `PUBLIC_ROUTES`.
-      // `routes/screen.ts` mentions auth nowhere either.
-      "POST /v1/screen/analyze",
-      "POST /v1/search",
+      // SONNY-130's transcription route, the one model route the Mac still calls directly. It appears
+      // here by *not* being listed in `PUBLIC_ROUTES`, which is the whole of what deny-by-default
+      // means — no line in `routes/model.ts` mentions auth.
       "POST /v1/transcriptions",
       // SONNY-215's consent. Challenged because it is the switch that stands between a user and a
       // charge, and a caller who could set it without signing in would be turning it on for
@@ -226,10 +209,10 @@ describe("which routes the gate challenges", () => {
     // nested two plugins deep, in a second plugin beside a first, and behind a prefix. The assertion
     // below was always right; only the story around it was wrong.
     //
-    // **The stand-in route was `POST /v1/plan` until SONNY-130 built it**, at which point this test
-    // stopped proving anything and started failing with `Method 'POST' already declared`. A route
-    // that a later ticket might really add is the wrong stand-in for a hypothetical one; the path
-    // below is not in the contract's §4.1 table and is not going to be.
+    // **The stand-in is a path no ticket will build.** The first stand-in was a contract route, and
+    // when a later ticket built it this test stopped proving anything and started failing with
+    // `Method 'POST' already declared`. The path below is not in the contract's §4.1 table and is not
+    // going to be.
     const app = build();
     app.register(async (scope) => {
       scope.post("/v1/not-a-contract-route", async () => ({ served: true }));
@@ -406,25 +389,25 @@ describe("what decides which routes the gate covers", () => {
     const app = Fastify({ logger: false });
     await wire(app);
     await app.ready();
-    const response = await app.inject({ method: "POST", url: "/v1/plan" });
+    const response = await app.inject({ method: "POST", url: "/v1/transcriptions" });
     await app.close();
     return response.statusCode;
   };
 
   it("covers a route registered BEFORE it, so order is not what decides coverage", async () => {
     expect(await probe((app) => {
-      app.post("/v1/plan", async () => ({ served: true }));
+      app.post("/v1/transcriptions", async () => ({ served: true }));
       registerAuthGate(app, deps);
     })).toBe(401);
     // And after it, which is the case everyone assumes is the only safe one.
     expect(await probe((app) => {
       registerAuthGate(app, deps);
-      app.post("/v1/plan", async () => ({ served: true }));
+      app.post("/v1/transcriptions", async () => ({ served: true }));
     })).toBe(401);
     // Including into a plugin registered afterwards: descendants of the gate's context are covered.
     expect(await probe((app) => {
       registerAuthGate(app, deps);
-      app.register(async (scope) => { scope.post("/v1/plan", async () => ({ served: true })); });
+      app.register(async (scope) => { scope.post("/v1/transcriptions", async () => ({ served: true })); });
     })).toBe(401);
   });
 
@@ -434,11 +417,11 @@ describe("what decides which routes the gate covers", () => {
     // instance, which is why the shipped app is not either of these.
     expect(await probe(async (app) => {
       await app.register(async (scope) => { registerAuthGate(scope, deps); });
-      app.post("/v1/plan", async () => ({ served: true }));
+      app.post("/v1/transcriptions", async () => ({ served: true }));
     })).toBe(200);
     expect(await probe(async (app) => {
       await app.register(async (scope) => { registerAuthGate(scope, deps); });
-      app.register(async (scope) => { scope.post("/v1/plan", async () => ({ served: true })); });
+      app.register(async (scope) => { scope.post("/v1/transcriptions", async () => ({ served: true })); });
     })).toBe(200);
   });
 
@@ -459,9 +442,9 @@ describe("the gate when nothing is configured to authenticate with", () => {
     const app = Fastify({ logger: false });
     registerErrorHandlers(app);
     registerAuthGate(app);
-    app.post("/v1/plan", async () => ({ ok: true }));
+    app.post("/v1/transcriptions", async () => ({ ok: true }));
     const response = await app.inject({
-      method: "POST", url: "/v1/plan", headers: { authorization: `Bearer ${accessTokenFor(USER)}` },
+      method: "POST", url: "/v1/transcriptions", headers: { authorization: `Bearer ${accessTokenFor(USER)}` },
     });
     expect(response.statusCode).toBe(401);
     expect(response.json().error.code).toBe("auth.unauthenticated");

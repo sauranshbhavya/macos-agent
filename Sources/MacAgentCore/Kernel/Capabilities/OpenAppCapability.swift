@@ -2,6 +2,10 @@ import AppKit
 import Foundation
 
 /// `open_app` v1: opens an installed app or brings it forward. Floor effect: navigate.
+///
+/// Opening an app doesn't take the person away from what they were in (SONNY-451): the app they
+/// were using comes back in front once the open has completed. An app already in front moves
+/// nothing.
 public struct OpenAppCapability: Capability {
     public let name = "open_app"
     public let version = 1
@@ -16,13 +20,16 @@ public struct OpenAppCapability: Capability {
 
     private let resolver: any InstalledAppResolving
     private let opener: @Sendable (InstalledApp) async throws -> Void
+    private let focus: @MainActor @Sendable () -> any FocusRestoring
 
     public init(
         resolver: any InstalledAppResolving = InstalledAppResolver.shared,
-        opener: @escaping @Sendable (InstalledApp) async throws -> Void = OpenAppCapability.openWithWorkspace
+        opener: @escaping @Sendable (InstalledApp) async throws -> Void = OpenAppCapability.openWithWorkspace,
+        focus: @escaping @MainActor @Sendable () -> any FocusRestoring = { FocusRestorer.inert() }
     ) {
         self.resolver = resolver
         self.opener = opener
+        self.focus = focus
     }
 
     public func prepare(actionID: ActionID, args: [String: JSONValue]) async throws -> PreparedAction {
@@ -52,11 +59,17 @@ public struct OpenAppCapability: Capability {
         }
         if Task.isCancelled { return .failed(.cancelled, "Stopped before opening \(resolved.app.displayName).") }
         do {
-            try await opener(resolved.app)
+            try await open(resolved.app)
             return .done("\(resolved.app.displayName) is open.")
         } catch {
             return .failed(.executionError, "\(resolved.app.displayName) could not be opened.")
         }
+    }
+
+    @MainActor
+    private func open(_ app: InstalledApp) async throws {
+        let opener = self.opener
+        try await focus().restoringFocus { try await opener(app) }
     }
 
     @MainActor

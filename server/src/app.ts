@@ -27,15 +27,10 @@ import { postgresKeyStore, type KeyStore } from "./idempotency/store.js";
 import { registerMetering } from "./metering/hook.js";
 import { postgresMeteringStore, type MeteringStore } from "./metering/store.js";
 import { registerAuth, type AuthDeps } from "./routes/auth.js";
-import { registerContent } from "./content/hook.js";
-import { postgresContentStore, type ContentStore } from "./content/store.js";
-import { registerContentDeletionRoutes } from "./routes/tasks.js";
 import fastifyMultipart from "@fastify/multipart";
 import { BODY_LIMIT_BYTES } from "./model/limits.js";
 import { describeRouting, modelProvidersFrom } from "./model/providers.js";
 import { registerModelRoutes } from "./routes/model.js";
-import { visionProviderFrom } from "./model/vision.js";
-import { registerScreenRoutes } from "./routes/screen.js";
 import { billingDepsFrom } from "./billing/deps.js";
 import { postgresBillingStore, type BillingStore } from "./billing/store.js";
 import type { BillingProvider } from "./billing/provider.js";
@@ -71,16 +66,9 @@ export const API_VERSION = "1.0";
 /**
  * Server-wide request body limit, 1 MiB, matching contract §6.1's "every other route".
  *
- * **This is the floor, not the ceiling.** §6.1 gives three routes a larger limit of their own —
- * `/v1/screen/analyze` 4,200,000, `/v1/transcriptions` 10 MiB, `/v1/research/synthesize` 4 MiB —
- * and each sets its own `bodyLimit` on its route definition. A route that forgets to therefore
- * inherits the *smallest* limit and fails loudly at 1 MiB, which is the safe direction: the
- * alternative default would let a route accept far more than its contract allows and discover it in
- * production.
- *
- * All three exist now: SONNY-130 added the second and third, SONNY-131 the first. **This said "four
- * routes" and then listed three**, because §6.1's table has four rows and the fourth is "every other
- * route" at 1 MiB — which is this constant, not a route with a larger limit of its own.
+ * **This is the floor, not the ceiling.** `/v1/transcriptions` sets its own larger `bodyLimit`
+ * (10 MiB, `model/limits.ts`). A route that forgets to inherits the *smallest* limit and fails
+ * loudly at 1 MiB, which is the safe direction.
  *
  * The gateway enforces this itself rather than inheriting a platform's, which is what the
  * 2026-08-21 move to a VM makes possible (`docs/sonny-row-12-host-decision.md` §12.2).
@@ -105,11 +93,10 @@ export const DEFAULT_BODY_LIMIT_BYTES = 1024 * 1024;
  * was refused `408`, and a handler that slept for five seconds returned `200`. So this is not a
  * second copy of §12's total deadlines and cannot be read as one; `model/limits.ts` owns those.
  *
- * **120 seconds, and the reason is §12 rather than a guess.** §12's longest *client* timeout is 120 s
- * (`screen/analyze` and `research/synthesize`). Past that instant no Sonny client is still waiting
- * for any route's answer, so a request whose body is still arriving at 120 s is one nobody will read
- * — refusing it costs a real caller nothing, and letting it run is the whole defect. A tighter
- * number would buy nothing, for the reason below.
+ * **120 seconds, above every client timeout the Mac uses on these routes** (the longest is
+ * transcription's 90 s). Past it no Sonny client is still waiting for an answer, so a request whose
+ * body is still arriving at 120 s is one nobody will read. A tighter number would buy nothing, for
+ * the reason below.
  *
  * **This is a coarse backstop and not a deadline, which is measured and is the reason the claim
  * lease is fixed at the route instead of here.** Node checks for expired connections on a sweep —
@@ -229,8 +216,8 @@ const CLIENT_ERROR_REASON: Readonly<Record<number, string>> = {
  * on the *recording* half — `recordServingProvider` gutted, the provider it records hard-coded, and
  * the `model routing` line deleted from this function. SONNY-132's third acceptance criterion is
  * that "the recorded metering says which provider actually served it", and the startup line is what
- * all four `deploy.sh` demonstrations and the founder's manual row 7 read. Neither could be asserted
- * because pino writes to fd 1 through `sonic-boom`, which `process.stdout.write` never sees.
+ * an operator reads. Neither could be asserted because pino writes to fd 1 through `sonic-boom`,
+ * which `process.stdout.write` never sees.
  *
  * The same seam and the same reason as `PoolOptions.createPool` and `SupabaseAuthConfig.fetch`.
  * Both are absent in every shipping path, so nothing a deployment does changes.
@@ -239,17 +226,6 @@ export interface AppOverrides {
   readonly idempotencyStore?: KeyStore;
   readonly meteringStore?: MeteringStore;
   readonly logStream?: NodeJS.WritableStream;
-  /**
-   * **`contentStore` exists for the third time and the same reason** (SONNY-134). Contract §10's
-   * store is Postgres, so without a seam every behaviour §10.1 names — an incognito run leaving
-   * nothing anywhere, a request that declared no `retention` storing nothing, voice audio and a
-   * provider's error body landing on the content clock — would be verified only in
-   * `npm run test:db`, and the run this repository gates on would be silent about the guarantee
-   * that a run marked "Don't save this task" is never stored. With it those tests drive the whole
-   * real app and assert what a client's request actually retained; `content.db.test.ts` proves the
-   * SQL, the clock and the structural exclusions underneath.
-   */
-  readonly contentStore?: ContentStore;
   /**
    * **`entitlementStore` exists for the fourth time and the fourth identical reason** (SONNY-135).
    * The cap's counter is Postgres, so without a seam every behaviour this ticket is about *except*
@@ -272,12 +248,10 @@ export interface AppOverrides {
   readonly billingStore?: BillingStore;
   /**
    * **`creditStore` exists for the sixth time and the sixth identical reason** (SONNY-212). What an
-   * account drew on screen control is a query over `sonny.metering_event`, so without a seam every
-   * behaviour this ticket is about — a plan's allowance becoming a run count, a revoked plan falling
-   * to the default, a period that resets, an account that has drawn past its allowance reading zero
-   * rather than a negative — would be verified only under `npm run test:db`. `credit.db.test.ts`
-   * proves the query itself against a real Postgres, including the one thing a fake cannot say
-   * anything about: that events on the other four routes change the answer by nothing at all.
+   * account has spent is a query over `sonny.agent_model_call`, so without a seam every behaviour
+   * this ticket is about — a revoked plan falling to the default, a period that resets, an account
+   * that has drawn past its allowance reading zero rather than a negative — would be verified only
+   * under `npm run test:db`. `credit.db.test.ts` proves the query itself against a real Postgres.
    */
   readonly creditStore?: CreditStore;
   /**
@@ -383,8 +357,7 @@ export function buildApp(
      * A real UUID per request, not Fastify's default counter.
      *
      * **Contract §2.3 makes `Sonny-Request-Id` a join key**: "the one string a user could ever be
-     * asked to quote for support", linking an error the user saw to the metering event and the
-     * retained content. Fastify's default is a per-process counter that restarts at `req-1` on
+     * asked to quote for support", linking an error the user saw to the metering event. Fastify's default is a per-process counter that restarts at `req-1` on
      * every boot, so across two instances — or one instance before and after a restart — the same
      * id names different requests. A join key that collides is not a join key.
      */
@@ -393,7 +366,7 @@ export function buildApp(
     bodyLimit: DEFAULT_BODY_LIMIT_BYTES,
 
     // SONNY-322. See `REQUEST_TIMEOUT_MS` for what this bounds, what it does not, and why the
-    // number is §12's longest client timeout rather than one of its server deadlines.
+    // number sits above the client timeouts rather than at one of the server deadlines.
     requestTimeout: REQUEST_TIMEOUT_MS,
 
     /**
@@ -535,8 +508,7 @@ export function buildApp(
    * Contract §9's `Idempotency-Key`, on THIS instance for the same reason the gate is (SONNY-300).
    *
    * A `preHandler`/`onSend` pair covering every `POST` this instance and its descendants serve, so
-   * the routes SONNY-131 and SONNY-132 are adding inherit §9.2's guarantees by existing rather than
-   * by each remembering to wire them. Coverage is encapsulation, not registration order —
+   * every route inherits §9.2's guarantees by existing rather than by remembering to wire them. Coverage is encapsulation, not registration order —
    * `auth/gate.ts` carries the seven wirings that were measured, and the conclusion is the same one
    * here: what matters is that this is `app` and not a scope.
    *
@@ -595,49 +567,11 @@ export function buildApp(
    *
    * Takes the same `withConnection` the gate and the key store take, and answers `undefined` for a
    * health-only deployment — which has no database, and no metered route it could reach either,
-   * since every one of the five is authenticated.
+   * since the one metered route is authenticated.
    */
   const meteringStore =
     overrides.meteringStore ?? (auth ? postgresMeteringStore(auth.withConnection) : undefined);
   registerMetering(app, config, meteringStore ? { store: meteringStore } : undefined);
-
-  /**
-   * Contract §10's content store, on THIS instance for the fourth time and the same reason
-   * (SONNY-134).
-   *
-   * **Registered after the metering hook, and the order carries one real consequence.** Fastify runs
-   * `onSend` hooks in registration order and both modules have one, so this captures the payload the
-   * client is actually being sent — after the idempotency hook has stored or released it and after
-   * metering has measured it. The *write* is not in `onSend` at all: it is in `onResponse`, after the
-   * response has left, which is the deliberate opposite of the call metering makes about its own
-   * write. `content/hook.ts` carries both halves of that reasoning — what is lost differs in kind
-   * (money against a debugging copy), and what it costs differs by three orders of magnitude (a row
-   * of integers against a megabyte screenshot, twelve times a screen-control session).
-   *
-   * **Nothing here consults `retention` and nothing here needs to.** §10.1 puts the guarantee at the
-   * storage layer, so the hook refuses before it reads a body and the table refuses under it. This
-   * line's only job is that the hook is installed on `app` and not on a scope, which is the same
-   * property the gate, the key store and the metering hook each depend on.
-   *
-   * Takes the same `withConnection` the other three take, and answers `undefined` for a health-only
-   * deployment — which has no database, and no content-bearing route it could reach either, since
-   * every one of the five is authenticated.
-   */
-  const contentStore =
-    overrides.contentStore ?? (auth ? postgresContentStore(auth.withConnection) : undefined);
-  registerContent(app, config, contentStore ? { store: contentStore } : undefined);
-
-  /**
-   * `DELETE /v1/tasks/{task_id}` (SONNY-134), contract §4.6 — the user's own delete reaching the
-   * server's copy.
-   *
-   * Mounted here rather than beside the auth routes below because it is not an auth route and does
-   * not want that block's `if (auth)` gate: `app.ts`'s standing argument is that the route table
-   * must not change shape with the environment. It is a `DELETE`, so it passes through neither the
-   * idempotency hook nor the metering hook — both are `POST`-only — which is why nothing about
-   * metering's shape changes on this branch.
-   */
-  registerContentDeletionRoutes(app, auth ? { withConnection: auth.withConnection } : undefined);
 
   /**
    * `POST /v1/transcriptions` is the one route with a `multipart/form-data` body (contract §4.4),
@@ -665,36 +599,16 @@ export function buildApp(
    * alternative is a `404 resource.not_found` — a code the client reads as "no such route", not
    * retryable — standing in for a deployment that is simply missing a key. A configured route with
    * no adapter answers `502 provider.unavailable` instead, which is true from the caller's side.
-   * The gate covers all four by not listing them in `PUBLIC_ROUTES`, so on a deployment with no
-   * `auth` — a health-only one, which is what `./scripts/deploy.sh local` starts today — every one
-   * of them refuses with a 401 rather than serving.
+   * The gate covers it by not listing it in `PUBLIC_ROUTES`, so on a deployment with no `auth` — a
+   * health-only one — it refuses with a 401 rather than serving.
    */
   registerModelRoutes(app, modelProvidersFrom(config));
 
-  /**
-   * `POST /v1/screen/analyze` (SONNY-131), mounted on the same terms and for the same reasons.
-   *
-   * Its provider comes from `model/vision.ts` rather than from `modelProvidersFrom` above.
-   *
-   * **That was written as a lane boundary that would end when SONNY-132 landed — "the two collapse
-   * when that one lands" — and SONNY-132 has now landed without collapsing them.** Nothing forced
-   * the collapse: this route reads no `ModelProviders` field, exactly as that comment predicted, so
-   * the provider router grew `plan`, `synthesize`, `transcriptions` and `search` chains and left
-   * this route untouched. Collapsing it is a real and probably worthwhile change — a
-   * `MODEL_ROUTE_SCREEN_ANALYZE` chain would give the vision route the same failover and the same
-   * per-provider retention policy the other four now have, which is precisely what SONNY-110 needs
-   * of it — but the vision route and `VisionModelClient` are on SONNY-132's never-touch list, so it
-   * is not that branch's to take. Whoever owns it next starts here.
-   */
-  registerScreenRoutes(app, visionProviderFrom(config));
-
   // **What this deployment's routing actually resolved to, printed once** (SONNY-132). Which
   // provider serves which route is configuration now, and per-provider retention/training terms are
-  // configuration that nothing routes on until SONNY-110 answers — so both are said out loud at
-  // startup, where an operator can see what the container was told rather than inferring it from
-  // which requests succeed. `describeRouting` carries provider names, policy words and a boolean
-  // per credential, and never a key. It describes the four routes the router owns; the vision route
-  // above is not among them, for the reason its own comment gives.
+  // configuration that nothing routes on — so both are said out loud at startup, where an operator
+  // can see what the container was told. `describeRouting` carries provider names, policy words and
+  // a boolean per credential, and never a key. The V2 agents' tiers are not in it.
   app.log.info(describeRouting(config), "model routing");
 
   /**
@@ -778,11 +692,7 @@ export function buildApp(
   const agentSessions = new SessionRegistry(overrides.agentMessageRate);
   app.decorate("agentSessions", agentSessions);
   app.decorate("agentRunner", null);
-  const tokenRates = auth ? requireCreditCatalogue(config).tokenRates : undefined;
-  if (auth && tokenRates === undefined) {
-    app.log.warn({}, "CREDIT_PLANS has no tokenRates, so /v2/session is not mounted");
-  }
-  if (auth && tokenRates !== undefined) {
+  if (auth) {
     const agentTaskStore = overrides.agentTaskStore ?? postgresTaskStore(auth.withConnection);
     const now = auth.now ?? (() => new Date());
     const runner = new TaskRunner({
@@ -794,7 +704,7 @@ export function buildApp(
           catalogue: requireCreditCatalogue(config),
           defaultCapUnits: requireSpendCapUnits(config),
         }),
-      rates: tokenRates,
+      rates: requireCreditCatalogue(config).tokenRates,
       agentFor: overrides.agentFactory ?? configuredAgent(config, app.log),
       deliver: (task, messages) => agentSessions.peerFor(task.accountId, task.deviceId)?.sendTask(messages),
       manifestFor: (accountId, deviceId) => agentSessions.peerFor(accountId, deviceId)?.manifest,
@@ -838,7 +748,7 @@ export function buildApp(
      * `GET /v1/account/credits`, mounted beside the entitlement claim and for its reason
      * (SONNY-212): it is the second route whose configuration must be refused at *startup* rather
      * than on the first real request, because `requireCreditCatalogue` is what stands between a
-     * malformed `CREDIT_PLANS` and a user being told a run count derived from nothing.
+     * malformed `CREDIT_PLANS` and a user being told a balance derived from nothing.
      *
      * **Mounted on `auth` and not on billing**, unlike the webhook above. A deployment that takes no
      * payments still has free-tier users, and the free tier has an allowance — that is the whole of

@@ -1,15 +1,14 @@
 # Sonny gateway
 
-The backend. It holds provider credentials, authenticates users, checks entitlement, meters usage,
-retains content, and forwards to model providers. Sonny's agent loop stays on the Mac
-(`docs/sonny-row-12-plan.md` §4.1).
+The backend, and where Sonny reasons. Each Mac holds one WebSocket session at `/v2/session`; each
+task lives here as a transcript, the planner and the screen agent decide its next step, and the Mac
+executes what they propose (`docs/sonny-v2-implementation-plan.md`). The gateway also holds provider
+credentials, authenticates users, checks entitlement, spends credits by tokens, and transcribes
+voice.
 
 TypeScript on Node 22, Fastify, Vitest, plain-SQL migrations, one container image.
-`docs/sonny-backend-api-contract.md` is the API contract and governs every route.
-
-**Today this is a foundation, not a gateway.** SONNY-126 builds the toolchain, the configuration,
-the container and the deploy path plus one route — `GET /v1/health`. Accounts, the model routes,
-metering and retention each have their own ticket, and none is here.
+`contracts/v2/` is the session protocol's contract; `docs/sonny-backend-api-contract.md` governs the
+HTTP routes.
 
 ## Commands
 
@@ -26,9 +25,7 @@ Run from `server/`.
 | `npm run migrate -- up\|down\|status` | Apply, roll back one, or list. Needs `DATABASE_URL` and a prior `npm run build`. **The same command works inside the container image**, which is why it runs the compiled runner rather than the source. All three exit **65** when an applied migration's file has changed — see "An applied migration cannot change silently" below. |
 | `npm run revocations` | What provider-side revocation is still owed — on closed accounts, and on live ones whose provider-side user id was superseded. Exit 1 when any is. See "Owed revocations" below. |
 | `npm run billing-debts` | Money this gateway cannot account for: top-up orders it granted nothing for, and subscription deliveries it could not act on. Exit 1 when any exist. See "Money nobody can account for" below. |
-| `npm run usage -- sessions\|routes\|span` | What the calls this gateway served cost. Needs `DATABASE_URL` and a prior `npm run build`. See "Reading what a call cost" below. |
-| `npm run support -- account\|content\|accesses\|deletions` | Answer a support question. Account state and usage read freely; **content only with `--operator` and `--reason`, and the lookup is recorded.** See "Retention" below. |
-| `npm run snapshots -- build\|list\|trace\|sweep` | Build the documented corpus training reads from, see which snapshots hold a task's content, or run the content-expiry sweep by hand. |
+| `npm run usage -- routes\|span` | What the metered HTTP calls cost. Needs `DATABASE_URL` and a prior `npm run build`. See "Reading what a call cost" below. |
 | `npm run entitlements -- show\|grant\|revoke\|restore\|sweep\|public-key` | What an account is allowed and what it has spent, plus the operator writes that set it. Needs `DATABASE_URL` and a prior `npm run build`. See "What an account is allowed" below. |
 | `npm run check:secrets` | Refuse a credential in the repository. Also `check-secrets.sh staged`. |
 | `./scripts/check-secrets-selftest.sh` | Prove the scanner still refuses things. |
@@ -200,165 +197,60 @@ was never charged — for credits the user cannot spend. `src/credit/topup.ts`'s
 carries the full argument. Settling one is a refund at the provider or a manual grant, and which of
 the two is right is not something this gateway can decide.
 
-## Retention: what is kept, for how long, and how it goes (SONNY-134)
+## The V2 session, and what is kept
 
-The backend retains **full request and response content** — request text, voice audio, redacted
-screenshots, the served response, and provider error bodies — for **30 days**, disclosed on the
-website's terms and privacy pages, for three named purposes: debugging and support, product
-analytics, and training or fine-tuning a model. Founder decision, 2026-08-16; the thirty days is his
-confirmation of 2026-08-28, from the 30–90 range that decision names. Contract §10.
+**One socket per Mac.** `GET /v2/session` upgrades to a WebSocket with the access token in the
+`Authorization` header. The Mac says `hello` with its manifest (the typed operations it serves and
+its permissions) and the tasks it is resuming; the gateway answers `welcome` and replays anything
+the Mac missed. Every message names its task and carries a sequence number, and `re` acknowledges;
+`contracts/v2/protocol.schema.json` is the wire shape and both sides decode the shared fixtures in
+`contracts/v2/fixtures/`. A second socket from the same device replaces the first (`4409`); signing
+out or closing the account closes it (`4403`); a draining gateway says `goodbye` (`1012`) and the Mac
+reconnects elsewhere.
 
-**Nothing here may be read as "this system does not retain screen content." It does.** What it does
-not do is let the provider retain it too — that is SONNY-110's, and a different claim.
+**A task is a transcript.** `sonny.agent_task` holds one row per task and `sonny.agent_message` every
+message of it, in and out, plus the agents' own notes (migration 0024). A turn is due when the last
+message is from the Mac; `TaskRunner` runs one turn at a time per task and any gateway process can
+resume one after a restart. Budgets per task: 80 turns, 120 model calls, 30 minutes.
 
-### Two clocks, and a third
+**Screenshots are never written down.** They live in memory for the turn that reads them (ten
+minutes at most).
 
-| What | Where | Clock |
+**What is kept, and for how long** (decisions 10 and 11):
+
+| What | Where | How long |
 |---|---|---|
-| Request and response content | `sonny.retained_content` | `CONTENT_RETENTION_DAYS`, 30 by default |
-| Usage and derived metrics | `sonny.metering_event` | Indefinite. That table holds no content, which is what lets it outlive it |
-| Training snapshots | `sonny.training_snapshot` | Its own `expires_at`, **NULL unless a build asks for one** |
+| An ordinary task and its messages | `agent_task`, `agent_message` | 30 days after it ends |
+| A private task | the same | Deleted the moment it ends |
+| A task nobody touched for a day | the same | Ended as failed, with a `finish` the Mac is replayed when it returns |
+| Each model call's tier, tokens and credits | `agent_model_call` | Kept; it carries no content |
+| A replayable response for an idempotent HTTP request | `idempotency_key` | 24 hours, and never for a request that declared `retention: "none"` |
 
-The third is NULL because §10.3 puts snapshots on a "separately-consented lifecycle" and no founder
-has set a number. NULL means none is set, not "never expires by policy"; `expireSnapshots` skips
-those rows, and the day a number exists the sweep that enforces it already runs.
-
-**A row carries the window it was written under.** `expires_at` is computed at insert from
-`CONTENT_RETENTION_DAYS`, never at read — so raising the setting applies to what arrives afterwards
-and cannot extend the life of content a user was told would be gone in thirty days.
-
-### The clock actually runs
-
-The gateway sweeps on a timer (`CONTENT_EXPIRY_SWEEP_SECONDS`, hourly by default), logs every pass,
-and writes a row to `sonny.content_deletion` for every pass that took something. `npm run snapshots
--- sweep` runs one by hand. `npm run support -- deletions` is where "did the clock run, and what did
-it take" is answered after the fact — for expiry sweeps, task deletes and account deletes alike.
-
-**Four things happen on that sweep, not one.** Expired content; any training snapshot that has
-reached a clock of its own; **the idempotency store's stored response bodies past their twenty-four
-hours** (`pruneExpiredResponses`, which had no production call site until PR #148's review measured
-that a body back-dated thirty days survived a full sweep — SONNY-318 keeps the policy question of
-whether the *rows* should ever go, and they must not simply be deleted, since a row carries the
-metering claim that stops a key billing twice); and the content of one closed account whose
-in-request wipe could not finish.
-
-### The second place response content lives
-
-`sonny.idempotency_key.response_body` holds the served response for twenty-four hours so a retry can
-be replayed (§9.2). That makes it the one place outside `sonny.retained_content` holding response
-content, and two rules follow:
-
-- **An incognito run stores no body there.** For `retention: "none"` the key is claimed and fenced
-  exactly as always and the response is withheld, so a repeat re-executes rather than replaying. That
-  is a deliberate §9.2 deviation with its own contract row; §9.2 carries what it costs.
-- **`DELETE /v1/account` clears an account's stored bodies**, and the sweep prunes expired ones. A
-  *per-task* delete cannot reach them, because that table has no `task_id` to key on.
-
-### Three ways content stops being kept
-
-- **`DELETE /v1/tasks/{task_id}`** — the user's own delete, from the app. Founder decision via
-  SONNY-14: delete means deleted everywhere. It removes the live content **and every training
-  snapshot member copied from it**, and records which snapshots it touched. A task with nothing
-  stored answers 200 with `requests_deleted: 0`, never 404; 404 is reserved for a task belonging to
-  someone else.
-- **`DELETE /v1/account`** — content, snapshot membership, and the account's stored idempotency
-  response bodies (SONNY-319). Usage survives, deliberately. If the wipe cannot finish inside the
-  request — the account is closed by then, so the caller cannot retry — the sweep takes it on the
-  next pass, which is also what reaches accounts closed before this existed.
-- **The content clock**, above.
-
-### Incognito is never stored, and that is structural
-
-A run started with **"Don't save this task"** sends `retention: "none"`, and three separate things
-have to fail before a byte of it is kept:
-
-1. `content/hook.ts` refuses before it reads a body, decodes a capture or opens a connection.
-2. `sonny.retained_content` carries a `CHECK` admitting exactly one value of `retention`, so the
-   insert is refused even if something above it is wrong.
-3. The snapshot builder's `FROM` names that table and nothing else — **so there is no `retention`
-   filter in it to drop.** Deleting every predicate in the build statement widens the snapshot to
-   every consenting account's content and still cannot reach one incognito run.
-   `content.db.test.ts` runs exactly that unfiltered statement and asserts it.
-
-**Metering runs either way.** Incognito changes what is stored, never what is billed.
-
-### Training reads from snapshots, never from the live store
-
-`npm run snapshots -- build --label <name>` copies eligible content into
-`sonny.training_snapshot_member` and seals the snapshot. A member holds **a copy plus the
-`content_id` it came from**, not a pointer — the copy because the live store is on a 30-day clock and
-the snapshot is not, and the lineage because a deletion request has to be traceable to the snapshots
-it touched after the source row is gone. That is the requirement §10.3 says cannot be retrofitted
-once anything has been trained on.
-
-Consent is honoured twice: the builder joins `sonny.account` and requires `training_consent` (which
-defaults to false and is `NOT NULL`, so a user whose consent was never written is excluded), and a
-trigger on the member table refuses the row anyway. `npm run snapshots -- trace --account <id>
---task <id>` says which snapshots hold one task's content without deleting anything.
-
-### What the support lookup may see
-
-Decided on SONNY-134, 2026-08-28, rather than left to whoever has database access:
-
-- `npm run support -- account <uuid>` reads freely — account state, how it signs in, what it has
-  been calling, **how many content rows are held and of what kinds**. Never content, and never the
-  email address behind an identity.
-- `npm run support -- content --request <id> --operator <name> --reason "<text>"` is the one command
-  that reads content. It refuses without both flags, writes a `sonny.content_access` row whether or
-  not it finds anything, and prints blobs as sizes rather than bytes.
-- `npm run support -- accesses` reads that log back.
-
-**It is a discipline and a trace, not a boundary.** Anyone who can run these commands holds
-`DATABASE_URL` and can read the same rows from `psql`, leaving nothing behind. What it buys today is
-that a lookup made through the product leaves a record; what it buys later is that the control
-already exists the day a support surface is something other than a founder's terminal.
-
-Entitlement plan and tier are not in the report because they do not exist: §5.3's signed entitlement
-claim is SONNY-135's. The report says so rather than printing an empty section that reads like "no
-entitlements".
+The retention sweeper (`src/agent/tasks/retention.ts`) runs these on a timer, under an advisory lock
+so one process sweeps at a time, and releases credits held for a call that never settled. Closing an
+account deletes its tasks at once.
 
 ## Reading what a call cost (SONNY-133)
 
-Every call on every model route writes one row to `sonny.metering_event` — contract §11. The table
-holds **no content**, which is what lets it sit on the long side of §10.3's two clocks: raw request
-and response content lives 30 days, usage lives indefinitely, and nothing in this gateway deletes or
-ages a metering row.
+Every call on a metered HTTP route writes one row to `sonny.metering_event` — contract §11 — and
+every model call inside a task writes one row to `sonny.agent_model_call`, with its tier, provider,
+tokens and credits. Neither holds content, and nothing ages either out.
 
 ```
-npm run usage -- sessions   # one block per screen-control session
 npm run usage -- routes     # one block per route
 npm run usage -- span       # how many events, and how far back they go
 ```
 
-Every command takes `--account`, `--session`, `--task`, `--since` and `--until`.
-
-**`sessions` is the one the pricing waits on.** A screen-control session is up to twelve iterations
-(`VisionSessionLimits.default.maximumIterations`), each its own request, its own upstream call and
-its own row; the gateway holds no session state, so a session's cost is the sum over the rows sharing
-one client-minted `session_id`. That figure is what SONNY-17 turns into a credit weight, and it did
-not exist anywhere before this row of work: `AIUsageCallKind` had three cases and none was vision.
-
-**Two things every figure is read with, and the command prints both under every report.** Image size
-drives vision token cost, and SONNY-114 changed what leaves the Mac — a cost measured over sessions
-that ran before it is a number about to move. And a token count of `0` on `screen.analyze` is an
-*absence* rather than a measurement: that route reports tokens only when the provider did and
-estimates nothing, because the dominant term is an image whose cost is a function of pixel dimensions
-and a provider's own tiling rule. The `no tokens` column counts those calls, and the megapixel figure
-is what sizes them.
-
-**It prints no price, and it must not learn one.** Tokens, bytes, pixels, iterations, durations and
-outcomes are measurements; a rate, a plan or a credit weight is SONNY-17's decision, and putting one
-here would be taking that decision in the wrong ticket.
-
-**A command rather than a screen, by decision of 2026-08-28.** The usage UI is SONNY-214's. What this
-row owes is the founders' pre-launch measurement, answerable before any UI exists.
+Every command takes `--account`, `--session`, `--task`, `--since` and `--until`. `routes` reports
+only `transcription`, the one route still metered; rows V1 wrote under its retired routes are
+counted by `span` but not reported by `routes`. **It prints no price**: tokens, durations and
+outcomes are measurements.
 
 ### What is metered, and what is deliberately not
 
-The five model routes are metered. Every other `POST` this gateway serves is declared unmetered by
+`POST /v1/transcriptions` is metered. Every other `POST` this gateway serves is declared unmetered by
 name in `src/metering/event.ts`, and a population test walks the built app's real route table — so a
-sixth content-bearing route fails the suite until somebody classifies it either way, rather than
-shipping free.
+new model route fails the suite until somebody classifies it either way, rather than shipping free.
 
 Inside a metered route, a request is recorded when it holds its idempotency key's claim, or when it
 carried no key at all. **A repeat that replayed a stored response writes nothing** — it ran nothing —
@@ -441,7 +333,7 @@ it as a control**, because a race test with no control passes whether or not the
 **Reserve, then settle.** The hold is taken before the upstream call and closed after it: charged if
 a provider was reached, released if none was. A request the host kills between the two leaks its hold
 until `npm run entitlements -- sweep` reclaims it — the reservation's `expires_at` is 300 seconds,
-which clears §12's longest route deadline (105 s) by enough that a running request can never have its
+which clears §12's longest route deadline (75 s) by enough that a running request can never have its
 own hold swept out from under it. (If it could, the loss is not a double spend but a call charged to
 nobody: `AND NOT settled` makes the late settle a no-op, measured.)
 
@@ -456,9 +348,8 @@ something is still counting against.
 **One metered call is one unit, and that is a consequence rather than a price.** A cost-weighted cap
 needs a credit weight, and credit weights are SONNY-212's. So the cap counts calls: it bounds a
 leaked token to `SPEND_CAP_UNITS` calls in a period, each of them bounded in turn by §6.1's body
-limits and §12's deadlines. It does **not** bound the money, because a `/v1/search` and a
-twelve-iteration screen-control session are the same number of units and nowhere near the same number
-of dollars. `unitsForMeteredCall` in `src/entitlement/store.ts` is the seam a real weight lands in.
+limits and §12's deadlines. It does **not** bound the money, because calls of very different cost are
+the same number of units. `unitsForMeteredCall` in `src/entitlement/store.ts` is the seam a real weight lands in.
 
 ### What an account is allowed, from a terminal
 
@@ -480,49 +371,36 @@ tier this repository invented.
 Both halves are fail-closed and they fail closed differently: no capabilities means every gated
 capability is refused, and a `NULL` cap means the deployment's rather than none.
 
-### Screen-control runs left
+### Credits
 
-**The spend cap above is an anti-abuse ceiling; this is the product's allowance, and they are two
-different things on purpose** (SONNY-212). The cap counts every metered call and bounds a leaked
-credential. The allowance is what a plan buys, it is denominated in credits, and **screen control is
-the only line that draws on it** — everything else is free and uncapped against it. A standing
-watcher's repeated checks were written down on SONNY-236 as an exception and are not one: the
-founders decided on 2026-08-31 that watchers are free and *capped* instead, so "screen-control runs
-left this month" stays a single number rather than a pool two things spend out of.
+**The spend cap above is an anti-abuse ceiling; credits are the product's allowance, and they are
+two different things on purpose.** The cap bounds a leaked credential. Credits are what a plan buys,
+and every model call inside a task spends them by tokens (decision 8).
 
 ```
-GET /v1/account/credits   ->   { "screen_control_runs_left": 97, "screen_control_runs_included": 100, … }
+GET /v1/account/credits   ->   { "plan": …, "credits": { "allowance": 2000, "drawn": 760, "remaining": 1240, "topped_up": 0 }, … }
 ```
 
-**The pool is derived from §11's metering, not ledgered.** `src/credit/store.ts` sums this account's
-`screen.analyze` rows for the period; `src/credit/balance.ts` turns sessions, iterations and pixels
-into credits and credits into runs. There is no credit table, so there is nothing to reconcile,
-nothing to backfill, and no second writer of a fact §11 already records — the audit row *is* the
-charge. What that costs is that changing a weight re-prices the period under way, which is acceptable
-for a forward-looking estimate and would **not** be for a refusal; `balance.ts` says so where a later
-ticket will read it.
+**A call holds before it runs and settles after.** `src/agent/credits.ts` holds credits for the
+call's maximum tokens at its tier, at `CREDIT_PLANS.tokenRates`, and takes the spend-cap
+reservation beside it; afterwards it settles to the tokens actually used, never above the hold. An
+account without enough credits for the hold stops the task **before its next model call, never in
+the middle of a Mac action**, and a closed account holds nothing. `src/credit/balance.ts` is the
+arithmetic: allowance is the plan's monthly credits plus this period's top-ups, drawn is what the
+period's calls spent, remaining is the difference and never below zero.
 
-**A row draws when `upstream_duration_ms` is set *or* the outcome is `client_cancelled`, and it took
-a defect to establish that one column was not enough** (PR #182's review, F2). The duration is
-written in a `finally` after the provider call, but the metering event has a second writer — the
-response's `close` listener — which fires while the handler is still awaiting the provider. A user
-pressing Stop mid-run therefore produces a row with a null duration, `outcome: client_cancelled`, a
-vendor that has been paid and a spend cap that charged it: on the duration alone that iteration drew
-nothing and its session paid no per-session weight either. The two conditions are read together, so
-the draw and the cap now agree on every path this gateway has rather than on every path where the
-handler finishes. `provider` and `outcome` used *alone* were both measured as wrong for this and
-`src/credit/store.ts` says why each fails.
-
-**Every number is `CREDIT_PLANS`, and this repository has no default for it.** Tiers, allowances, the
-credit weights and what one run is worth all arrive in that one JSON value; startup refuses without
-it, for `SPEND_CAP_UNITS`' reason — an unset catalogue has no safe reading, since no allowance locks
-every user out of screen control and unlimited is an uncapped bill. The tier *count* is configuration
-too: the product decision today is free plus one paid tier, and `plans` is a list of any length.
+**Every number is `CREDIT_PLANS`, and this repository has no default for it.** Plans, allowances,
+token rates and the top-up pack all arrive in that one JSON value; startup refuses without it. A
+catalogue written for V1 may still carry `runCredits` and `weights`; they are ignored.
 
 **Revoked, past-grace and unknown plans all fall to the catalogue's default tier.** A cancelled
 subscription keeps its plan *key* on the claim — so a client can say which plan ended — and does not
-keep its allowance. Of the two ways to be wrong, a smaller allowance than a user is owed is visible
-and complainable; a larger one is a bill nobody sees until it arrives.
+keep its allowance.
+
+**Top-up and auto top-up are unchanged**: a pack is bought only for an account that opted in, has no
+credits left and has attempts left this period. **Nothing in V2 triggers an automatic purchase yet**:
+V1's trigger lived in a Mac gate that V2 removed. Whether the gateway should top up when
+a task runs out is a founders' decision.
 
 ### Which routes are gated
 
@@ -667,12 +545,11 @@ OCI image and a set of environment variables, so moving between them is a redepl
 
 Not a copy of production, not a subset, not "just the last week", not "just for this one bug".
 
-The reason is specific rather than general caution. Under the 2026-08-16 retention decision this
-backend keeps **screenshots, command text and voice audio** (`docs/sonny-row-12-plan.md` §4.2).
-Seeding staging from production would put real users' screen contents — whatever was on their
-display when they asked Sonny to do something — into a second place with weaker access controls and
+The reason is specific rather than general caution. This backend keeps **each task's transcript** for
+30 days after it ends (see "What is kept" above) — real users' own words about their own lives.
+Seeding staging from production would put those into a second place with weaker access controls and
 more people touching it. Staging exists to rehearse changes, and a rehearsal does not need real
-screens.
+tasks.
 
 **This is written here because it is the kind of rule that gets undone by someone being helpful**,
 in a hurry, reproducing a bug that only shows up with real data. If that is genuinely the only way,
@@ -1232,42 +1109,14 @@ dashboard for.
 **This is written down because a credential that cannot be rotated without downtime is a credential
 nobody rotates.** The three steps above make the downtime zero, and they only work in that order.
 
-## The five model routes (SONNY-130, and SONNY-131's vision row)
+## The transcription route (SONNY-130)
 
-`POST /v1/plan`, `POST /v1/research/synthesize`, `POST /v1/transcriptions`, `POST /v1/search` and
-`POST /v1/screen/analyze`. All five are authenticated — they are covered by *not* appearing in
-`PUBLIC_ROUTES`, which is what deny-by-default means — and all five hold the provider credential
-here so the Mac app never sees one. `docs/sonny-backend-api-contract.md` §4.2–§4.5 is the wire
-shape; what belongs here is the operational half.
-
-**Which provider serves which route is one function for four routes and a second for the fifth.**
-`modelProvidersFrom` in `src/model/providers.ts` answers for `/v1/plan`,
-`/v1/research/synthesize`, `/v1/transcriptions` and `/v1/search`, reading the endpoints, model
-identifiers and route chains from the environment; `visionProviderFrom` in `src/model/vision.ts`
-answers for `/v1/screen/analyze`. That is what makes SONNY-110's move to a paid zero-retention route
-a redeploy: nothing in the Mac app names a provider, a model or an endpoint, so changing any of the
-three never needs an app release.
-
-**The two were expected to collapse when SONNY-132 landed, and they did not.** SONNY-131 and
-SONNY-132 ran in parallel and this paragraph used to say the split was temporary. It survived the
-merge because nothing forced it: `/v1/screen/analyze` reads no `ModelProviders` field, so the
-provider router grew its four chains without touching that route, and the vision route was on
-SONNY-132's never-touch list. Collapsing it is worthwhile and unclaimed — a `MODEL_ROUTE_SCREEN_ANALYZE`
-chain would give the vision route the same failover and the same per-provider retention policy the
-other four have, which is what SONNY-110 needs of it. `src/app.ts` carries the same note at the
-mount.
-
-**`/v1/screen/analyze` is the one route with a body worth thinking about, and its limit is derived
-rather than chosen.** `src/model/limits.ts` holds `MAXIMUM_IMAGE_BYTES` — 3,000,000, the same
-ceiling `RedactedCaptureEncoder` on the Mac encodes down to — and computes §6.1's 4,200,000 body
-limit from it, so the two numbers cannot drift apart. The image is refused above that ceiling with
-a `413 request.too_large` carrying `limit_bytes` and `actual_bytes`, which a correct client never
-sees: the Mac refuses at the same number before it builds a request body. **The server never
-resamples, re-encodes, crops or rotates the image** (§4.5 rule 1) — the base64 string the client
-sent is spliced into the provider's data URL verbatim, and the only decode is the one that counts
-its bytes. A server-side resize would leave every coordinate the model returns scaled by a factor
-nothing on the Mac knows about, which is a click landing inside the window, plausible-looking, and
-wrong.
+`POST /v1/transcriptions` is the one model route the Mac calls directly: voice becomes text there,
+and the text becomes a task on the session. It is authenticated by *not* appearing in
+`PUBLIC_ROUTES`, metered like any upstream call, and holds the provider credential here so the Mac
+never sees one. Every other model call is the gateway's own, inside a task: the planner and screen
+agent reach providers through `src/agent/model/`, whose tiers (`AGENT_MODEL_FAST`,
+`AGENT_MODEL_STANDARD`, `AGENT_MODEL_STRONG`) are `provider:model` chains.
 
 **A route whose provider has no credential answers `502 provider.unavailable`, not `404`.** The
 route table does not change shape with the environment, because a 404 tells the client "no such
@@ -1275,13 +1124,10 @@ route" — which it does not retry and cannot explain — when the truth is a de
 
 ### The provider router and failover (SONNY-132)
 
-**A route resolves to an ordered chain of providers, not to one.** Four variables decide it —
-`MODEL_ROUTE_PLAN`, `MODEL_ROUTE_SYNTHESIZE`, `MODEL_ROUTE_TRANSCRIPTIONS`, `MODEL_ROUTE_SEARCH` —
-each a comma-separated list whose first entry serves and whose remainder are the failover
-candidates. Unset means the shipped default: `openai,anthropic` on the two text routes, `openai` on
-transcription (Anthropic serves no transcription API), `tavily` on search. Three providers have text
-adapters — OpenAI, Anthropic and Cerebras — so moving the planner between them is one variable and a
-redeploy, with no change to the app and no new release.
+**Transcription and web search each resolve to an ordered chain of providers, not to one.**
+`MODEL_ROUTE_TRANSCRIPTIONS` and `MODEL_ROUTE_SEARCH` are comma-separated lists whose first entry
+serves and whose remainder are the failover candidates. Unset means the shipped default: `openai` on
+transcription, `tavily` on search (which the planner's `web_search` tool uses).
 
 **A deployment holding only `OPENAI_API_KEY` behaves exactly as it did before the router existed**,
 because a chain entry with no credential is not a candidate. **A chain entry with no *adapter* is
@@ -1315,24 +1161,11 @@ retains nothing but reserves training rights has not protected the content, beca
 of retention's own named purposes. Nothing routes on it yet, deliberately; the values are printed in
 the `model routing` log line at startup so a deployment's beliefs are visible rather than inferred.
 
-**Which vendors this gateway can currently speak to, and how each maps a JSON Schema.** OpenAI's
-Responses API takes `text.format` with `type: "json_schema"` and `strict: true`. Anthropic's
-Messages API takes `output_config.format` with the same `type`, after the adapter prunes the
-keywords structured outputs do not accept — the planner's own schema carries `minItems`, so an
-unpruned schema would fail every plan request rather than an unusual one. Cerebras takes the schema
-in the system prompt: its native mode caps a schema at 5,000 characters and ours is longer, which
-was re-verified live on 2026-08-13, so the adapter appends the schema instruction and strips a
-wrapping markdown fence off the reply. §4.2 names all three shapes as the server's to choose, and
-says the client "does not know which mechanism was used and must not need to".
-
-**Two numbers are pinned on both sides and must move together.** `src/model/limits.ts` holds
-contract §6.1's per-route body limits and §12's deadlines; `SonnyBackendTimeouts` in
-`Sources/MacAgentCore/SonnyBackendClient.swift` holds the client timeouts, each above this server's
-total deadline for the same route — by fifteen seconds on `plan`, `synthesize`, `transcriptions` and
-`screenAnalyze`, and by five on `search`, which is §12's table rather than one constant. The *ordering* is the governing rule — the
-client's timeout is always longer than the server's — so a slow route surfaces as this server's
-typed `504 provider.timeout` rather than as the client's opaque transport timeout, which it cannot
-tell apart from a dead network.
+**Two numbers are pinned on both sides and must move together.** `src/model/limits.ts` holds the
+route deadlines and `SonnyBackendTimeouts` in `Sources/MacAgentCore/SonnyBackendClient.swift` the
+client timeouts, each above this server's total deadline for the same route — by fifteen seconds on
+`transcriptions` and five on the account routes — so a slow route surfaces as this server's typed
+`504 provider.timeout` rather than as the client's opaque transport timeout.
 
 **The audio limit is enforced in different units on each side, on purpose.** The Mac caps a
 *recording* at `VoiceRecordingLimit.maximumDurationSeconds` (180 s) and refuses before a byte is
@@ -1342,12 +1175,9 @@ decision on the field that decides the bill, which §2.4.1 forbids in general. A
 bitrate, 180 s is roughly 2 MB, so the client's cap binds an order of magnitude before this one:
 the byte ceiling is the backstop for a client that is not ours, or is broken.
 
-**`retention` is validated and not yet honoured, and that is stated rather than implied.** §2.4.2
-makes an omitted `retention` a loud `400` rather than a quiet guess in either direction, and all
-five routes enforce that. What they do not do is store anything at all — there is no content store yet,
-and SONNY-134 builds it along with §10.1's rule that retention is enforced where the storing
-happens rather than at the call site. Claiming the guarantee now would be claiming a promise nothing
-keeps.
+**`retention` is required, and the idempotency store honours it.** §2.4.2 makes an omitted
+`retention` a loud `400`. A recording made with "Don't save this task" on declares `none`, and the
+gateway keeps no replayable copy of its transcript.
 
 ## Deploying
 
@@ -1359,12 +1189,11 @@ so a deploy that appeared to succeed while something older kept serving is a fai
 decision 2026-08-27), so a credentialed local container is this one command rather than a hand-run
 `docker run`. The list is `SUPABASE_JWT_SECRET`, `SUPABASE_JWT_SECRET_2`,
 `SUPABASE_JWT_SECRET_2_ACCEPTED_UNTIL`, `SUPABASE_JWT_ISSUER`, `SUPABASE_JWT_AUDIENCE`,
-`SUPABASE_ANON_KEY`, `DATABASE_URL`, `RATE_LIMIT_SALT` and — added at the extension point
-SONNY-306 left, by SONNY-130 then SONNY-131 — `OPENAI_API_KEY`, `TAVILY_API_KEY` and
-`VISION_API_KEY`, the three credentials the five model routes need, and — by SONNY-135 —
+`SUPABASE_ANON_KEY`, `DATABASE_URL`, `RATE_LIMIT_SALT`, the provider keys `OPENAI_API_KEY`,
+`TAVILY_API_KEY`, `ANTHROPIC_API_KEY` and `CEREBRAS_API_KEY`, and — by SONNY-135 —
 `ENTITLEMENT_SIGNING_KEY`, `ENTITLEMENT_SIGNING_KEY_ID` and `SPEND_CAP_UNITS`, and — by SONNY-212 —
-`CREDIT_PLANS`, all of which are required wherever auth is mounted. `CREDIT_PLANS` is the one entry
-on that list that is not a credential: it carries tiers, allowances and credit weights and no secret
+`CREDIT_PLANS`, all of which are required wherever auth is mounted, and the billing names.
+`CREDIT_PLANS` is not a credential: it carries tiers, allowances and token rates and no secret
 of any kind, and it is forwarded because what decides the list is what `src/config.ts` requires,
 not what is sensitive. **The count is deliberately not written here**: it is
 `awk '/^PASSTHROUGH=\(/,/^\)/' server/scripts/deploy.sh | grep -cE '^  [A-Z]'`, run against the
@@ -1395,23 +1224,9 @@ the first one, and neither it nor AWS exists yet. The script builds the image, s
 not happen, and lists the four things a real target needs. It does not pretend. **The first real
 remote deploy is owed and is recorded on SONNY-126.**
 
-**The five model routes still answer `401` against that container**, and the reason is the one the
-subsection above names rather than a missing credential: `src/server.ts` supplies no `AuthDeps`, so
-the gate refuses every protected route on a process with no way to authenticate anyone. SONNY-307 is
-what makes the forwarded credentials matter; until it lands, forwarding more of them changes
-nothing a caller can see.
-
-**The passthrough carries nine names: SONNY-130 added two and SONNY-131 a third** —
-`OPENAI_API_KEY` and `TAVILY_API_KEY` for the four text routes, `VISION_API_KEY` for
-`/v1/screen/analyze`. It stops there on purpose, and the block above the array in `deploy.sh`
-carries the same reasoning: `ANTHROPIC_API_KEY` and `CEREBRAS_API_KEY` are excluded because no route
-reads them yet, and
-`OPENAI_BASE_URL`, `OPENAI_TEXT_MODEL`, `OPENAI_TRANSCRIPTION_MODEL`, `SEARCH_BASE_URL`,
-`VISION_BASE_URL` and `VISION_MODEL` are excluded because each has a real default and this list is
-for values a container cannot invent. Pointing a local run at a stub instead of at a vendor — which
-is how SONNY-130 demonstrated all four text routes and SONNY-131 the vision route, end to end with
-no vendor key anywhere — is done by editing the array for that run, and both the count and the
-absent-name lines derive from its length, so nothing else needs touching.
+**Endpoints, route chains, agent tiers and data policies are forwarded by a second array**,
+`PASSTHROUGH_SETTINGS`, reported as a count rather than by name because each has a default and none
+is a secret. The script's own comment carries the reasoning for both arrays.
 
 ## `GET /v1/health`
 

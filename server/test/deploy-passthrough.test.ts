@@ -33,7 +33,7 @@ const SCRIPT = "scripts/deploy.sh";
  * nothing.
  */
 const LONG_STANDING_CREDENTIAL = "OPENAI_API_KEY";
-const LONG_STANDING_SETTING = "MODEL_ROUTE_PLAN";
+const LONG_STANDING_SETTING = "MODEL_ROUTE_TRANSCRIPTIONS";
 
 /**
  * A name `config.ts` reads and this script deliberately does not forward (the deploy script's own
@@ -125,7 +125,7 @@ describe("what the deploy script forwards into the container", () => {
 
     const set = forwardingWith({
       [LONG_STANDING_CREDENTIAL]: NOT_A_SECRET,
-      [LONG_STANDING_SETTING]: "anthropic",
+      [LONG_STANDING_SETTING]: "openai",
       [DELIBERATELY_NOT_FORWARDED]: NOT_A_SECRET,
     });
     expect(set.forwarded).toContain(LONG_STANDING_CREDENTIAL);

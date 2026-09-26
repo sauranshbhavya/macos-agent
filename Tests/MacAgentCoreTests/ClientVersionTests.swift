@@ -136,79 +136,17 @@ struct ClientVersionTests {
     // MARK: - The state
 
     @Test
-    func onlyTheCurrentStateHasNothingToSay() {
-        #expect(ClientVersionState.current.isSomethingToSay == false)
-        #expect(ClientVersionState.updateAvailable(link: nil).isSomethingToSay)
-        #expect(ClientVersionState.tooOld(link: nil).isSomethingToSay)
+    func theCurrentStateHasNoLink() {
         #expect(ClientVersionState.current.link == nil)
     }
 
     // MARK: - The words
 
-    @Test
-    func theCurrentStateRendersNoPrompt() {
-        #expect(ClientVersionCopy.prompt(for: .current) == nil)
-    }
-
-    /// The founder's decision of 2026-09-04, as the surfaces read it: a button when the link parses,
-    /// and the message with no button when it does not.
-    @Test
-    func theUpdateControlIsOfferedExactlyWhenThereIsALinkToOpen() throws {
-        let link = try #require(ClientUpgradeLink.openable("https://sonny.example.com/download"))
-
-        let walled = try #require(ClientVersionCopy.prompt(for: .tooOld(link: link)))
-        #expect(walled.updateLabel == "Update Sonny")
-        #expect(walled.link == link)
-
-        let walledWithoutLink = try #require(ClientVersionCopy.prompt(for: .tooOld(link: nil)))
-        #expect(walledWithoutLink.updateLabel == nil)
-        #expect(walledWithoutLink.link == nil)
-        #expect(walledWithoutLink.message == ClientVersionCopy.tooOldMessage)
-
-        let warned = try #require(ClientVersionCopy.prompt(for: .updateAvailable(link: link)))
-        #expect(warned.updateLabel == "Update Sonny")
-
-        let warnedWithoutLink = try #require(ClientVersionCopy.prompt(for: .updateAvailable(link: nil)))
-        #expect(warnedWithoutLink.updateLabel == nil)
-    }
-
-    /// The wall has no way out but updating; the warning has to be dismissible or it is a permanent
-    /// occupant of both surfaces for as long as the deprecation band lasts.
-    @Test
-    func onlyTheWarningCanBeWavedAway() throws {
-        let walled = try #require(ClientVersionCopy.prompt(for: .tooOld(link: nil)))
-        #expect(walled.dismissLabel == nil)
-
-        let warned = try #require(ClientVersionCopy.prompt(for: .updateAvailable(link: nil)))
-        #expect(warned.dismissLabel == "Not now")
-    }
-
-    @Test
-    func theTwoStatesSayDifferentThings() throws {
-        let walled = try #require(ClientVersionCopy.prompt(for: .tooOld(link: nil)))
-        let warned = try #require(ClientVersionCopy.prompt(for: .updateAvailable(link: nil)))
-
-        #expect(walled.title != warned.title)
-        #expect(walled.message != warned.message)
-        #expect(walled.title == "Update needed")
-        #expect(walled.message == "This version of Sonny is too old. Update to carry on.")
-        #expect(warned.title == "Update available")
-        #expect(warned.message == "A new version of Sonny is out.")
-    }
-
-    /// The founder's standing copy rule, applied to this state's five strings: functional labels,
-    /// no explanation, nothing about servers or versions-as-a-concept, and never the server's own
-    /// sentence.
+    /// The founder's standing copy rule, applied to the wall's sentence: no explanation, nothing
+    /// about servers or versions-as-a-concept, and never the server's own sentence.
     @Test
     func noVersionSentenceExplainsHowSonnyWorksOrRepeatsTheServers() {
-        let everySentence = [
-            ClientVersionCopy.tooOldTitle,
-            ClientVersionCopy.tooOldMessage,
-            ClientVersionCopy.updateAvailableTitle,
-            ClientVersionCopy.updateAvailableMessage,
-            ClientVersionCopy.updateLabel,
-            ClientVersionCopy.dismissLabel
-        ]
+        let everySentence = [ClientVersionCopy.tooOldMessage]
         // The gateway's own refusal, verbatim from `server/src/version/gate.ts`. §7.1 makes it a
         // sentence the client never displays.
         let serverSentence = "This client is older than the minimum supported version"
@@ -224,7 +162,6 @@ struct ClientVersionTests {
             #expect(sentence.count <= 90, "\"\(sentence)\" is \(sentence.count) characters")
             #expect(sentence == sentence.trimmingCharacters(in: .whitespacesAndNewlines))
         }
-        #expect(Set(everySentence).count == everySentence.count, "two of the six say the same thing")
     }
 
     // MARK: - The wire code stops being unmapped

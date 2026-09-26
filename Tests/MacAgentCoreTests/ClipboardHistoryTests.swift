@@ -102,82 +102,7 @@ struct ClipboardHistoryTests {
         #expect(try settingsStore.load() == ClipboardHistorySettings(noticeDismissed: true, isEnabled: false))
     }
 
-    @Test
-    func resolverBuildsClipboardHistoryPlans() throws {
-        let resolver = InstantCommandResolver(
-            snippetStore: UnreachableLocalStores.snippets(),
-            recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
-            routineStore: UnreachableLocalStores.routines(),
-            workspaceStore: UnreachableLocalStores.workspaces()
-        )
 
-        guard case .plan(let allPlan) = resolver.resolve(command: "clipboard history") else {
-            Issue.record("Expected clipboard history command to resolve locally.")
-            return
-        }
-        #expect(allPlan.steps.map(\.operation) == [.lookupClipboardHistory])
-        #expect(allPlan.steps[0].searchQuery == nil)
-
-        guard case .plan(let searchPlan) = resolver.resolve(command: "clip invoice") else {
-            Issue.record("Expected clipboard query command to resolve locally.")
-            return
-        }
-        #expect(searchPlan.steps.map(\.operation) == [.lookupClipboardHistory])
-        #expect(searchPlan.steps[0].searchQuery == "invoice")
-    }
-
-    @Test
-    func clipboardLookupUsesTierZeroRunnerPath() async throws {
-        let root = try makeDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
-        let store = ClipboardHistoryStore(fileURL: root.appendingPathComponent("history.json"))
-        let now = Date(timeIntervalSince1970: 1_800_000_000)
-        try store.record("Invoice 123", copiedAt: now)
-        try store.record("Meeting notes", copiedAt: now.addingTimeInterval(1))
-        let executor = AgentActionExecutor(
-            routineStore: UnreachableLocalStores.routines(),
-            workspaceStore: UnreachableLocalStores.workspaces(),
-            clipboardHistoryStore: store,
-            snippetStore: UnreachableLocalStores.snippets(),
-            recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
-            shortcutRunHistoryStore: UnreachableLocalStores.shortcutRunHistory(),
-            resumableTaskStore: UnreachableLocalStores.resumableTasks(),
-            now: { now.addingTimeInterval(2) }
-        )
-        let runner = AgentRunner(planner: FailingPlanner(), executor: executor)
-        let plan = AgentPlan(
-            summary: "Search clipboard history.",
-            requiresConfirmation: false,
-            steps: [
-                AgentStep(
-                    id: "clipboard",
-                    operation: .lookupClipboardHistory,
-                    description: "Search clipboard history.",
-                    count: 5,
-                    searchQuery: "invoice"
-                )
-            ]
-        )
-
-        let prepared = try runner.prepare(plan: plan, source: .instantResolver)
-        #expect(prepared.previews.first?.title == "Clipboard history")
-        #expect(prepared.previews.first?.details.contains("Invoice 123") == true)
-
-        let request = try runner.approvalRequest(
-            for: prepared,
-            scope: .unscoped,
-            context: ApprovalContext(mode: .normal, appControl: .notApplicable)
-        )
-        #expect(request.assessment.effectiveTier == .tier0)
-        #expect(request.requirement == .autoRun)
-
-        let result = try await runner.execute(
-            prepared,
-            scope: .unscoped,
-            context: ApprovalContext(mode: .normal, appControl: .notApplicable)
-        )
-        #expect(result.summary == "Found 1 clipboard item.")
-    }
 
     /// Consent must fail closed. When the settings file can't be read we cannot know the user
     /// left clipboard history enabled, so recording anything would be recording without consent.
@@ -252,12 +177,6 @@ private final class FakePasteboardReader: PasteboardReading {
     }
 }
 
-private struct FailingPlanner: Planning {
-    func plan(command: String, priorTaskContext: PriorTaskContext?) async throws -> AgentPlan {
-        Issue.record("Planner should not be called for clipboard instant commands.")
-        throw PlannerError.noPlannerRan
-    }
-}
 
 private struct FixedClipboardKeyManager: LocalStorageKeyManaging {
     let bytes: Data

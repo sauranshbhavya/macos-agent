@@ -1,19 +1,10 @@
 import Foundation
 
-/// The five model routes the Mac app calls, on top of the one shared backend client (SONNY-130; the
-/// vision route is SONNY-131's).
+/// The one model route the Mac app calls itself, voice transcription, on top of the shared backend
+/// client. Every other model call is the gateway's own, inside a task.
 ///
-/// **What moved and what did not.** Before this file, four clients each read a vendor key out of the
-/// user's own environment, each posted to a vendor endpoint, and each named a model identifier in
-/// its own initializer default. All three of those now live on the gateway. What stayed on the Mac
-/// is everything that decides anything: the prompts, the schemas, the strict decoders, the URL
-/// policy, and the whole risk and approval engine. `docs/sonny-backend-api-contract.md` §1.3 draws
-/// that line and §4.2 restates the half that matters here — "response *parsing* stays client-side;
-/// only the credential and the routing moved."
-///
-/// **Nothing in this file names a provider, a model or a vendor endpoint**, which is SONNY-130's
-/// sixth requirement and the reason it is load-bearing: it is what turns SONNY-110's move to a paid
-/// zero-retention route into a configuration change on the server rather than an app release.
+/// **Nothing in this file names a provider, a model or a vendor endpoint**, so a change of provider
+/// is a configuration change on the server rather than an app release.
 
 /// `task_id` and `retention` — §2.4's two fields, required on every content-bearing request.
 ///
@@ -25,8 +16,8 @@ import Foundation
 public struct BackendTaskContext: Equatable, Sendable {
     /// §10.1's wire values. `none` is what a run started with **"Don't save this task"** sends.
     ///
-    /// The word "incognito" appears in neither the enum nor the wire, deliberately — founder,
-    /// 2026-08-16, recorded on `TaskRecordingPolicy`, whose own doc comment carries the reasoning.
+    /// The word "incognito" appears in neither the enum nor the wire, deliberately (founder,
+    /// 2026-08-16).
     public enum Retention: String, Equatable, Sendable {
         case standard
         /// §10.1's `"none"`: the backend meters the call and stores no content from it.
@@ -41,10 +32,7 @@ public struct BackendTaskContext: Equatable, Sendable {
         case notStored = "none"
     }
 
-    /// §5.1: `CompletedTaskRecord.id`, **minted when the task starts** rather than when its record
-    /// is written — a record written at completion carries an id that arrives after every request
-    /// the task made, which would leave the retained content and the local row filed under
-    /// different keys and SONNY-134's delete unable to join them.
+    /// A fresh id per recording, minted before the request is sent.
     public let taskID: String
     public let retention: Retention
 
@@ -59,106 +47,25 @@ public struct BackendTaskContext: Equatable, Sendable {
     }
 }
 
-/// The route each call is made against — the one place a path string is written.
+/// The one model route the Mac calls directly: voice becomes text there. The one place its path is
+/// written.
 ///
-/// `usageModelName` is what `AIUsageRecord.model` is set to. §4.2 makes that explicit and gives the
-/// reason: the field is non-optional and eventually gets rendered, so it holds the route's name
-/// rather than a model identifier the client is no longer allowed to know.
+/// `usageModelName` is what `AIUsageRecord.model` is set to: the route's name rather than a model
+/// identifier the client is not allowed to know (§4.2).
 enum SonnyModelRoute {
-    case plan
-    case researchSynthesis
     case transcription
-    case search
-    /// §4.5, the screen-control route (SONNY-131).
-    case screenAnalyze
 
-    var path: String {
-        switch self {
-        case .plan: return "/v1/plan"
-        case .researchSynthesis: return "/v1/research/synthesize"
-        case .transcription: return "/v1/transcriptions"
-        case .search: return "/v1/search"
-        case .screenAnalyze: return "/v1/screen/analyze"
-        }
-    }
-
-    var timeout: TimeInterval {
-        switch self {
-        case .plan: return SonnyBackendTimeouts.plan
-        case .researchSynthesis: return SonnyBackendTimeouts.researchSynthesis
-        case .transcription: return SonnyBackendTimeouts.transcription
-        case .search: return SonnyBackendTimeouts.search
-        case .screenAnalyze: return SonnyBackendTimeouts.screenAnalyze
-        }
-    }
-
-    var usageModelName: String {
-        switch self {
-        case .plan: return "plan"
-        case .researchSynthesis: return "research.synthesize"
-        case .transcription: return "transcriptions"
-        case .search: return "search"
-        case .screenAnalyze: return "screen.analyze"
-        }
-    }
+    var path: String { "/v1/transcriptions" }
+    var timeout: TimeInterval { SonnyBackendTimeouts.transcription }
+    var usageModelName: String { "transcriptions" }
 }
 
-/// §4.2's request body, shared by `/v1/plan` and `/v1/research/synthesize`.
-///
-/// **One shape across two paths**, which is the contract's own decision and its reason: it lets the
-/// server hold one adapter per provider instead of one per route, while still routing, metering and
-/// pricing them separately.
-struct SonnyTextRouteBody {
-    let context: BackendTaskContext
-    /// Ordered and role-tagged. §4.2: the server forwards this text and never edits, re-wraps or
-    /// re-orders it — which is what keeps row I's `TRUSTED_USER_INSTRUCTION` and
-    /// `UNTRUSTED_OBSERVED_CONTENT` boundaries intact across the network hop.
-    let messages: [(role: String, text: String)]
-    let schemaName: String
-    let schema: [String: Any]
-
-    func encoded() throws -> Data {
-        var body = context.wireFields
-        body["messages"] = messages.map { ["role": $0.role, "text": $0.text] }
-        body["response_schema_name"] = schemaName
-        body["response_schema"] = schema
-        // Advisory hints, kept at the values the Mac has always sent so the move changes nothing a
-        // model can see. §4.2: a provider with no equivalent ignores them.
-        body["reasoning_effort"] = "medium"
-        body["verbosity"] = "low"
-        return try JSONSerialization.data(withJSONObject: body)
-    }
-}
-
-/// §4.2's response to the two text routes.
-struct SonnyTextRouteResponse: Decodable {
-    let output_text: String
-    let usage: SonnyWireUsage?
-}
-
-/// §4.4's response to `/v1/transcriptions`.
 struct SonnyTranscriptionRouteResponse: Decodable {
     let text: String
     let usage: SonnyWireUsage?
 }
 
-/// §4.3's response to `/v1/search`. It carries no `usage` block, and that is the contract's shape
-/// rather than an omission here — search has never fed the local per-task summary.
-struct SonnySearchRouteResponse: Decodable {
-    struct Item: Decodable {
-        let title: String?
-        let url: String
-        let snippet: String?
-    }
-
-    let results: [Item]
-}
-
-/// The `usage` block every content-bearing response but search carries.
-///
-/// Every field is optional, because §2.1 makes the client tolerant of a response it cannot fully
-/// read and because the two routes genuinely report different halves of it: a transcript may come
-/// back with a duration and no tokens, a plan with tokens and no duration.
+/// The usage block the transcription route replies with.
 struct SonnyWireUsage: Decodable {
     let input_tokens: Int?
     let output_tokens: Int?
@@ -197,16 +104,12 @@ extension SonnyBackendClient {
     /// which is the entire mechanism §9.2's at-most-once metering guarantee rests on. A key minted
     /// per attempt would make every retry a new billable operation.
     ///
-    /// `isRetrySafe: true` on all four, per §9.3's table: with the same key, a retry of any of them
-    /// returns the stored response rather than doing the work again.
+    /// `isRetrySafe: true`, per §9.3's table: with the same key, a retry returns the stored response
+    /// rather than doing the work again.
     ///
     /// A body this client cannot read becomes `undecodableResponse` rather than a raw
-    /// `DecodingError`. That matters because these errors reach the user: every error a planner
-    /// throws has to carry its own `LocalizedError`, and a Foundation error rendered verbatim in the
-    /// failure surface is a bug this repository has shipped before. (That obligation used to be
-    /// stated as `PlannerProvider`'s third, on a type SONNY-132 deleted with the client-side
-    /// provider router; the obligation is unchanged and is now simply what `Planning` conformances
-    /// owe.)
+    /// `DecodingError`, because these errors reach the user and a Foundation error rendered verbatim
+    /// in the failure surface is a bug this repository has shipped before.
     func modelRouteResponse<T: Decodable>(
         _ type: T.Type,
         route: SonnyModelRoute,
@@ -234,7 +137,7 @@ extension SonnyBackendClient {
 /// What the user is told when a call to Sonny's backend fails, in the app's own words.
 ///
 /// **§7.1 forbids displaying the server's `message`**, and `SignInCopy` is the existing answer for
-/// the sign-in routes. This is the same mapping for the four model routes, and it reuses
+/// the sign-in routes. This is the same mapping for the transcription route, and it reuses
 /// `SignInFailure` rather than growing a second taxonomy — that enum's own doc comment anticipates
 /// exactly this ("SONNY-130 and SONNY-136 will reuse it").
 ///
@@ -250,7 +153,7 @@ public enum SonnyBackendCopy {
         // **Three codes are answered here rather than through `SignInFailure`, because a retry
         // cannot help and the shared sentence tells the user to try one** (PR #139, F7). §9.3 lists
         // all three as not retryable — "retrying any of these produces the identical failure and
-        // burns a round trip" — and every one of them is reachable on these four routes while none
+        // burns a round trip" — and every one of them is reachable on this route while none
         // is reachable on the three unauthenticated sign-in routes `SignInFailure` was written for.
         // `request.invalid` in particular is what this server answers a missing `retention` with.
         //
@@ -317,7 +220,7 @@ public enum SonnyBackendCopy {
         case .signedOut:
             return "Sign in to Sonny to run this."
         case .updateRequired:
-            // §8.3's wall, and the four model routes are refused by it exactly as the sign-in routes
+            // §8.3's wall, and the transcription route is refused by it exactly as the sign-in routes
             // are — `version/gate.ts` covers every route and runs before authentication. The
             // sentence is `ClientVersionCopy`'s for the reason the two entitlement arms above take
             // `EntitlementCopy`'s: one condition, one set of words, whichever surface meets it.
