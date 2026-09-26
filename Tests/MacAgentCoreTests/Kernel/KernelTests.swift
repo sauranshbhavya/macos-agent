@@ -317,6 +317,100 @@ struct KernelTests {
     }
 
     @Test
+    func aRelaunchWhileAQuestionWaitsAsksItAgainAndTheAnswerGoesToThatQuestion() async throws {
+        let ledgers = MemoryTaskLedgerStore()
+        let first = ScriptedGateway()
+        let before = makeController(first, ledgers: ledgers, capabilities: [])
+        await before.launch()
+        let task = try await startedTask(before, TaskRequest(goal: "Plan my trip", mode: .normal))
+        _ = try await first.next("task.start")
+        let ask = await first.send(task, .ask(AskBody(question: "Which city?")), re: 1)
+        #expect(await eventually {
+            if case .awaitingAnswer = before.snapshot(task)?.phase { return true }
+            return false
+        })
+        await before.shutDown()
+
+        let second = ScriptedGateway()
+        let after = makeController(second, ledgers: ledgers, capabilities: [])
+        await after.launch()
+        #expect(await eventually {
+            if case .awaitingAnswer(let body) = after.snapshot(task)?.phase { return body.question == "Which city?" }
+            return false
+        })
+        await after.answer(task: task, text: "Lisbon")
+        let answer = try await second.next("answer")
+        #expect(answer.address?.re == ask.address?.seq)
+        #expect(ledgers.record(task)?.awaiting == nil)
+    }
+
+    @Test
+    func aRelaunchWhileTheGatewayWaitsOnALookLooksAgainAndAnswersIt() async throws {
+        let ledgers = MemoryTaskLedgerStore()
+        let first = ScriptedGateway()
+        let before = makeController(first, ledgers: ledgers, capabilities: [])
+        await before.launch()
+        let task = try await startedTask(before, TaskRequest(goal: "Read my note", mode: .normal))
+        _ = try await first.next("task.start")
+        // The app is quit before the look is answered: the request is saved, the observation isn't.
+        var record = try #require(ledgers.record(task))
+        let observe = ObserveBody(app: "com.apple.Notes", ax: true, screenshot: false)
+        record.lastSeqIn = 1
+        record.awaiting = .observe(seq: 1, body: observe)
+        await before.shutDown()
+        try ledgers.save(record)
+
+        let second = ScriptedGateway()
+        let after = makeController(second, ledgers: ledgers, capabilities: [])
+        await after.launch()
+        let observation = try await second.next("observation")
+        #expect(observation.address?.re == 1)
+        #expect(await eventually { after.snapshot(task)?.phase == .running })
+        #expect(await eventually { ledgers.record(task)?.awaiting == nil })
+    }
+
+    @Test
+    func aQuestionTheGatewayMovedPastIsNotAskedAgainAfterARelaunch() async throws {
+        let ledgers = MemoryTaskLedgerStore()
+        let first = ScriptedGateway()
+        let before = makeController(first, ledgers: ledgers, capabilities: [])
+        await before.launch()
+        let task = try await startedTask(before, TaskRequest(goal: "Plan my trip", mode: .normal))
+        _ = try await first.next("task.start")
+        await first.send(task, .ask(AskBody(question: "Which city?")), re: 1)
+        #expect(await eventually {
+            if case .awaitingAnswer = before.snapshot(task)?.phase { return true }
+            return false
+        })
+        // The gateway goes on without the answer, and its proposal is refused as unknown here.
+        await first.send(task, propose([call("launch_rockets")]), re: 1)
+        _ = try await first.next("outcome")
+        #expect(ledgers.record(task)?.awaiting == nil)
+        await before.shutDown()
+
+        let second = ScriptedGateway()
+        let after = makeController(second, ledgers: ledgers, capabilities: [])
+        await after.launch()
+        #expect(await eventually { after.snapshot(task)?.phase == .running })
+    }
+
+    @Test
+    func aRelaunchWhileTheGatewayIsThinkingLeavesTheTaskRunningNotReconciling() async throws {
+        let ledgers = MemoryTaskLedgerStore()
+        let first = ScriptedGateway()
+        let before = makeController(first, ledgers: ledgers, capabilities: [])
+        await before.launch()
+        let task = try await startedTask(before, TaskRequest(goal: "Think", mode: .normal))
+        _ = try await first.next("task.start")
+        await before.shutDown()
+
+        let second = ScriptedGateway()
+        let after = makeController(second, ledgers: ledgers, capabilities: [])
+        await after.launch()
+        #expect(await eventually { after.snapshot(task)?.phase == .running })
+    }
+
+    @Test
     func aNavigationWithAnUnknownEndIsReportedWithoutPausing() async throws {
         let gateway = ScriptedGateway()
         let ledgers = MemoryTaskLedgerStore()

@@ -48,12 +48,20 @@ public struct TaskLedgerRecord: Sendable, Equatable, Codable {
     public var outbox: [ClientMessage]
     public var actions: [LedgerAction]
     public var pending: PendingProposal?
+    /// A question or a screen request from the gateway this Mac hasn't answered yet. The gateway
+    /// waits on the answer, so a relaunch must put the question back or look again, not wait too.
+    public var awaiting: AwaitedRequest?
     /// Set when the task ended on this Mac while its last messages were still undelivered, so a
     /// relaunch restores it as ended rather than as a task still waiting on the gateway.
     public var endedLocally: LocalEnd?
 
     public enum LocalEnd: String, Sendable, Equatable, Codable {
         case cancelled
+    }
+
+    public enum AwaitedRequest: Sendable, Equatable, Codable {
+        case ask(seq: Int, body: AskBody)
+        case observe(seq: Int, body: ObserveBody)
     }
 
     public init(task: TaskID, request: TaskStartBody, createdAt: Date) {
