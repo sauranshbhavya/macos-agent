@@ -285,4 +285,41 @@ struct TaskDeskTests {
         #expect(KernelStores.removeV1Data(v2Folder: v2).isEmpty)
         #expect(FileManager.default.fileExists(atPath: sonny.appendingPathComponent("later.json").path))
     }
+
+    @Test
+    func v1DataThatCouldNotBeRemovedIsTriedAgainOnTheNextLaunch() throws {
+        let sonny = FileManager.default.temporaryDirectory.appendingPathComponent("sonny-\(UUID().uuidString)/Sonny")
+        let v2 = sonny.appendingPathComponent("V2")
+        try FileManager.default.createDirectory(at: v2, withIntermediateDirectories: true)
+        for old in ["task-history.json", "routines.json"] {
+            FileManager.default.createFile(atPath: sonny.appendingPathComponent(old).path, contents: Data("v1".utf8))
+        }
+        let busy = RefusingFileManager(refusing: "routines.json")
+
+        #expect(KernelStores.removeV1Data(v2Folder: v2, fileManager: busy) == ["task-history.json"])
+        #expect(FileManager.default.fileExists(atPath: sonny.appendingPathComponent("routines.json").path))
+
+        busy.refusing = nil
+        #expect(KernelStores.removeV1Data(v2Folder: v2, fileManager: busy) == ["routines.json"])
+        #expect(try FileManager.default.contentsOfDirectory(atPath: sonny.path) == ["V2"])
+        #expect(KernelStores.removeV1Data(v2Folder: v2, fileManager: busy).isEmpty)
+    }
+}
+
+/// A file manager that can't remove one named item, the way a file in use or a permission error
+/// would stop it.
+private final class RefusingFileManager: FileManager, @unchecked Sendable {
+    var refusing: String?
+
+    init(refusing: String) {
+        self.refusing = refusing
+        super.init()
+    }
+
+    override func removeItem(at url: URL) throws {
+        if url.lastPathComponent == refusing {
+            throw CocoaError(.fileWriteNoPermission)
+        }
+        try super.removeItem(at: url)
+    }
 }

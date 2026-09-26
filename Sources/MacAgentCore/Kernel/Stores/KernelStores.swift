@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import OSLog
 
 /// Everything V2 keeps on this Mac, in one folder: `Application Support/Sonny/V2` (V2 plan decision
 /// 1). Nothing here reads V1's stores; the first launch of V2 starts empty.
@@ -46,6 +47,9 @@ public final class KernelStores {
     /// settings files), once. Nothing is migrated (V2 plan decision 1). The Keychain items V1 used
     /// are all still V2's own: the storage key, the account and the entitlement claim.
     ///
+    /// It counts as done only once everything is gone, so an item it couldn't remove is tried again
+    /// on the next launch. That is safe because V2 writes nothing beside its own folder.
+    ///
     /// Returns the names it removed.
     @discardableResult
     public static func removeV1Data(v2Folder: URL, fileManager: FileManager = .default) -> [String] {
@@ -54,15 +58,24 @@ public final class KernelStores {
         let sonnyFolder = v2Folder.deletingLastPathComponent()
         let items = (try? fileManager.contentsOfDirectory(atPath: sonnyFolder.path)) ?? []
         var removed: [String] = []
+        var failed = 0
         for item in items.sorted() where item != v2Folder.lastPathComponent {
-            if (try? fileManager.removeItem(at: sonnyFolder.appendingPathComponent(item))) != nil {
+            do {
+                try fileManager.removeItem(at: sonnyFolder.appendingPathComponent(item))
                 removed.append(item)
+            } catch {
+                failed += 1
+                logger.warning("Could not remove V1 data \(item, privacy: .public): \(error.localizedDescription, privacy: .public). Trying again next launch.")
             }
         }
         try? fileManager.createDirectory(at: v2Folder, withIntermediateDirectories: true)
-        fileManager.createFile(atPath: done.path, contents: Data())
+        if failed == 0 {
+            fileManager.createFile(atPath: done.path, contents: Data())
+        }
         return removed
     }
+
+    private static let logger = Logger(subsystem: "com.sonny.macagent", category: "kernel-stores")
 
     /// An app's standing for screen control, asked from the screen controller's own actor: an
     /// app the person allowed is allowed, and everything else keeps the built-in standing.
