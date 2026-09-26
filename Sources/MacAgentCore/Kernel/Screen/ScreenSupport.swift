@@ -29,10 +29,51 @@ extension ScreenApps {
 }
 
 public struct WorkspaceScreenApps: ScreenApps {
-    private let resolver: any InstalledAppResolving
+    /// What bringing an app forward asks of the system, as a seam so the fallback can be tested
+    /// without moving real windows.
+    public struct Foreground: Sendable {
+        public var frontmost: @Sendable () async -> pid_t?
+        /// `NSRunningApplication.activate()`.
+        public var activate: @Sendable (pid_t) async -> Bool
+        /// Opening the app through Launch Services, as `open_app` does.
+        public var open: @Sendable (pid_t) async -> Bool
+        public var settle: @Sendable () async -> Void
 
-    public init(resolver: any InstalledAppResolving = InstalledAppResolver.shared) {
+        public init(
+            frontmost: @escaping @Sendable () async -> pid_t?,
+            activate: @escaping @Sendable (pid_t) async -> Bool,
+            open: @escaping @Sendable (pid_t) async -> Bool,
+            settle: @escaping @Sendable () async -> Void
+        ) {
+            self.frontmost = frontmost
+            self.activate = activate
+            self.open = open
+            self.settle = settle
+        }
+
+        public static let live = Foreground(
+            frontmost: { await MainActor.run { NSWorkspace.shared.frontmostApplication?.processIdentifier } },
+            activate: { pid in await MainActor.run { NSRunningApplication(processIdentifier: pid)?.activate() ?? false } },
+            open: { pid in
+                let bundleID = await MainActor.run { NSRunningApplication(processIdentifier: pid)?.bundleIdentifier }
+                guard let bundleID else { return false }
+                do {
+                    try await WorkspaceAppOpener().open(bundleIdentifier: bundleID)
+                    return true
+                } catch {
+                    return false
+                }
+            },
+            settle: { try? await Task.sleep(nanoseconds: 50_000_000) }
+        )
+    }
+
+    private let resolver: any InstalledAppResolving
+    private let foreground: Foreground
+
+    public init(resolver: any InstalledAppResolving = InstalledAppResolver.shared, foreground: Foreground = .live) {
         self.resolver = resolver
+        self.foreground = foreground
     }
 
     public func resolve(_ nameOrBundleID: String) async -> ScreenApp? {
@@ -46,19 +87,24 @@ public struct WorkspaceScreenApps: ScreenApps {
     }
 
     public func frontmostPID() async -> pid_t? {
-        await MainActor.run { NSWorkspace.shared.frontmostApplication?.processIdentifier }
+        await foreground.frontmost()
     }
 
+    /// Asks directly first. Since macOS 14 the system may ignore that from an app that isn't in front
+    /// itself, which Sonny usually isn't once a task has put another app forward: in the founders'
+    /// manual pass, Safari couldn't be brought forward right after a page opened in Chrome. So when
+    /// asking doesn't bring the app forward, it is opened the way `open_app` opens apps, which did.
     public func activate(pid: pid_t) async -> Bool {
-        let started = await MainActor.run { () -> Bool in
-            guard let app = NSRunningApplication(processIdentifier: pid) else { return false }
-            return app.activate()
-        }
-        guard started else { return false }
-        for _ in 0..<20 {
-            let front = await MainActor.run { NSWorkspace.shared.frontmostApplication?.processIdentifier }
-            if front == pid { return true }
-            try? await Task.sleep(nanoseconds: 50_000_000)
+        if await foreground.frontmost() == pid { return true }
+        if await foreground.activate(pid), await isFront(pid, checks: 10) { return true }
+        guard await foreground.open(pid) else { return false }
+        return await isFront(pid, checks: 20)
+    }
+
+    private func isFront(_ pid: pid_t, checks: Int) async -> Bool {
+        for _ in 0..<checks {
+            if await foreground.frontmost() == pid { return true }
+            await foreground.settle()
         }
         return false
     }
