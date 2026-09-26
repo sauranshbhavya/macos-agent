@@ -54,6 +54,8 @@ public actor ScriptedGateway: GatewayTransport {
     private var seqIn: [TaskID: Int] = [:]
     private var refusal: Refusal?
     public private(set) var connections = 0
+    /// Every attempt to open a socket, refused or not.
+    public private(set) var attempts = 0
     /// What welcome says about each resumed task. Defaults to live, with what the gateway has seen.
     public var welcomeState: @Sendable (TaskID) -> WelcomeBody.TaskState.State = { _ in .live }
 
@@ -72,6 +74,7 @@ public actor ScriptedGateway: GatewayTransport {
     }
 
     private func accept() throws -> InMemoryChannel {
+        attempts += 1
         if var refusal, refusal.remaining > 0 {
             refusal.remaining -= 1
             self.refusal = refusal.remaining > 0 ? refusal : nil

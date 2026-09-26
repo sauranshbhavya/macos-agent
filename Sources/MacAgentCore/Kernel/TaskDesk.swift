@@ -61,9 +61,6 @@ public final class TaskDesk: ObservableObject {
     private var scheduleCheck: Task<Void, Never>?
     private var watching: AnyCancellable?
 
-    /// The longest goal the protocol carries.
-    public static let goalLimit = 4000
-
     public init(
         controller: TaskController,
         history: FinishedTaskStore,
@@ -115,7 +112,7 @@ public final class TaskDesk: ObservableObject {
         let goal = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !goal.isEmpty else { return nil }
         let request = TaskRequest(
-            goal: String(goal.prefix(Self.goalLimit)),
+            goal: goal,
             origin: prior == nil ? origin : .followUp,
             isPrivate: isPrivate,
             mode: mode(),

@@ -71,23 +71,62 @@ func results(of message: ClientMessage) -> [ActionResult] {
     return body.results
 }
 
+/// Text within a contract limit counted in Characters or Unicode scalars, and one over it counted
+/// the gateway's way, in UTF-16 units: `limit - 1` letters and an emoji.
+func overByOneUnit(_ limit: Int) -> String {
+    String(repeating: "a", count: limit - 1) + "😀"
+}
+
+/// The letters of `overByOneUnit(limit)`, which is all of it the gateway takes.
+func lettersOf(_ limit: Int) -> String {
+    String(repeating: "a", count: limit - 1)
+}
+
+/// A capability that says more than the contract carries.
+struct WordyCapability: Capability {
+    let name = "wordy"
+    let version = 1
+
+    func prepare(actionID: ActionID, args: [String: JSONValue]) async throws -> PreparedAction {
+        PreparedAction(
+            actionID: actionID,
+            effect: .navigate,
+            targetIdentity: "wordy",
+            content: "",
+            preview: ApprovalPreview(title: "wordy"),
+            retry: .never,
+            payload: ()
+        )
+    }
+
+    func execute(_ prepared: PreparedAction) async -> CapabilityOutcome {
+        CapabilityOutcome(
+            status: .failed,
+            evidence: overByOneUnit(2000),
+            error: OutcomeError(code: .executionError, message: overByOneUnit(1000))
+        )
+    }
+}
+
 @MainActor
 func makeController(
     _ gateway: ScriptedGateway,
     ledgers: MemoryTaskLedgerStore = MemoryTaskLedgerStore(),
     capabilities: [any Capability],
     lease: ForegroundLease = ForegroundLease(),
-    credentials: any GatewayCredentials = FixedGatewayCredentials()
+    credentials: any GatewayCredentials = FixedGatewayCredentials(),
+    identity: GatewayConnection.Identity = .init(deviceID: DeviceID(), appVersion: "2.0.0", osVersion: "26.0"),
+    backoff: GatewayBackoff = GatewayBackoff(base: 0.01, cap: 0.05, jitter: { 0 })
 ) -> TaskController {
     TaskController(
         url: URL(string: "ws://gateway.test/v2/session")!,
         transport: gateway,
         credentials: credentials,
-        identity: .init(deviceID: DeviceID(), appVersion: "2.0.0", osVersion: "26.0"),
+        identity: identity,
         ledgers: ledgers,
         capabilities: KernelCapabilities(capabilities),
         permissions: { .init(accessibility: .granted, screenRecording: .granted, automation: []) },
-        backoff: GatewayBackoff(base: 0.01, cap: 0.05, jitter: { 0 }),
+        backoff: backoff,
         connectTimeout: 60,
         lease: lease
     )
@@ -620,6 +659,97 @@ struct KernelTests {
         #expect(outcome.address?.seq == 2)
         #expect(step.executed.value.count == 1)
     }
+
+    @Test
+    func everyTextTheMacFillsFitsTheGatewaysLimitsCountedInUTF16Units() async throws {
+        let gateway = ScriptedGateway()
+        let controller = makeController(
+            gateway,
+            capabilities: [WordyCapability()],
+            identity: .init(deviceID: DeviceID(), appVersion: overByOneUnit(32), osVersion: overByOneUnit(32))
+        )
+        await controller.launch()
+        let hello = try await gateway.next("hello")
+        guard case .hello(let greeting) = hello.payload else { throw KernelTestFailure("not a hello") }
+        #expect(greeting.appVersion == lettersOf(32))
+        #expect(greeting.osVersion == lettersOf(32))
+
+        let task = try await startedTask(controller, TaskRequest(
+            goal: overByOneUnit(4000),
+            mode: .normal,
+            context: .init(frontmostApp: WireAppRef(bundleID: overByOneUnit(255), name: overByOneUnit(255)))
+        ))
+        let start = try await gateway.next("task.start")
+        guard case .taskStart(let body) = start.payload else { throw KernelTestFailure("not a task.start") }
+        #expect(body.goal == lettersOf(4000))
+        #expect(body.context.frontmostApp == WireAppRef(bundleID: lettersOf(255), name: lettersOf(255)))
+
+        await gateway.send(task, propose([call("wordy")]), re: 1)
+        let outcome = try await gateway.next("outcome")
+        let result = try #require(results(of: outcome).first)
+        #expect(result.evidence == lettersOf(2000))
+        #expect(result.error?.message == lettersOf(1000))
+
+        await gateway.send(task, .ask(AskBody(question: "Which one?")), re: outcome.address?.seq)
+        #expect(await eventually {
+            if case .awaitingAnswer = controller.snapshot(task)?.phase { return true }
+            return false
+        })
+        await controller.answer(task: task, text: overByOneUnit(4000))
+        let answer = try await gateway.next("answer")
+        #expect(answer.payload == .answer(AnswerBody(text: lettersOf(4000))))
+    }
+
+    @Test
+    func aStepTheGatewayRefusesEndsItsTaskAndIsNeverSentAgain() async throws {
+        let gateway = ScriptedGateway()
+        let ledgers = MemoryTaskLedgerStore()
+        let controller = makeController(gateway, ledgers: ledgers, capabilities: [TestCapability(name: "step")])
+        await controller.launch()
+        _ = try await gateway.next("hello")
+        let first = try await startedTask(controller, TaskRequest(goal: "Step", mode: .normal))
+        _ = try await gateway.next("task.start")
+        let second = try await startedTask(controller, TaskRequest(goal: "Wait", mode: .normal))
+        let secondStart = try await gateway.next("task.start")
+        await gateway.send(first, propose([call("step")]), re: 1)
+        let outcome = try await gateway.next("outcome")
+
+        // An error about the connection, or naming no message a task still holds, changes nothing.
+        for error in [
+            ErrorBody(code: .internal, message: "", ref: secondStart.id),
+            ErrorBody(code: .sequenceGap, message: "", ref: secondStart.id),
+            ErrorBody(code: .rateLimited, message: "", ref: secondStart.id),
+            ErrorBody(code: .malformed, message: "", ref: MessageID()),
+            ErrorBody(code: .malformed, message: ""),
+        ] {
+            await gateway.deliver(ServerMessage(payload: .error(error)))
+        }
+        await gateway.deliver(ServerMessage(payload: .error(ErrorBody(
+            code: .malformed,
+            message: "The message does not match the protocol.",
+            ref: outcome.id
+        ))))
+        let stopped = TaskFailure(reason: nil, message: "Sonny couldn't send this step to its server, so the task stopped.")
+        #expect(await eventually { controller.snapshot(first)?.phase == .failed(stopped) })
+        #expect(ledgers.record(first) == nil)
+        #expect(controller.snapshot(second)?.phase == .running)
+
+        await gateway.deliver(ServerMessage(payload: .error(ErrorBody(
+            code: .unsupportedVersion,
+            message: "This gateway speaks protocol version 1.",
+            ref: secondStart.id
+        ))))
+        #expect(await eventually { controller.snapshot(second)?.phase == .failed(stopped) })
+
+        // Reconnecting offers neither task to the gateway again, so neither refused message is resent.
+        await gateway.drop()
+        let hello = try await gateway.next("hello")
+        guard case .hello(let body) = hello.payload else { throw KernelTestFailure("not a hello") }
+        #expect(body.resume.isEmpty)
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(await gateway.unread("outcome").isEmpty)
+        #expect(await gateway.unread("task.start").isEmpty)
+    }
 }
 
 @Suite(.serialized)
@@ -646,6 +776,40 @@ struct GatewayConnectionTests {
         await gateway.drop(code: 1012)
         _ = try await gateway.next("hello")
         #expect(await gateway.connections == 2)
+    }
+
+    @Test
+    func aRequestDuringALongBackoffConnectsAtOnceInsteadOfWaitingItOut() async throws {
+        let gateway = ScriptedGateway()
+        // The first attempt is refused, and the next retry nobody asked for is ten minutes away.
+        await gateway.refuseNext(1, status: 503)
+        let controller = makeController(gateway, capabilities: [], backoff: GatewayBackoff(base: 600, cap: 600, jitter: { 0 }))
+        await controller.launch()
+        #expect(await eventually { controller.gateway == .offline })
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(await gateway.connections == 0)
+
+        let task = try await startedTask(controller, TaskRequest(goal: "Now", mode: .normal))
+        let start = try await gateway.next("task.start")
+        #expect(start.address?.task == task)
+        #expect(await gateway.connections == 1)
+        await controller.shutDown()
+    }
+
+    @Test
+    func aRequestDuringAnOutageTriesOnceAndTheLoopGoesBackToBackingOff() async throws {
+        let gateway = ScriptedGateway()
+        await gateway.refuseNext(1000, status: 503)
+        let controller = makeController(gateway, capabilities: [], backoff: GatewayBackoff(base: 600, cap: 600, jitter: { 0 }))
+        await controller.launch()
+        #expect(await eventually { controller.gateway == .offline })
+
+        // The request's own attempt fails, so it fails at once, and the next retry waits its backoff.
+        let submission = await controller.submit(TaskRequest(goal: "Now", mode: .normal))
+        #expect(submission == .failed(submission.task, .serverUnavailable))
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(await gateway.attempts == 2)
+        await controller.shutDown()
     }
 
     @Test

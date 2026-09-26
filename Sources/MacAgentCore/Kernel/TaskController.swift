@@ -30,9 +30,19 @@ public struct TaskRequest: Sendable, Equatable {
         self.context = context
     }
 
+    /// What task.start carries, cut to the contract's lengths so the gateway never refuses it. Every
+    /// entry point (composer, voice, routine, schedule, follow-up, watcher) comes through here.
     var startBody: TaskStartBody {
-        TaskStartBody(
-            goal: goal,
+        var context = context
+        context.frontmostApp = context.frontmostApp.map {
+            WireAppRef(bundleID: $0.bundleID.clipped(toUTF16: 255), name: $0.name.clipped(toUTF16: 255))
+        }
+        // A path cut short names another file, so one too long is left out rather than cut.
+        context.finderSelection = context.finderSelection.map { paths in
+            Array(paths.filter { !$0.isEmpty && $0.utf16.count <= 1024 }.prefix(50))
+        }
+        return TaskStartBody(
+            goal: goal.clipped(toUTF16: 4000),
             origin: origin,
             isPrivate: isPrivate,
             unattended: unattended,
@@ -290,8 +300,23 @@ public final class TaskController: ObservableObject {
     }
 
     private func route(_ message: ServerMessage, generation: UInt64) async {
+        if case .error(let error) = message.payload {
+            await refused(error)
+            return
+        }
         guard let task = message.address?.task, let runtime = runtimes[task] else { return }
         await runtime.receive(message, generation: generation)
+    }
+
+    /// The gateway refused a message as not matching the protocol. It would refuse it again after
+    /// every reconnect, so the task holding it in its outbox ends. The error names the message, not
+    /// the task. Other codes are about the connection, not one message: after `internal` or
+    /// `sequence_gap` the gateway closes the socket and the outbox is sent again on reconnect.
+    private func refused(_ error: ErrorBody) async {
+        guard error.code == .malformed || error.code == .unsupportedVersion, let ref = error.ref else { return }
+        for (id, runtime) in runtimes where !localTasks.contains(id) {
+            if await runtime.refused(ref) { return }
+        }
     }
 
     private func gatewayChanged(_ state: GatewayState) {

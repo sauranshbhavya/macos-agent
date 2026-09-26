@@ -107,11 +107,11 @@ public struct AdapterCapability: Capability {
         }
     }
 
-    /// What the gateway reads back: the adapter's own summary and what it listed, within the
-    /// contract's 2,000 characters.
+    /// What the gateway reads back: the adapter's own summary and what it listed. The task runtime
+    /// cuts it to the contract's length, as it does every action's evidence.
     static func evidence(summary: String?, previews: [ActionPreview]) -> String {
         let lines = [summary].compactMap { $0 } + previews.flatMap { [$0.title] + $0.details }
-        return String(lines.joined(separator: "\n").prefix(2000))
+        return lines.joined(separator: "\n")
     }
 
     static func canonical(_ args: [String: JSONValue]) -> String {
@@ -120,8 +120,7 @@ public struct AdapterCapability: Capability {
     }
 
     static func userMessage(_ error: Error) -> String {
-        let text = (error as? LocalizedError)?.errorDescription ?? "It didn't work."
-        return String(text.prefix(1000))
+        (error as? LocalizedError)?.errorDescription ?? "It didn't work."
     }
 
     static func prepareError(_ error: Error) -> CapabilityPrepareError {

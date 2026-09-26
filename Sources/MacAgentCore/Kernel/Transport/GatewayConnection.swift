@@ -97,6 +97,8 @@ public actor GatewayConnection {
     private var loop: Task<Void, Never>?
     private var failures = 0
     private var waiters: [UUID: CheckedContinuation<Bool, Never>] = [:]
+    /// The backoff wait in progress, which a request waiting to connect cuts short.
+    private var backoffWait: Task<Void, Never>?
 
     public init(
         url: URL,
@@ -141,6 +143,8 @@ public actor GatewayConnection {
         let id = UUID()
         return await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
             waiters[id] = continuation
+            // A retry waiting out its backoff tries now, rather than after this request has timed out.
+            backoffWait?.cancel()
             Task {
                 try? await Task.sleep(for: .seconds(timeout))
                 self.resolveWaiter(id, false)
@@ -207,9 +211,21 @@ public actor GatewayConnection {
             case .backoff:
                 failures += 1
                 await setState(.offline)
-                await pause(backoff.delay(afterFailures: failures))
+                await waitOutBackoff(backoff.delay(afterFailures: failures))
             }
         }
+    }
+
+    /// A backoff wait, jittered so a fleet of Macs doesn't retry in step. It is for retries nobody is
+    /// waiting on: a request waiting to connect ends it and the next attempt starts at once. A pause
+    /// a draining gateway asked for is kept, since that gateway said when to come back.
+    private func waitOutBackoff(_ seconds: TimeInterval) async {
+        // A request arrived while this attempt was being reported as failed.
+        guard waiters.isEmpty else { return }
+        let wait = Task<Void, Never> { try? await Task.sleep(nanoseconds: UInt64(max(0, seconds) * 1_000_000_000)) }
+        backoffWait = wait
+        await withTaskCancellationHandler { await wait.value } onCancel: { wait.cancel() }
+        if backoffWait == wait { backoffWait = nil }
     }
 
     /// Waits before the next attempt. A direct `Task.sleep`, not an injected closure: calling a stored
@@ -261,8 +277,8 @@ public actor GatewayConnection {
         let current = generation
         let hello = ClientMessage(payload: .hello(HelloBody(
             deviceID: identity.deviceID,
-            appVersion: identity.appVersion,
-            osVersion: identity.osVersion,
+            appVersion: identity.appVersion.clipped(toUTF16: 32),
+            osVersion: identity.osVersion.clipped(toUTF16: 32),
             manifest: await handlers.manifest(),
             resume: await handlers.resume()
         )))
@@ -294,8 +310,6 @@ public actor GatewayConnection {
                     }
                 case .goodbye(let body):
                     goodbye = body
-                case .error:
-                    continue
                 default:
                     await handlers.received(message, current)
                 }
