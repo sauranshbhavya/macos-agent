@@ -138,14 +138,17 @@ struct AppleScriptRunnerTests {
 
         func run(_ template: String, arguments: [String], timeout: TimeInterval) async throws -> String {
             if template == MailCapabilities.readScript {
-                return ["Lunch", "Friday?", "sam@example.com", ""].joined(separator: MailCapabilities.separator)
+                return ["Lunch", "Friday?", "sam@example.com", "", ""].joined(separator: MailCapabilities.separator)
             }
             return try await OsascriptRunner().run(script, arguments: self.arguments, timeout: self.timeout)
         }
     }
 
     private func send(over runner: ScriptedSend) async -> CapabilityOutcome {
-        let capability = SendMailCapability(runner: runner)
+        // As if compose_mail had written draft 42 in this run.
+        let written = WrittenDrafts()
+        written.add("42")
+        let capability = SendMailCapability(runner: runner, written: written)
         guard let prepared = try? await capability.prepare(actionID: ActionID(), args: ["draft": .string("42")]) else {
             return .failed(.executionError, "prepare failed")
         }
