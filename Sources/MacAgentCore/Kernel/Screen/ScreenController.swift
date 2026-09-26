@@ -103,7 +103,10 @@ public actor ScreenController: ScreenControlling {
         let secureRefs: Set<String>
         let windowFrame: WireRect
         let screenshotSize: (width: Int, height: Int)?
+        /// Judged from the whole window as cua read it, not the part sent to the model: a look
+        /// with no tree, or one cut short, still has the window's fields.
         let hasTextInput: Bool
+        let hasSecureField: Bool
     }
 
     struct Planned: Sendable {
@@ -245,13 +248,11 @@ public actor ScreenController: ScreenControlling {
         var tree: ObservationBody.Tree?
         var elements: [String: CuaElement] = [:]
         var secureRefs: Set<String> = []
-        var hasTextInput = false
         if request.ax, let state, !state.elements.isEmpty {
             let built = Self.tree(from: state, maxNodes: min(request.maxNodes ?? Self.defaultMaxNodes, 2000))
             tree = built.tree
             elements = built.elements
             secureRefs = built.secureRefs
-            hasTextInput = built.hasTextInput
         }
 
         var screenshot: ObservationBody.Screenshot?
@@ -271,6 +272,8 @@ public actor ScreenController: ScreenControlling {
 
         let bounds = window.bounds
         let frame = WireRect(x: bounds?.x ?? 0, y: bounds?.y ?? 0, w: bounds?.width ?? 0, h: bounds?.height ?? 0)
+        // A window cua read nothing of may still have a field focused.
+        let listed = state?.elements ?? []
         looks[generation] = Look(
             generation: generation,
             windowID: window.windowID,
@@ -279,7 +282,8 @@ public actor ScreenController: ScreenControlling {
             secureRefs: secureRefs,
             windowFrame: frame,
             screenshotSize: screenshot.map { ($0.width, $0.height) },
-            hasTextInput: hasTextInput
+            hasTextInput: listed.isEmpty || listed.contains { Self.textRoles.contains($0.role) },
+            hasSecureField: listed.contains(where: Self.isSecure)
         )
         latest = generation
         looks = looks.filter { $0.key > generation - 3 }
@@ -322,6 +326,12 @@ public actor ScreenController: ScreenControlling {
         return textRoles.contains(element.role) && ["password", "passcode", "passwort", "mot de passe"].contains(where: label.contains)
     }
 
+    /// Whether a key chord types a character where the focus is: a letter or digit, with no Command
+    /// or Control held.
+    static func typesCharacter(_ keys: [String]) -> Bool {
+        !keys.contains(where: ["cmd", "command", "ctrl", "control"].contains) && keys.contains { $0.count == 1 }
+    }
+
     /// Secrets never leave the Mac (V2 plan section 7.4): a detected secret is masked, a secure
     /// field's value is never read out, and every field is cut to the contract's length.
     static func masked(_ text: String, limit: Int) -> String {
@@ -330,7 +340,7 @@ public actor ScreenController: ScreenControlling {
         return String(masked.unicodeScalars.prefix(limit).map(Character.init))
     }
 
-    static func tree(from state: CuaWindowState, maxNodes: Int) -> (tree: ObservationBody.Tree, elements: [String: CuaElement], secureRefs: Set<String>, hasTextInput: Bool) {
+    static func tree(from state: CuaWindowState, maxNodes: Int) -> (tree: ObservationBody.Tree, elements: [String: CuaElement], secureRefs: Set<String>) {
         let byIndex = Dictionary(state.elements.map { ($0.index, $0) }, uniquingKeysWith: { first, _ in first })
         var depths: [Int: Int] = [:]
         func depth(_ element: CuaElement) -> Int {
@@ -352,7 +362,6 @@ public actor ScreenController: ScreenControlling {
         var secureRefs: Set<String> = []
         var budget = textBudget
         var truncated = false
-        var hasTextInput = false
         for element in state.elements.sorted(by: { $0.index < $1.index }) {
             guard nodes.count < maxNodes, element.index < 100_000 else {
                 truncated = true
@@ -360,7 +369,6 @@ public actor ScreenController: ScreenControlling {
             }
             let ref = "e\(element.index)"
             let secure = isSecure(element)
-            if textRoles.contains(element.role) { hasTextInput = true }
             var label = element.label.map { masked($0, limit: 500) }
             var value = secure ? nil : element.value.map { masked($0, limit: 2000) }
             let cost = (label?.count ?? 0) + (value?.count ?? 0)
@@ -385,7 +393,7 @@ public actor ScreenController: ScreenControlling {
             elements[ref] = element
             if secure { secureRefs.insert(ref) }
         }
-        return (ObservationBody.Tree(nodes: nodes, truncated: truncated), elements, secureRefs, hasTextInput)
+        return (ObservationBody.Tree(nodes: nodes, truncated: truncated), elements, secureRefs)
     }
 
     // MARK: Acting
@@ -415,6 +423,11 @@ public actor ScreenController: ScreenControlling {
         func words(_ element: CuaElement) -> [String] {
             [element.label, element.value].compactMap { $0 }
         }
+        // A line break reaching a text field is a Return press there (V2 plan section 7.2).
+        func pressesReturn(in facts: inout RaiseFacts) {
+            facts.keyChord = ["return"]
+            facts.focusedTakesText = true
+        }
 
         let cua: CuaAction
         var fallback: CuaAction?
@@ -436,11 +449,17 @@ public actor ScreenController: ScreenControlling {
         case .setValue(_, let ref, let value):
             let (id, found) = try element(ref)
             cua = .setValue(cuaRef(found), value)
-            if (found.value ?? "").isEmpty { fallback = .typeText(cuaRef(found), value) }
+            let breaksLine = EffectRaiser.breaksLine(value)
+            // Typing presses Return at a line break, so only text without one is typed in when the
+            // field can't be set.
+            if (found.value ?? "").isEmpty, !breaksLine { fallback = .typeText(cuaRef(found), value) }
             floor = .editLocal
             facts.text = value
             facts.targetIsSecure = look.secureRefs.contains(id)
             facts.targetWords = [found.label].compactMap { $0 }
+            // Setting a value presses no key, but a one-line field has no use for a line break
+            // except to submit.
+            if breaksLine, found.role != "AXTextArea" { pressesReturn(in: &facts) }
             target = id
             content = value
             preview = ApprovalPreview(title: "Fill in \"\(found.label ?? found.role)\" in \(appName)", details: [value])
@@ -453,12 +472,15 @@ public actor ScreenController: ScreenControlling {
                 target = id
             } else {
                 cua = .typeAtFocus(text)
+                // cua doesn't say which element has focus, so while the window shows a password
+                // field, typing at the focus counts as typing into it.
+                facts.targetIsSecure = look.hasSecureField
                 target = "focus"
             }
             floor = .editLocal
             facts.text = text
-            facts.keyChord = text.hasSuffix("\n") ? ["return"] : nil
-            facts.focusedTakesText = text.hasSuffix("\n")
+            // Every line break presses Return, not only a last one: "Late\nsee you" sends "Late".
+            if EffectRaiser.breaksLine(text) { pressesReturn(in: &facts) }
             content = text
             preview = ApprovalPreview(title: "Type in \(appName)", details: [text])
         case .key(_, let keys):
@@ -468,6 +490,8 @@ public actor ScreenController: ScreenControlling {
             // cua doesn't say which element has focus, so a window with any text input is treated
             // as if one were focused: Return there may submit, and is raised to external.
             facts.focusedTakesText = look.hasTextInput
+            // A key that types a character types it at the focus, which may be the password field.
+            facts.targetIsSecure = look.hasSecureField && Self.typesCharacter(keys)
             target = "keys"
             content = keys.joined(separator: "+")
             preview = ApprovalPreview(title: "Press \(keys.joined(separator: "+")) in \(appName)")

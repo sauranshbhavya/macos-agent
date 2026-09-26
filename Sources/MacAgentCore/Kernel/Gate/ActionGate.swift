@@ -3,7 +3,8 @@ import Foundation
 /// What the Mac knows about an action's target that can make it more consequential than the model
 /// said. Every field is observed on the Mac; none can lower an effect (V2 plan section 7.2).
 public struct RaiseFacts: Sendable, Equatable {
-    /// A key chord about to be sent, modifiers first, lowercased: `["cmd", "return"]`.
+    /// A key chord about to be sent, lowercased: `["cmd", "return"]`. A line break typed into a
+    /// field is sent as `["return"]`.
     public var keyChord: [String]?
     /// Whether the focused element takes text (a field, a text area, a composer).
     public var focusedTakesText: Bool
@@ -11,7 +12,8 @@ public struct RaiseFacts: Sendable, Equatable {
     public var targetWords: [String]
     /// Text the action would type or set.
     public var text: String?
-    /// Whether the target is a secure (password) field.
+    /// Whether the target is a secure (password) field, or may be one: text typed at the focus
+    /// while a password field shows.
     public var targetIsSecure: Bool
 
     public init(
@@ -36,13 +38,16 @@ public enum EffectRaiser {
     static let externalWords = ["send", "post", "submit", "reply", "share", "invite", "publish"]
     static let financialWords = ["pay", "buy", "purchase", "order", "subscribe", "transfer", "checkout"]
     static let destructiveWords = ["delete", "remove", "trash", "discard", "overwrite", "erase", "reset"]
-    static let submitKeys: Set<String> = ["return", "enter"]
+    /// cua presses Return for "return" or "enter"; the keypad's spellings are here too, so no name
+    /// for Enter slips past.
+    static let submitKeys: Set<String> = ["return", "enter", "kpenter", "keypadenter", "numpadenter"]
 
     /// The effect an action is gated as: the highest of what the model declared, the operation's own
     /// floor, and every local rule that fires.
     public static func raise(declared: Effect, floor: Effect, facts: RaiseFacts) -> Effect {
         var effect = declared.raised(to: floor)
-        if let chord = facts.keyChord, facts.focusedTakesText, let last = chord.last, submitKeys.contains(last) {
+        // Any key of the chord counts, not only the last: ["return", "cmd"] still presses Return.
+        if let chord = facts.keyChord, facts.focusedTakesText, chord.contains(where: { submitKeys.contains($0.lowercased()) }) {
             effect = effect.raised(to: .external)
         }
         let words = facts.targetWords.flatMap(Self.words(in:))
@@ -54,6 +59,12 @@ public enum EffectRaiser {
             effect = effect.raised(to: .credential)
         }
         return effect
+    }
+
+    /// Whether text holds a line break of any kind: "\n", "\r", "\r\n", or a Unicode line or
+    /// paragraph separator. Typed into a field, each one is a Return press.
+    static func breaksLine(_ text: String) -> Bool {
+        text.unicodeScalars.contains(where: CharacterSet.newlines.contains)
     }
 
     /// Lowercased words, so "Send Now" and "Unsubscribe" are judged by their parts: "send" matches,
