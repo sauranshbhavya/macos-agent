@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import { buildApp } from "../src/app.js";
 import type { AuthProvider, VerifiedSession } from "../src/auth/provider.js";
+import { automaticTopUp } from "../src/credit/auto-top-up.js";
 import { creditBalance } from "../src/credit/balance.js";
 import {
   catalogueOf,
@@ -1899,5 +1900,125 @@ describe("the top-up route keeps one deadline, and never abandons a charge to it
 
     expect(charge.kind).toBe("unconfirmed");
     expect((charge as { reason: string }).reason).toContain("TimeoutError");
+  });
+});
+
+describe("a top-up for what the gateway's next model call needs", () => {
+  it("is not needed while the balance covers the call, even when little is left", async () => {
+    const provider = scriptedProvider(charged("order-1"));
+    const attempts = recordingAttempts();
+    const result = await attemptTopUp(depsFor(provider, attempts), {
+      accountId: ACCOUNT,
+      balance: balanceAfter(995),
+      consentedAt: AT,
+      needed: 5,
+      now: AT,
+    });
+    expect(result).toEqual({ kind: "refused", refusal: "not_needed" });
+    expect(provider.charges).toHaveLength(0);
+  });
+
+  it("buys a pack when credits are left but fewer than the call needs", async () => {
+    const provider = scriptedProvider(charged("order-1"));
+    const attempts = recordingAttempts();
+    const result = await attemptTopUp(depsFor(provider, attempts), {
+      accountId: ACCOUNT,
+      balance: balanceAfter(995),
+      consentedAt: AT,
+      needed: 40,
+      now: AT,
+    });
+    expect(result).toEqual({ kind: "granted", credits: 500 });
+    expect(provider.charges).toHaveLength(1);
+  });
+
+  it("refuses a pack that would still leave the call short, before claiming or charging", async () => {
+    const provider = scriptedProvider(charged("order-1"));
+    const attempts = recordingAttempts();
+    const result = await attemptTopUp(depsFor(provider, attempts), {
+      accountId: ACCOUNT,
+      balance: exhausted(),
+      consentedAt: AT,
+      needed: 501,
+      now: AT,
+    });
+    expect(result).toEqual({ kind: "refused", refusal: "too_small" });
+    expect(attempts.claims).toHaveLength(0);
+    expect(provider.charges).toHaveLength(0);
+  });
+});
+
+describe("the gateway's automatic top-up", () => {
+  const quiet = { info: () => {}, warn: () => {} };
+
+  /** A credit store whose balance goes up by what each granted pack credits, as the real one does. */
+  function liveCreditStore(optedInAt: Date | null) {
+    let toppedUp = 0;
+    const attempts = recordingAttempts();
+    const settle = attempts.settle;
+    const store = {
+      factsFor: async () => ({
+        planKey: undefined,
+        agentCredits: 1000,
+        toppedUpCredits: toppedUp,
+        topUpAttemptsThisPeriod: attempts.claims.length,
+        autoTopUpOptedInAt: optedInAt,
+        lastTopUp: undefined,
+      }),
+      setAutoTopUp: async () => optedInAt,
+    };
+    const counting: typeof attempts = {
+      ...attempts,
+      settle: async (row) => {
+        const settled = await settle(row);
+        if (settled.wrote && row.outcome === "granted") toppedUp += row.credits;
+        return settled;
+      },
+    };
+    return { store, attempts: counting };
+  }
+
+  function topUpFor(optedInAt: Date | null, provider = scriptedProvider(charged("order-1")), totalDeadlineMs = 5_000) {
+    const { store, attempts } = liveCreditStore(optedInAt);
+    const topUp = automaticTopUp({
+      store,
+      catalogue: parseCreditCatalogue(TEST_CREDIT_PLANS_WITH_TOP_UP),
+      topUp: { provider, billingCustomerFor: async () => CUSTOMER, attempts },
+      totalDeadlineMs,
+      now: () => AT,
+      log: quiet,
+    });
+    return { topUp, provider };
+  }
+
+  it("buys nothing for an account that did not opt in", async () => {
+    const { topUp, provider } = topUpFor(null);
+    expect(await topUp(ACCOUNT, 10)).toBe(false);
+    expect(provider.charges).toHaveLength(0);
+  });
+
+  it("buys one pack for an account that opted in and has run out", async () => {
+    const { topUp, provider } = topUpFor(AT);
+    expect(await topUp(ACCOUNT, 10)).toBe(true);
+    expect(provider.charges).toHaveLength(1);
+  });
+
+  it("buys one pack, not three, when three tasks run out together", async () => {
+    const { topUp, provider } = topUpFor(AT);
+    const answers = await Promise.all([topUp(ACCOUNT, 10), topUp(ACCOUNT, 10), topUp(ACCOUNT, 10)]);
+    // Each of the three is told to try its call again: the first bought, the others find it there.
+    expect(answers).toEqual([true, true, true]);
+    expect(provider.charges).toHaveLength(1);
+  });
+
+  it("treats a purchase that outlives its deadline as nothing granted", async () => {
+    const slow = scriptedProvider(charged("order-1"));
+    const finalize = slow.finalizeTopUpOrder;
+    const hanging = {
+      ...slow,
+      finalizeTopUpOrder: (orderId: string) => new Promise<TopUpCharge>((resolve) => setTimeout(() => void finalize(orderId).then(resolve), 200)),
+    };
+    const { topUp } = topUpFor(AT, hanging as typeof slow, 20);
+    expect(await topUp(ACCOUNT, 10)).toBe(false);
   });
 });

@@ -15,6 +15,7 @@ import { postgresEntitlementStore, type EntitlementStore } from "./entitlement/s
 import { registerEntitlementRoutes } from "./routes/entitlements.js";
 import { postgresCreditStore, type CreditStore } from "./credit/store.js";
 import { postgresTopUpAttemptStore, type TopUpAttemptStore } from "./credit/topup.js";
+import { automaticTopUp } from "./credit/auto-top-up.js";
 import { registerCreditRoutes } from "./routes/credits.js";
 import { leasingUnderTotalDeadline } from "./model/routing.js";
 import { registerAuthGate } from "./auth/gate.js";
@@ -28,7 +29,7 @@ import { registerMetering } from "./metering/hook.js";
 import { postgresMeteringStore, type MeteringStore } from "./metering/store.js";
 import { registerAuth, type AuthDeps } from "./routes/auth.js";
 import fastifyMultipart from "@fastify/multipart";
-import { BODY_LIMIT_BYTES } from "./model/limits.js";
+import { BODY_LIMIT_BYTES, DEADLINE_MS } from "./model/limits.js";
 import { describeRouting, modelProvidersFrom } from "./model/providers.js";
 import { registerModelRoutes } from "./routes/model.js";
 import { billingDepsFrom } from "./billing/deps.js";
@@ -689,6 +690,25 @@ export function buildApp(
     });
   }
 
+  /**
+   * The charge's own wiring, present only where this deployment can actually charge somebody
+   * (SONNY-215). The credits route and the runner's automatic top-up share it.
+   *
+   * **Both halves are required and neither implies the other.** The provider and the customer
+   * lookup come from the billing block above, which is mounted on `BILLING_PROVIDER`; the pack
+   * comes from `CREDIT_PLANS`, which is required wherever *any* authenticated route is mounted. So a
+   * gateway with a payment provider and no configured pack, and a gateway with a pack and no
+   * provider, are both deployments that cannot top anybody up.
+   */
+  const topUpCharge =
+    auth && billing && billingStore
+      ? {
+          provider: overrides.topUpProvider ?? billing.provider,
+          billingCustomerFor: billingStore.billingCustomerFor,
+          attempts: overrides.topUpAttemptStore ?? postgresTopUpAttemptStore(auth.withConnection),
+        }
+      : undefined;
+
   const agentSessions = new SessionRegistry(overrides.agentMessageRate);
   app.decorate("agentSessions", agentSessions);
   app.decorate("agentRunner", null);
@@ -708,6 +728,18 @@ export function buildApp(
       agentFor: overrides.agentFactory ?? configuredAgent(config, app.log),
       deliver: (task, messages) => agentSessions.peerFor(task.accountId, task.deviceId)?.sendTask(messages),
       manifestFor: (accountId, deviceId) => agentSessions.peerFor(accountId, deviceId)?.manifest,
+      ...(creditStore && topUpCharge && requireCreditCatalogue(config).topUp
+        ? {
+            topUp: automaticTopUp({
+              store: creditStore,
+              catalogue: requireCreditCatalogue(config),
+              topUp: topUpCharge,
+              totalDeadlineMs: overrides.topUpTotalDeadlineMs ?? DEADLINE_MS.topUp.total,
+              now,
+              log: app.log,
+            }),
+          }
+        : {}),
       now,
       log: app.log,
       ...(overrides.agentBudgets === undefined ? {} : { budgets: overrides.agentBudgets }),
@@ -763,30 +795,11 @@ export function buildApp(
         store: creditStore,
         catalogue: requireCreditCatalogue(config),
         /**
-         * The charge's own wiring, present only where this deployment can actually charge somebody
-         * (SONNY-215).
-         *
-         * **Both halves are required and neither implies the other.** The provider and the customer
-         * lookup come from the billing block above, which is mounted on `BILLING_PROVIDER`; the pack
-         * comes from `CREDIT_PLANS`, which is required wherever *any* authenticated route is
-         * mounted. So a gateway with a payment provider and no configured pack, and a gateway with a
-         * pack and no provider, are both deployments that cannot top anybody up — and each of them
-         * is a plausible half-finished configuration rather than a hypothetical.
-         *
-         * **The routes are registered either way** and the charge refuses with
-         * `topup.not_permitted`. That is the model routes' argument applied to a route the app
-         * really does call: a `404` says "no such route", which the client reads as a version
-         * problem, and this is a deployment that simply sells nothing.
+         * **The routes are registered even where nothing can be charged**, and the charge refuses
+         * with `topup.not_permitted`: a `404` says "no such route", which the client reads as a
+         * version problem, and this is a deployment that simply sells nothing.
          */
-        topUp:
-          billing && billingStore
-            ? {
-                provider: overrides.topUpProvider ?? billing.provider,
-                billingCustomerFor: billingStore.billingCustomerFor,
-                attempts:
-                  overrides.topUpAttemptStore ?? postgresTopUpAttemptStore(auth.withConnection),
-              }
-            : undefined,
+        topUp: topUpCharge,
         now: auth.now,
         topUpTotalDeadlineMs: overrides.topUpTotalDeadlineMs,
       });

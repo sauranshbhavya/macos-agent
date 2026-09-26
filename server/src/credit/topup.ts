@@ -39,6 +39,10 @@ import type { CreditBalance } from "./balance.js";
  * balance is recomputed by the caller from the account's own model-call ledger rather than taken
  * from the request, so "I am low" is not something a caller gets to assert, and a client cannot buy
  * credit it does not need.
+ *
+ * The gateway's own automatic top-up (`auto-top-up.ts`) knows one thing more: how much the task's
+ * next model call needs. For that caller "low" means "less than the call needs", and a pack that
+ * would still leave the call short is refused, because it buys nothing the task can use.
  */
 
 /** Why no top-up happened. Each case is a different status and a different thing to do about it. */
@@ -62,7 +66,9 @@ export type TopUpRefusal =
   /** The provider refused this gateway. An operator's to fix; a retry fails identically. */
   | "rejected"
   /** The charge was attempted and its answer could not be read. Nothing is granted. */
-  | "unconfirmed";
+  | "unconfirmed"
+  /** One pack would still not cover what the caller needs, so buying it would not help. */
+  | "too_small";
 
 export type TopUpResult =
   | { readonly kind: "granted"; readonly credits: number }
@@ -196,6 +202,11 @@ export interface TopUpInput {
   readonly balance: CreditBalance;
   /** When this account opted in, or `null`. `CreditFacts.autoTopUpOptedInAt` supplies it. */
   readonly consentedAt: Date | null;
+  /**
+   * The credits the caller needs: the gateway's hold for the next model call. Only the gateway
+   * supplies it; without it, any credit left means nothing is needed.
+   */
+  readonly needed?: number | undefined;
   readonly now: Date;
 }
 
@@ -368,8 +379,15 @@ export async function attemptTopUp(deps: TopUpDeps, input: TopUpInput): Promise<
   const pack = deps.pack;
   if (pack === undefined) return { kind: "refused", refusal: "not_offered" };
   // Recomputed from the account's own rows by the caller. A client does not get to declare that it
-  // is low, and an account with credits left is not charged for more.
-  if (input.balance.credits.remaining > 0) return { kind: "refused", refusal: "not_needed" };
+  // is low, and an account with credits left (or, for the gateway, enough for the call it is about
+  // to make) is not charged for more.
+  const remaining = input.balance.credits.remaining;
+  if (input.needed === undefined ? remaining > 0 : remaining >= input.needed) {
+    return { kind: "refused", refusal: "not_needed" };
+  }
+  if (input.needed !== undefined && remaining + pack.credits < input.needed) {
+    return { kind: "refused", refusal: "too_small" };
+  }
 
   // Before the slot is claimed: an account with nothing to charge can never succeed, and burning one
   // of the period's attempts on it would spend the bound on a refusal that costs nobody anything.
@@ -657,4 +675,46 @@ export function postgresTopUpAttemptStore(withConnection: WithConnection): TopUp
     outstanding: (input) => withConnection((client) => readOutstandingTopUp(client, input)),
     settle: (input) => withConnection((client) => settleTopUpAttempt(client, input)),
   };
+}
+
+/**
+ * What a top-up's total deadline resolves to when it elapses — a value, deliberately, not a throw
+ * (SONNY-430).
+ *
+ * A charge may be in flight at the provider at that instant, so whoever waited must not treat it as
+ * a failure worth retrying: the route answers `topup.unconfirmed`, and the gateway's automatic
+ * top-up treats it as nothing granted.
+ */
+export const TOP_UP_DEADLINE_ELAPSED = Symbol("the top-up's total deadline elapsed");
+
+/**
+ * Race `work` against a top-up's total deadline.
+ *
+ * **The losing work is not cancelled, and that is the property rather than an oversight.**
+ * `attemptTopUp` writes the provider's order id onto the attempt row *before* anything can charge,
+ * so a charge still in flight when this returns is one whose row already names the object it is
+ * charging: the work runs on, settles that row, and the account's next attempt resolves it either
+ * way. Cancelling it here would be the one way to abandon a charge the provider has accepted. So
+ * this bounds the *answer*, never the work.
+ *
+ * The no-op `catch` is defensive: `Promise.race` already subscribes to a late rejection (PR #220's
+ * F5), and the line keeps that true if the race is ever replaced.
+ */
+export async function withinTopUpDeadline<T>(
+  totalMs: number,
+  work: Promise<T>,
+): Promise<T | typeof TOP_UP_DEADLINE_ELAPSED> {
+  work.catch(() => {});
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      work,
+      new Promise<typeof TOP_UP_DEADLINE_ELAPSED>((resolve) => {
+        timer = setTimeout(() => resolve(TOP_UP_DEADLINE_ELAPSED), totalMs);
+      }),
+    ]);
+  } finally {
+    // Or the timer holds the event loop open for the rest of the deadline on every fast charge.
+    if (timer !== undefined) clearTimeout(timer);
+  }
 }

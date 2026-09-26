@@ -10,9 +10,17 @@ import { TEST_TOKEN_RATES } from "./support/agent.js";
 const ACCOUNT = "0b9c3a52-7c55-4f1e-8d3c-0000000000b1";
 const DEVICE = "d0d0d0d0-1111-4222-8333-444455556666";
 
-function runnerWith(agent: Agent, options: { now?: () => Date; modelCallDeadlineMs?: number } = {}) {
+function runnerWith(
+  agent: Agent,
+  options: {
+    now?: () => Date;
+    modelCallDeadlineMs?: number;
+    balance?: number;
+    topUp?: (accountId: string, needed: number) => Promise<boolean>;
+  } = {},
+) {
   const store = memoryTaskStore();
-  const ledger = memoryModelCallLedger(1000);
+  const ledger = memoryModelCallLedger(options.balance ?? 1000);
   const delivered: ServerTaskMessage[] = [];
   const runner = new TaskRunner({
     store,
@@ -23,6 +31,7 @@ function runnerWith(agent: Agent, options: { now?: () => Date; modelCallDeadline
     now: options.now ?? (() => new Date()),
     log: { info: () => {}, error: () => {} },
     ...(options.modelCallDeadlineMs === undefined ? {} : { modelCallDeadlineMs: options.modelCallDeadlineMs }),
+    ...(options.topUp === undefined ? {} : { topUp: options.topUp }),
   });
   return { runner, store, ledger, delivered };
 }
@@ -112,6 +121,60 @@ describe("TaskRunner", () => {
     await runner.idle();
     expect(delivered.at(-1)).toMatchObject({ type: "finish", body: { reason: "model_unavailable" } });
     expect([...ledger.calls.values()][0]!.settle).toMatchObject({ credits: 0, outcome: "provider_error" });
+  });
+
+  describe("when a model call can't be held", () => {
+    const oneCall: Agent = {
+      async turn(context) {
+        const value = await context.modelCall(
+          { agent: "planner", tier: "fast", maxInputTokens: 100, maxOutputTokens: 100 },
+          async () => ({ value: "ok", provider: "test", model: "test", usage: { inputTokens: 10, outputTokens: 10 } }),
+        );
+        return { messages: [{ type: "finish", body: { status: "completed", summary: value } }] };
+      },
+    };
+
+    it("asks for an automatic top-up for what the call needs, then makes the call", async () => {
+      const asked: [string, number][] = [];
+      let ledger: ReturnType<typeof memoryModelCallLedger> | undefined;
+      const h = runnerWith(oneCall, {
+        balance: 0,
+        topUp: async (accountId, needed) => {
+          asked.push([accountId, needed]);
+          ledger?.setBalance(500);
+          return true;
+        },
+      });
+      ledger = h.ledger;
+      await start(h.runner);
+      await h.runner.idle();
+      // The fast tier is one credit per thousand tokens each way: 200 tokens hold 0.2 credits.
+      expect(asked).toEqual([[ACCOUNT, 0.2]]);
+      expect(h.delivered.at(-1)).toMatchObject({ type: "finish", body: { status: "completed", summary: "ok" } });
+    });
+
+    it("ends the task out of credits when no top-up is made", async () => {
+      let asked = 0;
+      const h = runnerWith(oneCall, {
+        balance: 0,
+        topUp: async () => {
+          asked += 1;
+          return false;
+        },
+      });
+      await start(h.runner);
+      await h.runner.idle();
+      expect(asked).toBe(1);
+      expect(h.delivered.at(-1)).toMatchObject({ type: "finish", body: { reason: "credits_exhausted" } });
+      expect(h.ledger.calls.size).toBe(0);
+    });
+
+    it("ends the task out of credits when the deployment sells no top-up", async () => {
+      const h = runnerWith(oneCall, { balance: 0 });
+      await start(h.runner);
+      await h.runner.idle();
+      expect(h.delivered.at(-1)).toMatchObject({ type: "finish", body: { reason: "credits_exhausted" } });
+    });
   });
 
   it("stops a closed account's running turns and ends their tasks", async () => {
