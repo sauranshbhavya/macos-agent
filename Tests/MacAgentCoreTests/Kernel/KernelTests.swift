@@ -453,6 +453,33 @@ struct KernelTests {
     }
 
     @Test
+    func aTaskStoppedOfflineComesBackStoppedAfterARelaunchAndHoldsNoSlot() async throws {
+        let ledgers = MemoryTaskLedgerStore()
+        let before = ScriptedGateway()
+        let first = makeController(before, ledgers: ledgers, capabilities: [])
+        await first.launch()
+        let stopped = try await startedTask(first, TaskRequest(goal: "Stop me", mode: .normal))
+        _ = try await before.next("task.start")
+        // Offline: the socket drops and every reconnect is refused, so the cancel can't go out.
+        await before.refuseNext(1000, status: 503)
+        await before.drop()
+        await first.cancel(stopped)
+        #expect(await eventually { first.snapshot(stopped)?.phase == .cancelled })
+        #expect(ledgers.record(stopped)?.endedLocally == .cancelled)
+        await first.shutDown()
+
+        let after = ScriptedGateway()
+        await after.setWelcomeState { _ in .finished }
+        let second = makeController(after, ledgers: ledgers, capabilities: [])
+        await second.launch()
+        #expect(second.snapshot(stopped)?.phase == .cancelled)
+        let next = try await startedTask(second, TaskRequest(goal: "Next", mode: .normal))
+        let start = try await after.next("task.start")
+        #expect(start.address?.task == next)
+        #expect(await eventually { ledgers.record(stopped) == nil })
+    }
+
+    @Test
     func aRequestMadeWhileConnectingSendsItsStartOnce() async throws {
         let gateway = ScriptedGateway()
         let controller = makeController(gateway, capabilities: [])

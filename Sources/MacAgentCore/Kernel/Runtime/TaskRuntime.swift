@@ -151,7 +151,8 @@ public actor TaskRuntime {
         self.id = record.task
         self.record = record
         self.deps = deps
-        self.phase = .reconciling
+        // A task that ended here is still ended; only its undelivered messages remain to send.
+        self.phase = record.endedLocally == .cancelled ? .cancelled : .reconciling
     }
 
     // MARK: Driving the task
@@ -221,6 +222,11 @@ public actor TaskRuntime {
         // A task that already sent on this connection has nothing to send again.
         let alreadyHere = connectionGeneration == generation
         connectionGeneration = generation
+        // Ended here, and over or gone on the gateway too: nothing left to deliver.
+        if phase.isTerminal, state?.state == .finished || state?.state == .unknown {
+            try? deps.ledgers.delete(id)
+            return
+        }
         if phase == .reconciling { await reconcile() }
         switch state?.state {
         case .unknown?:
@@ -561,6 +567,7 @@ public actor TaskRuntime {
         phase = terminal
         await deps.broker.void(task: id)
         if keepLedgerUntilAcknowledged && !record.outbox.isEmpty {
+            if terminal == .cancelled { record.endedLocally = .cancelled }
             try? save()
         } else {
             try? deps.ledgers.delete(id)

@@ -1,15 +1,16 @@
 import type pg from "pg";
 import type { WithConnection } from "../../db/connection.js";
 import type { Mode } from "../protocol.js";
-import type {
-  CreateOutcome,
-  EndedStatus,
-  InboundOutcome,
-  StoredMessage,
-  SweepOutcome,
-  TaskRecord,
-  TaskStatus,
-  TaskStore,
+import {
+  ABANDONED_FINISH,
+  type CreateOutcome,
+  type EndedStatus,
+  type InboundOutcome,
+  type StoredMessage,
+  type SweepOutcome,
+  type TaskRecord,
+  type TaskStatus,
+  type TaskStore,
 } from "./store.js";
 
 /** How many ended tasks one sweep deletes at most, so a backlog can't hold a long transaction. */
@@ -285,11 +286,19 @@ export function postgresTaskStore(withConnection: WithConnection): TaskStore {
                             WHERE status = 'live' AND private AND updated_at <= $1 LIMIT $2)`,
             [idleSince, SWEEP_BATCH],
           );
+          // Each abandoned task gets its `finish` in the same statement that ends it, so a Mac that
+          // reconnects later is replayed the end rather than left waiting on a task that is over.
           const abandoned = await client.query(
-            `UPDATE sonny.agent_task SET status = 'failed', ended_at = $2, updated_at = $2
-              WHERE id IN (SELECT id FROM sonny.agent_task
-                            WHERE status = 'live' AND updated_at <= $1 LIMIT $3)`,
-            [idleSince, now, SWEEP_BATCH],
+            `WITH ended AS (
+               UPDATE sonny.agent_task SET status = 'failed', ended_at = $2, updated_at = $2,
+                      last_seq_out = last_seq_out + 1
+                WHERE id IN (SELECT id FROM sonny.agent_task
+                              WHERE status = 'live' AND updated_at <= $1 LIMIT $3)
+                RETURNING id, last_seq_out
+             )
+             INSERT INTO sonny.agent_message (task_id, direction, seq, re, msg_id, type, body, created_at)
+             SELECT id, 'out', last_seq_out, NULL, gen_random_uuid(), 'finish', $4::jsonb, $2 FROM ended`,
+            [idleSince, now, SWEEP_BATCH, JSON.stringify(ABANDONED_FINISH)],
           );
           const deleted = await client.query(
             `DELETE FROM sonny.agent_task

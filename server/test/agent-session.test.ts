@@ -4,7 +4,7 @@ import type { Agent } from "../src/agent/agent.js";
 import { memoryModelCallLedger } from "../src/agent/credits.js";
 import { CLOSE_CODE } from "../src/agent/session/close.js";
 import { memoryTaskStore } from "../src/agent/tasks/store.js";
-import { sweepTasksOnce, TASK_RETENTION_MS } from "../src/agent/tasks/retention.js";
+import { sweepTasksOnce, TASK_ABANDON_AFTER_MS, TASK_RETENTION_MS } from "../src/agent/tasks/retention.js";
 import {
   proposeOpen,
   scriptedAgent,
@@ -379,6 +379,29 @@ describe("task retention", () => {
     expect(await m.nextOfType("finish")).toMatchObject({ task, body: { status: "completed" } });
     expect(await h.store.task(task)).toBeUndefined();
     expect(await h.store.transcript(task)).toEqual([]);
+  });
+
+  it("tells a Mac that comes back after a day that its abandoned task has ended", async () => {
+    const h = await harness({ agentFactory: scriptedAgent([{ messages: [proposeOpen()] }]) });
+    const first = await mac(h.url);
+    first.hello(DEVICE);
+    await first.nextOfType("welcome");
+    const task = randomUUID();
+    first.startTask(task);
+    await first.nextOfType("propose");
+    // The Mac goes away without answering, and stays away past the abandonment window.
+    first.socket.terminate();
+    await h.app.agentRunner!.idle();
+    const touched = (await h.store.task(task))!.updatedAt;
+    const later = new Date(touched.getTime() + TASK_ABANDON_AFTER_MS);
+    expect(await sweepTasksOnce({ store: h.store, ledger: h.ledger, now: () => later })).toMatchObject({ abandoned: 1 });
+
+    const back = await mac(h.url);
+    back.setSeq(task, 1);
+    back.hello(DEVICE, [{ task, last_seq_in: 1, last_seq_out: 1 }]);
+    const welcome = await back.nextOfType("welcome");
+    expect(welcome.type === "welcome" && welcome.body.tasks).toEqual([{ task, state: "finished", last_seq_in: 1 }]);
+    expect(await back.nextOfType("finish")).toMatchObject({ task, seq: 2, body: { status: "failed" } });
   });
 
   it("keeps an ordinary task for 30 days after it ends, then deletes it", async () => {

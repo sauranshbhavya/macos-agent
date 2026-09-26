@@ -48,6 +48,13 @@ public struct TaskLedgerRecord: Sendable, Equatable, Codable {
     public var outbox: [ClientMessage]
     public var actions: [LedgerAction]
     public var pending: PendingProposal?
+    /// Set when the task ended on this Mac while its last messages were still undelivered, so a
+    /// relaunch restores it as ended rather than as a task still waiting on the gateway.
+    public var endedLocally: LocalEnd?
+
+    public enum LocalEnd: String, Sendable, Equatable, Codable {
+        case cancelled
+    }
 
     public init(task: TaskID, request: TaskStartBody, createdAt: Date) {
         self.task = task

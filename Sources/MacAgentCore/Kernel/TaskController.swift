@@ -132,8 +132,10 @@ public final class TaskController: ObservableObject {
         for record in unfinished {
             let runtime = TaskRuntime(restoring: record, deps: dependencies())
             runtimes[record.task] = runtime
-            if liveTask == nil { liveTask = record.task }
-            apply(await runtime.snapshot())
+            let snapshot = await runtime.snapshot()
+            // A task that already ended here only has messages to deliver; it holds no slot.
+            if liveTask == nil, !snapshot.phase.isTerminal { liveTask = record.task }
+            apply(snapshot)
         }
         await connection.start()
     }
