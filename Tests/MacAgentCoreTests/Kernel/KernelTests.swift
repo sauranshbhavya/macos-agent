@@ -76,12 +76,13 @@ func makeController(
     _ gateway: ScriptedGateway,
     ledgers: MemoryTaskLedgerStore = MemoryTaskLedgerStore(),
     capabilities: [any Capability],
-    lease: ForegroundLease = ForegroundLease()
+    lease: ForegroundLease = ForegroundLease(),
+    credentials: any GatewayCredentials = FixedGatewayCredentials()
 ) -> TaskController {
     TaskController(
         url: URL(string: "ws://gateway.test/v2/session")!,
         transport: gateway,
-        credentials: FixedGatewayCredentials(),
+        credentials: credentials,
         identity: .init(deviceID: DeviceID(), appVersion: "2.0.0", osVersion: "26.0"),
         ledgers: ledgers,
         capabilities: KernelCapabilities(capabilities),
@@ -99,6 +100,26 @@ func startedTask(_ controller: TaskController, _ request: TaskRequest) async thr
         throw KernelTestFailure("the task did not start: \(submission)")
     }
     return task
+}
+
+/// Credentials a test signs in and out.
+final class SwitchableCredentials: GatewayCredentials, @unchecked Sendable {
+    private let lock = NSLock()
+    private var signed: Bool
+
+    init(signedIn: Bool) {
+        signed = signedIn
+    }
+
+    var signedIn: Bool {
+        get { lock.withLock { signed } }
+        set { lock.withLock { signed = newValue } }
+    }
+
+    func accessToken(forceRefresh: Bool) async throws -> String {
+        guard signedIn else { throw SonnyBackendError.notSignedIn }
+        return "test-token"
+    }
 }
 
 struct KernelTestFailure: Error, CustomStringConvertible {
@@ -663,6 +684,48 @@ struct InstantPathTests {
             return false
         })
         #expect(make.executed.value.count == 1)
+    }
+
+    @Test
+    func aMacLaunchedSignedOutConnectsOnceThePersonSignsIn() async throws {
+        let gateway = ScriptedGateway()
+        let credentials = SwitchableCredentials(signedIn: false)
+        let controller = makeController(gateway, capabilities: [], credentials: credentials)
+        await controller.launch()
+
+        let signedOut = await controller.submit(TaskRequest(goal: "Open Notes", mode: .normal))
+        guard case .failed(_, let failure) = signedOut else { throw KernelTestFailure("expected a failure: \(signedOut)") }
+        #expect(failure == .signInNeeded)
+
+        credentials.signedIn = true
+        let task = try await startedTask(controller, TaskRequest(goal: "Open Notes", mode: .normal))
+        let start = try await gateway.next("task.start")
+        #expect(start.address?.task == task)
+    }
+
+    @Test
+    func signingInConnectsWithoutWaitingForARequest() async throws {
+        let gateway = ScriptedGateway()
+        let credentials = SwitchableCredentials(signedIn: false)
+        let controller = makeController(gateway, capabilities: [], credentials: credentials)
+        await controller.launch()
+        #expect(await eventually { controller.gateway == .stopped(.notSignedIn) })
+
+        credentials.signedIn = true
+        await controller.reconnect()
+        _ = try await gateway.next("hello")
+        #expect(await eventually { controller.gateway == .connected })
+    }
+
+    @Test
+    func aVersionTheGatewayRefusedSaysToUpdate() async throws {
+        let gateway = ScriptedGateway()
+        await gateway.refuseNext(1, status: 410)
+        let controller = makeController(gateway, capabilities: [])
+        await controller.launch()
+        let refused = await controller.submit(TaskRequest(goal: "Open Notes", mode: .normal))
+        guard case .failed(_, let failure) = refused else { throw KernelTestFailure("expected a failure: \(refused)") }
+        #expect(failure == .clientTooOld)
     }
 
     @Test

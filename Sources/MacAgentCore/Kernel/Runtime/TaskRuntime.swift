@@ -25,6 +25,12 @@ public struct TaskFailure: Sendable, Equatable {
         reason: nil,
         message: "Sonny couldn't reach its server, so it can't do this right now. Check your internet connection and try again."
     )
+    public static let signInNeeded = TaskFailure(reason: nil, message: "Sign in to Sonny to do this.")
+    public static let clientTooOld = TaskFailure(reason: nil, message: ClientVersionCopy.tooOldMessage)
+    public static let replacedElsewhere = TaskFailure(
+        reason: nil,
+        message: "Another copy of Sonny on this Mac is connected, so this one can't reach its server."
+    )
 }
 
 public enum TaskPhase: Sendable, Equatable {

@@ -151,6 +151,13 @@ public final class TaskController: ObservableObject {
         await connection.stop()
     }
 
+    /// The account changed: close the socket and connect again as whoever is signed in now. A
+    /// sign-out leaves it stopped until the next sign-in.
+    public func reconnect() async {
+        await connection.stop()
+        await connection.start()
+    }
+
     /// Starts a model-backed task. With no gateway connection it fails at once with a plain server
     /// error (V2 plan decision 13).
     @discardableResult
@@ -162,8 +169,9 @@ public final class TaskController: ObservableObject {
         await runtime.setConnecting()
 
         guard await connection.ensureConnected(within: connectTimeout) else {
-            await runtime.fail(.serverUnavailable)
-            return .failed(id, .serverUnavailable)
+            let failure = await connectionFailure()
+            await runtime.fail(failure)
+            return .failed(id, failure)
         }
         if liveTasks.count >= maxLiveTasks || !waiting.isEmpty {
             waiting.append(id)
@@ -303,6 +311,16 @@ public final class TaskController: ObservableObject {
         }
     }
 
+    /// Why a task couldn't reach the gateway, in words that say what to do about it.
+    private func connectionFailure() async -> TaskFailure {
+        switch await connection.state {
+        case .stopped(.notSignedIn), .stopped(.signedOut): .signInNeeded
+        case .stopped(.clientTooOld): .clientTooOld
+        case .stopped(.replaced): .replacedElsewhere
+        default: .serverUnavailable
+        }
+    }
+
     /// Starts waiting tasks, oldest first, while there are free slots.
     private func startNext() async {
         while liveTasks.count < maxLiveTasks, !waiting.isEmpty {
@@ -313,7 +331,7 @@ public final class TaskController: ObservableObject {
             liveTasks.insert(next)
             guard await connection.ensureConnected(within: connectTimeout) else {
                 liveTasks.remove(next)
-                await runtime.fail(.serverUnavailable)
+                await runtime.fail(await connectionFailure())
                 continue
             }
             await runtime.start(generation: generation)

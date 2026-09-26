@@ -110,6 +110,11 @@ final class SonnyAppModel: ObservableObject {
         Task { await watchClientVersion() }
     }
 
+    /// Signing in or out changes who the gateway connection is for.
+    func accountChanged() {
+        Task { await controller.reconnect() }
+    }
+
     func stop() async {
         pulse?.invalidate()
         clipboardTimer?.invalidate()

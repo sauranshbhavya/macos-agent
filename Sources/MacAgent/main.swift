@@ -33,6 +33,7 @@ let appModel = SonnyAppModel(
 accountModel.sessionDidChange = { [weak appModel] in
     appModel?.refreshPermissions()
     appModel?.forgetCredits()
+    appModel?.accountChanged()
 }
 // The plan row asks the account model's one entitlement service: a second would be a second clock
 // anchor and a second refresh guard.
