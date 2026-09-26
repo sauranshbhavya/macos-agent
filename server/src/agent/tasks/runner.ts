@@ -7,6 +7,7 @@
  * turn that never stored its answer is simply due again.
  */
 import { randomUUID } from "node:crypto";
+import type { AutoTopUp } from "../../credit/auto-top-up.js";
 import {
   AgentTurnFailed,
   BudgetExhausted,
@@ -78,6 +79,11 @@ export interface RunnerDeps {
   readonly modelCallDeadlineMs?: number;
   /** What a device declared in its hello, while it is connected. */
   readonly manifestFor?: (accountId: string, deviceId: string) => Manifest | undefined;
+  /**
+   * Buys credits for an account that opted in to automatic top-up, when a model call can't be
+   * held. Absent where this deployment sells none.
+   */
+  readonly topUp?: AutoTopUp;
 }
 
 /** How much of a prior task a follow-up sees. */
@@ -454,7 +460,7 @@ export class TaskRunner {
   }
 
   private contextFor(task: TaskRecord, transcript: StoredMessage[], signal: AbortSignal): TurnContext {
-    const { store, ledger, rates, now, log } = this.deps;
+    const { store, ledger, rates, now, log, topUp } = this.deps;
     const budgets = this.budgets;
     const deadlineMs = this.deps.modelCallDeadlineMs ?? MODEL_CALL_DEADLINE_MS;
     const kept = this.screenshots.get(task.id);
@@ -475,15 +481,20 @@ export class TaskRunner {
         const rate = rates[spec.tier];
         const stepId = randomUUID();
         const held = creditsFor(rate, spec.maxInputTokens, spec.maxOutputTokens);
-        const hold = await ledger.hold({
+        const request = {
           stepId,
           accountId: task.accountId,
           taskId: task.id,
           agent: spec.agent,
           tier: spec.tier,
           credits: held,
-          now: now(),
-        });
+        };
+        let hold = await ledger.hold({ ...request, now: now() });
+        // Out of credits, and the account asked to be topped up: buy once, then try once more.
+        if (hold.kind === "insufficient" && topUp !== undefined && (await topUp(task.accountId, held))) {
+          signal.throwIfAborted();
+          hold = await ledger.hold({ ...request, now: now() });
+        }
         if (hold.kind !== "held") throw new CreditsExhausted();
         let invocation: ModelInvocation<T>;
         const call = new AbortController();
