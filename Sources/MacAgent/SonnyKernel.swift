@@ -60,6 +60,7 @@ enum SonnyKernel {
                 guard case .plan(let plan)? = stores.instantResolver().resolve(command: text) else { return nil }
                 return InstantPath.actions(for: plan)
             },
+            routineNamed: { text, routines in stores.instantResolver().routine(namedBy: text, in: routines) },
             mode: {
                 defaults.string(forKey: SonnyAppModel.modeKey).flatMap(AgentInteractionMode.init(rawValue:)) ?? .normal
             },

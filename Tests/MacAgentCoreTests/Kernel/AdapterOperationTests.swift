@@ -44,9 +44,12 @@ private final class FakeSwitcher: RunningAppSwitching {
 @Suite(.serialized)
 @MainActor
 struct AdapterOperationTests {
-    private func capabilities(_ context: CapabilityExecutionContext) -> KernelCapabilities {
+    private func capabilities(
+        _ context: CapabilityExecutionContext,
+        reveal: @escaping RevealInFinderCapabilityAdapter.Reveal = { _ in }
+    ) -> KernelCapabilities {
         KernelCapabilities(
-            StandardCapabilities.all(context: { context }, finderRevealer: { _ in }, routines: RoutineGoalStore(fileURL: nil)).all
+            StandardCapabilities.all(context: { context }, finderRevealer: reveal, routines: RoutineGoalStore(fileURL: nil)).all
                 + InstantPath.localCapabilities(context: { context })
         )
     }
@@ -163,6 +166,52 @@ struct AdapterOperationTests {
         let (_, listed) = try await run(recent, [:])
         #expect(listed.evidence?.contains("plan.md") == true)
         #expect(try stores.recentFiles.recent().map(\.path) == [path])
+    }
+
+    // MARK: - A folder named the way a person says it (SONNY-242)
+
+    /// The gateway passes a path "as the user said it", so "zip my downloads folder" arrives as the
+    /// phrase. The capability reads it as `~/Downloads` before the adapter resolves it. Reveal only
+    /// checks that the folder exists and hands the URL to a fake, so nothing in Downloads is read.
+    @Test
+    func aFolderPhraseReachesTheOperationAsTheFolderItNames() async throws {
+        let downloads = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Downloads", isDirectory: true)
+            .resolvingSymlinksInPath()
+        let revealed = Shared<[URL]>([])
+        let context = CapabilityTestContext.make(installed: [], whitelist: PathWhitelist(roots: [downloads]))
+        let reveal = try #require(capabilities(context, reveal: { revealed.value += $0 }).capability(name: "reveal_in_finder", version: 1))
+
+        for phrase in ["my Downloads folder", "~/the Downloads folder", "our Downloads"] {
+            let (prepared, outcome) = try await run(reveal, ["path": .string(phrase)])
+            #expect(prepared.preview.details == ["Reveal \(downloads.path)"], "\(phrase)")
+            #expect(outcome.status == .done, "\(phrase)")
+        }
+        #expect(revealed.value.map(\.path) == Array(repeating: downloads.path, count: 3))
+    }
+
+    /// The reported command against a whitelist that doesn't hold Downloads, which is the app's own
+    /// (Desktop and Documents): still refused, but the refusal names the folder the person meant
+    /// instead of `~/my downloads folder`, a sibling nobody has. The whitelist is a temp folder, so
+    /// nothing in the home folder is read.
+    @Test
+    func theReportedCommandIsRefusedForTheFolderItNamesNotASiblingNobodyHas() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("phrase-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let downloads = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Downloads", isDirectory: true)
+            .resolvingSymlinksInPath()
+        let context = CapabilityTestContext.make(installed: [], whitelist: PathWhitelist(roots: [root]))
+        let zip = try #require(capabilities(context).capability(name: "zip_largest_files", version: 1))
+
+        for phrase in ["my Downloads folder", "~/my Downloads folder"] {
+            await #expect(throws: CapabilityPrepareError.targetRefused(
+                "\(downloads.path) is not one of the folders Sonny can use: \(root.path)."
+            )) {
+                _ = try await zip.prepare(actionID: ActionID(), args: ["folder": .string(phrase)])
+            }
+        }
     }
 
     @Test

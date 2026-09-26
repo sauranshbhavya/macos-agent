@@ -36,7 +36,9 @@ public struct AdapterCapability: Capability {
         } catch {
             throw CapabilityPrepareError.invalidArguments("\(name) got arguments it can't use.")
         }
-        return try await prepareOnMain(actionID: actionID, args: args, steps: steps)
+        // A path argument arrives as the person said it ("my downloads folder"); every operation
+        // reads it as the folder they meant before its adapter resolves it.
+        return try await prepareOnMain(actionID: actionID, args: args, steps: steps.map(SpokenPath.normalizingFolderPhrases(in:)))
     }
 
     @MainActor

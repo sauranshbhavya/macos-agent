@@ -9,8 +9,8 @@ public struct InstantCommandResolver: Sendable {
     private let snippetStore: SnippetStore
     private let recentArtifactStore: RecentArtifactStore
     private let shortcutCatalog: any ShortcutCatalogProviding
-    /// Only ever asked one question — "does this saved name also name an app?" — and only to step
-    /// aside to the planner when it does. Repointed from `MacAppCatalog` at SONNY-83: while the
+    /// Only ever asked one question — "does this saved routine's name also name an app?" — and only
+    /// to step aside to the gateway when it does. Repointed from `MacAppCatalog` at SONNY-83: while the
     /// catalog answered, a workspace called "Figma" and the installed Figma stopped disambiguating
     /// the moment SONNY-82 made Figma openable, because the collision the check exists to catch had
     /// become invisible to it.
@@ -94,6 +94,86 @@ public struct InstantCommandResolver: Sendable {
             return .plan(calculatorPlan(expression: expression))
         }
 
+        return nil
+    }
+
+    // MARK: - Saved routines
+
+    /// The saved routine a command names, or nil when it names none: V1's quick dispatch for
+    /// routines, read by `TaskDesk.ask` before the instant path and the gateway. The gateway never
+    /// sees the routine list, so a request that names one has to be recognised here.
+    ///
+    /// Every match is an exact name after trimming and folding case and diacritics, tried with and
+    /// without one leading article, so ordinary requests are not taken over:
+    /// - Naming the kind ("run routine X", "start routine X", "launch routine X", "routine X", or
+    ///   "run my X routine") is unambiguous and always runs.
+    /// - A bare verb ("run X", "start X", "launch X") steps aside when X also names an installed
+    ///   app, so "run Slack" is never silently a routine.
+    /// - The routine's exact name on its own runs it, and steps aside the same way: "Slack" alone
+    ///   is more likely the app than a routine named after it.
+    ///
+    /// The prefixed calculator, clipboard and snippet-save doors keep their commands, because they
+    /// read before this one in V1.
+    public func routine(namedBy rawCommand: String, in routines: [RoutineGoal]) -> RoutineGoal? {
+        let command = rawCommand.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !command.isEmpty, !routines.isEmpty,
+              prefixedCalculatorExpression(in: command) == nil,
+              prefixedClipboardHistoryQuery(in: command) == nil,
+              snippetSaveResolution(in: command) == nil else {
+            return nil
+        }
+
+        let candidates = routineLaunchCandidates(in: command)
+        if let routine = savedRoutine(matching: candidates.explicit, in: routines) {
+            return routine
+        }
+        // A bare verb is ambiguous: the same name can be a saved routine or an installed app. On a
+        // collision, step aside so the gateway reads the request instead of a routine silently
+        // running.
+        if let routine = savedRoutine(matching: candidates.direct, in: routines) {
+            let namesInstalledApp = candidates.direct.contains { installedAppResolver.resolve($0) != nil }
+            return namesInstalledApp ? nil : routine
+        }
+        guard let routine = savedRoutine(matching: [command], in: routines) else { return nil }
+        return installedAppResolver.resolve(command) == nil ? routine : nil
+    }
+
+    private struct LaunchCandidateSet {
+        var explicit: [String]
+        var direct: [String]
+    }
+
+    private func routineLaunchCandidates(in command: String) -> LaunchCandidateSet {
+        let lowered = command.lowercased()
+        var explicitCandidates: [String] = []
+        var directCandidates: [String] = []
+
+        for prefix in ["run routine", "start routine", "launch routine", "routine"] where lowered.hasPrefix("\(prefix) ") {
+            explicitCandidates.append(String(command.dropFirst(prefix.count)))
+        }
+
+        for prefix in ["run", "start", "launch"] where lowered.hasPrefix("\(prefix) ") {
+            let remainder = String(command.dropFirst(prefix.count))
+            directCandidates.append(remainder)
+            if remainder.lowercased().hasSuffix(" routine") {
+                // "run X routine" names its kind just like "run routine X" does.
+                explicitCandidates.append(String(remainder.dropLast(" routine".count)))
+            }
+        }
+
+        return LaunchCandidateSet(
+            explicit: uniqueLaunchCandidates(explicitCandidates.flatMap { [$0, strippedLaunchArticle($0)] }),
+            direct: uniqueLaunchCandidates(directCandidates.flatMap { [$0, strippedLaunchArticle($0)] })
+        )
+    }
+
+    private func savedRoutine(matching candidates: [String], in routines: [RoutineGoal]) -> RoutineGoal? {
+        for candidate in candidates {
+            let key = normalizedLaunchName(candidate)
+            if let routine = routines.first(where: { normalizedLaunchName($0.name) == key }) {
+                return routine
+            }
+        }
         return nil
     }
 

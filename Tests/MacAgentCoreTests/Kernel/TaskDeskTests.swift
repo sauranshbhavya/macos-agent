@@ -29,6 +29,7 @@ private struct DeskFixture {
         capabilities: [any Capability] = [],
         history: FinishedTaskStore = FinishedTaskStore(fileURL: nil),
         routines: RoutineGoalStore = RoutineGoalStore(fileURL: nil),
+        installed: [InstalledApp] = [],
         instant: @escaping (String) -> [WireAction]? = { _ in nil }
     ) throws {
         self.history = history
@@ -38,6 +39,13 @@ private struct DeskFixture {
         watchers = ResumableTaskStore(fileURL: folder.appendingPathComponent("watchers.json"))
         controller = makeController(gateway, capabilities: capabilities)
         let clock = self.clock
+        // The resolver the app reads saved routines through, with an installed-app list this test
+        // states rather than this Mac's.
+        let resolver = InstantCommandResolver(
+            snippetStore: UnreachableLocalStores.snippets(),
+            recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
+            installedAppResolver: InstalledAppResolver(source: FixedAppSource(installed))
+        )
         desk = TaskDesk(
             controller: controller,
             history: history,
@@ -45,6 +53,7 @@ private struct DeskFixture {
             watchers: watchers,
             pageReader: page,
             instant: instant,
+            routineNamed: { resolver.routine(namedBy: $0, in: $1) },
             mode: { .normal },
             now: { clock.value }
         )
@@ -154,6 +163,82 @@ struct TaskDeskTests {
         #expect(body.goal == "Open my calendar and summarise today")
         #expect(body.origin == .routine)
         #expect(!body.unattended)
+    }
+
+    // MARK: Running a saved routine by name
+
+    /// The gateway never sees the routine list, so a request that names a saved routine the way V1
+    /// recognised it runs that routine's goal as a new routine task, ahead of the instant path.
+    @Test
+    func aRequestThatNamesASavedRoutineRunsItsGoal() async throws {
+        let step = TestCapability(name: "step")
+        let fixture = try DeskFixture(capabilities: [step]) { _ in [call("step")] }
+        await fixture.start()
+        let goal = "Read today's calendar and unread mail and summarise them"
+        try await fixture.routines.save(RoutineGoal(name: "Morning Briefing", goal: goal, schedule: nil, savedAt: Date()))
+
+        for request in ["run morning briefing", "run routine Morning Briefing", "run my morning briefing routine", "Morning Briefing", "start the morning briefing"] {
+            let submission = try #require(await fixture.desk.ask(request, origin: .voice))
+            let (task, body) = try await fixture.startBody()
+            #expect(task == submission.task, "\(request)")
+            #expect(body.goal == goal, "\(request)")
+            #expect(body.origin == .routine, "\(request)")
+            #expect(!body.isPrivate && !body.unattended, "\(request)")
+            await fixture.finish(task)
+            #expect(await eventually { fixture.controller.snapshot(task)?.phase.isTerminal == true })
+        }
+        #expect(step.executed.value.isEmpty)
+
+        _ = await fixture.desk.ask("run morning briefing", isPrivate: true)
+        let (_, secret) = try await fixture.startBody()
+        #expect(secret.origin == .routine)
+        #expect(secret.isPrivate)
+    }
+
+    /// Matching is by exact saved name, so a request that only mentions a routine, names one that
+    /// isn't saved, or follows up an earlier task goes to the gateway exactly as it was typed.
+    @Test
+    func aRequestThatNamesNoSavedRoutineGoesToTheGatewayAsTyped() async throws {
+        let fixture = try DeskFixture()
+        await fixture.start()
+        try await fixture.routines.save(RoutineGoal(name: "Morning Briefing", goal: "Summarise my day", schedule: nil, savedAt: Date()))
+
+        for request in ["Summarise my morning briefing email", "run evening briefing", "morning briefing please"] {
+            _ = await fixture.desk.ask(request)
+            let (task, body) = try await fixture.startBody()
+            #expect(body.goal == request)
+            #expect(body.origin == .composer)
+            await fixture.finish(task)
+            #expect(await eventually { fixture.controller.snapshot(task)?.phase.isTerminal == true })
+        }
+
+        let earlier = TaskID()
+        _ = await fixture.desk.ask("run morning briefing", followingUp: earlier)
+        let (_, followUp) = try await fixture.startBody()
+        #expect(followUp.goal == "run morning briefing")
+        #expect(followUp.origin == .followUp)
+    }
+
+    /// "run Slack" when Slack is both a saved routine and an installed app is the gateway's to read;
+    /// naming the kind still runs the routine.
+    @Test
+    func aBareVerbStepsAsideWhenTheRoutineIsAlsoAnInstalledApp() async throws {
+        let slack = InstalledApp(displayName: "Slack", bundleIdentifier: "com.tinyspeck.slackmacgap", applicationURL: URL(fileURLWithPath: "/Applications/Slack.app"))
+        let fixture = try DeskFixture(installed: [slack])
+        await fixture.start()
+        try await fixture.routines.save(RoutineGoal(name: "Slack", goal: "Post my standup in Slack", schedule: nil, savedAt: Date()))
+
+        _ = await fixture.desk.ask("run Slack")
+        let (bare, bareBody) = try await fixture.startBody()
+        #expect(bareBody.goal == "run Slack")
+        #expect(bareBody.origin == .composer)
+        await fixture.finish(bare)
+        #expect(await eventually { fixture.controller.snapshot(bare)?.phase.isTerminal == true })
+
+        _ = await fixture.desk.ask("run routine Slack")
+        let (_, named) = try await fixture.startBody()
+        #expect(named.goal == "Post my standup in Slack")
+        #expect(named.origin == .routine)
     }
 
     @Test

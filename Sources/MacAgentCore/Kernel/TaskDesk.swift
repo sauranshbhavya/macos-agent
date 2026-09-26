@@ -63,6 +63,8 @@ public final class TaskDesk: ObservableObject {
     private let watcherStore: ResumableTaskStore
     private let pageReader: any StandingWatcherObserving
     private let instant: (String) -> [WireAction]?
+    /// The saved routine a request names, if it names one (`InstantCommandResolver.routine(namedBy:in:)`).
+    private let routineNamed: (String, [RoutineGoal]) -> RoutineGoal?
     private let mode: () -> AgentInteractionMode
     private let context: () -> TaskStartBody.Context
     private let now: () -> Date
@@ -87,6 +89,7 @@ public final class TaskDesk: ObservableObject {
         watchers: ResumableTaskStore,
         pageReader: any StandingWatcherObserving = LiveStandingWatcherObserver(),
         instant: @escaping (String) -> [WireAction]?,
+        routineNamed: @escaping (String, [RoutineGoal]) -> RoutineGoal?,
         mode: @escaping () -> AgentInteractionMode,
         context: @escaping () -> TaskStartBody.Context = { .init() },
         now: @escaping () -> Date = Date.init,
@@ -98,6 +101,7 @@ public final class TaskDesk: ObservableObject {
         self.watcherStore = watchers
         self.pageReader = pageReader
         self.instant = instant
+        self.routineNamed = routineNamed
         self.mode = mode
         self.context = context
         self.now = now
@@ -118,9 +122,10 @@ public final class TaskDesk: ObservableObject {
 
     // MARK: Entry points
 
-    /// The composer and voice. A command the Mac recognises on its own runs locally with no model;
-    /// anything else goes to the gateway. A follow-up always goes to the gateway, which has the
-    /// earlier task's history.
+    /// The composer and voice. A request that names a saved routine ("run morning briefing") runs
+    /// that routine, because the gateway never sees the routine list. A command the Mac recognises
+    /// on its own runs locally with no model; anything else goes to the gateway. A follow-up always
+    /// goes to the gateway, which has the earlier task's history.
     @discardableResult
     public func ask(
         _ text: String,
@@ -130,6 +135,10 @@ public final class TaskDesk: ObservableObject {
     ) async -> TaskSubmission? {
         let goal = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !goal.isEmpty else { return nil }
+        // Routines that can't be read name nothing, and the request goes to the gateway as typed.
+        if prior == nil, let routine = routineNamed(goal, (try? await routineStore.all()) ?? []) {
+            return await run(routine, isPrivate: isPrivate)
+        }
         let request = TaskRequest(
             goal: String(goal.prefix(Self.goalLimit)),
             origin: prior == nil ? origin : .followUp,
@@ -145,10 +154,16 @@ public final class TaskDesk: ObservableObject {
     }
 
     /// Runs a saved routine now, with the person at the Mac. The goal is planned again from the
-    /// start (decision 9).
+    /// start (decision 9). A routine asked for privately runs privately.
     @discardableResult
-    public func run(_ routine: RoutineGoal) async -> TaskSubmission {
-        await controller.submit(TaskRequest(goal: routine.goal, origin: .routine, mode: mode(), context: context()))
+    public func run(_ routine: RoutineGoal, isPrivate: Bool = false) async -> TaskSubmission {
+        await controller.submit(TaskRequest(
+            goal: routine.goal,
+            origin: .routine,
+            isPrivate: isPrivate,
+            mode: mode(),
+            context: context()
+        ))
     }
 
     /// Starts every routine whose time has come. A scheduled run is unattended: anything that

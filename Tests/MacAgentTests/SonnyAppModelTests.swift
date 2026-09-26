@@ -63,6 +63,7 @@ private struct AppFixture {
             routines: stores.routines,
             watchers: stores.watchers,
             instant: { _ in nil },
+            routineNamed: { _, _ in nil },
             mode: { .normal }
         )
         let defaults = try #require(UserDefaults(suiteName: "SonnyAppModelTests-\(UUID().uuidString)"))
