@@ -1,0 +1,50 @@
+{
+  "format": 1,
+  "id": "podia",
+  "name": "Podia",
+  "domain": "podia.com",
+  "category": "websites_apps_commerce",
+  "summary": "Platform for courses, downloads and memberships.",
+  "signInURL": "https://app.podia.com/login",
+  "triggers": [
+    "podia.com"
+  ],
+  "sections": [],
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Create an online course",
+      "startURL": "https://app.podia.com/login",
+      "steps": [
+        "From your home feed, click your site name and select Admin from the dropdown menu.",
+        "From the Admin dashboard, click Products in the sidebar menu.",
+        "From the Products page, click + New Product.",
+        "On the product creation page, select Course and give the product a name.",
+        "Click Create product."
+      ],
+      "source": "https://help.podia.com/en/articles/11370361-creating-an-online-course"
+    },
+    {
+      "title": "Add lessons and sections to a course, then publish it",
+      "startURL": "https://app.podia.com/login",
+      "steps": [
+        "After creating the course, the next step is to add your content — you need at least one lesson before you can publish it.",
+        "Click + New lesson and choose what to add: Lesson, Quiz or Files.",
+        "To group related lessons together, click the + New section button.",
+        "To move a lesson or a whole section, click the three-line icon next to it and drag it where you want it.",
+        "When the course is set up, click Publish at the top right."
+      ],
+      "source": "https://help.podia.com/en/articles/11370361-creating-an-online-course"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://app.podia.com/login",
+      "landedURL": "https://app.podia.com/login",
+      "title": "Podia: Login",
+      "heading": "Login to Podia",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "format": 1,
+  "id": "framer",
+  "name": "Framer",
+  "domain": "framer.com",
+  "category": "websites_apps_commerce",
+  "summary": "Website builder for designers.",
+  "signInURL": "https://framer.com/r/login",
+  "triggers": [
+    "framer.com"
+  ],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

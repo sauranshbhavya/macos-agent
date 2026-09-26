@@ -1,0 +1,58 @@
+{
+  "format": 1,
+  "id": "paypal",
+  "name": "PayPal",
+  "domain": "paypal.com",
+  "category": "finance_billing",
+  "summary": "Online payments service.",
+  "signInURL": "https://www.paypal.com/signin",
+  "triggers": ["paypal", "paypal.com"],
+  "sections": [],
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Download a report of your activity",
+      "startURL": "https://www.paypal.com/signin",
+      "steps": [
+        "Go to History.",
+        "Click the Download icon.",
+        "Click Custom.",
+        "Select the report that suits you.",
+        "Follow the prompts to create and generate the report. A large report can take time to prepare, and PayPal emails you when it is ready.",
+        "When the report is ready, click Download."
+      ],
+      "source": "https://www.paypal.com/us/cshelp/article/how-do-i-view-and-download-statements-and-reports-help145"
+    },
+    {
+      "title": "Download a monthly statement",
+      "startURL": "https://www.paypal.com/signin",
+      "steps": [
+        "Go to paypal.com/reports/accountStatements.",
+        "Click Request next to the month you want.",
+        "When the statement is ready, click Download."
+      ],
+      "source": "https://www.paypal.com/us/cshelp/article/how-do-i-view-and-download-statements-and-reports-help145"
+    },
+    {
+      "title": "Add or change an email address",
+      "startURL": "https://www.paypal.com/signin",
+      "steps": [
+        "Go to your Settings.",
+        "In the Emails section, click +Add to add a new email address, enter it and click Confirm. PayPal sends a message to that address to confirm it.",
+        "To update an existing address, click Edit next to it.",
+        "To remove one, click the three dots next to it and select Delete. The primary email address cannot be edited or deleted until another address is set as primary."
+      ],
+      "source": "https://www.paypal.com/us/cshelp/article/how-do-i-add-remove-or-update-an-email-address-on-my-paypal-account-help135"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://www.paypal.com/signin",
+      "landedURL": "https://www.paypal.com/signin",
+      "title": "Log in to your account",
+      "heading": "",
+      "offers": "sign-in",
+      "read": "2026-09-19"
+    }
+  ]
+}

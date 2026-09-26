@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "simplybook",
+  "name": "SimplyBook.me",
+  "domain": "simplybook.me",
+  "category": "scheduling",
+  "summary": "Online booking system for services.",
+  "signInURL": "https://simplybook.me/en/login",
+  "triggers": ["simplybook.me"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

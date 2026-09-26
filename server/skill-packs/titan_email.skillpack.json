@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "titan_email",
+  "name": "Titan Email",
+  "domain": "titan.email",
+  "category": "email_calendar",
+  "summary": "Business email for custom domains.",
+  "signInURL": "https://app.titan.email/login/",
+  "triggers": ["titan email", "titan.email"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

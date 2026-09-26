@@ -1,0 +1,41 @@
+{
+  "format": 1,
+  "id": "bitbucket",
+  "name": "Bitbucket",
+  "domain": "bitbucket.org",
+  "category": "code_hosting",
+  "summary": "Git code hosting from Atlassian.",
+  "signInURL": "https://id.atlassian.com/login?continue=https%3A%2F%2Fwww.atlassian.com%2Fgateway%2Fapi%2Fstart%2Fauthredirect&application=wac--ic",
+  "triggers": [
+    "bitbucket",
+    "bitbucket.org"
+  ],
+  "sections": [],
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Create a repository",
+      "startURL": "https://bitbucket.org/account/signin/",
+      "steps": [
+        "Select Create, then select Repository from the dropdown menu.",
+        "Select the Workspace the repository belongs in, and select a project from the Project dropdown menu. If no project exists, select Create new project at the bottom of that menu.",
+        "Enter a Repository name that describes the repository and appears in its address.",
+        "Keep access to the repository set to Private unless it should be public, so that anyone can see it.",
+        "If there are already files to put in it, select No from Include a README; otherwise keep the default or choose one of the included README options.",
+        "Select the Version control system, keeping Git as the default if the difference is unfamiliar.",
+        "Select Create."
+      ],
+      "source": "https://support.atlassian.com/bitbucket-cloud/docs/create-a-repository-in-bitbucket-cloud/"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://bitbucket.org/account/signin/",
+      "landedURL": "https://id.atlassian.com/login",
+      "title": "Log in to continue - Log in with Atlassian account",
+      "heading": "Log in to continue",
+      "offers": "sign-in",
+      "read": "2026-09-25"
+    }
+  ]
+}

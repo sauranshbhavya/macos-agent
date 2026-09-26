@@ -1,0 +1,58 @@
+{
+  "format": 1,
+  "id": "google_forms",
+  "name": "Google Forms",
+  "domain": "forms.google.com",
+  "category": "forms_surveys",
+  "summary": "Google's online forms and quizzes.",
+  "signInURL": "https://docs.google.com/forms/",
+  "triggers": ["google forms", "forms.google.com"],
+  "sections": [],
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Create a form or quiz",
+      "startURL": "https://forms.google.com/",
+      "steps": [
+        "Go to forms.google.com.",
+        "Click Blank form.",
+        "Name your untitled form."
+      ],
+      "source": "https://support.google.com/docs/answer/6281888?hl=en"
+    },
+    {
+      "title": "Publish a form so responders can open it",
+      "startURL": "https://forms.google.com/",
+      "steps": [
+        "Open a form in Google Forms. Until a form is published, responders with the link cannot open it.",
+        "At the top right, click Publish.",
+        "To choose who may respond, click Manage, add those people to the form, and click Share.",
+        "Click Publish, or Publish and notify. Once it is published, the top right reads \"Published.\"",
+        "Optional: under \"General access,\" give access to anyone with the link or to target audiences, then click Done, then Publish."
+      ],
+      "source": "https://support.google.com/docs/answer/2839588?hl=en"
+    },
+    {
+      "title": "Share a form with responders",
+      "startURL": "https://forms.google.com/",
+      "steps": [
+        "Open a form in Google Forms.",
+        "Click Share.",
+        "Enter the names of the people or groups. To set what they may do, next to each name click the Down arrow, then Responder.",
+        "Optional: to end their access on a date, click Add expiration, pick the date in the calendar, and click Done.",
+        "Click Send."
+      ],
+      "source": "https://support.google.com/docs/answer/2839588?hl=en"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://forms.google.com/",
+      "landedURL": "https://accounts.google.com/v3/signin/identifier",
+      "title": "Google Forms: Sign-in",
+      "heading": "Sign in",
+      "offers": "sign-in",
+      "read": "2026-09-25"
+    }
+  ]
+}

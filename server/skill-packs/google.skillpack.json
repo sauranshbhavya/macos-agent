@@ -1,0 +1,67 @@
+{
+  "format": 1,
+  "id": "google",
+  "name": "Google",
+  "domain": "google.com",
+  "category": "it_accounts_security",
+  "summary": "Google Account settings.",
+  "signInURL": "https://accounts.google.com/ServiceLogin?continue=https%3A%2F%2Fmyaccount.google.com%2F",
+  "triggers": ["google account", "google takeout", "myaccount.google.com"],
+  "sections": [],
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Change the name on a Google Account",
+      "startURL": "https://accounts.google.com/ServiceLogin?continue=https%3A%2F%2Fmyaccount.google.com%2F",
+      "steps": [
+        "Go to your Google Account and, at the top left, click Personal info.",
+        "Click Name.",
+        "Next to the current name, click Edit, and update the name.",
+        "Click Save. It can take a few days to show across all Google products."
+      ],
+      "source": "https://support.google.com/accounts/answer/27442?hl=en"
+    },
+    {
+      "title": "Change the profile picture",
+      "startURL": "https://accounts.google.com/ServiceLogin?continue=https%3A%2F%2Fmyaccount.google.com%2F",
+      "steps": [
+        "Go to your Google Account and click Personal info.",
+        "Under Basic info, click Profile picture.",
+        "Upload a photo from the computer, or choose one of your Google Photos.",
+        "Rotate and crop the photo as needed, and click Next.",
+        "At the bottom, click Save as profile picture."
+      ],
+      "source": "https://support.google.com/accounts/answer/27442?hl=en"
+    },
+    {
+      "title": "Download your Google data",
+      "startURL": "https://takeout.google.com/",
+      "steps": [
+        "Go to the Google Takeout page. The Google products holding your data are already selected.",
+        "Uncheck the box beside any product to leave out. For some products, a button like All data included lets you pick only part of the data.",
+        "Select Next step.",
+        "For Delivery method, select Send download link via email, then select Create export.",
+        "In the email that arrives, select Download archive. Downloading the data does not delete it from Google."
+      ],
+      "source": "https://support.google.com/accounts/answer/3024190?hl=en"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://accounts.google.com/ServiceLogin?continue=https%3A%2F%2Fmyaccount.google.com%2F",
+      "landedURL": "https://accounts.google.com/v3/signin/identifier",
+      "title": "Sign in - Google Accounts",
+      "heading": "Sign in",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    },
+    {
+      "url": "https://takeout.google.com/",
+      "landedURL": "https://accounts.google.com/v3/signin/identifier",
+      "title": "Sign in - Google Accounts",
+      "heading": "Sign in",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
+  ]
+}

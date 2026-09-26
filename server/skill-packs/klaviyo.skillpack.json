@@ -1,0 +1,59 @@
+{
+  "format": 1,
+  "id": "klaviyo",
+  "name": "Klaviyo",
+  "domain": "klaviyo.com",
+  "category": "marketing_email",
+  "summary": "Email and SMS marketing for online stores.",
+  "signInURL": "https://www.klaviyo.com/login",
+  "triggers": ["klaviyo", "klaviyo.com"],
+  "sections": [],
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Create and send an email campaign",
+      "startURL": "https://www.klaviyo.com/login",
+      "steps": [
+        "On the Campaigns tab, choose Create, choose Email, then click Continue.",
+        "Give the campaign a name (required), then click Continue to move to the Recipients screen.",
+        "Choose an existing list or segment to target. A campaign needs at least 1 recipient in order to send, otherwise it is automatically canceled.",
+        "Build the email content: choose a saved template, browse the email library, or create a blank email with the drag-and-drop editor, then click Next.",
+        "Review the campaign, then click Schedule or send at the top of the page and choose when to send it."
+      ],
+      "source": "https://help.klaviyo.com/hc/en-us/articles/115005054847"
+    },
+    {
+      "title": "Create a segment",
+      "startURL": "https://www.klaviyo.com/login",
+      "steps": [
+        "Navigate to Audience > Lists & segments in your account.",
+        "Click Create New in the upper right corner, then select Create segment.",
+        "Use the segment builder to add conditions that specify who should be included in the segment.",
+        "Once satisfied with the definition, click Create segment."
+      ],
+      "source": "https://help.klaviyo.com/hc/en-us/articles/115005237908"
+    },
+    {
+      "title": "Import contacts to a list",
+      "startURL": "https://www.klaviyo.com/login",
+      "steps": [
+        "Navigate to Audience > Lists & segments and select the list to add contacts to, or select Create New > Create list to make a new one first.",
+        "Open the Manage List dropdown in the upper right and choose Import contacts.",
+        "Click Upload and select the CSV file of subscribers, then click Next.",
+        "Map each column from the CSV to the matching property in Klaviyo, then click Next.",
+        "If the file has no consent column and Klaviyo asks whether these contacts subscribed to messaging, select Yes only when every contact gave explicit consent, and check the types of consent to apply. Then click Import."
+      ],
+      "source": "https://help.klaviyo.com/hc/en-us/articles/115005251128"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://www.klaviyo.com/login",
+      "landedURL": "https://www.klaviyo.com/login",
+      "title": "Log In | Klaviyo",
+      "heading": "Your next campaign starts with a prompt",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
+  ]
+}

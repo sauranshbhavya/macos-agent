@@ -1,0 +1,36 @@
+{
+  "format": 1,
+  "id": "chatwork",
+  "name": "Chatwork",
+  "domain": "chatwork.com",
+  "category": "communication",
+  "summary": "Business chat app.",
+  "signInURL": "https://www.chatwork.com/",
+  "triggers": ["chatwork", "chatwork.com"],
+  "sections": [],
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Write, edit or delete a message in a chat",
+      "startURL": "https://www.chatwork.com/",
+      "steps": [
+        "Signed out, www.chatwork.com opens Chatwork's Login page. Once signed in, open the chat the message belongs in; every step below is there.",
+        "Type the message where it reads Enter your message here, below the chat messages, then press Enter or click Send. Press Shift+Enter for a line break.",
+        "To mention someone, click the To button and select them in the group chat, or search for them. Hold Shift to select several people. Everyone in the group chat can still see the message.",
+        "To edit a message, hover over it and click the pencil icon that appears. Edited messages show a timestamp.",
+        "To delete a message, hover over it, click the trash icon, read the warning and click delete. A deleted message cannot be retrieved."
+      ],
+      "source": "https://support-en.chatwork.com/hc/en-us/articles/47532574546201-Type-edit-delete-messages"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://www.chatwork.com/",
+      "landedURL": "https://auth.chatwork.com/u/login/identifier",
+      "title": "Chatwork",
+      "heading": "Login",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
+  ]
+}

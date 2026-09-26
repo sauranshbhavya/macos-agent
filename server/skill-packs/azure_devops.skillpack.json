@@ -1,0 +1,37 @@
+{
+  "format": 1,
+  "id": "azure_devops",
+  "name": "Azure DevOps",
+  "domain": "dev.azure.com",
+  "category": "code_hosting",
+  "summary": "Microsoft's repositories, pipelines and boards for software teams.",
+  "signInURL": "https://dev.azure.com/login",
+  "triggers": [
+    "azure devops",
+    "dev.azure.com"
+  ],
+  "sections": [],
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Add a work item from the Work items page",
+      "startURL": "https://dev.azure.com/login",
+      "steps": [
+        "A new work item is assigned to the Area Path and Iteration Path last selected, and to the current team's area and iteration paths.",
+        "In the web portal, select New Work Item and choose the work item type from the drop-down menu, for example User Story.",
+        "Enter a title and save the work item. It has to be saved before its initial default state can be changed."
+      ],
+      "source": "https://learn.microsoft.com/en-us/azure/devops/boards/work-items/view-add-work-items?view=azure-devops"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://dev.azure.com/login",
+      "landedURL": "https://login.microsoftonline.com/common/oauth2/authorize",
+      "title": "Sign in to your account",
+      "heading": "Sign in",
+      "offers": "sign-in",
+      "read": "2026-09-25"
+    }
+  ]
+}

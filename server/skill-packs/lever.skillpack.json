@@ -1,0 +1,57 @@
+{
+  "format": 1,
+  "id": "lever",
+  "name": "Lever",
+  "domain": "lever.co",
+  "category": "recruiting_hr",
+  "summary": "Applicant tracking and recruiting software.",
+  "signInURL": "https://hire.lever.co/",
+  "triggers": ["lever.co", "lever candidate", "lever candidates", "lever referral", "lever posting", "lever ats"],
+  "sections": [],
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Find a candidate",
+      "startURL": "https://hire.lever.co/",
+      "steps": [
+        "Type into the search bar in the header, next to your avatar. Suggested candidates appear as you type, from both the active pipeline and the archive.",
+        "To narrow the search, use the filter chips below the search field with the operators AND, NOT and OR. The Resume chip searches only text parsed from resumes.",
+        "Pick a suggested candidate, or press Enter for a full page of results, sorted by last interaction with the most recent first.",
+        "For more criteria, click Advanced search at the bottom of the search menu."
+      ],
+      "source": "https://help.lever.co/s/article/Searching-the-Database-for-Candidates"
+    },
+    {
+      "title": "Consider a candidate for another job",
+      "startURL": "https://hire.lever.co/",
+      "steps": [
+        "Go to the Candidates page and click a candidate's opportunity to open their profile.",
+        "In the Opportunities section of the profile, click + Add.",
+        "In the Consider for new job window, click Choose job... and select a posting. Closed and draft postings are not listed. To hold off on a job, select Create General Opportunity instead.",
+        "Click Create Opportunity. The new opportunity appears in the profile's Opportunities section, and whoever added it owns it."
+      ],
+      "source": "https://help.lever.co/s/article/Adding-new-opportunities-to-existing-candidate-profiles"
+    },
+    {
+      "title": "Refer a candidate",
+      "startURL": "https://hire.lever.co/",
+      "steps": [
+        "Select the Referrals tab and click Refer Candidate. Under Referrals, the Jobs tab also has Refer Candidate beside each posting.",
+        "At the top of the referral form, select at least one job posting and at most three. A posting published only internally cannot be chosen.",
+        "If you have the candidate's resume, drag the file onto the form or click the upload file button. Lever fills in matching fields from it.",
+        "Fill in the form's fields and the Your recommendation section, then click Submit Referral."
+      ],
+      "source": "https://help.lever.co/s/article/Submitting-referrals"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://hire.lever.co/",
+      "landedURL": "https://hire.lever.co/auth/login",
+      "title": "Lever Hire",
+      "heading": "Sign in to Lever",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
+  ]
+}

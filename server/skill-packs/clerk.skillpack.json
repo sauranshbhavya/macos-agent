@@ -1,0 +1,54 @@
+{
+  "format": 1,
+  "id": "clerk",
+  "name": "Clerk",
+  "domain": "clerk.com",
+  "category": "developer_platforms",
+  "summary": "User sign-in and account management for apps.",
+  "signInURL": "https://clerk.com/sign-in",
+  "triggers": ["clerk.com"],
+  "sections": [],
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Create or delete a user",
+      "startURL": "https://dashboard.clerk.com/",
+      "steps": [
+        "In the Clerk Dashboard, navigate to the Users page.",
+        "To create a user, select Create user.",
+        "To delete one, select the user and then Delete user in the side navigation menu, or select the menu icon on the right of the user's row and select Delete user. Users cannot be deleted in bulk from the Dashboard."
+      ],
+      "source": "https://clerk.com/docs/guides/users/managing"
+    },
+    {
+      "title": "Invite a user to the application",
+      "startURL": "https://dashboard.clerk.com/",
+      "steps": [
+        "In the Clerk Dashboard, navigate to the Invitations page and create the invitation. From the Dashboard, the only option to set is its expiration date.",
+        "Clerk emails the user a unique invitation link. Visiting it takes them to sign-up with their email address already verified.",
+        "Invitations expire after a month. An invitation can be revoked from the same page."
+      ],
+      "source": "https://clerk.com/docs/guides/users/inviting"
+    },
+    {
+      "title": "Create an organization",
+      "startURL": "https://dashboard.clerk.com/",
+      "steps": [
+        "In the Clerk Dashboard, navigate to the Organizations page.",
+        "Select the Create Organization button.",
+        "To manage an organization later, select it on the Organizations page to view its details, members, invitations and settings."
+      ],
+      "source": "https://clerk.com/docs/guides/organizations/create-and-manage"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://dashboard.clerk.com/",
+      "landedURL": "https://dashboard.clerk.com/sign-in",
+      "title": "Sign in | Clerk.com",
+      "heading": "Sign in to Clerk",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
+  ]
+}

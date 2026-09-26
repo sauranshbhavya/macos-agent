@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "app_store_connect",
+  "name": "App Store Connect",
+  "domain": "appstoreconnect.apple.com",
+  "category": "developer_platforms",
+  "summary": "Apple's portal for publishing apps to the App Store.",
+  "signInURL": "https://appstoreconnect.apple.com/",
+  "triggers": ["app store connect", "appstoreconnect.apple.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

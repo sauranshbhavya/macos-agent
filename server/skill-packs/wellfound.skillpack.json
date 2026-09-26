@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "wellfound",
+  "name": "Wellfound",
+  "domain": "wellfound.com",
+  "category": "recruiting_hr",
+  "summary": "Startup jobs and recruiting platform.",
+  "signInURL": "https://wellfound.com/login",
+  "triggers": ["wellfound", "wellfound.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

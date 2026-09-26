@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "razorpay",
+  "name": "Razorpay",
+  "domain": "razorpay.com",
+  "category": "finance_billing",
+  "summary": "Payments platform for businesses in India.",
+  "signInURL": "https://accounts.razorpay.com/auth/?redirecturl=https%3A%2F%2Fdashboard.razorpay.com&auth_intent=login",
+  "triggers": ["razorpay", "razorpay.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

@@ -1,0 +1,65 @@
+{
+  "format": 1,
+  "id": "discord",
+  "name": "Discord",
+  "domain": "discord.com",
+  "category": "communication",
+  "summary": "Voice, video and text chat communities.",
+  "signInURL": "https://discord.com/login",
+  "triggers": [
+    "discord.com",
+    "discord server",
+    "discord channel",
+    "in discord"
+  ],
+  "sections": [],
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Create a server",
+      "startURL": "https://discord.com/channels/@me",
+      "steps": [
+        "Click the Add a Server icon in the server list on the left. When a lot of servers are open, scroll down the list to find it.",
+        "Choose Create My Own for a blank server, or pick one of the templates instead.",
+        "Choose whether the server is for a community or for friends, or skip that question — it can be changed later.",
+        "Enter the server name and, if you like, pick a server icon from your files. Icons are at least 128x128, so crop a large image in multiples of 128.",
+        "Click Create. The name and the icon can both be changed afterwards."
+      ],
+      "source": "https://support.discord.com/hc/en-us/articles/204849977-How-do-I-create-a-server"
+    },
+    {
+      "title": "Invite someone to a server",
+      "startURL": "https://discord.com/channels/@me",
+      "steps": [
+        "Hover over the right-hand side of the channel and select Create Invite, which needs the matching permission.",
+        "The invite panel opens with a link that lasts 7 days, unless the invite settings for that channel were changed before.",
+        "Click Edit invite link to choose how long the link stays valid and how many times it can be used. Set Max number of uses to No limit for an invite that never runs out.",
+        "Click Generate a New Link, then copy the link, or click Invite next to the name of someone you have recently messaged.",
+        "To remove invites later, open Server Settings and then Invites, where you can Pause Invites or remove any generated invite by tapping the x next to it. Once an invite is deleted it cannot be remade with that same invite code."
+      ],
+      "source": "https://support.discord.com/hc/en-us/articles/208866998-Invites-101"
+    },
+    {
+      "title": "Search for a message",
+      "startURL": "https://discord.com/channels/@me",
+      "steps": [
+        "Open the server or the direct message to search in: search covers the one you are viewing.",
+        "Click the search bar in the upper-right corner, or press Cmd+F on a Mac to search the channel you are in.",
+        "Type what to look for, then narrow it with the filters — from a person, in a channel, mentions someone, or includes links, files or polls. Typing from:, in:, mentions: or has: does the same thing.",
+        "After you search, the results appear in the side menu. Select the sorting icon there to order them by Newest, Oldest or Most Relevant.",
+        "Select a result to jump straight to that message in its channel."
+      ],
+      "source": "https://support.discord.com/hc/en-us/articles/115000468588-How-to-Use-Search-on-Discord"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://discord.com/channels/@me",
+      "landedURL": "https://discord.com/login",
+      "title": "Discord",
+      "heading": "Welcome back!",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "removebg",
+  "name": "remove.bg",
+  "domain": "remove.bg",
+  "category": "design",
+  "summary": "Image background removal tool.",
+  "signInURL": "https://remove.bg/users/sign_in",
+  "triggers": ["remove.bg"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

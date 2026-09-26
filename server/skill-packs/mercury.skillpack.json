@@ -1,0 +1,55 @@
+{
+  "format": 1,
+  "id": "mercury",
+  "name": "Mercury",
+  "domain": "mercury.com",
+  "category": "finance_billing",
+  "summary": "Banking for startups.",
+  "signInURL": "https://app.mercury.com/login",
+  "triggers": ["mercury.com", "mercury bank", "mercury banking"],
+  "sections": [],
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Filter and view transactions",
+      "startURL": "https://app.mercury.com/",
+      "steps": [
+        "Open the Transactions page to see the Cashflow and Top Money Movements graphs, which adjust automatically to match any filters you apply.",
+        "Use Quick Filters to narrow transactions by Date, Amount, or Keyword, or click the Filters menu for more specific filters like Category, Merchant Type, Team Member, Method, or GL Code.",
+        "Use the Customize menu to sort transactions by Date, Amount, or Account, or group them by Merchant Type, Card, or Category."
+      ],
+      "source": "https://support.mercury.com/hc/en-us/articles/38790547830036-Viewing-cashflow-and-transactions-data-on-your-Transactions-page"
+    },
+    {
+      "title": "Export transaction data",
+      "startURL": "https://app.mercury.com/",
+      "steps": [
+        "Go to the Transactions page.",
+        "Click Export all, or apply filters and click Export filtered.",
+        "Choose the format, .csv or .xlsx, and click Download.",
+        "For a month's data formatted for bookkeeping software instead: on the Documents & Data page, in the Statements tab, pick the account from the dropdown, click the vertical dots at the far right of a row, and choose QuickBooks CSV or NetSuite CSV."
+      ],
+      "source": "https://support.mercury.com/hc/en-us/articles/28768700685844-Bulk-export-statements-receipts-and-CSVs-from-Mercury-Business"
+    },
+    {
+      "title": "Download a monthly statement",
+      "startURL": "https://app.mercury.com/",
+      "steps": [
+        "Click your org name in the top left of the dashboard and select Documents & Data, or open a specific account page and click View Statements.",
+        "Select an account from the dropdown to see all statements for the year.",
+        "Hover over or select the statement you want, then click Download; you can select more than one statement at a time."
+      ],
+      "source": "https://support.mercury.com/hc/en-us/articles/28768764276756-Downloading-monthly-statements"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://app.mercury.com/",
+      "landedURL": "https://app.mercury.com/login",
+      "title": "Mercury | Banking for Startups",
+      "heading": "Log in",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "craft",
+  "name": "Craft",
+  "domain": "craft.do",
+  "category": "knowledge_bases",
+  "summary": "Documents and notes app.",
+  "signInURL": "https://docs.craft.do/",
+  "triggers": ["craft.do"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

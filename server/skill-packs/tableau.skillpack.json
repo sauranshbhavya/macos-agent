@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "tableau",
+  "name": "Tableau",
+  "domain": "tableau.com",
+  "category": "data_databases",
+  "summary": "Data visualization and business intelligence.",
+  "signInURL": "https://www.tableau.com/tableau-login-hub",
+  "triggers": ["tableau.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

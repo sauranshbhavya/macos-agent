@@ -1,0 +1,55 @@
+{
+  "format": 1,
+  "id": "surveymonkey",
+  "name": "SurveyMonkey",
+  "domain": "surveymonkey.com",
+  "category": "forms_surveys",
+  "summary": "Online survey platform.",
+  "signInURL": "https://www.surveymonkey.com/login/",
+  "triggers": ["surveymonkey", "surveymonkey.com"],
+  "sections": [],
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Create a survey from scratch",
+      "startURL": "https://www.surveymonkey.com/login/",
+      "steps": [
+        "Select Create survey from the SurveyMonkey header, on any screen.",
+        "Choose Start from scratch to get a blank survey page.",
+        "In the Build tab of Design Survey, add or edit questions, page elements and survey options directly in the survey preview.",
+        "Select Preview survey to test the respondent experience, then publish the survey to send it out."
+      ],
+      "source": "https://help.surveymonkey.com/en/surveymonkey/create/creating-a-survey/"
+    },
+    {
+      "title": "Share a survey by web link",
+      "startURL": "https://www.surveymonkey.com/login/",
+      "steps": [
+        "Go to the Publish survey section of the survey.",
+        "Select Add new collector +, then Share a link.",
+        "Choose the collector options. Optionally customize the web link, or edit the collector's nickname with the pencil icon."
+      ],
+      "source": "https://help.surveymonkey.com/en/surveymonkey/send/web-link-collector/"
+    },
+    {
+      "title": "View individual responses",
+      "startURL": "https://www.surveymonkey.com/login/",
+      "steps": [
+        "Go to the Analyze Results section of the survey.",
+        "Click the Individual Responses tab toward the top of the page.",
+        "Switch between the Table and Single response views in the top right corner."
+      ],
+      "source": "https://help.surveymonkey.com/en/surveymonkey/analyze/individual-responses/"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://www.surveymonkey.com/login/",
+      "landedURL": "https://auth-us.surveymonkey.com/login#/login",
+      "title": "SurveyMonkey Login",
+      "heading": "Log in",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
+  ]
+}

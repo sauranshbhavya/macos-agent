@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "livechat",
+  "name": "LiveChat",
+  "domain": "livechat.com",
+  "category": "customer_support",
+  "summary": "Live chat software for websites.",
+  "signInURL": "https://my.livechatinc.com",
+  "triggers": ["livechat", "livechat.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

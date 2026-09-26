@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "google_tasks",
+  "name": "Google Tasks",
+  "domain": "tasks.google.com",
+  "category": "project_tracking",
+  "summary": "Google's to-do list.",
+  "signInURL": "https://accounts.google.com/ServiceLogin?continue=https%3A%2F%2Fcalendar.google.com%2Fcalendar%2Fu%2F0%2Fr%2Ftasks",
+  "triggers": ["google tasks", "tasks.google.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

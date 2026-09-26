@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "microsoft_azure",
+  "name": "Microsoft Azure",
+  "domain": "portal.azure.com",
+  "category": "developer_platforms",
+  "summary": "Microsoft's cloud computing platform.",
+  "signInURL": "https://portal.azure.com/",
+  "triggers": ["microsoft azure", "portal.azure.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

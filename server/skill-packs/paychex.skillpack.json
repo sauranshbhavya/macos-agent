@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "paychex",
+  "name": "Paychex",
+  "domain": "paychex.com",
+  "category": "recruiting_hr",
+  "summary": "Payroll and HR services.",
+  "signInURL": "https://myapps.paychex.com/",
+  "triggers": ["paychex", "paychex.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "tldv",
+  "name": "tl;dv",
+  "domain": "tldv.io",
+  "category": "communication",
+  "summary": "AI meeting recorder and note-taker.",
+  "signInURL": "https://tldv.io/app/login",
+  "triggers": ["tl;dv", "tldv.io"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

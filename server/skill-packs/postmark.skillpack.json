@@ -1,0 +1,64 @@
+{
+  "format": 1,
+  "id": "postmark",
+  "name": "Postmark",
+  "domain": "postmarkapp.com",
+  "category": "marketing_email",
+  "summary": "Transactional email delivery service.",
+  "signInURL": "https://account.postmarkapp.com/login",
+  "triggers": ["postmarkapp.com", "postmarkapp"],
+  "sections": [],
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Find a message in Activity",
+      "startURL": "https://account.postmarkapp.com/servers",
+      "steps": [
+        "Open the Activity tab of the relevant Message Stream.",
+        "Enter the recipient's address in the search bar to see all message events for that address, or use time-based filters or the Subject parameter to narrow the results.",
+        "Click the message in the Activity list to see all its events and when they occurred."
+      ],
+      "source": "https://postmarkapp.com/support/article/1267-why-didn-t-this-recipient-receive-my-message"
+    },
+    {
+      "title": "Create a Message Stream",
+      "startURL": "https://account.postmarkapp.com/servers",
+      "steps": [
+        "Open the Postmark server where you want to add a stream.",
+        "Click Create Message Stream.",
+        "Enter a Name and choose a Type: Transactional or Broadcast.",
+        "Click Create Message Stream to finish."
+      ],
+      "source": "https://postmarkapp.com/support/article/how-to-create-and-send-through-message-streams"
+    },
+    {
+      "title": "Verify a sending domain",
+      "startURL": "https://account.postmarkapp.com/signature_domains",
+      "steps": [
+        "Go to your Sender Signatures page.",
+        "Under the domain you're verifying, select DNS Settings or Add a DKIM DNS record.",
+        "In your DNS provider's area for DNS records, add a new TXT record using the Hostname and Value shown on the DNS Settings page.",
+        "Once the record propagates, DKIM will show as verified in your Postmark account, or click Verify to check manually."
+      ],
+      "source": "https://postmarkapp.com/support/article/how-do-i-verify-a-domain"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://account.postmarkapp.com/servers",
+      "landedURL": "https://account.postmarkapp.com/login",
+      "title": "Log In to Postmark",
+      "heading": "Log In",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    },
+    {
+      "url": "https://account.postmarkapp.com/signature_domains",
+      "landedURL": "https://account.postmarkapp.com/login",
+      "title": "Log In to Postmark",
+      "heading": "Log In",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
+  ]
+}

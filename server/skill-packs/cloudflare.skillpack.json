@@ -1,0 +1,65 @@
+{
+  "format": 1,
+  "id": "cloudflare",
+  "name": "Cloudflare",
+  "domain": "cloudflare.com",
+  "category": "developer_platforms",
+  "summary": "Web performance, security and developer platform.",
+  "signInURL": "https://dash.cloudflare.com/login",
+  "triggers": ["cloudflare", "cloudflare.com"],
+  "sections": [],
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Add a DNS record",
+      "startURL": "https://dash.cloudflare.com/?to=/:account/:zone/dns/records",
+      "steps": [
+        "In the Cloudflare dashboard, go to the DNS Records page.",
+        "Select Add record.",
+        "Choose a record Type.",
+        "Complete the required fields, which vary by record. For A, AAAA and CNAME records, decide the Proxy status; TTL controls how long the record is valid.",
+        "Select Save."
+      ],
+      "source": "https://developers.cloudflare.com/dns/manage-dns-records/how-to/create-dns-records/"
+    },
+    {
+      "title": "Edit or delete a DNS record",
+      "startURL": "https://dash.cloudflare.com/?to=/:account/:zone/dns/records",
+      "steps": [
+        "In the Cloudflare dashboard, go to the DNS Records page.",
+        "On the record, select Edit.",
+        "To change it, make the changes and select Save.",
+        "To delete it, select Delete, then select Delete again to confirm."
+      ],
+      "source": "https://developers.cloudflare.com/dns/manage-dns-records/how-to/create-dns-records/"
+    },
+    {
+      "title": "Purge everything from the cache",
+      "startURL": "https://dash.cloudflare.com/?to=/:account/:zone/caching/configuration",
+      "steps": [
+        "In the Cloudflare dashboard, go to the Configuration page. Cloudflare recommends purging single files by URL instead of the whole cache where possible.",
+        "Under Purge Cache, select Purge Everything. A warning window appears.",
+        "If you agree, select Purge Everything again. Every resource is cleared from the cache in all Cloudflare data centers."
+      ],
+      "source": "https://developers.cloudflare.com/cache/how-to/purge-cache/purge-everything/"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://dash.cloudflare.com/?to=/:account/:zone/dns/records",
+      "landedURL": "https://dash.cloudflare.com/login",
+      "title": "Cloudflare Dashboard | Manage Your Account",
+      "heading": "Sign in to Cloudflare",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    },
+    {
+      "url": "https://dash.cloudflare.com/?to=/:account/:zone/caching/configuration",
+      "landedURL": "https://dash.cloudflare.com/login",
+      "title": "Cloudflare Dashboard | Manage Your Account",
+      "heading": "Sign in to Cloudflare",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
+  ]
+}

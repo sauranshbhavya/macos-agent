@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "fillout",
+  "name": "Fillout",
+  "domain": "fillout.com",
+  "category": "forms_surveys",
+  "summary": "Online forms and surveys.",
+  "signInURL": "https://app.fillout.com/login",
+  "triggers": ["fillout", "fillout.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

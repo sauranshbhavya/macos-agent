@@ -1,0 +1,54 @@
+{
+  "format": 1,
+  "id": "mailgun",
+  "name": "Mailgun",
+  "domain": "mailgun.com",
+  "category": "marketing_email",
+  "summary": "Email API and delivery service.",
+  "signInURL": "https://login.mailgun.com/login/",
+  "triggers": ["mailgun", "mailgun.com"],
+  "sections": [],
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Add a sending domain",
+      "startURL": "https://login.mailgun.com/login/",
+      "steps": [
+        "In the Control Panel, click Send then Sending to expand the sidebar, then click Domains.",
+        "Click the Add new domain button in the upper right corner.",
+        "Enter your domain name in the Domain name field, select a Domain region, and choose an IP assignment option.",
+        "Click the Add Domain button."
+      ],
+      "source": "https://documentation.mailgun.com/docs/mailgun/user-manual/domains/domains-custom"
+    },
+    {
+      "title": "Find a message in the logs",
+      "startURL": "https://login.mailgun.com/login/",
+      "steps": [
+        "Open the Logs tab in the Control Panel to view and search every event that happened to your messages.",
+        "Search by fields such as recipient, subject line, or message-id to find the message you're looking for."
+      ],
+      "source": "https://documentation.mailgun.com/docs/mailgun/user-manual/tracking-messages/tracking-messages"
+    },
+    {
+      "title": "Manage unsubscribed addresses",
+      "startURL": "https://login.mailgun.com/login/",
+      "steps": [
+        "Go to the Suppressions tab in the Control Panel.",
+        "View the list of unsubscribed addresses.",
+        "Remove an address from the list, or add a new unsubscribed address."
+      ],
+      "source": "https://documentation.mailgun.com/docs/mailgun/user-manual/tracking-messages/tracking-unsubscribes"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://login.mailgun.com/login/",
+      "landedURL": "https://login.mailgun.com/login/",
+      "title": "Login | Mailgun",
+      "heading": "Log in to Mailgun",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
+  ]
+}

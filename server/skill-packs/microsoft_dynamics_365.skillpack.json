@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "microsoft_dynamics_365",
+  "name": "Microsoft Dynamics 365 Sales",
+  "domain": "dynamics.microsoft.com",
+  "category": "sales_crm",
+  "summary": "Microsoft's sales CRM.",
+  "signInURL": "https://login.microsoft.com/",
+  "triggers": ["microsoft dynamics 365 sales", "dynamics.microsoft.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

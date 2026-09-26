@@ -46,6 +46,8 @@ import { agentModelChainsFrom } from "./agent/model/adapter.js";
 import { modelRouter } from "./agent/model/router.js";
 import { tiersConfigured } from "./agent/model/tiers.js";
 import { serverTools, taskAgentFactory } from "./agent/task-agent.js";
+import { loadSkillPackCatalog } from "./agent/skills/catalog.js";
+import { skillGuidanceFor } from "./agent/skills/guidance.js";
 import { postgresModelCallLedger, type ModelCallLedger } from "./agent/credits.js";
 import { DEFAULT_SESSION_TIMING, type SessionTiming } from "./agent/session/connection.js";
 import { SessionRegistry, type MessageRate } from "./agent/session/registry.js";
@@ -320,12 +322,26 @@ export interface AppOverrides {
   readonly agentMessageRate?: MessageRate;
 }
 
-/** The planner and screen agent when every tier has a model, otherwise an honest refusal. */
-function configuredAgent(config: Config): AgentFactory {
+/**
+ * The planner and screen agent when every tier has a model, otherwise an honest refusal. The skill
+ * packs load here, once, at boot; a missing pack folder stops the gateway rather than letting it
+ * plan without them.
+ */
+function configuredAgent(config: Config, log: FastifyInstance["log"]): AgentFactory {
   const chains = agentModelChainsFrom(config, config.agentTiers);
-  return tiersConfigured(config.agentTiers) && Object.values(chains).every((chain) => chain.length > 0)
-    ? taskAgentFactory({ router: modelRouter(chains), tools: serverTools(modelProvidersFrom(config).search) })
-    : unavailableAgent;
+  if (!tiersConfigured(config.agentTiers) || !Object.values(chains).every((chain) => chain.length > 0)) {
+    return unavailableAgent;
+  }
+  const catalog = loadSkillPackCatalog();
+  if (catalog.failures.length > 0) {
+    log.error({ failures: catalog.failures.map((failure) => failure.fileName) }, "skill packs that could not be loaded");
+  }
+  log.info({ packs: catalog.packs.length }, "skill packs loaded");
+  return taskAgentFactory({
+    router: modelRouter(chains),
+    tools: serverTools(modelProvidersFrom(config).search),
+    skillGuidance: (goal, context) => skillGuidanceFor(catalog, goal, context),
+  });
 }
 
 export function buildApp(
@@ -779,7 +795,7 @@ export function buildApp(
           defaultCapUnits: requireSpendCapUnits(config),
         }),
       rates: tokenRates,
-      agentFor: overrides.agentFactory ?? configuredAgent(config),
+      agentFor: overrides.agentFactory ?? configuredAgent(config, app.log),
       deliver: (task, messages) => agentSessions.peerFor(task.accountId, task.deviceId)?.sendTask(messages),
       manifestFor: (accountId, deviceId) => agentSessions.peerFor(accountId, deviceId)?.manifest,
       now,

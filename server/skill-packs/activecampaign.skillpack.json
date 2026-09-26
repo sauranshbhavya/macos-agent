@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "activecampaign",
+  "name": "ActiveCampaign",
+  "domain": "activecampaign.com",
+  "category": "marketing_email",
+  "summary": "Email marketing and automation platform.",
+  "signInURL": "https://www.activecampaign.com/login",
+  "triggers": ["activecampaign", "activecampaign.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

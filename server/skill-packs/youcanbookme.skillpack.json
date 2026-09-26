@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "youcanbookme",
+  "name": "YouCanBook.me",
+  "domain": "youcanbook.me",
+  "category": "scheduling",
+  "summary": "Online booking and scheduling.",
+  "signInURL": "https://app.youcanbook.me/#/login",
+  "triggers": ["youcanbook.me"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

@@ -1,0 +1,37 @@
+{
+  "format": 1,
+  "id": "photoroom",
+  "name": "Photoroom",
+  "domain": "photoroom.com",
+  "category": "design",
+  "summary": "AI photo editor for product images.",
+  "signInURL": "https://app.photoroom.com",
+  "triggers": ["photoroom", "photoroom.com"],
+  "sections": [],
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Remove the background of a photo",
+      "startURL": "https://app.photoroom.com",
+      "steps": [
+        "Select Explore.",
+        "Select Background Remover.",
+        "Upload a photo. Photoroom removes its background automatically.",
+        "Use the editor to make any further changes you want, such as adding text, graphics or shadows, or choosing a different background.",
+        "Select Download to save the result to your device. Enter a file name, choose the image file format, then select Download.",
+        "Select Home to leave the editor and keep the design in Photoroom."
+      ],
+      "source": "https://help.photoroom.com/en/articles/13713828-remove-the-background-of-a-photo-with-background-remover-web-app"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://app.photoroom.com",
+      "landedURL": "https://app.photoroom.com/create",
+      "title": "Home",
+      "heading": "Home",
+      "offers": "product",
+      "read": "2026-09-25"
+    }
+  ]
+}

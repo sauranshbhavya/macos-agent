@@ -1,0 +1,49 @@
+{
+  "format": 1,
+  "id": "ghost",
+  "name": "Ghost",
+  "domain": "ghost.org",
+  "category": "websites_apps_commerce",
+  "summary": "Publishing platform for newsletters and memberships.",
+  "signInURL": "https://account.ghost.org/signin/",
+  "triggers": [
+    "ghost.org"
+  ],
+  "sections": [],
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Add a card to a post in the editor",
+      "startURL": "https://account.ghost.org/signin/",
+      "steps": [
+        "Open the post you want to edit in the Ghost editor.",
+        "Insert a card by clicking the + button, or by typing / on a new line to search for a particular card.",
+        "Choose the card you want: images, HTML, embeds, bookmarks, email-only content, and more.",
+        "Use the contextual toolbar to format your text, and to add links, quotes or headings.",
+        "Add an emoji by pressing : and continuing to type."
+      ],
+      "source": "https://ghost.org/help/using-the-editor/"
+    },
+    {
+      "title": "Set your publication's title, description, timezone and language",
+      "startURL": "https://account.ghost.org/signin/",
+      "steps": [
+        "Set a publication title and description from the Settings, then General, then Title & description area.",
+        "Set the timezone of your publication from the Settings, then General, then Timezone area. A custom timezone is used for scheduling and publishing posts.",
+        "Set a custom language for your publication from the Settings, then General, then Publication language area, so search engines are told what language your content is in.",
+        "In the Settings, then General, then Meta data area, add custom meta data content for search engines."
+      ],
+      "source": "https://ghost.org/help/site-setup/"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://account.ghost.org/signin/",
+      "landedURL": "https://account.ghost.org/signin",
+      "title": "Ghost: Sign in",
+      "heading": "",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
+  ]
+}

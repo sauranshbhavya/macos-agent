@@ -1,0 +1,19 @@
+{
+  "format": 1,
+  "id": "amplitude",
+  "name": "Amplitude",
+  "domain": "amplitude.com",
+  "category": "analytics_monitoring",
+  "summary": "Product analytics platform.",
+  "signInURL": "https://app.amplitude.com/login",
+  "triggers": [
+    "amplitude analytics",
+    "amplitude dashboard",
+    "amplitude cohort",
+    "open amplitude",
+    "amplitude.com"
+  ],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

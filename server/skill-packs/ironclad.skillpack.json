@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "ironclad",
+  "name": "Ironclad",
+  "domain": "ironcladapp.com",
+  "category": "documents_storage",
+  "summary": "Contract lifecycle management software.",
+  "signInURL": "https://ironcladapp.com/signin",
+  "triggers": ["ironcladapp.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

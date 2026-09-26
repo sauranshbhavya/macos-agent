@@ -1,0 +1,35 @@
+{
+  "format": 1,
+  "id": "gusto",
+  "name": "Gusto",
+  "domain": "gusto.com",
+  "category": "recruiting_hr",
+  "summary": "Payroll, benefits and HR for small businesses.",
+  "signInURL": "https://gusto.com/login",
+  "triggers": ["gusto.com"],
+  "sections": [],
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Edit the company's trade name",
+      "startURL": "https://gusto.com/login",
+      "steps": [
+        "In the left menu, click your company name.",
+        "Under Information, click Details.",
+        "Next to your company name, click Edit.",
+        "Under Trade name, enter the DBA and click Save."
+      ],
+      "source": "https://support.gusto.com/article/106622257100000/edit-company-details-for-admins"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://gusto.com/login",
+      "landedURL": "https://login.gusto.com/realms/zenpayroll/protocol/openid-connect/auth",
+      "title": "Gusto Login - Payroll, Benefits, HR | Gusto",
+      "heading": "Sign In",
+      "offers": "sign-in",
+      "read": "2026-09-25"
+    }
+  ]
+}

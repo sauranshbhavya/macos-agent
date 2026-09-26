@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "freshservice",
+  "name": "Freshservice",
+  "domain": "freshservice.com",
+  "category": "it_accounts_security",
+  "summary": "IT service management from Freshworks.",
+  "signInURL": "https://login.freshworks.com/email-login/",
+  "triggers": ["freshservice", "freshservice.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

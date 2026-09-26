@@ -1,0 +1,59 @@
+{
+  "format": 1,
+  "id": "lemlist",
+  "name": "lemlist",
+  "domain": "lemlist.com",
+  "category": "marketing_email",
+  "summary": "Cold email outreach platform.",
+  "signInURL": "https://app.lemlist.com/login",
+  "triggers": ["lemlist", "lemlist.com"],
+  "sections": [],
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Create a campaign",
+      "startURL": "https://app.lemlist.com/",
+      "steps": [
+        "From the left-hand menu, click Campaigns, then click Create campaign in the top-right corner. This lands you on the Sequence tab of the new campaign.",
+        "On the Sequence tab, click Add step to insert a step, such as an email, LinkedIn step, call, or task, and build out your outreach workflow.",
+        "At the top left of the page, enter a descriptive name for the campaign.",
+        "Open the Lead list tab at the top of the page and click Import new leads in the middle of the screen to add leads to the campaign.",
+        "When the sequence and Lead list are ready, go to the Launch tab and click Launch for X leads to open the launch recap. Review the key details there, such as how many leads will be contacted, the time between each lead and the sending schedule, then click Launch campaign for X leads to confirm and start sending."
+      ],
+      "source": "https://help.lemlist.com/en/articles/4452686-create-a-lemlist-campaign"
+    },
+    {
+      "title": "Import leads from a CSV file",
+      "startURL": "https://app.lemlist.com/",
+      "steps": [
+        "Format your CSV so the first row contains only column names (such as email, firstName, companyName) and every row after that is one lead's data; every lead needs an email address.",
+        "Go to Campaigns, open the campaign you want to import leads into, click Leads list, then click Import new leads.",
+        "Select CSV import, then click in the upload area or drag and drop your CSV file.",
+        "Review the column mappings lemlist suggests for your CSV; if a column isn't mapped the way you want, open its dropdown and pick the correct field or create a custom field, then click Continue.",
+        "Under Manage duplicates, choose how lemlist should handle leads that already exist in the campaign or team workspace, then click Import leads."
+      ],
+      "source": "https://help.lemlist.com/en/articles/4515109-how-to-import-leads-from-a-csv-file"
+    },
+    {
+      "title": "Search for a lead",
+      "startURL": "https://app.lemlist.com/",
+      "steps": [
+        "Go to Campaigns, then click the campaign that contains the lead you want to find.",
+        "In the campaign, click Leads list, then click into the search bar at the top of the list.",
+        "Type a keyword related to the lead, such as their first name, last name, company name, or email address; the list filters to matching results as you type.",
+        "Clear the search to see the full lead list again."
+      ],
+      "source": "https://help.lemlist.com/en/articles/4494101-search-and-edit-leads"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://app.lemlist.com/",
+      "landedURL": "https://app.lemlist.com/login",
+      "title": "lemlist",
+      "heading": "Welcome back!",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
+  ]
+}

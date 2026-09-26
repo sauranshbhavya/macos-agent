@@ -1,0 +1,16 @@
+{
+  "format": 1,
+  "id": "airtable",
+  "name": "Airtable",
+  "domain": "airtable.com",
+  "category": "data_databases",
+  "summary": "Spreadsheet-database hybrid for building apps.",
+  "signInURL": "https://airtable.com/login",
+  "triggers": [
+    "airtable",
+    "airtable.com"
+  ],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

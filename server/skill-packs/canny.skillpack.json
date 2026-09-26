@@ -1,0 +1,59 @@
+{
+  "format": 1,
+  "id": "canny",
+  "name": "Canny",
+  "domain": "canny.io",
+  "category": "project_tracking",
+  "summary": "Customer feedback and feature request tracking.",
+  "signInURL": "https://canny.io/login",
+  "triggers": ["canny.io"],
+  "sections": [],
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Create a post",
+      "startURL": "https://canny.io/redirect?to=%2Fadmin",
+      "steps": [
+        "Open the Feedback tab.",
+        "Click the pencil icon at the top of the page. Only Canny admins can create posts here."
+      ],
+      "source": "https://help.canny.io/en/articles/3831672-creating-a-post"
+    },
+    {
+      "title": "Create a board",
+      "startURL": "https://canny.io/redirect?to=%2Fadmin%2Fsettings%2Fboards",
+      "steps": [
+        "Open the Boards tab in the Canny settings.",
+        "Click the Create board button at the top and follow the prompts. A board title can be up to 40 characters."
+      ],
+      "source": "https://help.canny.io/en/articles/4968514-board-settings"
+    },
+    {
+      "title": "Change a post's status",
+      "startURL": "https://canny.io/redirect?to=%2Fadmin",
+      "steps": [
+        "Go to the post in the admin view, in the Feedback tab.",
+        "Select a status from the dropdown in the right-hand panel of the post. A comment, with an image, can be added as part of the update."
+      ],
+      "source": "https://help.canny.io/en/articles/673583-changing-the-status-of-a-post"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://canny.io/redirect?to=%2Fadmin",
+      "landedURL": "https://canny.io/login",
+      "title": "Canny",
+      "heading": "Log in to your account",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    },
+    {
+      "url": "https://canny.io/redirect?to=%2Fadmin%2Fsettings%2Fboards",
+      "landedURL": "https://canny.io/login",
+      "title": "Canny",
+      "heading": "Log in to your account",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
+  ]
+}

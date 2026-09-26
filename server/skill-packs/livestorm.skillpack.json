@@ -1,0 +1,36 @@
+{
+  "format": 1,
+  "id": "livestorm",
+  "name": "Livestorm",
+  "domain": "livestorm.co",
+  "category": "communication",
+  "summary": "Webinar and virtual event platform.",
+  "signInURL": "https://app.livestorm.co/#/login",
+  "triggers": ["livestorm", "livestorm.co"],
+  "sections": [],
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Record an event",
+      "startURL": "https://app.livestorm.co/",
+      "steps": [
+        "Open the event, go to its Settings, then Recording & on-demand.",
+        "Check that the 'Automatically record upon event start' box is ticked. Events are recorded by default, and the setting applies to every session of the event.",
+        "In the event room before the event starts, the Record button in the middle of the dock is disabled — the event has to be started before it can be recorded.",
+        "Click Start event. The recording begins on its own and ends when you click End event, unless you pause it before then.",
+        "The recording pauses by itself when nobody is on stage and no media, screen or PDF has been shared for 30 seconds, and resumes as soon as someone is on stage or something is shared again."
+      ],
+      "source": "https://support.livestorm.co/article/250-record-your-event"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://app.livestorm.co/",
+      "landedURL": "https://app.livestorm.co/#/login",
+      "title": "Dashboard | Livestorm",
+      "heading": "Nice seeing you again",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
+  ]
+}

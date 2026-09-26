@@ -1,0 +1,60 @@
+{
+  "format": 1,
+  "id": "base44",
+  "name": "Base44",
+  "domain": "base44.com",
+  "category": "ai_assistants",
+  "summary": "AI app builder.",
+  "signInURL": "https://app.base44.com/login",
+  "triggers": [
+    "base44",
+    "base44.com"
+  ],
+  "sections": [],
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Add a page to an app",
+      "startURL": "https://app.base44.com/",
+      "steps": [
+        "Go to your app editor.",
+        "In AI chat, describe the page you want — for example, Create a new About page with a hero section, text about our company, and a contact button.",
+        "When the AI chat has finished, open the new page from the page drop-down above the preview and carry on customising it there."
+      ],
+      "source": "https://docs.base44.com/Building-your-app/managing-your-pages"
+    },
+    {
+      "title": "Switch to another page in the editor",
+      "startURL": "https://app.base44.com/",
+      "steps": [
+        "Go to your app editor.",
+        "Click the page drop-down above the preview.",
+        "Click the page you want to open.",
+        "In an app with many pages, start typing the page name in the drop-down to search for it."
+      ],
+      "source": "https://docs.base44.com/Building-your-app/managing-your-pages"
+    },
+    {
+      "title": "Try an app against test data instead of live data",
+      "startURL": "https://app.base44.com/",
+      "steps": [
+        "Click Dashboard in your app editor.",
+        "Click Settings, then App Settings.",
+        "Turn on the Test Data toggle. It builds a new, empty test database; nothing from production is copied into it.",
+        "To work with those records, click Dashboard, click Data, click the table you want on the left menu, and click Test at the top.",
+        "A published app always reads and writes production data; testing mode reaches only the dashboard and the preview."
+      ],
+      "source": "https://docs.base44.com/documentation/managing-app-data/testing-your-data"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://app.base44.com/",
+      "landedURL": "https://app.base44.com/login",
+      "title": "Base44",
+      "heading": "Welcome to Base44",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
+  ]
+}

@@ -1,0 +1,56 @@
+{
+  "format": 1,
+  "id": "datadog",
+  "name": "Datadog",
+  "domain": "datadoghq.com",
+  "category": "analytics_monitoring",
+  "summary": "Monitoring and observability platform.",
+  "signInURL": "https://datadoghq.com/login",
+  "triggers": ["datadog", "datadoghq.com"],
+  "sections": [],
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Start a new dashboard",
+      "startURL": "https://app.datadoghq.com/",
+      "steps": [
+        "Click +New Dashboard on the Dashboard List page, or New Dashboard from the navigation menu.",
+        "Enter a dashboard name and choose a layout option."
+      ],
+      "source": "https://docs.datadoghq.com/dashboards/"
+    },
+    {
+      "title": "Start a new metric monitor",
+      "startURL": "https://app.datadoghq.com/",
+      "steps": [
+        "Navigate to Monitors > New Monitor and select Metric. Threshold Alert is already selected as the detection method.",
+        "Define the metric the monitor watches.",
+        "Set the alert conditions, with an Alert threshold and optionally a Warning threshold.",
+        "Give the notification a title, which must be unique for each monitor, and a message telling your team how to resolve the issue.",
+        "Choose who is notified, by email, Slack, PagerDuty and more."
+      ],
+      "source": "https://docs.datadoghq.com/getting_started/monitors/"
+    },
+    {
+      "title": "Search logs",
+      "startURL": "https://app.datadoghq.com/",
+      "steps": [
+        "Open the Log Explorer.",
+        "Choose the time window with the time range selector at the top right.",
+        "Type a search query, combining key:value pairs such as status:error with full-text search. Autocomplete suggests keys, values, recent searches and saved views.",
+        "To describe what to find in plain English instead, click Ask in the search field, where Natural Language Queries are available."
+      ],
+      "source": "https://docs.datadoghq.com/logs/explorer/search/"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://app.datadoghq.com/",
+      "landedURL": "https://app.datadoghq.com/account/login",
+      "title": "Datadog: Log In",
+      "heading": "Log in to Datadog",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
+  ]
+}

@@ -83,6 +83,7 @@ function notesWindow(generation: number, extra: ObservationBody["ax"] = undefine
 }
 
 interface HarnessOptions {
+  readonly skillGuidance?: (goal: string) => string | undefined;
   readonly search?: ServerTools["search"];
   readonly pages?: Record<string, string>;
   readonly store?: ReturnType<typeof memoryTaskStore>;
@@ -99,6 +100,7 @@ function harness(router: ModelRouter, options: HarnessOptions = {}) {
     rates: TEST_TOKEN_RATES,
     agentFor: taskAgentFactory({
       router,
+      ...(options.skillGuidance ? { skillGuidance: (goal: string) => options.skillGuidance!(goal) } : {}),
       tools: {
         search: options.search,
         readPage: (url) => {
@@ -497,6 +499,15 @@ describe("the planner's typed operations and server tools", () => {
     expect(action.operation.args["content"]).toContain("# Solar payback");
     expect(action.operation.args["content"]).toContain(`[Solar](${pageURL})`);
     expect(router.calls.at(-1)!.user).toContain("Solar panels pay for themselves");
+  });
+
+  it("puts the skill packs matched to the goal into the planner's prompt", async () => {
+    const router = scriptedRouter({ planner: [plan({ kind: "finish", status: "completed", summary: "ok" })] });
+    const h = harness(router, {
+      skillGuidance: (goal) => (goal.includes("Linear") ? "Skill: Linear (linear.app)\nCreate an issue from the sidebar." : undefined),
+    });
+    await h.start("File a bug in Linear");
+    expect(router.calls[0]!.user).toContain("Skill: Linear (linear.app)");
   });
 
   it("reports a page it would not read, without fetching it", async () => {

@@ -1,0 +1,38 @@
+{
+  "format": 1,
+  "id": "squarespace",
+  "name": "Squarespace",
+  "domain": "squarespace.com",
+  "category": "websites_apps_commerce",
+  "summary": "Website builder and hosting.",
+  "signInURL": "https://squarespace.com/login",
+  "triggers": [
+    "squarespace",
+    "squarespace.com"
+  ],
+  "sections": [],
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Switch between your sites",
+      "startURL": "https://account.squarespace.com/",
+      "steps": [
+        "Open the account dashboard, which displays all sites, domains and other subscriptions connected to your account.",
+        "In the dashboard tab, each site shows its preview image, title, primary domain and account status.",
+        "Browse for the site you need, hover over its preview image and click Go To Website to open it in the same browser tab.",
+        "To reach a site through its domain instead, click Domains, click ... beside the domain, then click Manage Domain Settings to open its connected site."
+      ],
+      "source": "https://support.squarespace.com/hc/en-us/articles/205810458-Managing-multiple-sites"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://account.squarespace.com/",
+      "landedURL": "https://login.squarespace.com/api/1/login/oauth/provider/authorize",
+      "title": "Squarespace — Login",
+      "heading": "Log into Squarespace",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
+  ]
+}

@@ -1,0 +1,54 @@
+{
+  "format": 1,
+  "id": "supabase",
+  "name": "Supabase",
+  "domain": "supabase.com",
+  "category": "data_databases",
+  "summary": "Postgres development platform.",
+  "signInURL": "https://app.supabase.com/login",
+  "triggers": ["supabase", "supabase.com"],
+  "sections": [],
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Create a table",
+      "startURL": "https://supabase.com/dashboard",
+      "steps": [
+        "In the project's Dashboard, go to the Table Editor page.",
+        "Click New Table, give the table a name, and click Save. Use lowercase and underscores rather than spaces in the name.",
+        "Click New Column, give the column a name and a data type, and click Save. Adding columns while creating the table is best practice."
+      ],
+      "source": "https://supabase.com/docs/guides/database/tables"
+    },
+    {
+      "title": "Run SQL in the SQL Editor",
+      "startURL": "https://supabase.com/dashboard",
+      "steps": [
+        "In the project's dashboard, open the SQL Editor.",
+        "Paste the SQL to run.",
+        "Click Run."
+      ],
+      "source": "https://supabase.com/docs/guides/getting-started/quickstarts/nextjs"
+    },
+    {
+      "title": "Invite someone to the organization",
+      "startURL": "https://supabase.com/dashboard",
+      "steps": [
+        "Open the organization's team settings.",
+        "Send an invite to the person's email address. A project-scoped role can be given for one project when inviting, and for more projects after they accept.",
+        "The invite is valid for 24 hours."
+      ],
+      "source": "https://supabase.com/docs/guides/platform/access-control"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://supabase.com/dashboard",
+      "landedURL": "https://supabase.com/dashboard/sign-in",
+      "title": "Supabase",
+      "heading": "Welcome back",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
+  ]
+}

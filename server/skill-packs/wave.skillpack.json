@@ -1,0 +1,35 @@
+{
+  "format": 1,
+  "id": "wave",
+  "name": "Wave",
+  "domain": "waveapps.com",
+  "category": "finance_billing",
+  "summary": "Accounting and invoicing for small businesses.",
+  "signInURL": "https://www.waveapps.com/login",
+  "triggers": ["waveapps.com"],
+  "sections": [],
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Import a customer list from a CSV file",
+      "startURL": "https://my.waveapps.com/",
+      "steps": [
+        "Prepare a CSV file laid out like Wave's sample CSV template. Every contact needs at least a company name, a first name or a last name, or the import does not work.",
+        "On the left side menu, click Sales & Payments > Customers, then click the Import or Export button.",
+        "Click Choose File, select the CSV file, and click Upload and preview customers.",
+        "Check that the information sits under the right column headers, then click Yes, proceed with import to finish, or No, try again to go back to the file upload page. An import cannot be undone; customers can be edited one at a time afterwards."
+      ],
+      "source": "https://support.waveapps.com/hc/en-us/articles/208623076-Import-a-customer-list"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://my.waveapps.com/",
+      "landedURL": "https://my.waveapps.com/login/",
+      "title": "Wave • Sign in",
+      "heading": "Sign in",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
+  ]
+}

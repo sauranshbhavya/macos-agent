@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "goto_meeting",
+  "name": "GoTo Meeting",
+  "domain": "goto.com",
+  "category": "communication",
+  "summary": "Online meetings from GoTo.",
+  "signInURL": "https://myaccount.goto.com/products",
+  "triggers": ["goto meeting"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

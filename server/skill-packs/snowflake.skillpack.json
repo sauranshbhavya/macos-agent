@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "snowflake",
+  "name": "Snowflake",
+  "domain": "snowflake.com",
+  "category": "data_databases",
+  "summary": "Cloud data platform.",
+  "signInURL": "https://app.snowflake.com/",
+  "triggers": ["snowflake.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

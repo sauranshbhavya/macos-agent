@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "connecteam",
+  "name": "Connecteam",
+  "domain": "connecteam.com",
+  "category": "scheduling",
+  "summary": "Employee management app for deskless teams.",
+  "signInURL": "https://connecteam.com/login/",
+  "triggers": ["connecteam", "connecteam.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

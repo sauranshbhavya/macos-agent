@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "intercom",
+  "name": "Intercom",
+  "domain": "intercom.com",
+  "category": "customer_support",
+  "summary": "Customer service platform with AI chat.",
+  "signInURL": "https://app.intercom.com/admins/sign_in",
+  "triggers": ["intercom.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

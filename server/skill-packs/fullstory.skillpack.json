@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "fullstory",
+  "name": "Fullstory",
+  "domain": "fullstory.com",
+  "category": "analytics_monitoring",
+  "summary": "Digital experience analytics.",
+  "signInURL": "https://app.fullstory.com/login/?dest=%2Fui%2F",
+  "triggers": ["fullstory", "fullstory.com"],
+  "sections": [],
+  "depth": "shallow",
+  "flows": []
+}

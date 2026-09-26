@@ -1,0 +1,53 @@
+{
+  "format": 1,
+  "id": "auth0",
+  "name": "Auth0",
+  "domain": "auth0.com",
+  "category": "developer_platforms",
+  "summary": "Identity and sign-in platform from Okta.",
+  "signInURL": "https://auth0.com/api/auth/login?redirectTo=dashboard",
+  "triggers": ["auth0", "auth0.com"],
+  "sections": [],
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Create a tenant role",
+      "startURL": "https://manage.auth0.com/",
+      "steps": [
+        "Go to Dashboard > User Management > Roles and select Create Role.",
+        "Name the role and add a description, then select Create. A tenant role applies across the entire tenant and can be assigned to any user."
+      ],
+      "source": "https://auth0.com/docs/manage-users/access-control/configure-core-rbac/roles/create-roles"
+    },
+    {
+      "title": "Create an Organization role",
+      "startURL": "https://manage.auth0.com/",
+      "steps": [
+        "Go to Dashboard > Organizations and select the Organization.",
+        "Select the Roles tab, then select Create Role.",
+        "Enter a name and description for the role, then select Create."
+      ],
+      "source": "https://auth0.com/docs/manage-users/access-control/configure-core-rbac/roles/create-roles"
+    },
+    {
+      "title": "Assign a role to a user",
+      "startURL": "https://manage.auth0.com/",
+      "steps": [
+        "Go to Dashboard > User Management > Users.",
+        "Click ... next to the user and select Assign Roles.",
+        "Choose the role or roles to assign, then click Assign. If the list of roles is blank, create a role first."
+      ],
+      "source": "https://auth0.com/docs/manage-users/access-control/configure-core-rbac/rbac-users/assign-roles-to-users"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://manage.auth0.com/",
+      "landedURL": "https://auth0.auth0.com/u/login/identifier",
+      "title": "Log in | Auth0 Dashboard",
+      "heading": "Welcome",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
+  ]
+}

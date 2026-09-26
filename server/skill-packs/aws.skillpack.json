@@ -1,0 +1,47 @@
+{
+  "format": 1,
+  "id": "aws",
+  "name": "Amazon Web Services",
+  "domain": "aws.amazon.com",
+  "category": "developer_platforms",
+  "summary": "Amazon's cloud computing platform.",
+  "signInURL": "https://console.aws.amazon.com/console/home/?nc2=h_si&src=header-signin",
+  "triggers": ["amazon web services", "aws.amazon.com"],
+  "sections": [],
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Create an S3 bucket",
+      "startURL": "https://console.aws.amazon.com/",
+      "steps": [
+        "Open the Amazon S3 console. In the navigation bar, choose the name of the currently displayed AWS Region, then choose the Region for the bucket. A bucket's Region cannot be changed after it is created.",
+        "In the left navigation pane, choose General purpose buckets, then choose Create bucket. The Create bucket page opens.",
+        "For Bucket name, enter a name for the bucket. It must be unique within the partition and between 3 and 63 characters long.",
+        "Under Block Public Access settings for this bucket, keep all four settings enabled unless the use case needs one of them turned off.",
+        "Choose Create bucket."
+      ],
+      "source": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/create-bucket-overview.html"
+    },
+    {
+      "title": "Turn on versioning for an S3 bucket",
+      "startURL": "https://console.aws.amazon.com/",
+      "steps": [
+        "Open the Amazon S3 console, and in the left navigation pane choose General purpose buckets.",
+        "In the buckets list, choose the name of the bucket.",
+        "Choose Properties, and under Bucket Versioning choose Edit.",
+        "Choose Enable, or Suspend to stop versioning, and then choose Save changes."
+      ],
+      "source": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/manage-versioning-examples.html"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://console.aws.amazon.com/",
+      "landedURL": "https://us-east-2.signin.aws.amazon.com/oauth",
+      "title": "Amazon Web Services Sign-In",
+      "heading": "IAM user sign in",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
+  ]
+}

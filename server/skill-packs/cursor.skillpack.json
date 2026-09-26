@@ -1,0 +1,50 @@
+{
+  "format": 1,
+  "id": "cursor",
+  "name": "Cursor",
+  "domain": "cursor.com",
+  "category": "ai_assistants",
+  "summary": "AI code editor.",
+  "signInURL": "https://authenticator.cursor.sh/",
+  "triggers": [
+    "cursor.com"
+  ],
+  "sections": [],
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Plan a change before Agent writes any code",
+      "startURL": "https://cursor.com/dashboard",
+      "steps": [
+        "In Cursor, press Shift+Tab from the chat input to rotate to Plan Mode. Cursor also offers it when your wording suggests a complex task, and the mode picker dropdown in Agent switches modes too.",
+        "Answer Agent's clarifying questions. It researches the codebase to gather context and writes a full implementation plan.",
+        "Review and edit the plan, either through chat or in the markdown file itself.",
+        "Click to build the plan when it says what you meant.",
+        "Plans are saved in your home directory; Save to workspace moves one into the workspace to keep, share or refer back to. If the build goes wrong, revert it and sharpen the plan rather than patching through follow-up prompts."
+      ],
+      "source": "https://cursor.com/docs/agent/plan-mode"
+    },
+    {
+      "title": "Give Agent standing instructions with rules",
+      "startURL": "https://cursor.com/dashboard",
+      "steps": [
+        "Decide which kind of rule fits: a project rule, version-controlled in .cursor/rules and scoped to that codebase; a user rule, global to your Cursor environment and used by Agent in chat; a team rule managed from the dashboard on Team and Enterprise plans; or an AGENTS.md file in the project root.",
+        "For a project rule, write an .mdc file in .cursor/rules — a plain .md there is ignored, because it carries no frontmatter.",
+        "Set how it applies through the type dropdown, which writes the frontmatter: always apply it, let Agent judge from the description, attach it when a file matches a glob, or keep it for when you @-mention it.",
+        "For a user rule, write the preference under Customize, then Rules; it then applies across every project.",
+        "Whatever the kind, the rule's contents go in at the start of the model's context, and team, project and user rules are merged in that order."
+      ],
+      "source": "https://cursor.com/docs/rules"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://cursor.com/dashboard",
+      "landedURL": "https://authenticator.cursor.sh/",
+      "title": "Sign in",
+      "heading": "Sign in",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
+  ]
+}

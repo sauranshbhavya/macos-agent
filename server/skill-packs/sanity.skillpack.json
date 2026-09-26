@@ -1,0 +1,56 @@
+{
+  "format": 1,
+  "id": "sanity",
+  "name": "Sanity",
+  "domain": "sanity.io",
+  "category": "websites_apps_commerce",
+  "summary": "Headless content platform.",
+  "signInURL": "https://www.sanity.io/entry",
+  "triggers": ["sanity.io", "sanity studio"],
+  "sections": [],
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Create and publish a document",
+      "startURL": "https://www.sanity.io/manage",
+      "steps": [
+        "In Sanity Studio, select the + icon in the top navigation and choose a content type (or navigate to the content type in the sidebar and click + in its document list).",
+        "Complete all required fields, marked with asterisks.",
+        "Select Publish in the lower right to publish the document."
+      ],
+      "source": "https://www.sanity.io/docs/user-guides/content-operations-cheatsheet"
+    },
+    {
+      "title": "Create a task in Studio",
+      "startURL": "https://www.sanity.io/manage",
+      "steps": [
+        "Open your tasks inbox from the checkmark icon in the top-right of the Studio navbar.",
+        "Click + New task to create a new task.",
+        "Give the task a due date and assign it to the person who should handle it (or @mention a Studio user); they'll get a notification.",
+        "Optionally attach the task to a target document so it's easy to find in context.",
+        "Once it's handled, resolve the task from the list to check it off."
+      ],
+      "source": "https://www.sanity.io/docs/studio/tasks"
+    },
+    {
+      "title": "Search and filter content",
+      "startURL": "https://www.sanity.io/manage",
+      "steps": [
+        "Use the global search bar to search across all content types by keyword, document title, or content snippet.",
+        "Apply filters to narrow results by document type, creation or edit date, or any field in your content model.",
+        "In any document list, open the pane menu (⋮) to sort by title, created date, or last edited, and to switch between Compact and Detailed views."
+      ],
+      "source": "https://www.sanity.io/docs/user-guides/content-operations-cheatsheet"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://www.sanity.io/manage",
+      "landedURL": "https://www.sanity.io/login",
+      "title": "Log in to Sanity",
+      "heading": "Build content-powered applications in minutes",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
+  ]
+}

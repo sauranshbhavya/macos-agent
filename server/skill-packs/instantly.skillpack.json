@@ -1,0 +1,58 @@
+{
+  "format": 1,
+  "id": "instantly",
+  "name": "Instantly",
+  "domain": "instantly.ai",
+  "category": "marketing_email",
+  "summary": "Cold email outreach platform.",
+  "signInURL": "https://app.instantly.ai/auth/login",
+  "triggers": ["instantly.ai", "instantly ai"],
+  "sections": [],
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Create a campaign",
+      "startURL": "https://app.instantly.ai/",
+      "steps": [
+        "Go to the Campaigns dashboard and click \"+ Add New\" in the top right corner to start a new campaign.",
+        "Name the campaign, then click \"Continue\" to proceed. Instantly suggests including the target audience's title, industry, and location in the name so campaigns are easier to find and optimize later.",
+        "Go to the campaign's Leads section, click \"Add Leads\", and choose an upload method such as CSV, SuperSearch, entering emails manually, Google Sheet, HubSpot, or Pipedrive.",
+        "Write the email sequence: compose the subject line and email copy for the first email, then add follow-up steps as needed (Instantly recommends 3-4 steps for most cold outreach campaigns).",
+        "In the Schedule tab, set the days of the week and the sending times, then click \"Launch\" once the leads, sequence, and sending accounts are ready."
+      ],
+      "source": "https://help.instantly.ai/en/articles/6386134-how-to-create-a-campaign-complete-setup-guide"
+    },
+    {
+      "title": "Import leads via CSV",
+      "startURL": "https://app.instantly.ai/",
+      "steps": [
+        "In your campaign's Leads section, click \"Add Leads\", select CSV, and choose the CSV file to upload from your device.",
+        "Map each column with the dropdown menu: map the email column to the predefined \"Email\" variable (required), map other columns to standard fields like First Name or Company Name, mark personalized columns as a Custom variable, or mark unwanted columns \"Do Not Import\".",
+        "Choose whether to check for duplicate leads across other campaigns and lists, and whether to verify the leads before uploading.",
+        "Click \"Upload all\" to import the leads. Instantly will notify you of any missing or invalid emails, and of any duplicate leads that were skipped."
+      ],
+      "source": "https://help.instantly.ai/en/articles/6254215-how-to-import-leads-via-csv"
+    },
+    {
+      "title": "View campaign analytics",
+      "startURL": "https://app.instantly.ai/",
+      "steps": [
+        "Open the campaign and go to its Analytics tab to see key metrics, including Sequence started, Open Rate, Click Rate, and Reply Rate.",
+        "Select a longer timeframe, such as Last 3 months, to view complete campaign analytics.",
+        "Scroll down to the Step Analytics section to measure the performance of each step and variant in the campaign.",
+        "Click \"Share\" to download the analytics chart for the campaign, which includes Contacted, Opened, Replies, and Opportunities."
+      ],
+      "source": "https://help.instantly.ai/en/articles/6602310-analytics"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://app.instantly.ai/",
+      "landedURL": "https://app.instantly.ai/auth/login",
+      "title": "Login - Instantly",
+      "heading": "",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
+  ]
+}

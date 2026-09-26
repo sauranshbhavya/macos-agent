@@ -1,0 +1,49 @@
+{
+  "format": 1,
+  "id": "clicksend",
+  "name": "ClickSend",
+  "domain": "clicksend.com",
+  "category": "communication",
+  "summary": "SMS and messaging platform for businesses.",
+  "signInURL": "https://dashboard.clicksend.com/login",
+  "triggers": ["clicksend", "clicksend.com"],
+  "sections": [],
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Send a quick SMS",
+      "startURL": "https://dashboard.clicksend.com/",
+      "steps": [
+        "Open Quick SMS in the Dashboard. Quick SMS reaches as many as 1,000 contacts without setting up a full campaign.",
+        "Add a number, or search your contact lists, in the To field.",
+        "In the From field select the type of number or sender to send from.",
+        "Write the SMS, or use one of your pre-built templates.",
+        "Select Now to send it immediately, or Later to schedule it.",
+        "Click Preview and Confirm to see what the send will cost, then click Send."
+      ],
+      "source": "https://help.clicksend.com/en/articles/42189-quick-sms"
+    },
+    {
+      "title": "Set up an SMS template",
+      "startURL": "https://dashboard.clicksend.com/",
+      "steps": [
+        "In the Dashboard go to SMS, then Templates.",
+        "Click the +.",
+        "Name the template for quick reference and write the message.",
+        "Optional: personalise the template by adding merge tags or placeholders.",
+        "Click Add. Templates can be created from Quick SMS, SMS Campaign and Messenger too, and edited or deleted from the templates page afterwards."
+      ],
+      "source": "https://help.clicksend.com/en/articles/42196-sms-templates"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://dashboard.clicksend.com/",
+      "landedURL": "https://dashboard.clicksend.com/login",
+      "title": "ClickSend Login",
+      "heading": "Login",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
+  ]
+}

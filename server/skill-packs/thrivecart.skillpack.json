@@ -1,0 +1,39 @@
+{
+  "format": 1,
+  "id": "thrivecart",
+  "name": "ThriveCart",
+  "domain": "thrivecart.com",
+  "category": "websites_apps_commerce",
+  "summary": "Shopping cart and checkout pages.",
+  "signInURL": "https://thrivecart.com/signin/",
+  "triggers": [
+    "thrivecart",
+    "thrivecart.com"
+  ],
+  "sections": [],
+  "depth": "deep",
+  "flows": [
+    {
+      "title": "Resend a receipt to a customer",
+      "startURL": "https://thrivecart.com/signin/",
+      "steps": [
+        "Go to the Transactions area in ThriveCart.",
+        "Locate the transaction you want to resend the invoice for.",
+        "Click the invoice button on the transaction. A modal window shows the customer's invoice. For a subscription, click the Manage button on the transaction first, then click View invoice.",
+        "Click the Re-send to customer button to send the invoice email to the customer again.",
+        "Receipts are resent one transaction at a time. If the customer still does not see it, ask them to check spam, trash and any inbox filters."
+      ],
+      "source": "https://support.thrivecart.com/help/resend-a-receipt/"
+    }
+  ],
+  "startPages": [
+    {
+      "url": "https://thrivecart.com/signin/",
+      "landedURL": "https://thrivecart.com/signin/",
+      "title": "ThriveCart",
+      "heading": "Revenue Infrastructure for Modern Creators",
+      "offers": "sign-in",
+      "read": "2026-09-18"
+    }
+  ]
+}
