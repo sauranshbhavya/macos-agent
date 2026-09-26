@@ -13,6 +13,7 @@ import {
   CreditsExhausted,
   ModelUnavailable,
   type AgentFactory,
+  type AgentNote,
   type ModelCallSpec,
   type ModelInvocation,
   type OutboundMessage,
@@ -158,6 +159,10 @@ function storedBodyOf(message: TaskReply): unknown {
 
 function endedStatusOf(finish: FinishBody): EndedStatus {
   return finish.status;
+}
+
+function noteEntries(notes: readonly AgentNote[]): TurnEntry[] {
+  return notes.map((note) => ({ direction: "note" as const, re: null, msgId: randomUUID(), type: note.type, body: note.body }));
 }
 
 function lastExchanged(transcript: readonly StoredMessage[]): StoredMessage | undefined {
@@ -407,7 +412,15 @@ export class TaskRunner {
     try {
       result = await this.deps.agentFor(task).turn(this.contextFor(task, transcript, controller.signal));
     } catch (error) {
-      if (controller.signal.aborted) return;
+      if (controller.signal.aborted) {
+        // A deploy stopped this turn. The hops it already finished are paid for, so their notes are
+        // kept: the turn stays due, and the new process carries on from them instead of paying
+        // for them again. A stop by the person or a closed account ends the task instead.
+        if (this.stopped && error instanceof AgentTurnFailed) {
+          await this.storeTurn(task, trigger.seq, noteEntries(error.notes), undefined);
+        }
+        return;
+      }
       if (error instanceof AgentTurnFailed) {
         return this.endWith(task, trigger.seq, error.notes, this.finishFor(error.cause, task));
       }
@@ -424,13 +437,7 @@ export class TaskRunner {
     const last = result.messages[result.messages.length - 1]!;
     const end = last.type === "finish" ? endedStatusOf(last.body) : undefined;
     const entries: TurnEntry[] = [
-      ...(result.notes ?? []).map((note) => ({
-        direction: "note" as const,
-        re: null,
-        msgId: randomUUID(),
-        type: note.type,
-        body: note.body,
-      })),
+      ...noteEntries(result.notes ?? []),
       ...result.messages.map((message) => ({
         direction: "out" as const,
         re: trigger.seq,
@@ -512,7 +519,7 @@ export class TaskRunner {
     finish: FinishBody,
   ): Promise<void> {
     const entries: TurnEntry[] = [
-      ...notes.map((note) => ({ direction: "note" as const, re: null, msgId: randomUUID(), type: note.type, body: note.body })),
+      ...noteEntries(notes),
       { direction: "out", re, msgId: randomUUID(), type: "finish", body: finish },
     ];
     await this.storeTurn(task, re, entries, endedStatusOf(finish));

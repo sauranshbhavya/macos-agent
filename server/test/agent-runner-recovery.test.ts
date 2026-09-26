@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import type { Agent } from "../src/agent/agent.js";
+import { AgentTurnFailed, type Agent, type AgentNote, type ModelInvocation } from "../src/agent/agent.js";
 import { memoryModelCallLedger } from "../src/agent/credits.js";
 import type { ServerTaskMessage } from "../src/agent/protocol.js";
 import { TaskRunner } from "../src/agent/tasks/runner.js";
@@ -170,5 +170,56 @@ describe("TaskRunner, when the store fails under a turn", () => {
     await runner.idle();
     expect(delivered.map((message) => message.type)).toEqual(["finish"]);
     expect(turns).toBe(0);
+  });
+
+  it("keeps a drained turn's paid-for notes, and the new process carries on from them", async () => {
+    const store = memoryTaskStore();
+    const ledger = memoryModelCallLedger(1000);
+    const spec = { agent: "planner" as const, tier: "fast" as const, maxInputTokens: 100, maxOutputTokens: 100 };
+    const answered = { value: "found it", usage: { inputTokens: 10, outputTokens: 10 }, provider: "test", model: "test" };
+    let resumedWith: string[] = [];
+    const researching: Agent = {
+      async turn(context) {
+        const earlier = context.transcript.filter((m) => m.type === "tool.result").map((m) => (m.body as { content: string }).content);
+        if (earlier.length > 0) {
+          resumedWith = earlier;
+          return { messages: [{ type: "finish", body: { status: "completed", summary: "Done." } }] };
+        }
+        const notes: AgentNote[] = [];
+        const found = await context.modelCall(spec, () => Promise.resolve(answered));
+        notes.push({ type: "tool.result", body: { content: found } });
+        try {
+          await context.modelCall(
+            spec,
+            (signal) => new Promise<ModelInvocation<string>>((_resolve, reject) => signal.addEventListener("abort", () => reject(signal.reason))),
+          );
+        } catch (error) {
+          throw new AgentTurnFailed(error, notes);
+        }
+        return { messages: [] };
+      },
+    };
+    const deps = (delivered: ServerTaskMessage[]) => ({
+      store,
+      ledger,
+      rates: TEST_TOKEN_RATES,
+      agentFor: () => researching,
+      deliver: (_task: unknown, messages: readonly ServerTaskMessage[]) => delivered.push(...messages),
+      now: () => new Date(),
+      log: { info: () => {}, error: () => {} },
+    });
+    const before = new TaskRunner(deps([]));
+    const task = await start(before);
+    await eventually(() => ledger.calls.size === 2);
+    await before.stop();
+    expect((await store.transcript(task)).filter((m) => m.type === "tool.result")).toHaveLength(1);
+
+    const delivered: ServerTaskMessage[] = [];
+    const after = new TaskRunner(deps(delivered));
+    const { replay } = await after.resume(ACCOUNT, [{ task, lastSeqIn: 0 }]);
+    await replay();
+    await eventually(() => delivered.length > 0);
+    expect(resumedWith).toEqual(["found it"]);
+    expect(ledger.calls.size).toBe(2);
   });
 });
