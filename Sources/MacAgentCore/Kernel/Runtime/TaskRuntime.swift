@@ -483,6 +483,9 @@ public actor TaskRuntime {
         return phase.isTerminal && record.outbox.isEmpty ? nil : record.resumeEntry
     }
 
+    /// Whether an action is waiting on the person's decision. For tests.
+    var isWaitingForADecision: Bool { approval != nil }
+
     public func snapshot() -> TaskSnapshot {
         TaskSnapshot(
             id: id,
@@ -499,8 +502,16 @@ public actor TaskRuntime {
 
     private func run(_ body: ProposeBody, re: Int) async {
         record.pending = PendingProposal(seq: re, agent: body.agent, final: body.final, actions: body.actions.map(\.actionID))
-        for action in body.actions {
-            record.actions.append(LedgerAction(actionID: action.actionID, state: .received, declared: action.effect))
+        // An action id runs at most once. One this task has seen before, or one repeated within this
+        // proposal, is refused, and the ledger's record of the first stays as it was.
+        var known = Set(record.actions.map(\.actionID))
+        var repeated: Set<Int> = []
+        for (index, action) in body.actions.enumerated() {
+            if known.insert(action.actionID).inserted {
+                record.actions.append(LedgerAction(actionID: action.actionID, state: .received, declared: action.effect))
+            } else {
+                repeated.insert(index)
+            }
         }
         try? save()
 
@@ -508,6 +519,16 @@ public actor TaskRuntime {
         var judgedSoFar: [Effect] = []
         var stopped = false
         for (index, action) in body.actions.enumerated() {
+            if repeated.contains(index) {
+                results.append(ActionResult(
+                    actionID: action.actionID,
+                    status: .refused,
+                    effect: action.effect,
+                    error: OutcomeError(code: .executionError, message: "This action was already given once, so it didn't run again.")
+                ))
+                stopped = true
+                continue
+            }
             if stopped || Task.isCancelled {
                 results.append(skip(action))
                 continue
@@ -700,6 +721,11 @@ public actor TaskRuntime {
 
     private func end(_ terminal: TaskPhase, keepLedgerUntilAcknowledged: Bool = false) async {
         phase = terminal
+        // Ended however it ends, even by the gateway mid-approval: nothing is left waiting on the
+        // person or running for a task that is over.
+        working?.cancel()
+        approval?.reply.resume(returning: false)
+        approval = nil
         await deps.broker.void(task: id)
         await deps.screen?.taskEnded()
         // A local task's messages go to no gateway, so nothing would ever acknowledge them.

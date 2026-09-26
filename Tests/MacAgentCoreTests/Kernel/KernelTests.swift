@@ -425,6 +425,52 @@ struct KernelTests {
     }
 
     @Test
+    func anActionIDGivenASecondTimeIsRefusedAndTheFirstRecordStands() async throws {
+        let gateway = ScriptedGateway()
+        let ledgers = MemoryTaskLedgerStore()
+        let make = TestCapability(name: "make")
+        let controller = makeController(gateway, ledgers: ledgers, capabilities: [make])
+        await controller.launch()
+        let task = try await startedTask(controller, TaskRequest(goal: "Make it", mode: .normal))
+        _ = try await gateway.next("task.start")
+        let action = ActionID()
+        await gateway.send(task, propose([call("make", action)]), re: 1)
+        #expect(results(of: try await gateway.next("outcome")).map(\.status) == [.done])
+
+        await gateway.send(task, propose([call("make", action), call("make")]), re: 2)
+        let again = results(of: try await gateway.next("outcome"))
+        #expect(again.map(\.status) == [.refused, .skipped])
+        #expect(make.executed.value == [action])
+        #expect(ledgers.record(task)?.action(action)?.state == .done)
+    }
+
+    @Test
+    func aTaskTheGatewayEndsWhileAnApprovalWaitsLeavesNothingWaiting() async throws {
+        let send = TestCapability(name: "send_it", floor: .external)
+        let sent = Shared<[ClientMessage]>([])
+        let runtime = TaskRuntime(
+            id: TaskID(),
+            request: TaskStartBody(goal: "Send it", origin: .composer, isPrivate: false, unattended: false, mode: .normal),
+            deps: RuntimeDependencies(
+                send: { message in sent.value.append(message); return true },
+                ledgers: MemoryTaskLedgerStore(),
+                capabilities: KernelCapabilities([send]),
+                broker: ApprovalBroker(),
+                publish: { _ in }
+            )
+        )
+        await runtime.start(generation: 1)
+        await runtime.receive(ServerMessage(address: TaskAddress(task: runtime.id, seq: 1, re: 1), payload: propose([call("send_it", effect: .external)])), generation: 1)
+        #expect(await eventually { await runtime.isWaitingForADecision })
+
+        await runtime.receive(ServerMessage(address: TaskAddress(task: runtime.id, seq: 2, re: nil), payload: .finish(FinishBody(status: .cancelled, summary: "Stopped on the server."))), generation: 1)
+        #expect(await runtime.phase == .cancelled)
+        #expect(await runtime.isWaitingForADecision == false)
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(send.executed.value.isEmpty)
+    }
+
+    @Test
     func aNavigationWithAnUnknownEndIsReportedWithoutPausing() async throws {
         let gateway = ScriptedGateway()
         let ledgers = MemoryTaskLedgerStore()
