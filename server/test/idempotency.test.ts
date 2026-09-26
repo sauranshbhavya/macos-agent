@@ -10,7 +10,9 @@ import {
   type KeyStore,
 } from "../src/idempotency/store.js";
 import { testConfig } from "./support/config.js";
+import { fakeCreditStore } from "./support/credit.js";
 import { fakeEntitlementStore } from "./support/entitlement.js";
+import { transcriptionBody } from "./support/multipart.js";
 import { accessTokenFor } from "./support/tokens.js";
 import { signedInConnectionTo } from "./support/connection.js";
 import { WithoutOAuth } from "./support/without-oauth.js";
@@ -109,53 +111,76 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-/** One OpenAI-shaped reply per call, counted, so "no second upstream call" is an assertion. */
+/** One transcription per call, counted, so "no second upstream call" is an assertion. */
 function stubUpstream(): void {
   vi.stubGlobal("fetch", async () => {
     upstreamCalls += 1;
-    return new Response(
-      JSON.stringify({
-        output: [{ content: [{ type: "output_text", text: "{\"summary\":\"ok\"}" }] }],
-        usage: { input_tokens: 1, output_tokens: 2, total_tokens: 3 },
-      }),
-      { status: 200, headers: { "content-type": "application/json" } },
-    );
+    return new Response(JSON.stringify({ text: "hello there" }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
   });
 }
 
+/**
+ * The whole app, with a fake credit store so `POST /v1/account/credits/top-up` answers without a
+ * database. That route is here only as a `POST` whose body is JSON: the transcription route's body
+ * is multipart, which the hook can fingerprint only by its length, so the tests about hashing a
+ * parsed body need a second route. With no pack configured it refuses every top-up, after the hook
+ * has claimed the key, which is all these tests read.
+ */
 function build() {
   return buildApp(
     testConfig({ credentials: [{ provider: "openai", keys: ["sk-test-openai-key"] }] }),
     { provider: new UnusedAuthProvider(), withConnection: signedInConnection },
-    { idempotencyStore: store, entitlementStore: fakeEntitlementStore() },
+    {
+      idempotencyStore: store,
+      entitlementStore: fakeEntitlementStore(),
+      creditStore: fakeCreditStore({}),
+    },
   );
 }
 
 const authorization = (user = SUPABASE_USER) => `Bearer ${accessTokenFor(user)}`;
-const planBody = (text = "hello") => ({
-  task_id: "task-1",
-  retention: "standard" as const,
-  messages: [{ role: "user" as const, text }],
-  response_schema_name: "Plan",
-  response_schema: { type: "object" },
-});
+const META = { task_id: "task-1", retention: "standard" as const };
+const RECORDING = Buffer.from("a short recording", "utf8");
+const TOP_UP = "/v1/account/credits/top-up";
 
+/** `POST /v1/transcriptions`, the gateway's one metered route, as the Mac sends it. */
 const post = (
   app: ReturnType<typeof build>,
-  options: { key?: string; body?: unknown; user?: string; url?: string } = {},
+  options: { key?: string; user?: string; meta?: unknown; audio?: Buffer } = {},
+) => {
+  const body = transcriptionBody(options.meta ?? META, options.audio ?? RECORDING);
+  return app.inject({
+    method: "POST",
+    url: "/v1/transcriptions",
+    headers: {
+      authorization: authorization(options.user),
+      "content-type": body.contentType,
+      ...(options.key === undefined ? {} : { "idempotency-key": options.key }),
+    },
+    payload: body.payload,
+  });
+};
+
+/** A `POST` with a JSON body, so the hook fingerprints the parsed document rather than a length. */
+const postJSON = (
+  app: ReturnType<typeof build>,
+  options: { key: string; body: object; url?: string; authenticated?: boolean },
 ) =>
   app.inject({
     method: "POST",
-    url: options.url ?? "/v1/plan",
+    url: options.url ?? TOP_UP,
     headers: {
-      authorization: authorization(options.user),
-      ...(options.key === undefined ? {} : { "idempotency-key": options.key }),
+      ...(options.authenticated === false ? {} : { authorization: authorization() }),
+      "idempotency-key": options.key,
     },
-    payload: (options.body ?? planBody()) as object,
+    payload: options.body,
   });
 
 describe("contract §9.2 — the key is claimed before the handler runs", () => {
-  it("claims the key under the caller's account, fingerprinting the route and the body", async () => {
+  it("claims the key under the caller's account, fingerprinting the route and the body's length", async () => {
     stubUpstream();
     const app = build();
 
@@ -169,9 +194,9 @@ describe("contract §9.2 — the key is claimed before the handler runs", () => 
     // **The account, not the Supabase user and not the request's own id.** Scoping is what stops one
     // account's key from replaying another's response, and it is invisible in the reply.
     expect(claim.accountScope).toBe(ACCOUNT);
-    expect(claim.route).toBe("POST /v1/plan");
-    expect(claim.fingerprint).toContain("POST /v1/plan");
-    expect(claim.fingerprint).toMatch(/sha256:[0-9a-f]{64}$/);
+    expect(claim.route).toBe("POST /v1/transcriptions");
+    // A multipart body is not parsed before the handler, so its fingerprint is the declared length.
+    expect(claim.fingerprint).toMatch(/^POST \/v1\/transcriptions\nlen:\d+$/);
     await app.close();
   });
 
@@ -214,7 +239,7 @@ describe("contract §9.2 — a repeat inside the window returns the stored respo
       kind: "replay",
       response: {
         status: 200,
-        body: Buffer.from('{"request_id":"original-id","output_text":"{}"}', "utf8"),
+        body: Buffer.from('{"request_id":"original-id","text":"{}"}', "utf8"),
         contentType: "application/json; charset=utf-8",
         requestId: "original-id",
       },
@@ -223,7 +248,7 @@ describe("contract §9.2 — a repeat inside the window returns the stored respo
     const response = await post(app, { key: KEY });
 
     expect(response.statusCode).toBe(200);
-    expect(response.body).toBe('{"request_id":"original-id","output_text":"{}"}');
+    expect(response.body).toBe('{"request_id":"original-id","text":"{}"}');
     // The whole point: a repeat costs nothing upstream.
     expect(upstreamCalls).toBe(0);
     // And it is not stored again — a replay has nothing new to record.
@@ -233,9 +258,9 @@ describe("contract §9.2 — a repeat inside the window returns the stored respo
   });
 
   it("replays the original's Sonny-Request-Id rather than stamping the repeat's", async () => {
-    // §2.3 makes that header the join key to the metering event and the retained content. A replay
-    // has exactly one of each and they are the original's, so a fresh id would name a request that
-    // metered nothing — and would disagree with the `request_id` inside the body it is sent with.
+    // §2.3 makes that header the join key to the metering event. A replay has exactly one and it is
+    // the original's, so a fresh id would name a request that metered nothing — and would disagree
+    // with the `request_id` inside the body it is sent with.
     stubUpstream();
     const app = build();
     store.outcome = {
@@ -263,7 +288,7 @@ describe("contract §9.2 — the two conflicts", () => {
     const app = build();
     store.outcome = { kind: "conflict" };
 
-    const response = await post(app, { key: KEY, body: planBody("a different command") });
+    const response = await post(app, { key: KEY, audio: Buffer.from("a different recording", "utf8") });
 
     expect(response.statusCode).toBe(409);
     const body = response.json();
@@ -296,35 +321,44 @@ describe("contract §9.2 — the two conflicts", () => {
   });
 
   it("sends a different body to the same route as a genuinely different fingerprint", async () => {
-    stubUpstream();
     const app = build();
 
-    await post(app, { key: KEY, body: planBody("first") });
-    await post(app, { key: KEY, body: planBody("second") });
+    await postJSON(app, { key: KEY, body: { note: "first" } });
+    await postJSON(app, { key: KEY, body: { note: "second" } });
 
     expect(store.claims).toHaveLength(2);
+    // Hashed from the parsed document, not from a length: the two bodies are the same length.
+    expect(store.claims[0]!.fingerprint).toMatch(/^POST \/v1\/account\/credits\/top-up\nsha256:[0-9a-f]{64}$/);
     expect(store.claims[0]!.fingerprint).not.toBe(store.claims[1]!.fingerprint);
     await app.close();
   });
 
   it("sends the same body twice as the same fingerprint", async () => {
-    stubUpstream();
     const app = build();
 
-    await post(app, { key: KEY, body: planBody("same") });
-    await post(app, { key: KEY, body: planBody("same") });
+    await postJSON(app, { key: KEY, body: { note: "same" } });
+    await postJSON(app, { key: KEY, body: { note: "same" } });
 
+    expect(store.claims).toHaveLength(2);
     expect(store.claims[0]!.fingerprint).toBe(store.claims[1]!.fingerprint);
     await app.close();
   });
 
   it("treats one key on two routes as two different fingerprints", async () => {
-    stubUpstream();
+    // The same JSON body to two routes, so the body's half of each fingerprint is identical and the
+    // route is the only thing that can tell them apart. The sign-in route refuses this body before it
+    // reads anything else, which is after the hook has claimed the key.
     const app = build();
+    const body = { note: "same" };
 
-    await post(app, { key: KEY, url: "/v1/plan" });
-    await post(app, { key: KEY, url: "/v1/research/synthesize" });
+    await postJSON(app, { key: KEY, body });
+    await postJSON(app, { key: KEY, body, url: "/v1/auth/email/start", authenticated: false });
 
+    expect(store.claims).toHaveLength(2);
+    const [topUp, signIn] = store.claims.map((claim) => claim.fingerprint.split("\n"));
+    expect(topUp![1]).toBe(signIn![1]);
+    expect(topUp![0]).toBe(`POST ${TOP_UP}`);
+    expect(signIn![0]).toBe("POST /v1/auth/email/start");
     expect(store.claims[0]!.fingerprint).not.toBe(store.claims[1]!.fingerprint);
     await app.close();
   });
@@ -386,7 +420,8 @@ describe("a retryable failure releases the key rather than freezing it", () => {
     stubUpstream();
     const app = build();
 
-    const response = await post(app, { key: KEY, body: { task_id: "t" } });
+    // The meta part is missing its required `retention`.
+    const response = await post(app, { key: KEY, meta: { task_id: "t" } });
 
     expect(response.statusCode).toBe(400);
     expect(response.json()["error"]["code"]).toBe("request.invalid");
@@ -459,11 +494,12 @@ describe("what the hook does not do", () => {
     // about a shape that does not exist.
     const app = buildApp(testConfig());
 
+    const body = transcriptionBody(META, RECORDING);
     const response = await app.inject({
       method: "POST",
-      url: "/v1/plan",
-      headers: { "idempotency-key": KEY },
-      payload: planBody(),
+      url: "/v1/transcriptions",
+      headers: { "idempotency-key": KEY, "content-type": body.contentType },
+      payload: body.payload,
     });
 
     // Refused by the gate, which runs first — which is the reachability argument, executable.
@@ -482,46 +518,10 @@ describe("the multipart route, whose body the hook cannot hash", () => {
    * the first, stream-teeing version of the fingerprint had, and it presented as a hang rather than
    * as a red test.
    */
-  const multipart = (audio: Buffer) => {
-    const boundary = "----sonnytestboundary";
-    return {
-      contentType: `multipart/form-data; boundary=${boundary}`,
-      payload: Buffer.concat([
-        Buffer.from(
-          `--${boundary}\r\nContent-Disposition: form-data; name="meta"\r\n` +
-            `Content-Type: application/json\r\n\r\n{"task_id":"t","retention":"standard"}\r\n` +
-            `--${boundary}\r\nContent-Disposition: form-data; name="audio"; filename="a.m4a"\r\n` +
-            `Content-Type: audio/mp4\r\n\r\n`,
-          "utf8",
-        ),
-        audio,
-        Buffer.from(`\r\n--${boundary}--\r\n`, "utf8"),
-      ]),
-    };
-  };
-
-  const send = (app: ReturnType<typeof build>, audio: Buffer) => {
-    const body = multipart(audio);
-    return app.inject({
-      method: "POST",
-      url: "/v1/transcriptions",
-      headers: {
-        authorization: authorization(),
-        "content-type": body.contentType,
-        "idempotency-key": KEY,
-      },
-      payload: body.payload,
-    });
-  };
+  const send = (app: ReturnType<typeof build>, audio: Buffer) => post(app, { key: KEY, audio });
 
   it("claims a key on a multipart body, fingerprinting its declared length", async () => {
-    vi.stubGlobal("fetch", async () => {
-      upstreamCalls += 1;
-      return new Response(JSON.stringify({ text: "hello there" }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      });
-    });
+    stubUpstream();
     const app = build();
 
     // Two megabytes: past the size at which the stream-teeing fingerprint deadlocked, so this also
@@ -538,13 +538,7 @@ describe("the multipart route, whose body the hook cannot hash", () => {
   });
 
   it("gives two different recordings of different lengths different fingerprints", async () => {
-    vi.stubGlobal("fetch", async () => {
-      upstreamCalls += 1;
-      return new Response(JSON.stringify({ text: "hello" }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      });
-    });
+    stubUpstream();
     const app = build();
 
     await send(app, Buffer.alloc(1000, 0x41));
@@ -557,13 +551,7 @@ describe("the multipart route, whose body the hook cannot hash", () => {
   it("cannot tell two different recordings of the same length apart — the stated weakness", async () => {
     // Pinned rather than left in prose, because it is the one place conflict detection is weaker
     // than "different body" suggests, and a future change that fixed it should have to notice.
-    vi.stubGlobal("fetch", async () => {
-      upstreamCalls += 1;
-      return new Response(JSON.stringify({ text: "hello" }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      });
-    });
+    stubUpstream();
     const app = build();
 
     await send(app, Buffer.alloc(1000, 0x41));
@@ -611,30 +599,31 @@ describe("the fencing token", () => {
 });
 
 describe("the fingerprint", () => {
+  const ROUTE = `POST ${TOP_UP}`;
   const request = (body: unknown, headers: Record<string, string> = {}) =>
     ({ body, headers }) as never;
 
   it("ignores key order, because two JSON documents differing only in it are the same document", () => {
-    expect(fingerprintOf(request({ a: 1, b: 2 }), "POST /v1/plan")).toBe(
-      fingerprintOf(request({ b: 2, a: 1 }), "POST /v1/plan"),
+    expect(fingerprintOf(request({ a: 1, b: 2 }), ROUTE)).toBe(
+      fingerprintOf(request({ b: 2, a: 1 }), ROUTE),
     );
   });
 
   it("does not ignore array order, because an array's order is part of its meaning", () => {
-    expect(fingerprintOf(request({ xs: [1, 2] }), "POST /v1/plan")).not.toBe(
-      fingerprintOf(request({ xs: [2, 1] }), "POST /v1/plan"),
+    expect(fingerprintOf(request({ xs: [1, 2] }), ROUTE)).not.toBe(
+      fingerprintOf(request({ xs: [2, 1] }), ROUTE),
     );
   });
 
   it("sorts nested keys too", () => {
-    expect(fingerprintOf(request({ o: { a: 1, b: 2 } }), "POST /v1/plan")).toBe(
-      fingerprintOf(request({ o: { b: 2, a: 1 } }), "POST /v1/plan"),
+    expect(fingerprintOf(request({ o: { a: 1, b: 2 } }), ROUTE)).toBe(
+      fingerprintOf(request({ o: { b: 2, a: 1 } }), ROUTE),
     );
   });
 
   it("tells a value apart from the string that spells it", () => {
-    expect(fingerprintOf(request({ n: 1 }), "POST /v1/plan")).not.toBe(
-      fingerprintOf(request({ n: "1" }), "POST /v1/plan"),
+    expect(fingerprintOf(request({ n: 1 }), ROUTE)).not.toBe(
+      fingerprintOf(request({ n: "1" }), ROUTE),
     );
   });
 
@@ -653,8 +642,8 @@ describe("the fingerprint", () => {
   });
 
   it("never lets a parsed body and an unparsed one collide", () => {
-    expect(fingerprintOf(request({}), "POST /v1/plan")).not.toBe(
-      fingerprintOf(request(undefined, { "content-length": "2" }), "POST /v1/plan"),
+    expect(fingerprintOf(request({}), ROUTE)).not.toBe(
+      fingerprintOf(request(undefined, { "content-length": "2" }), ROUTE),
     );
   });
 
@@ -667,15 +656,15 @@ describe("the fingerprint", () => {
     // fails unsafe: a wrong answer to a correct request.
     const parsed = { a: 1, b: 2 };
     const canonicalText = '{"a":1,"b":2}';
-    expect(fingerprintOf(request(parsed), "POST /v1/plan")).not.toBe(
-      fingerprintOf(request(canonicalText), "POST /v1/plan"),
+    expect(fingerprintOf(request(parsed), ROUTE)).not.toBe(
+      fingerprintOf(request(canonicalText), ROUTE),
     );
   });
 
   it("does not let a Buffer body collide with the string that spells it", () => {
     const text = '{"a":1}';
-    expect(fingerprintOf(request(text), "POST /v1/plan")).not.toBe(
-      fingerprintOf(request(Buffer.from(text, "utf8")), "POST /v1/plan"),
+    expect(fingerprintOf(request(text), ROUTE)).not.toBe(
+      fingerprintOf(request(Buffer.from(text, "utf8")), ROUTE),
     );
   });
 
@@ -687,23 +676,23 @@ describe("the fingerprint", () => {
     // the prefix, and it is the invariant the prefixes exist for: no value of one kind can spell a
     // value of another.
     const object = { a: 1 };
-    expect(fingerprintOf(request(`json\n${JSON.stringify(object)}`), "POST /v1/plan")).not.toBe(
-      fingerprintOf(request(object), "POST /v1/plan"),
+    expect(fingerprintOf(request(`json\n${JSON.stringify(object)}`), ROUTE)).not.toBe(
+      fingerprintOf(request(object), ROUTE),
     );
   });
 
   it("cannot be made to collide by a Buffer that spells a string's hashed form", () => {
     // The same invariant from the third kind's side, so the `bytes` prefix is pinned too rather
     // than resting on the other two.
-    expect(fingerprintOf(request(Buffer.from("text\nhello", "utf8")), "POST /v1/plan")).not.toBe(
-      fingerprintOf(request("hello"), "POST /v1/plan"),
+    expect(fingerprintOf(request(Buffer.from("text\nhello", "utf8")), ROUTE)).not.toBe(
+      fingerprintOf(request("hello"), ROUTE),
     );
   });
 
   it("still gives two equal strings the same fingerprint", () => {
     // The prefixes separate the kinds without making a genuine repeat conflict with itself.
-    expect(fingerprintOf(request("hello"), "POST /v1/plan")).toBe(
-      fingerprintOf(request("hello"), "POST /v1/plan"),
+    expect(fingerprintOf(request("hello"), ROUTE)).toBe(
+      fingerprintOf(request("hello"), ROUTE),
     );
   });
 
@@ -711,8 +700,8 @@ describe("the fingerprint", () => {
     // The account scope is a separate column, not part of the fingerprint: two accounts sending the
     // same body to the same route must fingerprint identically and still never collide.
     expect(UNAUTHENTICATED_SCOPE).toBe("00000000-0000-0000-0000-000000000000");
-    expect(fingerprintOf(request({ a: 1 }), "POST /v1/plan")).toBe(
-      fingerprintOf(request({ a: 1 }), "POST /v1/plan"),
+    expect(fingerprintOf(request({ a: 1 }), ROUTE)).toBe(
+      fingerprintOf(request({ a: 1 }), ROUTE),
     );
   });
 });

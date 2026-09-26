@@ -67,7 +67,7 @@ function appWith(revoked: ReadonlySet<string>, asked: Recorded[]) {
     policy: TEST_JWT_POLICY,
     withConnection: recordingConnection(revoked, asked),
   });
-  app.post("/v1/plan", async (request) => ({
+  app.post("/v1/transcriptions", async (request) => ({
     accountId: request.auth?.accountId,
     providerSessionId: request.auth?.providerSessionId,
     expiresAt: request.auth?.accessTokenExpiresAt?.toISOString(),
@@ -86,7 +86,7 @@ describe("a signed-out session, at the gate", () => {
     const app = appWith(new Set([providerSessionFor(USER)]), asked);
 
     const refused = await app.inject({
-      method: "POST", url: "/v1/plan",
+      method: "POST", url: "/v1/transcriptions",
       headers: { authorization: `Bearer ${accessTokenFor(USER)}` },
     });
 
@@ -107,7 +107,7 @@ describe("a signed-out session, at the gate", () => {
     const app = appWith(new Set([OTHER_SESSION]), asked);
 
     const served = await app.inject({
-      method: "POST", url: "/v1/plan",
+      method: "POST", url: "/v1/transcriptions",
       headers: { authorization: `Bearer ${accessTokenFor(USER)}` },
     });
 
@@ -132,7 +132,7 @@ describe("a signed-out session, at the gate", () => {
     const expectedExpiry = new Date((Math.floor(issued.getTime() / 1000) + 3600) * 1000);
 
     const served = await app.inject({
-      method: "POST", url: "/v1/plan",
+      method: "POST", url: "/v1/transcriptions",
       headers: {
         authorization: `Bearer ${accessTokenFor(USER, { now: issued, lifetimeSeconds: 3600 })}`,
       },
@@ -155,7 +155,7 @@ describe("a signed-out session, at the gate", () => {
     const app = appWith(new Set([providerSessionFor(USER)]), asked);
 
     const refused = await app.inject({
-      method: "POST", url: "/v1/plan",
+      method: "POST", url: "/v1/transcriptions",
       headers: {
         authorization: `Bearer ${tokenWithClaims(USER, { session_id: undefined })}`,
       },
@@ -178,7 +178,7 @@ describe("a signed-out session, at the gate", () => {
     const app = appWith(new Set(), asked);
 
     const refused = await app.inject({
-      method: "POST", url: "/v1/plan",
+      method: "POST", url: "/v1/transcriptions",
       headers: { authorization: `Bearer ${tokenWithClaims(USER, { session_id: "not-a-uuid" })}` },
     });
 

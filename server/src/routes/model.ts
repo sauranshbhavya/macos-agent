@@ -1,113 +1,44 @@
 import type { FastifyError, FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { classify, errorBody } from "../errors.js";
-import { noteContent } from "../content/hook.js";
+import { noteRetention } from "../retention.js";
 import { meteredUpstreamCall, noteMetering } from "../metering/hook.js";
 import { BODY_LIMIT_BYTES, BODY_READ_DEADLINE_MS, DEADLINE_MS } from "../model/limits.js";
-import {
-  ProviderRejected,
-  ProviderTimedOut,
-  ProviderUnavailable,
-  type ModelProviders,
-  type ProviderAttribution,
-  type RoutedTextAdapter,
-  type UpstreamUsage,
-} from "../model/upstream.js";
+import { sendUpstreamFailure, withDeadlines } from "../model/routing.js";
+import type { ModelProviders, ProviderAttribution, UpstreamUsage } from "../model/upstream.js";
 
 /**
- * The four credential-bearing text routes (SONNY-130): `/v1/plan`, `/v1/research/synthesize`,
- * `/v1/transcriptions` and `/v1/search`.
+ * `POST /v1/transcriptions`, the one model route the Mac still calls directly: voice becomes text
+ * here, and the text becomes a task on the session (V2 plan section 6, "Composer and voice"). Every
+ * other model call is the gateway's own, inside a task.
  *
- * All four are authenticated — `auth/gate.ts` covers them by *not* listing them in `PUBLIC_ROUTES`,
- * which is the deny-by-default property that file exists for — and none of them reads the caller's
- * account for anything. Entitlement checks are SONNY-135's, and are not stubbed here, because a
- * stub of an entitlement check is a check that has been written and does nothing.
- *
- * **Metering has since landed and these routes deposit into it** (SONNY-133). This paragraph used to
- * name it as a non-goal alongside entitlements. What the routes contribute is the three facts the
- * hook cannot see for itself — that an upstream call was opened, how long it took, and which
- * provider served it — through `noteMetering` and `meteredUpstreamCall`; the event itself, and the
- * decision to write one at all, are `metering/hook.ts`', on this instance, for every route. A route
- * here that deposited nothing would still be metered, with the provider column empty.
- *
- * **`retention` is validated here and honoured somewhere else, and the split is the guarantee**
- * (updated 2026-08-28, SONNY-134). The field is required on every one of the four and §2.4.2 makes
- * an omitted one a loud `400` rather than a quiet guess in either direction — that part is
- * unchanged. This paragraph used to continue "what it is *not* is honoured, because this ticket
- * stores no content at all", which was true of SONNY-130 and is not true now: the content store
- * exists. What has not changed is that **no line in this file consults the field to decide whether
- * to store**, which is §10.1's rule rather than an omission — "enforced where the storing happens,
- * not at the call site" — and `content/hook.ts` is where that happens.
- *
- * What these routes contribute to retention is the same shape as what they contribute to metering:
- * the facts the hook cannot see for itself. There are two — the serving provider, beside the
- * metering deposit, and `/v1/transcriptions`' audio, which is the one piece of request content that
- * is not in `request.body`.
+ * Authenticated by `auth/gate.ts` not listing it in `PUBLIC_ROUTES`, and metered through
+ * `meteredUpstreamCall` like any upstream call. `retention` is required and recorded with
+ * `noteRetention`, so a recording made with "Don't save this task" on leaves no replayable copy in
+ * the idempotency store.
  */
 
-/** §2.4: required on all five model routes, never defaulted. */
+/** §2.4: required, never defaulted. */
 const retentionField = z.enum(["standard", "none"]);
 const taskIdField = z.string().trim().min(1).max(200);
 
 /**
- * §4.2's one body shape, shared by the two text routes.
+ * The `meta` part of §4.4's multipart body.
  *
  * `.strict()` is deliberate and is the opposite of §2.1's rule for *responses*. The contract makes
  * the client tolerant of unknown response fields so the server can add them additively; nothing
  * makes the server tolerant of unknown request fields, and it should not be — a field this server
  * silently drops is a client believing it asked for something.
  */
-const textBody = z
-  .object({
-    task_id: taskIdField,
-    retention: retentionField,
-    messages: z
-      .array(
-        z
-          .object({ role: z.enum(["system", "user"]), text: z.string() })
-          .strict(),
-      )
-      .min(1),
-    response_schema_name: z.string().trim().min(1).max(100),
-    response_schema: z.record(z.unknown()),
-    reasoning_effort: z.string().trim().min(1).max(50).optional(),
-    verbosity: z.string().trim().min(1).max(50).optional(),
-  })
-  .strict();
-
-const searchBody = z
-  .object({
-    task_id: taskIdField,
-    retention: retentionField,
-    query: z.string().trim().min(1),
-    max_results: z.number().int().optional(),
-  })
-  .strict();
-
-/** §4.4's `meta` part. The audio arrives as the other part, never as a field in here. */
 const transcriptionMeta = z
   .object({ task_id: taskIdField, retention: retentionField })
   .strict();
 
 /**
- * Record which provider served, and which were tried first (SONNY-132).
- *
- * **This is the only place the fact leaves the router, and it never leaves this server.** §4.2:
- * "The response names no provider and no model." §11 puts `provider` on the metering event —
- * "Which provider actually served it. Required for failover accounting (SONNY-132) and never
- * returned to the client" — and **that event now exists**, so this function does two things: it
- * deposits the attribution onto the request's metering draft, and it logs. `request.id` ties both to
- * the `Sonny-Request-Id` the caller was given, which §2.3 makes the join key for exactly this kind
- * of lookup.
- *
- * The log line is kept beside the write rather than replaced by it. They answer different questions:
- * a log line is what an operator reads while a deploy is going wrong, and the event is what a cost
- * question is answered from a month later. `logStream` in `app.ts` exists because this line was
- * unpinned by any assertion (PR #143's F3), and it stays pinned.
- *
- * A failover is logged at `warn` and an ordinary request at `debug`: the first is a provider
- * having a bad hour and is worth noticing without anyone asking, the second is every request that
- * has ever worked.
+ * Record which provider served (SONNY-132): on the request's metering event, and in a debug log line
+ * tied to the `Sonny-Request-Id`. It never reaches the response — §4.2: "The response names no
+ * provider and no model." Transcription has one servable provider, so `failedOver` is always empty
+ * here; it is recorded anyway because the metering column exists.
  */
 function recordServingProvider(
   request: FastifyRequest,
@@ -115,16 +46,10 @@ function recordServingProvider(
   served: ProviderAttribution,
 ): void {
   noteMetering(request, { provider: served.provider, failedOver: served.failedOver });
-  // The same fact on the content row, so a retained response says which provider produced it
-  // without a join to a table on a different clock (SONNY-134). `failedOver` is not copied: it is
-  // failover accounting and belongs to the metering event alone.
-  noteContent(request, { provider: served.provider });
-  const detail = { route, provider: served.provider, failedOver: served.failedOver };
-  if (served.failedOver.length > 0) {
-    request.log.warn(detail, "model route served after failover");
-  } else {
-    request.log.debug(detail, "model route served");
-  }
+  request.log.debug(
+    { route, provider: served.provider, failedOver: served.failedOver },
+    "model route served",
+  );
 }
 
 function usageBody(usage: UpstreamUsage): Record<string, unknown> {
@@ -135,85 +60,6 @@ function usageBody(usage: UpstreamUsage): Record<string, unknown> {
     audio_duration_seconds: usage.audioDurationSeconds,
     source: usage.source,
   };
-}
-
-/**
- * Every upstream failure this route family can produce, as §7.2 names it.
- *
- * **Keyed on the thrown type, never on a status this gateway saw.** §9.3 states the client-side
- * version of the same rule and gives the reason: several statuses carry more than one code with
- * opposite semantics. `provider.rejected` and `provider.unavailable` are both 502 and the client
- * retries exactly one of them.
- */
-function sendUpstreamFailure(
-  request: FastifyRequest,
-  reply: FastifyReply,
-  error: unknown,
-): FastifyReply {
-  // **No `request.too_large` arm here** (PR #139, F11). Every oversize body on these four routes is
-  // refused before a handler runs — by `bodyLimit`, or by the multipart parser's own `fileSize` —
-  // and `errors.ts` maps Fastify's 413 onto §7.2's code. An arm here would be unreachable.
-  if (error instanceof ProviderTimedOut) {
-    request.log.info({ err: error }, "upstream timed out");
-    return reply.status(504).send(
-      errorBody("provider.timeout", "The upstream provider did not answer in time.", request.id, {
-        retryable: true,
-      }),
-    );
-  }
-  if (error instanceof ProviderUnavailable) {
-    request.log.warn({ err: error }, "upstream unavailable");
-    return reply.status(502).send(
-      errorBody("provider.unavailable", "The upstream provider could not be reached.", request.id, {
-        retryable: true,
-      }),
-    );
-  }
-  if (error instanceof ProviderRejected) {
-    request.log.warn({ err: error }, "upstream rejected the request");
-    return reply.status(502).send(
-      errorBody("provider.rejected", "The upstream provider refused this request.", request.id, {
-        retryable: false,
-      }),
-    );
-  }
-  // Anything else is this gateway's own bug, and §7.2 case 6 makes that a retryable 500. Rethrown
-  // rather than answered here, so the root error handler logs it at `error` with the stack.
-  throw error;
-}
-
-/**
- * Run `work` under the route's total deadline (§12), with an `AbortSignal` bounded by its upstream
- * deadline.
- *
- * **Two deadlines and not one, because they fail in different places.** The signal ends a provider
- * call that is still open. The total-deadline race ends a handler that is stuck anywhere else —
- * parsing a pathological body, an adapter that resolved and then hung. Without the second, §12's
- * "server total deadline" column would be a number nothing enforces, and the failure it describes
- * would arrive as whatever the platform in front does when it gives up, which the client cannot
- * tell apart from a dead network.
- */
-async function withDeadlines<T>(
-  deadlines: { readonly upstream: number; readonly total: number },
-  work: (signal: AbortSignal) => Promise<T>,
-): Promise<T> {
-  const controller = new AbortController();
-  const upstreamTimer = setTimeout(() => controller.abort(), deadlines.upstream);
-  let totalTimer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      work(controller.signal),
-      new Promise<never>((_resolve, reject) => {
-        totalTimer = setTimeout(() => {
-          controller.abort();
-          reject(new ProviderTimedOut("the route's total deadline elapsed"));
-        }, deadlines.total);
-      }),
-    ]);
-  } finally {
-    clearTimeout(upstreamTimer);
-    if (totalTimer !== undefined) clearTimeout(totalTimer);
-  }
 }
 
 function invalid(request: FastifyRequest, reply: FastifyReply, message: string): FastifyReply {
@@ -288,12 +134,9 @@ function parseJSON(value: string): unknown {
  * the thing Sonny needed could not be reached — and it is the code §7.2 gives a client the right
  * behaviour for.
  *
- * **This branch is reachable, and this comment said it was not** (PR #139, F4). It claimed the
- * deployment-shaped failure is caught at startup by `buildApp` refusing to mount an adapterless
- * route; `buildApp` does no such thing and deliberately mounts all four unconditionally. A
- * deployment holding one credential and not another really does reach this, which is why it answers
- * a code the client knows what to do with — and why `answers 502 provider.unavailable when this
- * deployment holds no credential for the route` is a behavioural test rather than a note.
+ * `buildApp` mounts the route whatever the credentials, so a deployment with no OpenAI key reaches
+ * this; `answers 502 provider.unavailable when this deployment holds no credential for the route`
+ * is the behavioural test.
  */
 function noProvider(request: FastifyRequest, reply: FastifyReply): FastifyReply {
   request.log.error({ url: request.url }, "route reached with no configured provider adapter");
@@ -305,112 +148,6 @@ function noProvider(request: FastifyRequest, reply: FastifyReply): FastifyReply 
 }
 
 export function registerModelRoutes(app: FastifyInstance, providers: ModelProviders): void {
-  const textRoute = (
-    path: string,
-    // **The route's own adapter, not one shared entry** (SONNY-132). §4.2 gives the two text routes
-    // one body shape so the server can hold one adapter per provider "while still routing, metering
-    // and pricing them separately"; a shared entry would make `MODEL_ROUTE_SYNTHESIZE` mean nothing.
-    route: "plan" | "research.synthesize",
-    adapter: RoutedTextAdapter | undefined,
-    deadlines: { readonly upstream: number; readonly total: number },
-    bodyLimit: number,
-  ): void => {
-    app.post(path, { bodyLimit }, async (request, reply) => {
-      const parsed = textBody.safeParse(request.body);
-      if (!parsed.success) return invalid(request, reply, "Request body failed validation.");
-      if (adapter === undefined) return noProvider(request, reply);
-
-      try {
-        const result = await meteredUpstreamCall(request, () =>
-          withDeadlines(deadlines, (signal) =>
-            adapter({
-              messages: parsed.data.messages,
-              responseSchemaName: parsed.data.response_schema_name,
-              responseSchema: parsed.data.response_schema,
-              reasoningEffort: parsed.data.reasoning_effort,
-              verbosity: parsed.data.verbosity,
-              signal,
-            }),
-          ),
-        );
-        recordServingProvider(request, route, result.served);
-        noteMetering(request, { usage: result.usage });
-        return reply.send({
-          request_id: request.id,
-          output_text: result.outputText,
-          usage: usageBody(result.usage),
-        });
-      } catch (error) {
-        return sendUpstreamFailure(request, reply, error);
-      }
-    });
-  };
-
-  textRoute("/v1/plan", "plan", providers.plan, DEADLINE_MS.plan, BODY_LIMIT_BYTES.plan);
-  textRoute(
-    "/v1/research/synthesize",
-    "research.synthesize",
-    providers.synthesize,
-    DEADLINE_MS.synthesize,
-    BODY_LIMIT_BYTES.synthesize,
-  );
-
-  app.post("/v1/search", { bodyLimit: BODY_LIMIT_BYTES.search }, async (request, reply) => {
-    const parsed = searchBody.safeParse(request.body);
-    if (!parsed.success) return invalid(request, reply, "Request body failed validation.");
-    const search = providers.search;
-    if (search === undefined) return noProvider(request, reply);
-
-    // §4.3: clamped to 1–20 on both sides. Clamped rather than refused, because the client already
-    // clamps and a 400 here would fail a whole research task over a number both sides agree to fix.
-    const requested = parsed.data.max_results ?? 5;
-    const maxResults = Math.min(Math.max(requested, 1), 20);
-
-    try {
-      const result = await meteredUpstreamCall(request, () =>
-        withDeadlines(DEADLINE_MS.search, (signal) =>
-          search({ query: parsed.data.query, maxResults, signal }),
-        ),
-      );
-      recordServingProvider(request, "search", result.served);
-      return reply.send({
-        request_id: request.id,
-        results: result.items.map((item) => ({
-          title: item.title,
-          url: item.url,
-          snippet: item.snippet,
-        })),
-      });
-    } catch (error) {
-      return sendUpstreamFailure(request, reply, error);
-    }
-  });
-
-  /**
-   * `POST /v1/transcriptions` — §4.4's two-part multipart body.
-   *
-   * **The audio's byte ceiling is enforced by exactly one guard, and it is not `bodyLimit`** (PR
-   * #139's F11, corrected by its G2). `@fastify/multipart`'s `limits.fileSize` — set in `app.ts` —
-   * throws `FST_REQ_FILE_TOO_LARGE` with `statusCode: 413` while the part is still streaming, and
-   * `errors.ts` maps it on its `status === 413` arm to §7.2's `request.too_large`.
-   *
-   * **The route's `bodyLimit` below is not consulted for a multipart body**, which is measured
-   * rather than reasoned: with it lowered to 1 MiB and `fileSize` left at 10 MiB, a 2 MiB multipart
-   * body was **served 200**. Registering the multipart parser replaces the body parser for this
-   * content type, and Fastify's own `FST_ERR_CTP_BODY_TOO_LARGE` never enters the picture. The
-   * option stays because it still bounds a body sent to this route with some *other* content type,
-   * where the JSON parser and its limit do run.
-   *
-   * **Two comments have now been wrong about this in the same place, in opposite directions.** The
-   * first called the removed per-part check and `bodyLimit` a pair that was "not redundant"; the
-   * second, written while removing that check, said the ceiling was enforced "twice" and that
-   * `bodyLimit` "refuses first by construction". Neither had been measured. What the oversize test
-   * pins is the outcome and nothing about the mechanism: an 11 MiB audio part answers
-   * `413 request.too_large` with `retryable: false`, and **zero** upstream calls are made.
-   *
-   * All of it is a backstop anyway — SONNY-130's real cap is a duration, enforced on the Mac before
-   * a byte is sent, and `model/limits.ts` says why the two sides measure different units.
-   */
   app.post(
     "/v1/transcriptions",
     { bodyLimit: BODY_LIMIT_BYTES.transcriptions },
@@ -504,25 +241,10 @@ export function registerModelRoutes(app: FastifyInstance, providers: ModelProvid
       }
 
       const recording = audio;
-      // **Voice audio into the content store, deposited by hand for the same reason the two fields
-      // above are** (SONNY-134). This is the one route whose request content the content hook
-      // cannot read for itself: §4.4's body is `multipart/form-data`, consumed by `request.parts()`
-      // above, so `request.body` is undefined here. §10.3 names voice audio explicitly as content —
-      // "the most personally sensitive of the four types and the one most likely to be overlooked
-      // because nobody listed it" — and this line is the whole of why it is not.
-      //
-      // **Depositing is not storing**: the hook keeps nothing unless this request declared
-      // `retention: "standard"`, so a recording made with "Don't save this task" on is deposited on
-      // a draft that is discarded. Deposited after the meta part has been validated, because that
-      // is the first point `retention` is known to be what it claims.
-      noteContent(request, {
-        // Deposited because this route's body is not readable by the hook — without it, the one
-        // content type §10.3 names as most easily overlooked would be the one that is never kept.
-        retention: parsedMeta.data.retention,
-        voiceAudio: recording,
-        voiceAudioMediaType: contentType,
-        voiceAudioFilename: filename,
-      });
+      // Recorded by hand for the reason the two metering fields above are: the body is multipart, so
+      // nothing downstream can read `retention` off `request.body`. With `"none"` the idempotency
+      // store keeps no replayable copy of the transcript.
+      noteRetention(request, parsedMeta.data.retention);
       try {
         const result = await meteredUpstreamCall(request, () =>
           withDeadlines(DEADLINE_MS.transcriptions, (signal) =>

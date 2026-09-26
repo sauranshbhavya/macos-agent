@@ -39,6 +39,7 @@ describeDb("migration 0023's guard", () => {
 
   itUnderHangBackstop("refuses to apply while any Supabase user backs two live accounts, and applies once it does not", async () => {
     // Rolled back to 0022, the broken state seeded — the only way to reach it now — and forward again.
+    expect(await down(client)).toBe("0025_v1_content_leaves_the_gateway");
     expect(await down(client)).toBe("0024_a_task_lives_on_the_gateway");
     expect(await down(client)).toBe("0023_the_gate_honours_only_sessions_the_gateway_started");
     try {
@@ -58,6 +59,7 @@ describeDb("migration 0023's guard", () => {
       expect(await up(client)).toEqual([
         "0023_the_gate_honours_only_sessions_the_gateway_started",
         "0024_a_task_lives_on_the_gateway",
+        "0025_v1_content_leaves_the_gateway",
       ]);
     } finally {
       // Whatever happened above, leave the schema at its head for the tests after this one.

@@ -2,69 +2,34 @@ import { ConfigError, providers, type Provider } from "../config.js";
 import { ProviderUnavailable, type ProviderAttribution, type Routed } from "./upstream.js";
 
 /**
- * The provider-agnostic router: which provider serves which route, in what order, and what happens
- * when the first one cannot (SONNY-132).
- *
- * **What this file is, against what `providers.ts` is.** `providers.ts` is still the one place the
- * decision is *made* — SONNY-130 built it for that and this ticket generalizes it rather than
- * forking it. What lives here is the part of the decision that is pure: parsing a route's provider
- * chain out of the environment, and the combinator that walks the chain. Neither function knows
- * what an adapter is beyond "something that can be called and can throw", which is what makes the
- * whole of it testable without a credential, a network, or an app.
- *
- * **Spec §16.5 asks for four things and this file is two of them** — "Model routing controlled
- * server-side" and "Failover where appropriate". The other two, "Provider credentials never ship to
- * client" and "Provider-specific retention/training configuration", are `config.ts`'s; the second
- * of those is read back here as `providerDataPolicy` so the router can report it.
+ * The pure half of provider routing (SONNY-132): parsing a route's provider chain out of the
+ * environment, and the combinator that walks it. `providers.ts` builds the adapters.
  */
 
-/** The routes whose provider is configuration. §11's `route` enum, minus the one SONNY-131 owns. */
-export const modelRoutes = ["plan", "synthesize", "transcriptions", "search"] as const;
+/** The HTTP-side operations whose provider is configuration: the transcription route and the agents' search tool. */
+export const modelRoutes = ["transcriptions", "search"] as const;
 export type ModelRoute = (typeof modelRoutes)[number];
 
-/** `MODEL_ROUTE_PLAN`, `MODEL_ROUTE_SYNTHESIZE`, … — one variable per route. */
+/** `MODEL_ROUTE_TRANSCRIPTIONS`, `MODEL_ROUTE_SEARCH` — one variable per route. */
 export function routeVariableName(route: ModelRoute): string {
   return `MODEL_ROUTE_${route.toUpperCase()}`;
 }
 
 /**
- * Which providers serve which route when nothing is configured.
- *
- * **The single-entry rows reproduce SONNY-130 exactly, and the two-entry rows are this ticket's
- * only behavioural default change.** A deployment holding one OpenAI key and one Tavily key — which
- * is every deployment that exists today — behaves byte-identically either way, because a chain
- * entry whose provider has no credential is dropped when the chain is built. The second entry costs
- * nothing until somebody sets `ANTHROPIC_API_KEY`, and the moment they do, §16.5's "failover where
- * appropriate" is live without a second, undocumented variable to find.
- *
- * **This is not the default-planner flip, and the distinction is the ticket's never-touch list.**
- * OpenAI is the primary on every request, unconditionally, and nothing here or anywhere else
- * changes that: the second entry is reached only after the first has failed *this one request*, and
- * no state survives it — the next request starts at OpenAI again. Which provider is *first* stays a
- * founder decision, made in configuration.
- *
- * **Transcription is a one-entry chain because Anthropic serves no transcription API**, not because
- * transcription deserves less failover. A chain entry that could never work is a configuration that
- * fails at request time instead of at startup; `parseRouteChain` refuses one for the same reason.
- * Search is one entry because Tavily is the only search provider this gateway has an adapter for.
+ * Which providers serve each route when nothing is configured. Each is one entry because only one
+ * provider has an adapter for it: OpenAI for transcription, Tavily for search.
  */
 export const DEFAULT_ROUTE_CHAINS: Readonly<Record<ModelRoute, readonly Provider[]>> = {
-  plan: ["openai", "anthropic"],
-  synthesize: ["openai", "anthropic"],
   transcriptions: ["openai"],
   search: ["tavily"],
 };
 
 /**
- * Which providers this gateway has an adapter for, per operation.
- *
- * Read by `parseRouteChain` so a chain naming a provider that cannot serve that route is refused at
- * startup with the variable's name, rather than silently dropped — a dropped entry is a failover
- * candidate an operator believes they configured and does not have.
+ * Which providers this gateway has an adapter for, per route. `parseRouteChain` refuses a chain
+ * naming any other at startup, rather than dropping it and leaving a failover candidate the
+ * operator believes they configured.
  */
 export const PROVIDERS_BY_OPERATION: Readonly<Record<ModelRoute, readonly Provider[]>> = {
-  plan: ["openai", "anthropic", "cerebras"],
-  synthesize: ["openai", "anthropic", "cerebras"],
   transcriptions: ["openai"],
   search: ["tavily"],
 };
@@ -209,10 +174,8 @@ export function providerDataPolicies(
  * for. `unknown` is not `none` — an unverified provider fails this, which is the safe direction and
  * is why the default is `unknown` rather than an optimistic guess.
  *
- * **This is the field, not the answer.** Nothing routes on it today, deliberately: making
- * `retention: "none"` on the wire mean "refuse a provider that retains" is SONNY-110's decision to
- * take and SONNY-131's route to enforce it on, and building it here with every policy `unknown`
- * would refuse every request this gateway can currently serve.
+ * **This is the field, not the answer.** Nothing routes on it today; it is reported at startup by
+ * `describeRouting`.
  */
 export function meetsZeroRetentionBar(policy: ProviderDataPolicy): boolean {
   return policy.retention === "none" && policy.training === "none";

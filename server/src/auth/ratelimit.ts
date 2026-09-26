@@ -101,14 +101,11 @@ export const OAUTH_EXCHANGE_PER_SOURCE: Limit = { max: 30, windowSeconds: 60 * 6
  * two refusals are different codes for exactly that reason — §7.2 gives `limit.rate` a `Retry-After`
  * and denies `limit.spend` one, "because waiting seconds does not fix it".
  *
- * **Sized against the busiest thing Sonny legitimately does.** A screen-control session is at most
- * twelve iterations, one gateway call each, and every one of them waits on a vision round trip
- * measured in seconds (§12 gives that route a 90-second upstream deadline). So a real session cannot
- * approach two calls a second even if the model answered instantly, and a user running several
- * sessions and a few planning calls at once is still an order of magnitude below this. A leaked
- * token driven flat out by a script meets it immediately, which is the case it exists for — and the
- * spend cap is what bounds that token over the period, since 120 a minute is a great deal over a
- * month.
+ * **Sized far above anything a real Mac does.** A V2 task runs over one WebSocket, so an account's
+ * HTTP calls are sign-in, account reads and the occasional transcription — nowhere near two a
+ * second. A leaked token driven flat out by a script meets it immediately, which is the case it
+ * exists for — and the spend cap is what bounds that token over the period, since 120 a minute is a
+ * great deal over a month.
  *
  * **Keyed on the account and never on the address**, unlike the four limits above: those protect an
  * unauthenticated endpoint, where the caller has no identity yet and the source is all there is.

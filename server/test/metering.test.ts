@@ -19,9 +19,11 @@ import {
   type MeteringEvent,
 } from "../src/metering/event.js";
 import type { MeteringStore, MeteringWriteOutcome } from "../src/metering/store.js";
+import { BODY_LIMIT_BYTES } from "../src/model/limits.js";
 import { parseUsageArguments } from "../src/usage.js";
 import { testConfig } from "./support/config.js";
 import { fakeEntitlementStore } from "./support/entitlement.js";
+import { transcriptionBody } from "./support/multipart.js";
 import { expectPopulationIsReal, registeredRoutes } from "./support/routes.js";
 import { accessTokenFor } from "./support/tokens.js";
 import { signedInConnectionTo } from "./support/connection.js";
@@ -30,12 +32,15 @@ import { WithoutOAuth } from "./support/without-oauth.js";
 /**
  * Contract §11's metering event, driven through the whole real app (SONNY-133).
  *
- * **Every test here goes through `buildApp` and `inject`**, for the reason `model.test.ts`,
- * `screen.test.ts` and `idempotency.test.ts` all give: the decisions live in the hook's place in the
- * chain — after the gate has named the account, after the idempotency hook has decided whether this
- * request holds the key's claim, after the handler has deposited what it learned — and a test that
- * built an event by hand would skip all three. What is asserted is the event a *client's request*
- * actually produced.
+ * **Every test here goes through `buildApp` and `inject`**, for the reason `model.test.ts` and
+ * `idempotency.test.ts` both give: the decisions live in the hook's place in the chain — after the
+ * gate has named the account, after the idempotency hook has decided whether this request holds the
+ * key's claim, after the handler has deposited what it learned — and a test that built an event by
+ * hand would skip all three. What is asserted is the event a *client's request* actually produced.
+ *
+ * **`POST /v1/transcriptions` is the one metered route now** (V2 plan phase 7): every other model
+ * call is the gateway's own, inside a task, and is metered as an `agent_model_call` row instead. So
+ * every request below is a recording, and the §4.4 multipart body is what carries it.
  *
  * The store behind them is a fake that models the claim the same way `writeMeteringEvent` does, so
  * these tests are about the decisions; `metering.db.test.ts` proves the SQL and the real
@@ -174,7 +179,6 @@ afterEach(() => {
 const CREDENTIALS: Config["credentials"] = [
   { provider: "openai", keys: ["sk-test-openai-key"] },
   { provider: "tavily", keys: ["tvly-test-search-key"] },
-  { provider: "vision", keys: ["vk-test-vision-key"] },
 ];
 
 function build(overrides: Partial<Config> = {}) {
@@ -219,59 +223,30 @@ function stubUpstream(respond: (call: number) => Response | Promise<Response> | 
   });
 }
 
-const OPENAI_REPLY = {
-  output_text: '{"steps":[]}',
-  usage: { input_tokens: 4210, output_tokens: 318, total_tokens: 4528 },
+const TRANSCRIPTION_REPLY = {
+  text: "Open Safari",
+  usage: { type: "tokens", input_tokens: 42, output_tokens: 3, total_tokens: 45 },
 };
 
-function planBody(overrides: Record<string, unknown> = {}): Record<string, unknown> {
-  return {
-    task_id: "task-1",
-    retention: "standard",
-    messages: [{ role: "user", text: "Open Safari" }],
-    response_schema_name: "agent_plan",
-    response_schema: { type: "object" },
-    ...overrides,
-  };
-}
+const META = { task_id: "task-1", retention: "standard" };
 
-const SMALL_IMAGE = Buffer.alloc(9, 0x41).toString("base64");
-
-function analyzeBody(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+/**
+ * One `POST /v1/transcriptions`, ready for `inject`. The body is §4.4's two parts; the audio is the
+ * one thing a test varies to make two bodies differ, since the idempotency fingerprint of a
+ * multipart request is its declared length.
+ */
+function transcription(
+  options: { key?: string | null; meta?: unknown; audio?: Buffer } = {},
+) {
+  const body = transcriptionBody(options.meta ?? META, options.audio ?? Buffer.from("fake-audio-bytes"));
   return {
-    task_id: "task-1",
-    session_id: "session-1",
-    session_iteration: 5,
-    retention: "standard",
-    prompt: "Decide the next action.",
-    image: {
-      media_type: "image/jpeg",
-      encoding: "base64",
-      data: SMALL_IMAGE,
-      pixel_width: 2406,
-      pixel_height: 1354,
+    method: "POST" as const,
+    url: "/v1/transcriptions",
+    headers: {
+      ...headers(options.key === undefined ? randomUUID() : options.key),
+      "content-type": body.contentType,
     },
-    ...overrides,
-  };
-}
-
-/** §4.4's two-part body, built the way `model.test.ts` builds it. */
-function multipartBody(meta: unknown, audio: Buffer): { payload: Buffer; contentType: string } {
-  const boundary = "SonnyMeteringBoundary-cbf29ce484222325";
-  const head = Buffer.from(
-    `--${boundary}\r\n` +
-      `Content-Disposition: form-data; name="meta"\r\n` +
-      `Content-Type: application/json\r\n\r\n` +
-      `${JSON.stringify(meta)}\r\n` +
-      `--${boundary}\r\n` +
-      `Content-Disposition: form-data; name="audio"; filename="recording.m4a"\r\n` +
-      `Content-Type: audio/mp4\r\n\r\n`,
-    "utf8",
-  );
-  const tail = Buffer.from(`\r\n--${boundary}--\r\n`, "utf8");
-  return {
-    payload: Buffer.concat([head, audio, tail]),
-    contentType: `multipart/form-data; boundary=${boundary}`,
+    payload: body.payload,
   };
 }
 
@@ -281,35 +256,35 @@ function onlyEvent(): MeteringEvent {
   return metering.events[0]!;
 }
 
-describe("every route writes a metering event", () => {
-  it("POST /v1/plan records the account, the route, the provider, the model and the tokens", async () => {
+describe("the transcription route writes a metering event", () => {
+  it("records the account, the route, the provider, the model and the tokens", async () => {
     // The whole §11 row for one ordinary call, asserted on concrete values rather than on a row
     // having appeared. `provider` and `model` are the two the client is never told (§4.2) and the
-    // two failover accounting needs, so they are the ones worth naming exactly.
-    stubUpstream(() => jsonResponse(OPENAI_REPLY));
+    // two failover accounting needs, so they are the ones worth naming exactly. The task id and the
+    // retention come from the meta part, which the handler deposits by hand: the body is multipart,
+    // so the hook cannot read them off `request.body` the way it could a JSON body.
+    stubUpstream(() => jsonResponse(TRANSCRIPTION_REPLY));
     const app = build();
     const key = randomUUID();
 
-    const response = await app.inject({
-      method: "POST",
-      url: "/v1/plan",
-      headers: headers(key),
-      payload: planBody(),
-    });
+    const response = await app.inject(transcription({ key }));
     expect(response.statusCode).toBe(200);
 
     const event = onlyEvent();
-    expect(event.route).toBe("plan");
+    expect(event.route).toBe("transcription");
     expect(event.accountId).toBe(ACCOUNT);
     expect(event.idempotencyKey).toBe(key);
     expect(event.requestId).toBe(response.headers["sonny-request-id"]);
     expect(event.provider).toBe("openai");
     expect(event.failedOver).toEqual([]);
-    expect(event.model).toBe("test-text-model");
-    expect(event.inputTokens).toBe(4210);
-    expect(event.outputTokens).toBe(318);
-    expect(event.totalTokens).toBe(4528);
+    // The transcription model, not the text one — `testConfig` names both for OpenAI, and §11 wants
+    // the identifier that actually ran.
+    expect(event.model).toBe("test-transcription-model");
+    expect(event.inputTokens).toBe(42);
+    expect(event.outputTokens).toBe(3);
+    expect(event.totalTokens).toBe(45);
     expect(event.tokenSource).toBe("reported");
+    expect(event.audioDurationSeconds).toBeNull();
     expect(event.outcome).toBe("ok");
     expect(event.taskId).toBe("task-1");
     expect(event.retention).toBe("standard");
@@ -317,196 +292,55 @@ describe("every route writes a metering event", () => {
     expect(event.sessionId).toBeNull();
     expect(event.sessionIteration).toBeNull();
     expect(event.imageBytes).toBeNull();
-    expect(event.audioDurationSeconds).toBeNull();
     await app.close();
   });
 
-  it("POST /v1/research/synthesize records its own route rather than plan's", async () => {
-    // §4.2 gives the two text routes one body shape so the server can hold one adapter per provider
-    // "while still routing, metering and pricing them separately" — which is only true if the event
-    // says which of the two it was.
-    stubUpstream(() => jsonResponse(OPENAI_REPLY));
-    const app = build();
-
-    await app.inject({
-      method: "POST",
-      url: "/v1/research/synthesize",
-      headers: headers(),
-      payload: planBody({ response_schema_name: "web_research_note" }),
-    });
-
-    expect(onlyEvent().route).toBe("research.synthesize");
-    await app.close();
-  });
-
-  it("POST /v1/search records the search provider and no model, because Tavily has none", async () => {
-    stubUpstream(() =>
-      jsonResponse({ results: [{ title: "t", url: "https://example.com", content: "c" }] }),
-    );
-    const app = build();
-
-    const response = await app.inject({
-      method: "POST",
-      url: "/v1/search",
-      headers: headers(),
-      payload: { task_id: "task-1", retention: "standard", query: "swift 6 concurrency" },
-    });
-    expect(response.statusCode).toBe(200);
-
-    const event = onlyEvent();
-    expect(event.route).toBe("search");
-    expect(event.provider).toBe("tavily");
-    // A search API has no model, and an invented one would be a value nothing could check.
-    expect(event.model).toBeNull();
-    expect(event.outcome).toBe("ok");
-    await app.close();
-  });
-
-  it("POST /v1/transcriptions records the transcription model and the audio duration", async () => {
-    // The one route whose §2.4 fields the hook cannot read off `request.body` — §4.4's body is
-    // multipart and is consumed in the handler — so this is also the check that the handler's own
-    // deposit of `task_id` and `retention` arrives.
+  it("records the audio duration when the provider reports a duration instead of tokens", async () => {
     stubUpstream(() => jsonResponse({ text: "open safari", usage: { seconds: 4.8 } }));
     const app = build();
-    const body = multipartBody(
-      { task_id: "task-audio", retention: "standard" },
-      Buffer.from("fake-audio-bytes"),
-    );
 
-    const response = await app.inject({
-      method: "POST",
-      url: "/v1/transcriptions",
-      headers: { ...headers(), "content-type": body.contentType },
-      payload: body.payload,
-    });
+    const response = await app.inject(
+      transcription({ meta: { task_id: "task-audio", retention: "standard" } }),
+    );
     expect(response.statusCode).toBe(200);
 
     const event = onlyEvent();
-    expect(event.route).toBe("transcription");
-    expect(event.provider).toBe("openai");
-    // The transcription model, not the text one — the same provider serves both and §11 wants the
-    // identifier that actually ran.
-    expect(event.model).toBe("test-transcription-model");
     expect(event.audioDurationSeconds).toBe(4.8);
-    expect(event.taskId).toBe("task-audio");
-    expect(event.retention).toBe("standard");
-    await app.close();
-  });
-
-  it("POST /v1/screen/analyze records the session, the iteration and the image it was sent", async () => {
-    // **The route this ticket exists for.** Screen control recorded usage nowhere at all until
-    // SONNY-131 gave it a client-side record and this branch gave it a server-side event; the
-    // per-session figure SONNY-17's credit weight waits on is the sum over rows sharing `session_id`,
-    // and the pixel dimensions are what that route's cost is actually derived from (§4.5 rule 3).
-    stubUpstream(() => jsonResponse({ output_text: '{"action":"done"}' }));
-    const app = build();
-
-    const response = await app.inject({
-      method: "POST",
-      url: "/v1/screen/analyze",
-      headers: headers(),
-      payload: analyzeBody(),
-    });
-    expect(response.statusCode).toBe(200);
-
-    const event = onlyEvent();
-    expect(event.route).toBe("screen.analyze");
-    expect(event.provider).toBe("vision");
-    expect(event.model).toBe("test-vision-model");
-    expect(event.sessionId).toBe("session-1");
-    expect(event.sessionIteration).toBe(5);
-    expect(event.imagePixelWidth).toBe(2406);
-    expect(event.imagePixelHeight).toBe(1354);
-    expect(event.imageMediaType).toBe("image/jpeg");
-    // The decoded bytes, not the base64 length — 9 bytes of `A` encode to 12 characters.
-    expect(event.imageBytes).toBe(9);
-    expect(event.outcome).toBe("ok");
-    await app.close();
-  });
-
-  it("records a screen-control call the provider reported no tokens for, with no tokens", async () => {
-    // §4.5's own shape, and the one most likely to be turned into a zero by accident.
-    // `model/vision.ts` sends no usage block when the provider reported none, and estimates nothing
-    // — so this event carries a null token source and a null count, which is what tells a reader
-    // later that the figure is absent rather than measured at zero.
-    stubUpstream(() => jsonResponse({ output_text: '{"action":"done"}' }));
-    const app = build();
-
-    await app.inject({
-      method: "POST",
-      url: "/v1/screen/analyze",
-      headers: headers(),
-      payload: analyzeBody(),
-    });
-
-    const event = onlyEvent();
-    expect(event.tokenSource).toBeNull();
-    expect(event.inputTokens).toBeNull();
-    expect(event.outputTokens).toBeNull();
-    expect(event.totalTokens).toBeNull();
-    // And the thing that *can* price it is there.
-    expect(event.imagePixelWidth! * event.imagePixelHeight!).toBe(3_257_724);
-    await app.close();
-  });
-
-  it("records a screen-control call the provider did report tokens for", async () => {
-    stubUpstream(() =>
-      jsonResponse({
-        output_text: '{"action":"done"}',
-        usage: { input_tokens: 1900, output_tokens: 40, total_tokens: 1940 },
-      }),
-    );
-    const app = build();
-
-    await app.inject({
-      method: "POST",
-      url: "/v1/screen/analyze",
-      headers: headers(),
-      payload: analyzeBody(),
-    });
-
-    const event = onlyEvent();
+    // A duration is a measurement, so the source is `reported` — and the token counts stay empty
+    // rather than being read as a measured zero.
     expect(event.tokenSource).toBe("reported");
-    expect(event.inputTokens).toBe(1900);
-    expect(event.totalTokens).toBe(1940);
+    expect(event.totalTokens).toBeNull();
+    expect(event.taskId).toBe("task-audio");
     await app.close();
   });
 
   it("records the tokens this server estimated as estimated, never as reported", async () => {
     // §4.2: "The server estimates only when the provider reported nothing, and says which it did."
     // Summing the two would erase exactly that, which is why the query path keeps them apart.
-    stubUpstream(() => jsonResponse({ output_text: '{"steps":[]}' }));
+    stubUpstream(() => jsonResponse({ text: "Open Safari and find the migration guide" }));
     const app = build();
 
-    await app.inject({
-      method: "POST",
-      url: "/v1/plan",
-      headers: headers(),
-      payload: planBody(),
-    });
+    await app.inject(transcription());
 
     const event = onlyEvent();
     expect(event.tokenSource).toBe("estimated");
-    expect(event.inputTokens).toBeGreaterThan(0);
+    expect(event.outputTokens).toBeGreaterThan(0);
+    // Nothing here can count the audio's input tokens, so that one is absent rather than guessed.
+    expect(event.inputTokens).toBeNull();
     await app.close();
   });
 
   it("records a duration and a byte count for the request and the response", async () => {
-    stubUpstream(() => jsonResponse(OPENAI_REPLY));
+    stubUpstream(() => jsonResponse(TRANSCRIPTION_REPLY));
     const app = build();
-    const payload = planBody();
+    const request = transcription();
 
-    const response = await app.inject({
-      method: "POST",
-      url: "/v1/plan",
-      headers: headers(),
-      payload,
-    });
+    const response = await app.inject(request);
 
     const event = onlyEvent();
     // §11's `request_bytes` is the decoded size, and nothing in this gateway decodes a
     // `Content-Encoding`, so the declared length is that size. `inject` sets it from the payload.
-    expect(event.requestBytes).toBe(Buffer.byteLength(JSON.stringify(payload), "utf8"));
+    expect(event.requestBytes).toBe(request.payload.byteLength);
     expect(event.responseBytes).toBe(Buffer.byteLength(response.body, "utf8"));
     expect(event.durationMs).toBeGreaterThanOrEqual(0);
     expect(event.upstreamDurationMs).toBeGreaterThanOrEqual(0);
@@ -515,51 +349,26 @@ describe("every route writes a metering event", () => {
 });
 
 describe("an incognito run is metered identically", () => {
-  it("writes an event carrying retention none for a screen-control call", async () => {
+  it("writes an event carrying retention none, with every cost field present", async () => {
     // §10.1: "Metering runs either way. Incognito changes what is stored, never what is billed. A
     // metering design that dropped these events would silently make those runs free, and it is the
-    // case most likely to be dropped by accident." Asserted on the route the product charges for.
-    stubUpstream(() =>
-      jsonResponse({
-        output_text: '{"action":"done"}',
-        usage: { input_tokens: 1900, output_tokens: 40, total_tokens: 1940 },
-      }),
-    );
+    // case most likely to be dropped by accident."
+    stubUpstream(() => jsonResponse(TRANSCRIPTION_REPLY));
     const app = build();
 
-    const response = await app.inject({
-      method: "POST",
-      url: "/v1/screen/analyze",
-      headers: headers(),
-      payload: analyzeBody({ retention: "none" }),
-    });
+    const response = await app.inject(
+      transcription({ meta: { task_id: "task-1", retention: "none" } }),
+    );
     expect(response.statusCode).toBe(200);
 
     const event = onlyEvent();
     expect(event.retention).toBe("none");
     // Every cost field is present, which is the actual claim: this run is billed like any other.
-    expect(event.inputTokens).toBe(1900);
-    expect(event.totalTokens).toBe(1940);
-    expect(event.imageBytes).toBe(9);
-    expect(event.sessionId).toBe("session-1");
+    expect(event.provider).toBe("openai");
+    expect(event.inputTokens).toBe(42);
+    expect(event.totalTokens).toBe(45);
+    expect(event.taskId).toBe("task-1");
     expect(event.outcome).toBe("ok");
-    await app.close();
-  });
-
-  it("writes an event carrying retention none on a text route too", async () => {
-    stubUpstream(() => jsonResponse(OPENAI_REPLY));
-    const app = build();
-
-    await app.inject({
-      method: "POST",
-      url: "/v1/plan",
-      headers: headers(),
-      payload: planBody({ retention: "none" }),
-    });
-
-    const event = onlyEvent();
-    expect(event.retention).toBe("none");
-    expect(event.totalTokens).toBe(4528);
     await app.close();
   });
 });
@@ -569,22 +378,12 @@ describe("a retry produces one event, not two", () => {
     // The ordinary retry: inside the twenty-four hours the handler never runs, so nothing was spent
     // and nothing must be recorded. `attempts` is what distinguishes this from the claim refusing —
     // both leave one event, and only one of them called the store twice.
-    stubUpstream(() => jsonResponse(OPENAI_REPLY));
+    stubUpstream(() => jsonResponse(TRANSCRIPTION_REPLY));
     const app = build();
     const key = randomUUID();
 
-    const first = await app.inject({
-      method: "POST",
-      url: "/v1/plan",
-      headers: headers(key),
-      payload: planBody(),
-    });
-    const second = await app.inject({
-      method: "POST",
-      url: "/v1/plan",
-      headers: headers(key),
-      payload: planBody(),
-    });
+    const first = await app.inject(transcription({ key }));
+    const second = await app.inject(transcription({ key }));
 
     expect(first.statusCode).toBe(200);
     expect(second.statusCode).toBe(200);
@@ -601,23 +400,13 @@ describe("a retry produces one event, not two", () => {
     // on that operation — so a second upstream call really does happen under one key, and it must go
     // unbilled. SONNY-300's hand-over states it as "that is the guarantee working, not a gap".
     stubUpstream((call) =>
-      call === 1 ? jsonResponse({ error: "overloaded" }, 503) : jsonResponse(OPENAI_REPLY),
+      call === 1 ? jsonResponse({ error: "overloaded" }, 503) : jsonResponse(TRANSCRIPTION_REPLY),
     );
     const app = build();
     const key = randomUUID();
 
-    const first = await app.inject({
-      method: "POST",
-      url: "/v1/plan",
-      headers: headers(key),
-      payload: planBody(),
-    });
-    const second = await app.inject({
-      method: "POST",
-      url: "/v1/plan",
-      headers: headers(key),
-      payload: planBody(),
-    });
+    const first = await app.inject(transcription({ key }));
+    const second = await app.inject(transcription({ key }));
 
     // The retry really re-ran: a new request id, a second provider call, and a different answer.
     expect(first.statusCode).toBe(502);
@@ -640,24 +429,19 @@ describe("a retry produces one event, not two", () => {
     // reason. It would also be worse than free: taking this key's one claim would leave the request
     // that really ran with nothing to spend, and its real cost would go unrecorded. So the hook does
     // not ask the store at all.
-    stubUpstream(() => jsonResponse(OPENAI_REPLY));
+    stubUpstream(() => jsonResponse(TRANSCRIPTION_REPLY));
     const app = build();
     const key = randomUUID();
 
-    await app.inject({
-      method: "POST",
-      url: "/v1/plan",
-      headers: headers(key),
-      payload: planBody(),
-    });
-    const conflicting = await app.inject({
-      method: "POST",
-      url: "/v1/plan",
-      headers: headers(key),
-      payload: planBody({ messages: [{ role: "user", text: "Open Mail" }] }),
-    });
+    await app.inject(transcription({ key }));
+    // A different recording under the same key: a different declared length, so a different
+    // fingerprint.
+    const conflicting = await app.inject(
+      transcription({ key, audio: Buffer.from("a different, longer recording") }),
+    );
 
     expect(conflicting.statusCode).toBe(409);
+    expect(upstreamCalls).toBe(1);
     expect(metering.attempts).toHaveLength(1);
     expect(metering.events).toHaveLength(1);
     await app.close();
@@ -669,15 +453,10 @@ describe("a retry produces one event, not two", () => {
     // `false` would make every keyless request free. The key's *presence* is checked instead, and a
     // keyless one is written unconditionally — it has no at-most-once guarantee available to it,
     // because there is no key for one to be about.
-    stubUpstream(() => jsonResponse(OPENAI_REPLY));
+    stubUpstream(() => jsonResponse(TRANSCRIPTION_REPLY));
     const app = build();
 
-    const response = await app.inject({
-      method: "POST",
-      url: "/v1/plan",
-      headers: headers(null),
-      payload: planBody(),
-    });
+    const response = await app.inject(transcription({ key: null }));
     expect(response.statusCode).toBe(200);
 
     const event = onlyEvent();
@@ -688,11 +467,11 @@ describe("a retry produces one event, not two", () => {
   });
 
   it("meters two keyless requests separately, because neither has a guarantee to share", async () => {
-    stubUpstream(() => jsonResponse(OPENAI_REPLY));
+    stubUpstream(() => jsonResponse(TRANSCRIPTION_REPLY));
     const app = build();
 
-    await app.inject({ method: "POST", url: "/v1/plan", headers: headers(null), payload: planBody() });
-    await app.inject({ method: "POST", url: "/v1/plan", headers: headers(null), payload: planBody() });
+    await app.inject(transcription({ key: null }));
+    await app.inject(transcription({ key: null }));
 
     expect(upstreamCalls).toBe(2);
     expect(metering.events).toHaveLength(2);
@@ -704,11 +483,17 @@ describe("which requests are metered at all", () => {
   it("writes nothing for a request refused at the gate", async () => {
     // §11's `user_id` comes "from the authenticated session", so there is no event to write. Nothing
     // was spent either: the gate's `onRequest` runs before the body is parsed, let alone forwarded.
+    stubUpstream(() => jsonResponse(TRANSCRIPTION_REPLY));
     const app = build();
+    const request = transcription();
 
-    const response = await app.inject({ method: "POST", url: "/v1/plan", payload: planBody() });
+    const response = await app.inject({
+      ...request,
+      headers: { "content-type": request.headers["content-type"] },
+    });
 
     expect(response.statusCode).toBe(401);
+    expect(upstreamCalls).toBe(0);
     expect(metering.attempts).toHaveLength(0);
     await app.close();
   });
@@ -726,19 +511,14 @@ describe("which requests are metered at all", () => {
     // formality.** A metering write that failed loudly would turn a call the provider already served
     // into a 500 — the worst of both — so it is caught and logged, the same call
     // `idempotency/hook.ts` makes for its own write one hook earlier.
-    stubUpstream(() => jsonResponse(OPENAI_REPLY));
+    stubUpstream(() => jsonResponse(TRANSCRIPTION_REPLY));
     metering.failWrites = true;
     const app = build();
 
-    const response = await app.inject({
-      method: "POST",
-      url: "/v1/plan",
-      headers: headers(),
-      payload: planBody(),
-    });
+    const response = await app.inject(transcription());
 
     expect(response.statusCode).toBe(200);
-    expect(JSON.parse(response.body).output_text).toBe('{"steps":[]}');
+    expect(JSON.parse(response.body).text).toBe("Open Safari");
     expect(metering.attempts).toHaveLength(1);
     expect(metering.events).toHaveLength(0);
     await app.close();
@@ -748,19 +528,14 @@ describe("which requests are metered at all", () => {
     // §4.2: "The response names no provider and no model." The event carries both, so the check that
     // matters is on the bytes that leave — a field the app receives is a field that eventually gets
     // rendered, and SONNY-132's acceptance criteria include nothing in the app mentioning a provider.
-    stubUpstream(() => jsonResponse(OPENAI_REPLY));
+    stubUpstream(() => jsonResponse(TRANSCRIPTION_REPLY));
     const app = build();
 
-    const response = await app.inject({
-      method: "POST",
-      url: "/v1/plan",
-      headers: headers(),
-      payload: planBody(),
-    });
+    const response = await app.inject(transcription());
 
     expect(onlyEvent().provider).toBe("openai");
     expect(response.body).not.toContain("openai");
-    expect(response.body).not.toContain("test-text-model");
+    expect(response.body).not.toContain("test-transcription-model");
     await app.close();
   });
 });
@@ -769,17 +544,12 @@ describe("what the outcome says about where the money went", () => {
   it("records a refusal that never reached a provider as refused, with no provider named", async () => {
     // SONNY-131's proposal is emphatic about this one: "those refusals happen before any upstream
     // call, and an event that did not distinguish them would bill a user for a request that never
-    // left the gateway."
-    stubUpstream(() => jsonResponse(OPENAI_REPLY));
+    // left the gateway." An empty recording is refused after the meta part was validated, so the
+    // event is still attributable to its task.
+    stubUpstream(() => jsonResponse(TRANSCRIPTION_REPLY));
     const app = build();
 
-    const response = await app.inject({
-      method: "POST",
-      url: "/v1/plan",
-      headers: headers(),
-      // §2.4.2: an omitted `retention` is a loud 400 rather than a quiet guess.
-      payload: { task_id: "task-1", messages: [{ role: "user", text: "hi" }], response_schema_name: "s", response_schema: {} },
-    });
+    const response = await app.inject(transcription({ audio: Buffer.alloc(0) }));
 
     expect(response.statusCode).toBe(400);
     expect(upstreamCalls).toBe(0);
@@ -788,40 +558,26 @@ describe("what the outcome says about where the money went", () => {
     expect(event.provider).toBeNull();
     expect(event.model).toBeNull();
     expect(event.upstreamDurationMs).toBeNull();
-    // Read off the unvalidated body, so a refusal is still attributable to a task.
     expect(event.taskId).toBe("task-1");
-    expect(event.retention).toBeNull();
+    expect(event.retention).toBe("standard");
     await app.close();
   });
 
-  it("records an oversize screen capture as refused, carrying the size that was refused", async () => {
-    // §6.2 asks for the refusal to be diagnosable. The event is where that is answered a week later,
-    // which is why the image facts are deposited before the ceiling check rather than after it.
-    stubUpstream(() => jsonResponse({ output_text: "x" }));
+  it("records an oversize recording as refused, carrying the size that was refused", async () => {
+    // §6.2 asks for the refusal to be diagnosable. The event is where that is answered a week later:
+    // the declared length is the size the caller tried to send, and nothing was forwarded.
+    stubUpstream(() => jsonResponse(TRANSCRIPTION_REPLY));
     const app = build();
-    const oversize = Buffer.alloc(3_000_001, 0x41).toString("base64");
+    const request = transcription({ audio: Buffer.alloc(BODY_LIMIT_BYTES.transcriptions + 1, 0x41) });
 
-    const response = await app.inject({
-      method: "POST",
-      url: "/v1/screen/analyze",
-      headers: headers(),
-      payload: analyzeBody({
-        image: {
-          media_type: "image/png",
-          encoding: "base64",
-          data: oversize,
-          pixel_width: 5120,
-          pixel_height: 2880,
-        },
-      }),
-    });
+    const response = await app.inject(request);
 
     expect(response.statusCode).toBe(413);
     expect(upstreamCalls).toBe(0);
     const event = onlyEvent();
     expect(event.outcome).toBe("refused");
-    expect(event.imageBytes).toBe(3_000_001);
-    expect(event.imagePixelWidth).toBe(5120);
+    expect(event.requestBytes).toBe(request.payload.byteLength);
+    expect(event.requestBytes).toBeGreaterThan(BODY_LIMIT_BYTES.transcriptions);
     expect(event.provider).toBeNull();
     await app.close();
   });
@@ -830,14 +586,9 @@ describe("what the outcome says about where the money went", () => {
     // A `502 provider.unavailable` that no provider was ever asked for. Without the
     // `upstreamAttempted` gate, a deployment missing one credential would record a provider failure
     // per request against a provider it never called — and failover accounting would be a fiction.
-    const app = build({ credentials: [{ provider: "openai", keys: ["sk-test"] }] });
+    const app = build({ credentials: [{ provider: "tavily", keys: ["tvly-test-search-key"] }] });
 
-    const response = await app.inject({
-      method: "POST",
-      url: "/v1/screen/analyze",
-      headers: headers(),
-      payload: analyzeBody(),
-    });
+    const response = await app.inject(transcription());
 
     expect(response.statusCode).toBe(502);
     expect(JSON.parse(response.body).error.code).toBe("provider.unavailable");
@@ -849,19 +600,12 @@ describe("what the outcome says about where the money went", () => {
 
   it("records a provider that answered 500 as a provider failure, and the time it wasted", async () => {
     stubUpstream(() => jsonResponse({ error: "boom" }, 500));
-    const app = build({
-      // One provider on the chain, so the 500 is the whole answer rather than the first of two.
-      routeChains: { ...testConfig().routeChains, plan: ["openai"] },
-    });
+    const app = build();
 
-    const response = await app.inject({
-      method: "POST",
-      url: "/v1/plan",
-      headers: headers(),
-      payload: planBody(),
-    });
+    const response = await app.inject(transcription());
 
     expect(response.statusCode).toBe(502);
+    expect(upstreamCalls).toBe(1);
     const event = onlyEvent();
     expect(event.outcome).toBe("provider_error");
     expect(event.upstreamDurationMs).toBeGreaterThanOrEqual(0);
@@ -876,58 +620,20 @@ describe("what the outcome says about where the money went", () => {
     // checks the code before it checks anything about a status.
     // A provider that answers something this gateway did not anticipate — here, a `fetch` that
     // resolves to no response at all. The adapter reads `.ok` off it and raises a `TypeError`, which
-    // is none of the seam's three typed failures, so `sendUpstreamFailure` rethrows it and the root
-    // handler answers §7.2 case 6. A stub that *threw* would be the wrong shape: `fetch` throwing is
-    // a transport failure and `upstreamTransportError` correctly calls that `provider.unavailable`.
+    // is none of the seam's three typed failures, so the route rethrows it and the root handler
+    // answers §7.2 case 6. A stub that *threw* would be the wrong shape: `fetch` throwing is a
+    // transport failure and `upstreamTransportError` correctly calls that `provider.unavailable`.
     vi.stubGlobal("fetch", async () => {
       upstreamCalls += 1;
       return undefined;
     });
-    const app = build({ routeChains: { ...testConfig().routeChains, plan: ["openai"] } });
+    const app = build();
 
-    const response = await app.inject({
-      method: "POST",
-      url: "/v1/plan",
-      headers: headers(),
-      payload: planBody(),
-    });
+    const response = await app.inject(transcription());
 
     expect(response.statusCode).toBe(500);
     expect(JSON.parse(response.body).error.code).toBe("server.error");
     expect(onlyEvent().outcome).toBe("server_error");
-    await app.close();
-  });
-
-  it("records the provider that served after a failover, and the one that could not", async () => {
-    // §11: `provider` is "which provider actually served it. Required for failover accounting
-    // (SONNY-132)". A failover costs two upstream calls and one of them produced nothing, which is
-    // a real cost the event is the only record of.
-    stubUpstream((call) =>
-      call === 1
-        ? jsonResponse({ error: "overloaded" }, 503)
-        : jsonResponse({
-            content: [{ type: "text", text: '{"steps":[]}' }],
-            usage: { input_tokens: 10, output_tokens: 5 },
-          }),
-    );
-    const app = build({
-      credentials: [...CREDENTIALS, { provider: "anthropic", keys: ["sk-ant-test"] }],
-      routeChains: { ...testConfig().routeChains, plan: ["openai", "anthropic"] },
-    });
-
-    const response = await app.inject({
-      method: "POST",
-      url: "/v1/plan",
-      headers: headers(),
-      payload: planBody(),
-    });
-
-    expect(response.statusCode).toBe(200);
-    const event = onlyEvent();
-    expect(event.provider).toBe("anthropic");
-    expect(event.failedOver).toEqual(["openai"]);
-    expect(event.model).toBe("test-anthropic-model");
-    expect(event.outcome).toBe("ok");
     await app.close();
   });
 });
@@ -966,7 +672,7 @@ describe("a caller who goes away mid-call", () => {
       upstreamCalls += 1;
       reachedProvider();
       await providerMayAnswer;
-      return jsonResponse(OPENAI_REPLY);
+      return jsonResponse(TRANSCRIPTION_REPLY);
     });
 
     let eventWritten!: (event: MeteringEvent) => void;
@@ -992,10 +698,11 @@ describe("a caller who goes away mid-call", () => {
     if (address === null || typeof address === "string") throw new Error("no port to call");
 
     const controller = new AbortController();
-    const inflight = realFetch(`http://127.0.0.1:${address.port}/v1/plan`, {
+    const request = transcription();
+    const inflight = realFetch(`http://127.0.0.1:${address.port}${request.url}`, {
       method: "POST",
-      headers: { ...headers(), "content-type": "application/json" },
-      body: JSON.stringify(planBody()),
+      headers: request.headers,
+      body: request.payload,
       signal: controller.signal,
     }).catch(() => undefined);
 
@@ -1008,7 +715,7 @@ describe("a caller who goes away mid-call", () => {
     // pass or fail on which won.
     const event = await written;
     expect(event.outcome).toBe("client_cancelled");
-    expect(event.route).toBe("plan");
+    expect(event.route).toBe("transcription");
     expect(event.accountId).toBe(ACCOUNT);
     // The call really was made, which is the whole reason this is not free.
     expect(upstreamCalls).toBe(1);
@@ -1019,19 +726,14 @@ describe("a caller who goes away mid-call", () => {
     await app.close();
   });
 
-  it("records a caller who goes away before any provider was reached as refused", async () => {
+  it("records a request that ends before any provider was reached as refused", async () => {
     // The other half of §12's sentence, and the reason `outcomeFor` takes `upstreamAttempted`: a
-    // cancellation that arrived before anything was spent is an ordinary refusal. Driven here
-    // through a body this route refuses, so no provider is ever opened.
-    stubUpstream(() => jsonResponse(OPENAI_REPLY));
+    // request that ended before anything was spent is an ordinary refusal. Driven here through a
+    // meta part this route refuses, so no provider is ever opened.
+    stubUpstream(() => jsonResponse(TRANSCRIPTION_REPLY));
     const app = build();
 
-    const response = await app.inject({
-      method: "POST",
-      url: "/v1/plan",
-      headers: headers(),
-      payload: { task_id: "task-1", retention: "standard" },
-    });
+    const response = await app.inject(transcription({ meta: { task_id: "task-1" } }));
 
     expect(response.statusCode).toBe(400);
     expect(upstreamCalls).toBe(0);
@@ -1095,23 +797,18 @@ describe("outcomeFor", () => {
 });
 
 describe("the route map", () => {
-  it("names exactly §11's five routes", () => {
+  it("meters exactly the transcription route, under a name §11's enum still carries", () => {
     // Written out as literals rather than derived from the map, so changing the production list
     // fails here instead of agreeing with itself — the same shape `gate.test.ts` uses on
     // `PUBLIC_ROUTES`, and for the same reason.
-    expect([...METERED_ROUTES.entries()].sort()).toEqual([
-      ["POST /v1/plan", "plan"],
-      ["POST /v1/research/synthesize", "research.synthesize"],
-      ["POST /v1/screen/analyze", "screen.analyze"],
-      ["POST /v1/search", "search"],
-      ["POST /v1/transcriptions", "transcription"],
-    ]);
-    expect([...METERED_ROUTES.values()].sort()).toEqual([...meteredRoutes].sort());
+    expect([...METERED_ROUTES.entries()]).toEqual([["POST /v1/transcriptions", "transcription"]]);
+    // The enum is exactly what the map writes: V2 keeps no readers for V1's other route names.
+    expect([...meteredRoutes]).toEqual(["transcription"]);
+    for (const route of METERED_ROUTES.values()) expect(meteredRoutes).toContain(route);
   });
 
   it("every POST route the app serves is either metered or declared unmetered", async () => {
-    // The scan that makes a sixth content-bearing route someone else's problem rather than a silent
-    // free one. Read off the built app, so a route added by a later ticket appears here whoever
+    // The scan that makes a new `POST` someone's decision rather than a silent free one. Read off the built app, so a route added by a later ticket appears here whoever
     // registered it — the property `gate.test.ts`' own scan exists for.
     const app = build();
     const routes = await registeredRoutes(app);
@@ -1145,19 +842,14 @@ describe("the route map", () => {
 describe("modelForRoute", () => {
   const config = testConfig();
 
-  it("answers the model that actually served, per provider and per route", () => {
-    expect(modelForRoute(config, "plan", "openai")).toBe("test-text-model");
-    // The same provider serves two routes with two models, and the event wants the one that ran.
+  it("answers the configured transcription model when OpenAI served", () => {
     expect(modelForRoute(config, "transcription", "openai")).toBe("test-transcription-model");
-    expect(modelForRoute(config, "plan", "anthropic")).toBe("test-anthropic-model");
-    expect(modelForRoute(config, "plan", "cerebras")).toBe("test-cerebras-model");
-    expect(modelForRoute(config, "screen.analyze", "vision")).toBe("test-vision-model");
   });
 
-  it("answers nothing for a provider with no model and for no provider at all", () => {
-    expect(modelForRoute(config, "search", "tavily")).toBeUndefined();
-    expect(modelForRoute(config, "plan", undefined)).toBeUndefined();
-    expect(modelForRoute(config, "plan", "a-provider-this-gateway-does-not-know")).toBeUndefined();
+  it("answers nothing for another provider and for no provider at all", () => {
+    expect(modelForRoute(config, "transcription", "tavily")).toBeUndefined();
+    expect(modelForRoute(config, "transcription", undefined)).toBeUndefined();
+    expect(modelForRoute(config, "transcription", "a-provider-this-gateway-does-not-know")).toBeUndefined();
   });
 });
 
@@ -1167,7 +859,7 @@ describe("parseUsageArguments", () => {
   // number that looks right.
   it("parses a command and a window", () => {
     const parsed = parseUsageArguments([
-      "sessions",
+      "routes",
       "--account",
       "acct-1",
       "--since",
@@ -1175,14 +867,14 @@ describe("parseUsageArguments", () => {
     ]);
     expect(parsed.kind).toBe("run");
     if (parsed.kind !== "run") throw new Error("unreachable");
-    expect(parsed.command).toBe("sessions");
+    expect(parsed.command).toBe("routes");
     expect(parsed.window.accountId).toBe("acct-1");
     expect(parsed.window.since?.toISOString()).toBe("2026-08-01T00:00:00.000Z");
     expect(parsed.window.until).toBeUndefined();
   });
 
   it("refuses a date it cannot read rather than dropping the bound", () => {
-    expect(parseUsageArguments(["sessions", "--since", "last tuesday"])).toEqual({
+    expect(parseUsageArguments(["routes", "--since", "last tuesday"])).toEqual({
       kind: "error",
       message: '--since is not a date: "last tuesday"',
     });
@@ -1190,9 +882,15 @@ describe("parseUsageArguments", () => {
 
   it("refuses an unknown command, an unknown option and a flag with no value", () => {
     expect(parseUsageArguments(["cost"]).kind).toBe("error");
-    expect(parseUsageArguments(["sessions", "--price"]).kind).toBe("error");
-    expect(parseUsageArguments(["sessions", "--account"]).kind).toBe("error");
-    expect(parseUsageArguments(["sessions", "--account", "--since"]).kind).toBe("error");
+    // The per-session report went with V1's vision route, and is refused by name rather than
+    // answered with an empty table.
+    expect(parseUsageArguments(["sessions"])).toEqual({
+      kind: "error",
+      message: 'unknown command "sessions"',
+    });
+    expect(parseUsageArguments(["routes", "--price"]).kind).toBe("error");
+    expect(parseUsageArguments(["routes", "--account"]).kind).toBe("error");
+    expect(parseUsageArguments(["routes", "--account", "--since"]).kind).toBe("error");
   });
 
   it("prints help for no arguments", () => {

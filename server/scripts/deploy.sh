@@ -70,46 +70,24 @@ PLATFORM="${DEPLOY_PLATFORM:-linux/arm64}"
 # container carrying the three Supabase names and not that one cannot serve a sign-in at all -- which
 # is the outcome the single command exists for.
 #
-# **Provider credentials arrived on SONNY-130**, at the extension point the sentence that used to
-# stand here left open: it said they belong to the routes that ticket was building and that its
-# branch is where they are added if it needs them. It needs two. `OPENAI_API_KEY` serves `/v1/plan`,
-# `/v1/research/synthesize` and `/v1/transcriptions`; `TAVILY_API_KEY` serves `/v1/search`. Unlike
-# the auth routes, those four **are** mounted by a running container — `app.ts` registers them
-# outside its `if (auth)` — so a container started without these serves them and answers
-# `502 provider.unavailable`, which is honest and is not what a manual pass wants.
+# **Provider credentials.** `OPENAI_API_KEY` serves `/v1/transcriptions` and any agent tier that
+# names `openai`; `TAVILY_API_KEY` serves the agents' web search tool; `ANTHROPIC_API_KEY` and
+# `CEREBRAS_API_KEY` serve an agent tier that names them. A container given none of them still
+# starts: transcription answers `502 provider.unavailable`, and a tier with no usable model makes a
+# V2 task end with "not available yet". Forwarding a name costs nothing when it is unset.
 #
-# **SONNY-132 added two of the three names that sentence held open, and left the third.** The
-# sentence said `ANTHROPIC_API_KEY`, `CEREBRAS_API_KEY` and `VISION_API_KEY` were absent because no
-# route read them. The provider router now reads two: `ANTHROPIC_API_KEY` serves `/v1/plan` and
-# `/v1/research/synthesize` as the shipped failover candidate, and `CEREBRAS_API_KEY` serves them
-# whenever a `MODEL_ROUTE_*` chain names it. `VISION_API_KEY` stays absent for the original reason —
-# `/v1/screen/analyze` is SONNY-131's and no route reads it yet.
-#
-# **A container given no Anthropic key is not broken.** The chain drops an entry it has no credential
-# for, so a local run with only `OPENAI_API_KEY` behaves exactly as it did before the router existed.
-# Forwarding the name costs nothing when it is unset, and is what makes a founder's failover check a
-# matter of exporting one variable.
-#
-# **The endpoint, model, routing and data-policy settings are forwarded too, by a second array**,
-# `PASSTHROUGH_SETTINGS` below. They are not credentials — every one has a real default and none is
-# a secret — so they are reported as a count rather than by name, and the credential lines above and
-# below keep meaning exactly what they meant: "did my key get in".
-#
-# **They are forwarded because otherwise the one thing this ticket exists to demonstrate cannot be
-# demonstrated with this command.** SONNY-132's headline acceptance criterion is that a planner
-# request is served by one provider or another *purely by changing server configuration*, and the
-# founder's manual rows are written as `MODEL_ROUTE_PLAN=anthropic ./scripts/deploy.sh local`. With
-# only credentials forwarded, that line starts a container that silently uses the default chain and
-# prints a routing log saying so — measured, at `06031ac`, before this array existed: `MODEL_ROUTE_PLAN`
-# exported as `anthropic,openai`, the container's own line reading `"plan":["openai","anthropic"]`.
-# A demonstration that quietly does not demonstrate the thing is worse than one that refuses.
+# **The endpoint, routing, agent-tier and data-policy settings are forwarded too, by a second
+# array**, `PASSTHROUGH_SETTINGS` below. They are not credentials — every one has a real default and
+# none is a secret — so they are reported as a count rather than by name, and the credential lines
+# keep meaning exactly what they meant: "did my key get in". Without them a local container could
+# not be told a different chain or tier at all.
 #
 # **The rule the two arrays together track is "a name that changes what the gateway does with a
 # request", not "every name `config.ts` reads".** What is deliberately still absent is the set that
 # describes the *container* rather than the traffic: `SONNY_ENV` and `LOG_LEVEL` are set explicitly
 # below, `PORT`, `HOST` and `SONNY_BUILD_ID` are the image's own and injected at build time, and
 # `TRUSTED_PROXIES` is correct empty with no proxy in front and actively wrong inherited from a
-# shell. `VISION_API_KEY` is absent for its own reason, above.
+# shell.
 #
 # **The paragraph stamped at `6b72909` says "eleven names ... the five that remain are these", and
 # both halves are that tree's rather than this one's.** Re-measured: the schema holds **44** names
@@ -186,19 +164,13 @@ PASSTHROUGH=(
   SPEND_CAP_UNITS
   # SONNY-212's one, joining the three above on exactly their rule: `CREDIT_PLANS` is required
   # wherever auth is mounted, so a container given the Supabase names and not this exits 78 naming
-  # it. It is the one entry here that is not a credential -- it holds tiers, allowances and credit
-  # weights, no secret of any kind -- and it is forwarded the same way regardless, because what
+  # it. It is the one entry here that is not a credential -- it holds tiers, allowances and token
+  # rates, no secret of any kind -- and it is forwarded the same way regardless, because what
   # decides this list is what `src/config.ts` requires and not what is sensitive.
   CREDIT_PLANS
-  # SONNY-130's two, and SONNY-132's two. See the block above for why these four and not VISION_API_KEY.
+  # The provider credentials. See the block above for what each serves.
   OPENAI_API_KEY
   TAVILY_API_KEY
-  # SONNY-131's one, on the same rule: `POST /v1/screen/analyze` is mounted by a running container
-  # whatever the environment holds, so a container without this serves `502 provider.unavailable`.
-  VISION_API_KEY
-  # SONNY-132's two. The sentence that stood here said ANTHROPIC and CEREBRAS "stay off, because no
-  # route reads them"; the provider router reads both, so both are forwarded. A container given
-  # neither is unchanged -- a chain entry with no credential is not a candidate.
   ANTHROPIC_API_KEY
   CEREBRAS_API_KEY
   # SONNY-405's five: billing's trigger and the four names that trigger makes required. **What places
@@ -237,26 +209,17 @@ PASSTHROUGH=(
 )
 
 # Everything else that changes what the gateway does with a request: where each provider sends, what
-# it asks for, which providers serve which route, and what this deployment has been told about each
-# provider's retention and training terms. Not secrets, all defaulted, so absence is uninteresting
-# and is reported as a count rather than as a list of names.
+# transcription asks for, which providers serve transcription and search, which models serve each
+# agent tier, and what this deployment has been told about each provider's retention and training
+# terms. Not secrets, all defaulted, so absence is uninteresting and is reported as a count rather
+# than as a list of names.
 PASSTHROUGH_SETTINGS=(
   OPENAI_BASE_URL
-  OPENAI_TEXT_MODEL
   OPENAI_TRANSCRIPTION_MODEL
   SEARCH_BASE_URL
   ANTHROPIC_BASE_URL
-  ANTHROPIC_TEXT_MODEL
   ANTHROPIC_MAX_OUTPUT_TOKENS
   CEREBRAS_BASE_URL
-  CEREBRAS_TEXT_MODEL
-  # SONNY-131's, on this array's own rule: they change what the gateway does with a request, they are
-  # not credentials, and they have real defaults. The vision route is not part of the provider router,
-  # so it has no MODEL_ROUTE_* entry — only an endpoint and a model.
-  VISION_BASE_URL
-  VISION_MODEL
-  MODEL_ROUTE_PLAN
-  MODEL_ROUTE_SYNTHESIZE
   MODEL_ROUTE_TRANSCRIPTIONS
   MODEL_ROUTE_SEARCH
   # The V2 agents' model tiers (docs/sonny-v2-implementation-plan.md section 5): which provider:model
@@ -272,29 +235,15 @@ PASSTHROUGH_SETTINGS=(
   CEREBRAS_TRAINING
   TAVILY_DATA_RETENTION
   TAVILY_TRAINING
-  VISION_DATA_RETENTION
-  VISION_TRAINING
-  # SONNY-134's two, on this array's own rule: they change what the gateway does with a request, they
-  # are not credentials, and both have real defaults. **The first is the one that matters**: without
-  # it here, `CONTENT_RETENTION_DAYS` is unsettable on any deployment, so the founder's confirmed
-  # thirty days would be a number the container could never be told — which is how a configurable
-  # window ends up being one value forever. Measured rather than reasoned: with
-  # `CONTENT_EXPIRY_SWEEP_SECONDS=60` in the launching shell and neither name on this list, the
-  # container swept once at startup and not again, and an already-expired row planted in its database
-  # was still there seventy-five seconds later.
-  CONTENT_RETENTION_DAYS
-  CONTENT_EXPIRY_SWEEP_SECONDS
-  # SONNY-204's three, on this array's own rule and for the reason the two above it record. They
-  # change what the gateway does with every request -- below MINIMUM_SUPPORTED_CLIENT it answers 410
-  # on every route, and below RECOMMENDED_CLIENT it adds two headers -- and none of the three is a
-  # secret: two are version numbers and the third is a public download page.
+  # SONNY-204's three, on this array's own rule. They change what the gateway does with every
+  # request -- below MINIMUM_SUPPORTED_CLIENT it answers 410 on every route, and below
+  # RECOMMENDED_CLIENT it adds two headers -- and none of the three is a secret: two are version
+  # numbers and the third is a public download page.
   #
   # **Without them here the version gate is unconfigurable on the only deploy target that exists.**
   # Both bounds default to 0.0.0, which disarms the gate, so a container that can never be told a
-  # minimum is a container where this feature is permanently off -- which is exactly the shape
-  # CONTENT_RETENTION_DAYS' comment above records ("how a configurable window ends up being one
-  # value forever"), and the founder's manual rows for this feature are `curl` against a local
-  # container and cannot be run at all without them.
+  # minimum is a container where this feature is permanently off, and the founder's manual rows for
+  # this feature are `curl` against a local container and cannot be run at all without them.
   #
   # **UPGRADE_URL is the one entry on this list with no default**, which is the credential array's
   # rule rather than this one's. It sits here anyway, because what the other array's by-name absence
@@ -308,11 +257,10 @@ PASSTHROUGH_SETTINGS=(
   # `billingDepsFrom`'s rather than a judgment: neither of these is required when BILLING_PROVIDER is
   # set, both have a real default, and neither is a secret. BILLING_API_BASE_URL is the payment
   # provider's API origin, defaulted inside `billing/polar.ts` -- the endpoint shape OPENAI_BASE_URL
-  # and VISION_BASE_URL have above -- and absent is its ordinary, correct state, so a by-name "not
-  # set" line for it would be the noise UPGRADE_URL's note describes. BILLING_GRACE_DAYS is
-  # CONTENT_RETENTION_DAYS' shape exactly: defaulted to fourteen, bounded at both ends, and in
-  # `config.ts`' words "a mechanism default the founders may move" -- which they cannot do on any
-  # deployment while it stops at the container wall.
+  # has above -- and absent is its ordinary, correct state, so a by-name "not set" line for it would
+  # be the noise UPGRADE_URL's note describes. BILLING_GRACE_DAYS is defaulted to fourteen, bounded
+  # at both ends, and in `config.ts`' words "a mechanism default the founders may move" -- which
+  # they cannot do on any deployment while it stops at the container wall.
   #
   # **Neither is among SONNY-405's five and both are forwarded anyway**, because that ticket's own
   # argument reaches them. `docs/sonny-manual-test-checklist.md`'s SONNY-216 row sets

@@ -61,7 +61,6 @@ function claimOf(
     provider: overrides.provider ?? PROVIDER,
     periodStart: overrides.periodStart ?? THIS_PERIOD,
     consentedAt: CONSENTED,
-    runsLeftAtTrigger: 0,
     creditsRemainingAtTrigger: 4,
     // High enough that the per-period bound never refuses a fixture: what that bound does is
     // `topup.db.test.ts`'s subject, and a claim refused here would read as this file's query
@@ -309,8 +308,8 @@ describeDb("what the debt report selects out of a table holding every other outc
       await client.query(
         `INSERT INTO sonny.credit_topup
              (account_id, provider, provider_order_id, period_start, attempt_no, outcome,
-              consented_at, runs_left_at_trigger, credits_remaining_at_trigger)
-         VALUES ($1, $2, 'order-future', $3, 1, 'uncredited', $4, 0, 0)`,
+              consented_at, credits_remaining_at_trigger)
+         VALUES ($1, $2, 'order-future', $3, 1, 'uncredited', $4, 0)`,
         [ACCOUNT, PROVIDER, THIS_PERIOD, CONSENTED],
       );
 

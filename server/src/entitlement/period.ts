@@ -37,7 +37,7 @@ export function periodStart(at: Date): Date {
  * (`docs/sonny-row-12-host-decision.md` §4.3), and SONNY-125's hand-over on this ticket says
  * explicitly that the platform cut "is gone with the VM decision, so the window should now be
  * derived from the gateway's own request deadline instead". It is: §12's longest total deadline is
- * **105,000 ms** — `synthesize` and `screenAnalyze` — and this is that with a wide margin.
+ * **75,000 ms** — `transcriptions` — and this is that with a wide margin.
  *
  * **The direction that matters is the floor, not the ceiling.** A window *shorter* than a request's
  * own deadline would let the sweep reclaim a hold belonging to a request that is still running — and

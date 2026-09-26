@@ -97,9 +97,9 @@ const AUTH_INTENT: readonly (readonly [name: string, read: (config: Config) => u
  * treated that as missing would refuse to start over an answer somebody gave.
  *
  * **SONNY-212 added `CREDIT_PLANS` for the same reason and by the same argument.** It carries every
- * tier, allowance and credit weight this deployment bills against, `requireCreditCatalogue` refuses
+ * tier, allowance and token rate this deployment bills against, `requireCreditCatalogue` refuses
  * an unset one at the route, and an unset one has no safe reading in either direction — no allowance
- * locks every user out of screen control, and unlimited is an uncapped bill. It is read for presence
+ * locks every user out, and unlimited is an uncapped bill. It is read for presence
  * rather than parsed here: parsing it is `requireCreditCatalogue`'s, which runs before any request
  * for the reason the paragraph below gives, and a second parse in this sweep would be a second thing
  * that believes it validates the catalogue. **A truthiness test rather than `!== undefined`**,

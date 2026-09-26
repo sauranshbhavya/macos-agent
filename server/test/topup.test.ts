@@ -3,7 +3,12 @@ import { describe, expect, it, vi } from "vitest";
 import { buildApp } from "../src/app.js";
 import type { AuthProvider, VerifiedSession } from "../src/auth/provider.js";
 import { creditBalance } from "../src/credit/balance.js";
-import { catalogueOf, fakeCreditStore, TEST_CREDIT_PLANS_WITH_TOP_UP } from "./support/credit.js";
+import {
+  catalogueOf,
+  creditPlansDocument,
+  fakeCreditStore,
+  TEST_CREDIT_PLANS_WITH_TOP_UP,
+} from "./support/credit.js";
 import {
   CreditCatalogueError,
   parseCreditCatalogue,
@@ -225,33 +230,34 @@ describe("a late caller answers from the row (SONNY-435)", () => {
   });
 });
 
-/** The catalogue every decision test uses: ten credits a run, a thousand a month, one a iteration. */
+/** The catalogue every decision test uses: a thousand credits a month. */
 function catalogue() {
-  return catalogueOf({ runCredits: 10, monthlyCredits: [1000] });
+  return catalogueOf({ monthlyCredits: [1000] });
 }
 
-/** A balance with `runsLeft` at zero — the state the gate would otherwise refuse on. */
+/** A balance after the account's model calls spent `agentCredits` of that month. */
+function balanceAfter(agentCredits: number) {
+  return creditBalance({
+    catalogue: catalogue(),
+    planKey: undefined,
+    agentCredits,
+    toppedUpCredits: 0,
+    now: AT,
+  });
+}
+
+/** A balance with nothing remaining — the state a task's next model call would be refused in. */
 function exhausted() {
-  return creditBalance({
-    catalogue: catalogue(),
-    planKey: undefined,
-    // 1000 iterations at one credit each is the whole allowance.
-    draw: { sessions: 0, iterations: 1000, pixels: 0 },
-    toppedUpCredits: 0,
-    now: AT,
-  });
+  return balanceAfter(1000);
 }
 
-/** A balance with runs still in hand. */
+/** A balance with credits still in hand. */
 function comfortable() {
-  return creditBalance({
-    catalogue: catalogue(),
-    planKey: undefined,
-    draw: { sessions: 0, iterations: 10, pixels: 0 },
-    toppedUpCredits: 0,
-    now: AT,
-  });
+  return balanceAfter(10);
 }
+
+/** The whole of `TEST_CREDIT_PLANS`' tier-A month, spent: what the route tests' accounts have used. */
+const MONTH_SPENT = 1000;
 
 function depsFor(
   provider: ReturnType<typeof scriptedProvider>,
@@ -266,42 +272,30 @@ function depsFor(
   };
 }
 
-describe("a pack that cannot buy a run is a deployment that will not start (PR #196's F4)", () => {
+describe("what a top-up block may say", () => {
   /** The catalogue document, with the top-up block a test wants to try. */
   const withPack = (topUp: Record<string, unknown>) =>
-    JSON.stringify({
-      runCredits: 10,
+    creditPlansDocument({
       defaultPlan: "a",
-      weights: { perSession: 0, perIteration: 1, perMegapixel: 0 },
       plans: [{ key: "a", monthlyCredits: 1000 }],
       topUp,
     });
 
-  it("refuses a pack worth less than one run, naming what every purchase would be", () => {
-    // **The charge that provably cannot help.** The gate triggers on being unable to afford a run,
-    // buys, is still unable to afford one, and refuses — after the card was charged, once per
-    // session start up to `maxPerPeriod`. The refusal in the product is correct and tested
-    // (`aPurchaseThatDoesNotClearTheDebtStillRefuses`); what was missing was anything stopping the
-    // charge, and `catalogue.ts`'s standing answer to an unsafe configuration is a startup failure.
-    const raw = withPack({
-      credits: 9,
-      productId: "p",
-      maxPerPeriod: 3,
-      price: { amount: 500, currency: "usd" },
-    });
-
-    expect(() => parseCreditCatalogue(raw)).toThrow(CreditCatalogueError);
-    expect(() => parseCreditCatalogue(raw)).toThrow(/could not buy a single run/);
-  });
-
-  it("accepts a pack worth exactly one run, which is the boundary", () => {
-    // Asserted as a value at the boundary rather than as "some large pack is fine": exactly one run
-    // is the smallest pack that can clear the wall it was bought to clear.
+  it("refuses a pack that grants nothing, and accepts the smallest one that grants something", () => {
+    // A pack worth nothing is a charge that buys nothing, and `credit_topup`'s own CHECK refuses to
+    // record one; refused at startup so no user pays to discover it.
+    for (const credits of [0, -5]) {
+      expect(() =>
+        parseCreditCatalogue(
+          withPack({ credits, productId: "p", maxPerPeriod: 1, price: { amount: 1, currency: "usd" } }),
+        ),
+      ).toThrow(/topUp\.credits/);
+    }
+    // Any positive grant is a pack: credits are spent by tokens, so there is no run it must cover.
     const catalogue = parseCreditCatalogue(
-      withPack({ credits: 10, productId: "p", maxPerPeriod: 1, price: { amount: 1, currency: "usd" } }),
+      withPack({ credits: 0.5, productId: "p", maxPerPeriod: 1, price: { amount: 1, currency: "usd" } }),
     );
-
-    expect(catalogue.topUp?.credits).toBe(10);
+    expect(catalogue.topUp?.credits).toBe(0.5);
   });
 
   it("refuses a price that is not a whole amount in a real currency", () => {
@@ -420,14 +414,13 @@ describe("what else has to be true before anybody is charged", () => {
     expect(attempts.claims).toEqual([]);
   });
 
-  it("refuses an account that can still afford a run — a client does not get to say it is low", async () => {
-    // The balance is recomputed by the route from the account's own metering rows, so this is the
-    // check that stops a modified client buying credit it does not need. `runsLeft > 0` is the
-    // weaker of the gate's two exhaustion conditions and therefore covers both of its moments.
+  it("refuses an account with credits left — a client does not get to say it is low", async () => {
+    // The balance is recomputed by the route from the account's own model-call rows, so this is the
+    // check that stops a modified client buying credit it does not need.
     const provider = scriptedProvider(charged("order-1"));
     const attempts = recordingAttempts();
     const balance = comfortable();
-    expect(balance.runsLeft).toBe(99);
+    expect(balance.credits.remaining).toBe(990);
 
     const result = await attemptTopUp(depsFor(provider, attempts), {
       accountId: ACCOUNT,
@@ -439,6 +432,38 @@ describe("what else has to be true before anybody is charged", () => {
     expect(result).toEqual({ kind: "refused", refusal: "not_needed" });
     expect(provider.charges).toEqual([]);
     expect(attempts.claims).toEqual([]);
+  });
+
+  it("counts the smallest remainder a balance can hold as credits left, and only zero as run out", async () => {
+    // The boundary is `remaining > 0`: one millionth of a credit is still credit, and an account
+    // holding it is not charged. Exactly zero is where a charge may begin.
+    const provider = scriptedProvider(charged("order-1"));
+    const attempts = recordingAttempts();
+    const almost = balanceAfter(999.999999);
+    expect(almost.credits.remaining).toBe(0.000001);
+
+    expect(
+      await attemptTopUp(depsFor(provider, attempts), {
+        accountId: ACCOUNT,
+        balance: almost,
+        consentedAt: AT,
+        now: AT,
+      }),
+    ).toEqual({ kind: "refused", refusal: "not_needed" });
+    expect(provider.charges).toEqual([]);
+
+    // Overspent reads as zero remaining, so it is run out too and the charge goes ahead.
+    const overspent = balanceAfter(1200);
+    expect(overspent.credits.remaining).toBe(0);
+    expect(
+      await attemptTopUp(depsFor(provider, attempts), {
+        accountId: ACCOUNT,
+        balance: overspent,
+        consentedAt: AT,
+        now: AT,
+      }),
+    ).toEqual({ kind: "granted", credits: 500 });
+    expect(provider.charges).toHaveLength(1);
   });
 
   it("refuses an account with no customer at the provider without spending one of its attempts", async () => {
@@ -512,11 +537,11 @@ describe("what a charge grants, and what every other answer does not", () => {
     // The justification for the trigger, recorded beside the charge because the catalogue that
     // priced it lives in an environment variable and no row can reconstruct it (SONNY-394).
     expect(attempts.claims[0]).toMatchObject({
-      runsLeftAtTrigger: 0,
-      creditsRemainingAtTrigger: balance.credits.remaining,
+      creditsRemainingAtTrigger: 0,
       maxPerPeriod: 3,
       periodStart: balance.periodStart,
     });
+    expect(attempts.claims[0]).not.toHaveProperty("runsLeftAtTrigger");
   });
 
   it.each([
@@ -751,32 +776,28 @@ describe("a charge whose record is lost is resolved, not paid for twice (PR #196
 });
 
 describe("a top-up raises the allowance rather than lowering the draw", () => {
-  it("moves the denominator too, so the user is not shown ten runs arriving from nowhere", () => {
+  it("moves the allowance too, so the user is not shown credit arriving from nowhere", () => {
     const plans = catalogue();
     const before = creditBalance({
       catalogue: plans,
       planKey: undefined,
-      draw: { sessions: 0, iterations: 1000, pixels: 0 },
+      agentCredits: 1000,
       toppedUpCredits: 0,
       now: AT,
     });
     const after = creditBalance({
       catalogue: plans,
       planKey: undefined,
-      draw: { sessions: 0, iterations: 1000, pixels: 0 },
+      agentCredits: 1000,
       toppedUpCredits: 500,
       now: AT,
     });
 
-    expect(before.runsLeft).toBe(0);
-    expect(before.runsIncluded).toBe(100);
-    expect(after.runsLeft).toBe(50);
-    // The denominator moves with it: "50 of 150 left", not fifty runs appearing inside a hundred.
-    expect(after.runsIncluded).toBe(150);
-    // The draw is untouched. That is the half `balance.ts` refuses to ledger, and a top-up is a
-    // grant rather than a second writer of it.
+    expect(before.credits).toEqual({ allowance: 1000, drawn: 1000, remaining: 0, toppedUp: 0 });
+    // The allowance moves with it: "500 of 1500 left", not five hundred appearing inside a thousand.
+    expect(after.credits).toEqual({ allowance: 1500, drawn: 1000, remaining: 500, toppedUp: 500 });
+    // The draw is untouched. A top-up is a grant, not spending undone.
     expect(after.credits.drawn).toBe(before.credits.drawn);
-    expect(after.credits.toppedUp).toBe(500);
   });
 });
 
@@ -915,8 +936,6 @@ function buildTopUpApp(input: {
 }
 
 describe("the routes a user reaches the setting and the charge through", () => {
-  const drawn = { sessions: 0, iterations: 1000, pixels: 0 };
-
   it("says the setting is off for an account that has never touched it", async () => {
     // **Off by default, read off the wire.** The store's `autoTopUpOptedInAt` defaults to `null`,
     // which is what an absent `sonny.auto_topup_consent` row answers.
@@ -941,10 +960,8 @@ describe("the routes a user reaches the setting and the charge through", () => {
     // the app is told there is nothing to offer rather than being left to discover it on a press.
     const app = buildTopUpApp({
       store: fakeCreditStore({ planKey: "test-plan-a" }),
-      plans: JSON.stringify({
-        runCredits: 10,
+      plans: creditPlansDocument({
         defaultPlan: "test-plan-a",
-        weights: { perSession: 0, perIteration: 1, perMegapixel: 0 },
         plans: [{ key: "test-plan-a", monthlyCredits: 1000 }],
       }),
     });
@@ -975,7 +992,7 @@ describe("the routes a user reaches the setting and the charge through", () => {
     expect(on.json().auto_top_up.opted_in).toBe(true);
     // Answered with the balance beside the setting, so the surface that shows both cannot be one
     // request apart from itself.
-    expect(on.json().screen_control_runs_left).toBe(100);
+    expect(on.json().credits).toEqual({ allowance: 1000, drawn: 0, remaining: 1000, topped_up: 0 });
 
     const off = await app.inject({
       method: "PUT",
@@ -1012,7 +1029,7 @@ describe("the routes a user reaches the setting and the charge through", () => {
     const provider = scriptedProvider(charged("order-1"));
     const attempts = recordingAttempts();
     const app = buildTopUpApp({
-      store: fakeCreditStore({ planKey: "test-plan-a", draw: drawn }),
+      store: fakeCreditStore({ planKey: "test-plan-a", agentCredits: MONTH_SPENT }),
       provider,
       attempts,
     });
@@ -1037,12 +1054,12 @@ describe("the routes a user reaches the setting and the charge through", () => {
     // what the real route re-reads after the charge.
     const store = fakeCreditStore({
       planKey: "test-plan-a",
-      draw: drawn,
+      agentCredits: MONTH_SPENT,
       autoTopUpOptedInAt: new Date("2026-08-01T00:00:00Z"),
     });
     const granted = fakeCreditStore({
       planKey: "test-plan-a",
-      draw: drawn,
+      agentCredits: MONTH_SPENT,
       toppedUpCredits: 500,
       topUpAttemptsThisPeriod: 1,
       autoTopUpOptedInAt: new Date("2026-08-01T00:00:00Z"),
@@ -1066,9 +1083,7 @@ describe("the routes a user reaches the setting and the charge through", () => {
     expect(response.statusCode).toBe(200);
     expect(provider.charges).toHaveLength(1);
     const body = response.json();
-    expect(body.screen_control_runs_left).toBe(50);
-    expect(body.screen_control_runs_included).toBe(150);
-    expect(body.credits.topped_up).toBe(500);
+    expect(body.credits).toEqual({ allowance: 1500, drawn: 1000, remaining: 500, topped_up: 500 });
     expect(body.auto_top_up).toEqual({
       offered: true,
       opted_in: true,
@@ -1085,7 +1100,7 @@ describe("the routes a user reaches the setting and the charge through", () => {
     const app = buildTopUpApp({
       store: fakeCreditStore({
         planKey: "test-plan-a",
-        draw: drawn,
+        agentCredits: MONTH_SPENT,
         autoTopUpOptedInAt: new Date("2026-08-01T00:00:00Z"),
       }),
       provider,
@@ -1111,7 +1126,7 @@ describe("the routes a user reaches the setting and the charge through", () => {
     const app = buildTopUpApp({
       store: fakeCreditStore({
         planKey: "test-plan-a",
-        draw: drawn,
+        agentCredits: MONTH_SPENT,
         autoTopUpOptedInAt: new Date("2026-08-01T00:00:00Z"),
       }),
       provider,
@@ -1140,7 +1155,7 @@ describe("the routes a user reaches the setting and the charge through", () => {
     const app = buildTopUpApp({
       store: fakeCreditStore({
         planKey: "test-plan-a",
-        draw: drawn,
+        agentCredits: MONTH_SPENT,
         autoTopUpOptedInAt: new Date("2026-08-01T00:00:00Z"),
       }),
       // The *order* fails, which is the half with no unconfirmed case: these three statuses reach
@@ -1190,7 +1205,7 @@ describe("the routes a user reaches the setting and the charge through", () => {
       {
         creditStore: fakeCreditStore({
           planKey: "test-plan-a",
-          draw: drawn,
+          agentCredits: MONTH_SPENT,
           autoTopUpOptedInAt: new Date("2026-08-01T00:00:00Z"),
         }),
         entitlementStore: fakeEntitlementStore(),
@@ -1219,7 +1234,7 @@ describe("the routes a user reaches the setting and the charge through", () => {
     const app = buildTopUpApp({
       store: fakeCreditStore({
         planKey: "test-plan-a",
-        draw: drawn,
+        agentCredits: MONTH_SPENT,
         autoTopUpOptedInAt: new Date("2026-08-01T00:00:00Z"),
       }),
       provider,
@@ -1264,7 +1279,7 @@ describe("the routes a user reaches the setting and the charge through", () => {
     const app = buildTopUpApp({
       store: fakeCreditStore({
         planKey: "test-plan-a",
-        draw: drawn,
+        agentCredits: MONTH_SPENT,
         autoTopUpOptedInAt: new Date("2026-08-01T00:00:00Z"),
       }),
       provider,
@@ -1608,8 +1623,6 @@ describe("the provider adapter's off-session charge", () => {
  * #196's F1 exactly — a charge the provider accepted that nothing will ever find.
  */
 describe("the top-up route keeps one deadline, and never abandons a charge to it", () => {
-  const drawn = { sessions: 0, iterations: 1000, pixels: 0 };
-
   /** A provider whose finalize never answers — the stall the ticket asks for. */
   function stallingProvider(): BillingProvider & {
     readonly charges: TopUpChargeRequest[];
@@ -1643,7 +1656,7 @@ describe("the top-up route keeps one deadline, and never abandons a charge to it
     const app = buildTopUpApp({
       store: fakeCreditStore({
         planKey: "test-plan-a",
-        draw: drawn,
+        agentCredits: MONTH_SPENT,
         autoTopUpOptedInAt: new Date("2026-08-01T00:00:00Z"),
       }),
       provider,
@@ -1678,7 +1691,7 @@ describe("the top-up route keeps one deadline, and never abandons a charge to it
     const app = buildTopUpApp({
       store: fakeCreditStore({
         planKey: "test-plan-a",
-        draw: drawn,
+        agentCredits: MONTH_SPENT,
         autoTopUpOptedInAt: new Date("2026-08-01T00:00:00Z"),
       }),
       provider: stallingProvider(),
@@ -1712,7 +1725,7 @@ describe("the top-up route keeps one deadline, and never abandons a charge to it
     const app = buildTopUpApp({
       store: fakeCreditStore({
         planKey: "test-plan-a",
-        draw: drawn,
+        agentCredits: MONTH_SPENT,
         autoTopUpOptedInAt: new Date("2026-08-01T00:00:00Z"),
       }),
       provider,
@@ -1747,7 +1760,7 @@ describe("the top-up route keeps one deadline, and never abandons a charge to it
       const app = buildTopUpApp({
         store: fakeCreditStore({
           planKey: "test-plan-a",
-          draw: drawn,
+          agentCredits: MONTH_SPENT,
           autoTopUpOptedInAt: new Date("2026-08-01T00:00:00Z"),
         }),
         provider: stallingProvider(),

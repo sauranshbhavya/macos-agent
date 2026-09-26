@@ -12,13 +12,8 @@ import {
 } from "./upstream.js";
 
 /**
- * The Cerebras adapter: the open-weights planner, moved off the Mac (SONNY-132).
- *
- * **What moved, and what it stops being.** `CerebrasPlanner` lived in `MacAgentCore`, held
- * `CEREBRAS_API_KEY` in the user's own environment, and was reachable only by launching the app
- * with `SONNY_PLANNER=cerebras`. Row 12's whole argument is that a provider is a server decision,
- * so it is now a `MODEL_ROUTE_PLAN` entry and a credential this gateway holds — the Swift class,
- * its parser and its environment variable are gone in the same change.
+ * The Cerebras text adapter (SONNY-132), used by the V2 agents when a tier chain names `cerebras`
+ * (`agent/model/adapter.ts`). The credential is the gateway's, never the user's.
  *
  * **Schema-in-prompt, not native structured output, and that is measured rather than assumed.**
  * `CerebrasPlanner`'s doc recorded a live re-check on 2026-08-13 against
@@ -39,7 +34,7 @@ export interface CerebrasSettings {
   readonly keys: readonly string[];
   /** `https://api.cerebras.ai/v1` by default. */
   readonly baseUrl: string;
-  /** The model the text routes ask for. Never sent to, or named by, the client. */
+  /** The model to ask for, from the tier chain. Never sent to, or named by, the client. */
   readonly textModel: string;
 }
 
@@ -169,9 +164,8 @@ export function makeCerebrasTextAdapter(
     const body = {
       model: settings.textModel,
       messages: messages.map((message) => ({ role: message.role, content: message.text })),
-      // The Swift planner sent `reasoning_effort: "medium"` unconditionally; the client now supplies
-      // it per §4.2 and it is forwarded when present. `verbosity` has no Chat Completions
-      // equivalent and is ignored, which §4.2 permits in as many words.
+      // `reasoning_effort` is forwarded when the caller supplies one. `verbosity` has no Chat
+      // Completions equivalent and is ignored.
       ...(request.reasoningEffort === undefined
         ? {}
         : { reasoning_effort: request.reasoningEffort }),
@@ -186,25 +180,20 @@ export function makeCerebrasTextAdapter(
       // are stored by default. Chat completions are stored by default for new accounts." So the
       // difference is narrower than "different API" suggests — what *is* Responses-specific is
       // Azure's "By default, response data is retained for 30 days", which is the figure the other
-      // two adapters defend against. Anyone moving the text route to a new provider should assume
-      // Chat Completions stores by default too, and check.
+      // two adapters defend against. Anyone moving traffic to a new provider should assume Chat
+      // Completions stores by default too, and check.
       //
-      // **So the reason is not that the exposure is undocumented — it is documented.** It rests on
-      // two provider-and-routing facts that hold today and could each stop holding. First,
-      // `cerebras` appears in no chain in `DEFAULT_ROUTE_CHAINS` (`provider-router.ts`), so this
-      // adapter serves nothing unless a deployment names it in a `MODEL_ROUTE_*` variable — no
-      // user content flows through this body as shipped. Second, Cerebras does not list `store`
-      // among the parameters it accepts and documents nothing about what it does with a field it
-      // does not recognise (read 2026-09-17 at
-      // `inference-docs.cerebras.ai/api-reference/chat-completions`), so sending one would be an
-      // unverifiable change against a third-party endpoint no test in this repository can reach.
-      // Founders' decision of 2026-09-17: it stays off on those two grounds.
+      // **The founders' decision of 2026-09-17 kept it off on two grounds.** First, no shipped
+      // default routed user content here. Second, Cerebras does not list `store` among the
+      // parameters it accepts and documents nothing about a field it does not recognise (read
+      // 2026-09-17 at `inference-docs.cerebras.ai/api-reference/chat-completions`), so sending one
+      // would be an unverifiable change against a third-party endpoint.
       //
-      // **The first of those two is enforced rather than trusted to this comment**, because it can
-      // be undone by one edit in another file by someone with no reason to open this one:
-      // `cerebras.test.ts`'s `may only serve a route chain once it carries a store decision` fails
-      // if `cerebras` joins a chain while this body still sends no `store`. Adding the field is one
-      // of the two ways to make it green again; the other is leaving the chains alone.
+      // **Since V2 the first ground depends on configuration.** This adapter can serve no
+      // `MODEL_ROUTE_*` chain; it serves only when a deployment names `cerebras` in an
+      // `AGENT_MODEL_*` tier chain, and then user content does flow through this body.
+      // `cerebras.test.ts`'s store-decision test checks only `DEFAULT_ROUTE_CHAINS`, not the tier
+      // chains, which are deployment configuration.
     };
 
     let response: Response;
@@ -223,7 +212,7 @@ export function makeCerebrasTextAdapter(
     }
 
     if (!response.ok) {
-      // Body to the content store, never to the thrown message. `openai.ts` carries the reasoning.
+      // The body travels on the error's `detail`, never in its message.
       throw upstreamStatusError(response.status, "cerebras", await providerErrorDetail(response));
     }
 

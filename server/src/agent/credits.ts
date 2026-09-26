@@ -11,12 +11,10 @@
  */
 import type pg from "pg";
 import type { WithConnection } from "../db/connection.js";
-import { creditsForDraw, periodEnd } from "../credit/balance.js";
 import { planFor, type CreditCatalogue } from "../credit/catalogue.js";
 import {
   creditPlanKeyFor,
   readAgentCredits,
-  readScreenControlDraw,
   readToppedUpCredits,
 } from "../credit/store.js";
 import { periodStart } from "../entitlement/period.js";
@@ -90,10 +88,8 @@ async function remainingCredits(
   const entitlement = await readEntitlement(client, accountId);
   const plan = planFor(catalogue, creditPlanKeyFor(entitlement, now));
   const toppedUp = await readToppedUpCredits(client, { accountId, periodStart: since });
-  // Screen-control runs from the V1 path still draw until phase 7 deletes that path.
-  const draw = await readScreenControlDraw(client, { accountId, since, until: periodEnd(now) });
   const agent = await readAgentCredits(client, { accountId, periodStart: since });
-  return roundCredits(plan.monthlyCredits + toppedUp - creditsForDraw(catalogue.weights, draw) - agent);
+  return roundCredits(plan.monthlyCredits + toppedUp - agent);
 }
 
 // One key space per purpose for pg_advisory_xact_lock, so this lock can't collide with another.

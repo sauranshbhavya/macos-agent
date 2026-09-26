@@ -9,18 +9,14 @@ import {
   meteringEventClaimed,
   pruneExpiredResponses,
 } from "../src/idempotency/store.js";
-import type { MeteringEvent, MeteredRoute } from "../src/metering/event.js";
-import {
-  meteringSpan,
-  routeTotals,
-  screenControlSessionCosts,
-} from "../src/metering/query.js";
+import type { MeteringEvent } from "../src/metering/event.js";
+import { meteringSpan, routeTotals } from "../src/metering/query.js";
 import {
   insertMeteringEvent,
   postgresMeteringStore,
   writeMeteringEvent,
 } from "../src/metering/store.js";
-import { reportRoutes, reportSessions, reportSpan } from "../src/usage.js";
+import { reportRoutes, reportSpan } from "../src/usage.js";
 
 /**
  * Contract §11's table, against a real Postgres (SONNY-133).
@@ -57,10 +53,10 @@ function event(overrides: Partial<MeteringEvent> = {}): MeteringEvent {
     requestId: "11111111-2222-4333-8444-555555555555",
     idempotencyKey: KEY,
     accountId: ACCOUNT,
-    route: "screen.analyze",
-    provider: "vision",
+    route: "transcription",
+    provider: "openai",
     failedOver: [],
-    model: "a-vision-model",
+    model: "a-transcription-model",
     inputTokens: 1900,
     outputTokens: 40,
     totalTokens: 1940,
@@ -84,23 +80,6 @@ function event(overrides: Partial<MeteringEvent> = {}): MeteringEvent {
   };
 }
 
-/** A whole screen-control session's worth of iterations, as the runner would produce them. */
-function session(
-  sessionId: string,
-  iterations: number,
-  overrides: Partial<MeteringEvent> = {},
-): MeteringEvent[] {
-  return Array.from({ length: iterations }, (_unused, index) =>
-    event({
-      idempotencyKey: `${sessionId}-key-${index + 1}`,
-      requestId: `${sessionId}-request-${index + 1}`,
-      sessionId,
-      sessionIteration: index + 1,
-      ...overrides,
-    }),
-  );
-}
-
 describeDb("the metering event table", () => {
   let client: pg.Client;
 
@@ -118,7 +97,7 @@ describeDb("the metering event table", () => {
     const outcome = await claimKey(client, {
       accountScope,
       key,
-      route: "POST /v1/screen/analyze",
+      route: "POST /v1/transcriptions",
       fingerprint: "sha256:aaa",
     });
     expect(outcome.kind).toBe("claimed");
@@ -202,10 +181,10 @@ describeDb("the metering event table", () => {
         request_id: "11111111-2222-4333-8444-555555555555",
         idempotency_key: KEY,
         account_id: ACCOUNT,
-        route: "screen.analyze",
-        provider: "vision",
+        route: "transcription",
+        provider: "openai",
         failed_over: ["openai", "cerebras"],
-        model: "a-vision-model",
+        model: "a-transcription-model",
         input_tokens: 1900,
         output_tokens: 40,
         total_tokens: 1940,
@@ -230,8 +209,8 @@ describeDb("the metering event table", () => {
     });
 
     itUnderHangBackstop("keeps a null token count as null rather than as zero", async () => {
-      // The vision route's ordinary state — `model/vision.ts` reports nothing when the provider did
-      // and estimates nothing — and the one a reader must be able to tell from a measured zero.
+      // A refused or failed call carries no usage, and a reader must be able to tell that from a
+      // measured zero.
       await insertMeteringEvent(
         client,
         event({ inputTokens: null, outputTokens: null, totalTokens: null, tokenSource: null }),
@@ -352,7 +331,7 @@ describeDb("the metering event table", () => {
       const second = await claimKey(client, {
         accountScope: ACCOUNT,
         key: KEY,
-        route: "POST /v1/screen/analyze",
+        route: "POST /v1/transcriptions",
         fingerprint: "sha256:aaa",
       });
       expect(second.kind).toBe("claimed");
@@ -391,8 +370,8 @@ describeDb("the metering event table", () => {
 
   describe("the usage clock is not the content clock", () => {
     itUnderHangBackstop("keeps an event far older than the content retention window", async () => {
-      // §10.3: raw content on the short clock (30 days), derived metrics and usage indefinitely.
-      // Back-dated four hundred days, which is past every content window this project has named.
+      // §10.3: content on the short clock (a task is deleted 30 days after it ends), usage kept
+      // indefinitely. Back-dated four hundred days, past every content window this project names.
       await insertMeteringEvent(client, event());
       await client.query("UPDATE sonny.metering_event SET occurred_at = now() - interval '400 days'");
 
@@ -401,18 +380,20 @@ describeDb("the metering event table", () => {
       const ageDays = (Date.now() - span.oldest!.getTime()) / (24 * 60 * 60 * 1000);
       expect(ageDays).toBeGreaterThan(365);
       // And it is still readable through the founder query path, not merely present in the table.
-      expect(await screenControlSessionCosts(client)).toHaveLength(1);
+      const totals = await routeTotals(client);
+      expect(totals.find((total) => total.route === "transcription")?.calls).toBe(1);
     });
 
     itUnderHangBackstop("is untouched by every sweep this gateway has", async () => {
       // **Enumerated rather than asserted in general**, because "nothing deletes it" is a negative
-      // and the evidence for one lives everywhere you did not look. The gateway has exactly two
-      // operations that remove data on a clock or on request, both in `idempotency/store.ts`, and
-      // both are run here against a key this event shares.
+      // and the evidence for one lives everywhere you did not look. The two operations that clear
+      // data sharing a key with this event are in `idempotency/store.ts`, and both are run here.
+      // (The task sweep and the account close delete `agent_task` rows, which this table never
+      // references.)
       const claimed = await claimKey(client, {
         accountScope: ACCOUNT,
         key: KEY,
-        route: "POST /v1/screen/analyze",
+        route: "POST /v1/transcriptions",
         fingerprint: "sha256:aaa",
       });
       if (claimed.kind !== "claimed") throw new Error("the key was not claimable");
@@ -443,217 +424,51 @@ describeDb("the metering event table", () => {
     });
   });
 
-  describe("what a screen-control session cost", () => {
-    itUnderHangBackstop("sums twelve iterations into one session, which is the figure SONNY-17 waits on", async () => {
-      // A full session at the cap (`VisionSessionLimits.default.maximumIterations` is 12). The
-      // gateway holds no session state, so this is the only shape the figure can take: a GROUP BY
-      // over the events sharing one client-minted `session_id`.
-      for (const iteration of session("session-a", 12)) {
-        await insertMeteringEvent(client, iteration);
-      }
-      const [cost] = await screenControlSessionCosts(client);
-      expect(cost).toBeDefined();
-      expect(cost!.sessionId).toBe("session-a");
-      expect(cost!.accountId).toBe(ACCOUNT);
-      expect(cost!.iterations).toBe(12);
-      expect(cost!.highestIteration).toBe(12);
-      expect(cost!.taskIds).toEqual(["task-1"]);
-      expect(cost!.reportedInputTokens).toBe(12 * 1900);
-      expect(cost!.reportedOutputTokens).toBe(12 * 40);
-      expect(cost!.reportedTotalTokens).toBe(12 * 1940);
-      expect(cost!.estimatedTotalTokens).toBe(0);
-      expect(cost!.iterationsWithoutTokens).toBe(0);
-      expect(cost!.imageBytes).toBe(12 * 1_226_249);
-      expect(cost!.pixels).toBe(12 * 2406 * 1354);
-      expect(cost!.upstreamMs).toBe(12 * 4100);
-      expect(cost!.wallMs).toBe(12 * 4218);
-      expect(cost!.outcomes).toEqual({ ok: 12 });
-      expect(cost!.providers).toEqual(["vision"]);
-      expect(cost!.retentions).toEqual(["standard"]);
-    });
-
-    itUnderHangBackstop("counts the iterations a provider reported no tokens for, so a zero is never read as measured", async () => {
-      // The number that stops the whole figure from being misread. Three iterations reported
-      // nothing; the token sum is honestly lower, and `iterationsWithoutTokens` is what says the
-      // difference is an absence rather than a cheap call.
-      for (const iteration of session("session-b", 5)) await insertMeteringEvent(client, iteration);
-      await client.query(
-        `UPDATE sonny.metering_event
-            SET token_source = NULL, input_tokens = NULL, output_tokens = NULL, total_tokens = NULL
-          WHERE session_iteration <= 3`,
-      );
-      const [cost] = await screenControlSessionCosts(client);
-      expect(cost!.iterations).toBe(5);
-      expect(cost!.iterationsWithoutTokens).toBe(3);
-      expect(cost!.reportedTotalTokens).toBe(2 * 1940);
-      // Pixels are unaffected, which is what prices those three.
-      expect(cost!.pixels).toBe(5 * 2406 * 1354);
-    });
-
-    itUnderHangBackstop("keeps reported and estimated tokens apart rather than summing them", async () => {
-      // §4.2's `usage.source` exists so a summary can say which numbers a provider measured, and one
-      // sum would erase exactly that.
-      for (const iteration of session("session-c", 4)) await insertMeteringEvent(client, iteration);
-      await client.query(
-        "UPDATE sonny.metering_event SET token_source = 'estimated' WHERE session_iteration <= 2",
-      );
-      const [cost] = await screenControlSessionCosts(client);
-      expect(cost!.reportedTotalTokens).toBe(2 * 1940);
-      expect(cost!.estimatedTotalTokens).toBe(2 * 1940);
-    });
-
-    itUnderHangBackstop("includes an incognito session, and says that is what it was", async () => {
-      // §10.1: metering runs either way. A per-session cost that quietly dropped these would make
-      // exactly the runs a user asked not to store into free ones.
-      for (const iteration of session("session-private", 3, { retention: "none" })) {
-        await insertMeteringEvent(client, iteration);
-      }
-      const [cost] = await screenControlSessionCosts(client);
-      expect(cost!.iterations).toBe(3);
-      expect(cost!.retentions).toEqual(["none"]);
-      expect(cost!.reportedTotalTokens).toBe(3 * 1940);
-    });
-
-    itUnderHangBackstop("counts an iteration that failed and one the caller abandoned, both of which cost money", async () => {
-      for (const iteration of session("session-d", 3)) await insertMeteringEvent(client, iteration);
-      await client.query(
-        "UPDATE sonny.metering_event SET outcome = 'provider_error' WHERE session_iteration = 2",
-      );
-      await client.query(
-        "UPDATE sonny.metering_event SET outcome = 'client_cancelled' WHERE session_iteration = 3",
-      );
-      const [cost] = await screenControlSessionCosts(client);
-      expect(cost!.outcomes).toEqual({ ok: 1, provider_error: 1, client_cancelled: 1 });
-      expect(cost!.iterations).toBe(3);
-    });
-
-    itUnderHangBackstop("separates two sessions and orders them newest first", async () => {
-      for (const iteration of session("session-old", 2)) await insertMeteringEvent(client, iteration);
-      await client.query("UPDATE sonny.metering_event SET occurred_at = now() - interval '2 days'");
-      for (const iteration of session("session-new", 3)) await insertMeteringEvent(client, iteration);
-
-      const costs = await screenControlSessionCosts(client);
-      expect(costs.map((cost) => cost.sessionId)).toEqual(["session-new", "session-old"]);
-      expect(costs.map((cost) => cost.iterations)).toEqual([3, 2]);
-    });
-
-    itUnderHangBackstop("narrows to one account, one session and one time window", async () => {
-      for (const iteration of session("session-mine", 2)) await insertMeteringEvent(client, iteration);
-      for (const iteration of session("session-theirs", 2, { accountId: OTHER_ACCOUNT })) {
-        await insertMeteringEvent(client, iteration);
-      }
-      expect(
-        (await screenControlSessionCosts(client, { accountId: ACCOUNT })).map((c) => c.sessionId),
-      ).toEqual(["session-mine"]);
-      expect(
-        (await screenControlSessionCosts(client, { sessionId: "session-theirs" })).map(
-          (c) => c.sessionId,
-        ),
-      ).toEqual(["session-theirs"]);
-      expect(
-        await screenControlSessionCosts(client, { since: new Date(Date.now() + 60_000) }),
-      ).toEqual([]);
-    });
-
-    itUnderHangBackstop("ignores a session id that somehow reached another route", async () => {
-      // §2.4 puts `session_id` on `/v1/screen/analyze` alone, so a row from another route carrying
-      // one is a client bug — and it must not be able to inflate a screen-control figure.
-      for (const iteration of session("session-e", 2)) await insertMeteringEvent(client, iteration);
+  describe("what every route cost", () => {
+    itUnderHangBackstop("totals the metered route, and leaves out rows under a route no longer metered", async () => {
+      await insertMeteringEvent(client, event({ tokenSource: "estimated", audioDurationSeconds: 4.8 }));
       await insertMeteringEvent(
         client,
-        event({
-          route: "plan",
-          idempotencyKey: "plan-key",
-          requestId: "plan-request",
-          sessionId: "session-e",
-          sessionIteration: 99,
-        }),
+        event({ requestId: "second", idempotencyKey: "second-key", inputTokens: null, outputTokens: null, totalTokens: null, tokenSource: null }),
       );
-      const [cost] = await screenControlSessionCosts(client);
-      expect(cost!.iterations).toBe(2);
-      expect(cost!.highestIteration).toBe(2);
-    });
-  });
-
-  describe("what every route cost", () => {
-    itUnderHangBackstop("totals each route separately, in §11's own order", async () => {
-      const calls: [MeteredRoute, Partial<MeteringEvent>][] = [
-        ["plan", { tokenSource: "estimated", imageBytes: null, sessionId: null, sessionIteration: null }],
-        ["research.synthesize", { imageBytes: null, sessionId: null, sessionIteration: null }],
-        ["transcription", { audioDurationSeconds: 4.8, imageBytes: null, sessionId: null, sessionIteration: null }],
-        ["search", { imageBytes: null, sessionId: null, sessionIteration: null }],
-        ["screen.analyze", {}],
-      ];
-      for (const [route, overrides] of calls) {
-        await insertMeteringEvent(
-          client,
-          event({ route, idempotencyKey: `${route}-key`, requestId: `${route}-request`, ...overrides }),
-        );
-      }
+      // A row V1 wrote under a route V2 no longer meters. The table's CHECK still admits it.
+      await insertMeteringEvent(
+        client,
+        event({ requestId: "v1-row", idempotencyKey: "v1-key", route: "plan" as MeteringEvent["route"] }),
+      );
       const totals = await routeTotals(client);
-      expect(totals.map((total) => total.route)).toEqual([
-        "plan",
-        "research.synthesize",
-        "transcription",
-        "search",
-        "screen.analyze",
-      ]);
-      expect(totals.find((total) => total.route === "plan")!.estimatedTotalTokens).toBe(1940);
-      expect(totals.find((total) => total.route === "plan")!.reportedTotalTokens).toBe(0);
-      expect(totals.find((total) => total.route === "transcription")!.audioSeconds).toBeCloseTo(4.8);
-      expect(totals.find((total) => total.route === "screen.analyze")!.imageBytes).toBe(1_226_249);
-      expect(totals.every((total) => total.calls === 1)).toBe(true);
+      expect(totals.map((total) => total.route)).toEqual(["transcription"]);
+      const [transcription] = totals;
+      expect(transcription!.calls).toBe(2);
+      expect(transcription!.estimatedTotalTokens).toBe(1940);
+      expect(transcription!.reportedTotalTokens).toBe(0);
+      expect(transcription!.callsWithoutTokens).toBe(1);
+      expect(transcription!.audioSeconds).toBeCloseTo(4.8);
     });
   });
 
   describe("the founder command", () => {
-    itUnderHangBackstop("answers the per-session screen-control question in one report", async () => {
-      // The ticket's own acceptance criterion, on real rows: "the query path answers the per-session
-      // screen-control cost question". Asserted on the rendered text, because the text is what a
-      // founder actually reads.
-      for (const iteration of session("session-report", 12)) {
-        await insertMeteringEvent(client, iteration);
-      }
-      const report = await reportSessions(client, {});
-      expect(report).toContain("1 screen-control session(s)");
-      expect(report).toContain("session session-report");
-      expect(report).toContain("iterations       12");
-      expect(report).toContain(String(12 * 1940));
-      expect(report).toContain("outcomes         ok=12");
-      // And the caveat the ticket asks to travel with every figure.
-      expect(report).toContain("SONNY-114");
-    });
-
-    itUnderHangBackstop("prints no price on any of the three reports, which is the never-touch list asserted", async () => {
-      // **All three, not just `sessions`** (PR #147's review, F8 — this covered one and the PR body
+    itUnderHangBackstop("prints no price on either report, which is the never-touch list asserted", async () => {
+      // **Every report, not just one** (PR #147's review, F8 — this covered one and the PR body
       // generalised it). The ticket's never-touch list is one line: no price, no plan, no tier, no
-      // credit weight, and no number that implies one. SONNY-17 turns these figures into money;
-      // anything here that already had would be that ticket's decision taken in the wrong one.
+      // credit weight, and no number that implies one.
       //
-      // Driven over a corpus with something on every route, so a report that is empty cannot pass
-      // this by having nothing to say.
-      // **Nothing in the corpus may contain a forbidden word itself**, which is not a hypothetical:
-      // the first draft named this session `session-price`, and the assertion failed on its own
-      // fixture rather than on anything the renderer wrote.
-      for (const iteration of session("session-under-test", 3)) {
-        await insertMeteringEvent(client, iteration);
-      }
-      for (const route of ["plan", "transcription"] as const) {
+      // Driven over a real corpus, so a report that is empty cannot pass this by having nothing to
+      // say. **Nothing in the corpus may contain a forbidden word itself**, which is not a
+      // hypothetical: the first draft named a fixture `session-price`, and the assertion failed on
+      // its own fixture rather than on anything the renderer wrote.
+      for (const index of [1, 2]) {
         await insertMeteringEvent(
           client,
           event({
-            route,
-            idempotencyKey: `${route}-forbidden-words-key`,
-            requestId: `${route}-forbidden-words-request`,
-            sessionId: null,
-            sessionIteration: null,
-            audioDurationSeconds: route === "transcription" ? 4.8 : null,
+            idempotencyKey: `forbidden-words-key-${index}`,
+            requestId: `forbidden-words-request-${index}`,
+            audioDurationSeconds: 4.8,
           }),
         );
       }
 
       const reports = {
-        sessions: await reportSessions(client, {}),
         routes: await reportRoutes(client, {}),
         span: await reportSpan(client, {}),
       };
@@ -667,14 +482,9 @@ describeDb("the metering event table", () => {
           );
         }
       }
-      // The corpus really did reach all three, or the loop above asserted over nothing.
-      expect(reports.sessions).toContain("session session-under-test");
+      // The corpus really did reach both, or the loop above asserted over nothing.
       expect(reports.routes).toContain("transcription");
-      expect(reports.span).toContain("5 metering event(s)");
-    });
-
-    itUnderHangBackstop("says nothing rather than an empty table when the window holds no session", async () => {
-      expect(await reportSessions(client, {})).toBe("no screen-control sessions in this window\n");
+      expect(reports.span).toContain("2 metering event(s)");
     });
 
     itUnderHangBackstop("reports how far back usage goes, which is the two clocks made visible", async () => {

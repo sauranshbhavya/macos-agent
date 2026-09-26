@@ -11,23 +11,13 @@ import {
 } from "./upstream.js";
 
 /**
- * The Anthropic adapter: the two text routes, `/v1/plan` and `/v1/research/synthesize` (SONNY-132).
- *
- * **The second real provider spec §16.5 asked for "from day one".** The router's whole claim — that
- * adding a provider is a config entry plus an adapter and never a client change — is only worth
- * anything if a second adapter actually exists, so this one is written against the real Messages
- * API rather than stubbed. `test/anthropic.test.ts` drives it through the app with `fetch` stubbed
- * at the boundary, the way SONNY-130's OpenAI tests do; a live round against `api.anthropic.com`
- * needs a real key and is a founder's to run.
+ * The Anthropic text adapter (SONNY-132), used by the V2 agents when a tier chain names
+ * `anthropic` (`agent/model/adapter.ts`).
  *
  * **Raw `fetch`, not `@anthropic-ai/sdk`, and the reason is this seam rather than taste.**
  * `upstream.ts` is explicit that the seam holds "no retries, no caching, no policy", and the
- * official SDK's default is two automatic retries on `429` and `5xx`. Inside a failover chain,
- * inside a route deadline, that is a hidden multiplier on upstream calls that neither `withFailover`
- * nor `withDeadlines` can see — the same request could be attempted six times inside one 60-second
- * budget while the log said one. Every other provider in this directory is raw `fetch` at the same
- * seam for the same reason, and an adapter that was structurally different from its neighbours
- * would be the thing the seam exists to prevent.
+ * official SDK's default is two automatic retries on `429` and `5xx` — a hidden multiplier on
+ * upstream calls that the agents' model router and its deadline cannot see.
  */
 
 export interface AnthropicSettings {
@@ -35,7 +25,7 @@ export interface AnthropicSettings {
   readonly keys: readonly string[];
   /** `https://api.anthropic.com/v1` by default. Configurable so SONNY-110 is a redeploy. */
   readonly baseUrl: string;
-  /** The model the text routes ask for. Never sent to, or named by, the client. */
+  /** The model to ask for, from the tier chain. Never sent to, or named by, the client. */
   readonly textModel: string;
   /** Required by the Messages API on every request; there is no server-side default. */
   readonly maxOutputTokens: number;
@@ -258,10 +248,8 @@ export function makeAnthropicTextAdapter(
     }
 
     if (!response.ok) {
-      // The body is read into the content store and not into the thrown message, for the reason
-      // `openai.ts` gives at length: §7.1 makes `message` a field the support lookup reads, and a
-      // provider error body can carry the request back verbatim — which on these routes is the
-      // user's own command. §10.3 is where it goes instead.
+      // The body travels on the error's `detail`, never in its message: a provider error body can
+      // carry the request back verbatim, and the request is the user's own task.
       throw upstreamStatusError(response.status, "anthropic", await providerErrorDetail(response));
     }
 

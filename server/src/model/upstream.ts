@@ -1,41 +1,18 @@
 /**
- * The seam between this gateway and whichever model provider serves a route (SONNY-130).
+ * The seam between this gateway and the providers it calls (SONNY-130): the typed failures, the
+ * request and result shapes, and the helpers every adapter shares. The client never names a provider,
+ * a model or an endpoint; they are all gateway configuration.
  *
- * **This seam is the whole point of the row.** `docs/sonny-backend-api-contract.md` §4.2 states it
- * from the client's side — "the client does not know which mechanism was used and must not need
- * to" — and SONNY-130's sixth requirement states the consequence: model identifiers, endpoints and
- * provider choice live here, which is what turns SONNY-110's move to a paid zero-retention route
- * into a configuration change rather than an app release.
- *
- * Three operations, not one, because the three have genuinely different shapes: text in and text
- * out under a named JSON schema, audio in and a transcript out, a query in and ranked links out. A
- * single `call(provider, payload)` would be a union type pretending to be an abstraction.
- *
- * **Deliberately thin, the same way `auth/provider.ts` is.** No retries, no caching, no policy. The
- * client retries per §9.3, and it is the only side that knows whether the operation is still worth
- * anything to the user.
+ * **Deliberately thin, the same way `auth/provider.ts` is.** No retries, no caching, no policy.
  */
 
 /**
- * What a provider said when it refused, carried back for the content store (SONNY-134).
+ * What a provider said when it refused: its status, a bounded copy of its body, and its request id.
+ * Carried on the error rather than in its message, so a body that echoes the user's request never
+ * becomes the §7.1 `message` a client is shown.
  *
- * **A provider's error body is content and belongs on the content clock**, which is §10.3 in one
- * line: "An error body that echoes the input is content arriving in a field nobody classified. It
- * goes into the content store on the content clock, not into an unclassified log. Provider request
- * IDs are kept for correlation."
- *
- * **Until this existed the adapters' only safe move was to drop the body unread**, and each said so
- * in a comment of its own — §7.1 makes `message` a field the support lookup reads, and a body that
- * carries the user's own command back has no business there. Those comments were right about where
- * it must not go and left nowhere for it to go instead. This type is that place: the body travels on
- * the error, is deposited by `meteredUpstreamCall`, and is written by the content hook under exactly
- * the same `retention` rule as everything else the call carried — so an incognito run's provider
- * error body is not stored either, which a log line could never have promised.
- *
- * `body` is `null` when the response could not be read at all, which is a real outcome on the path
- * where things are already going wrong. `providerRequestId` survives independently of it: it is a
- * header, so it is there even when the body is not, and it is the half that makes a vendor support
- * ticket possible.
+ * `body` is `null` when the response could not be read at all. `providerRequestId` survives
+ * independently of it: it is a header, and it is what a vendor support ticket needs.
  */
 export interface ProviderErrorDetail {
   readonly status: number;
@@ -86,13 +63,8 @@ export class ProviderRejected extends UpstreamError {}
 const REQUEST_ID_HEADERS = ["x-request-id", "request-id", "x-amzn-requestid"] as const;
 
 /**
- * The longest provider error body read off the wire, in bytes.
- *
- * Read bounded rather than whole, because this runs on the failure path and the body is a third
- * party's: an error response that streams indefinitely must not become this gateway's problem. The
- * content hook bounds again before storing, at the same size — two bounds because they answer
- * different questions, how much is read and how much is kept, and either alone would leave the other
- * unanswered.
+ * The longest provider error body kept, in characters. Bounded because this runs on the failure path
+ * and the body is a third party's.
  */
 export const PROVIDER_ERROR_BODY_BYTES = 8192;
 
@@ -124,16 +96,6 @@ export async function providerErrorDetail(response: Response): Promise<ProviderE
   return { status: response.status, body, providerRequestId };
 }
 
-/**
- * **`UpstreamRequestTooLarge` stood here and is gone** (PR #139, F11). It was thrown by one branch
- * on `/v1/transcriptions`, checking the audio part against the same number `bodyLimit` already
- * bounds the whole request by — which a part can never exceed, so the branch could not fire. Every
- * oversize body on these four routes is refused before a handler runs, and `errors.ts` maps
- * Fastify's own 413 onto §7.2's `request.too_large`. A route that one day needs a size refusal of
- * its own — one derived from something other than the body's length — reintroduces a typed error
- * then, with a call site that can reach it.
- */
-
 /** Token counts as the contract's §4.2 `usage` block carries them. */
 export interface UpstreamUsage {
   readonly inputTokens: number | null;
@@ -150,7 +112,7 @@ export interface UpstreamUsage {
   readonly source: "reported" | "estimated";
 }
 
-/** One message on a text route. §4.2: ordered, role-tagged, forwarded verbatim. */
+/** One message of a text call. Ordered, role-tagged, forwarded verbatim. */
 export interface UpstreamMessage {
   readonly role: "system" | "user";
   readonly text: string;
@@ -205,14 +167,7 @@ export interface SearchResultItem {
   readonly snippet: string | null;
 }
 
-/**
- * Search's own result object, so all three operations return an object rather than two objects and
- * an array (SONNY-132).
- *
- * The array shape was fine while nothing else travelled beside the items. `Routed` below adds
- * `served` to whatever an adapter returns, and an intersection of an array type with an object is
- * a shape TypeScript accepts and nobody should have to read.
- */
+/** Search's result, an object rather than a bare array so `Routed` can add `served` beside the items. */
 export interface SearchResult {
   readonly items: readonly SearchResultItem[];
 }
@@ -220,11 +175,9 @@ export interface SearchResult {
 /**
  * Which provider actually served a request, and which were tried and could not (SONNY-132).
  *
- * **Server-side only, and the contract says so twice.** §4.2: "The response names no provider and
- * no model." §11's metering event carries a `provider` column — "Which provider actually served it.
- * Required for failover accounting (SONNY-132) and never returned to the client". So this rides
- * back to the route handler, which logs it; SONNY-133 is what records it on the event. Nothing here
- * reaches a response body, and `test/provider-router.test.ts` asserts that on the bytes.
+ * **Server-side only.** §4.2: "The response names no provider and no model." It rides back to the
+ * route handler, which logs it and records it on the metering event; nothing here reaches a response
+ * body, and `test/provider-router.test.ts` asserts that on the bytes.
  *
  * `failedOver` is empty on the ordinary path, which is the case worth keeping cheap: a request the
  * primary served allocates one empty array and says exactly that.
@@ -237,56 +190,26 @@ export interface ProviderAttribution {
 /**
  * An adapter's result plus the attribution the router adds to it.
  *
- * The split is deliberate: an adapter does not name itself. `makeOpenAITextAdapter` returns a
- * `TextResult` and knows nothing about routing, chains or failover, so the same adapter is correct
- * whether it is a route's only provider or the third one tried. The router owns the name because
- * the router is what chose it.
+ * The split is deliberate: an adapter does not name itself and knows nothing about chains or
+ * failover, so the same adapter is correct whether it is a route's only provider or the third one
+ * tried. The router owns the name because the router is what chose it.
  */
 export type Routed<T> = T & { readonly served: ProviderAttribution };
 
 /**
- * The three upstream operations the four routes need.
- *
- * One interface rather than three, because a deployment configures one set of adapters and the
- * routes read them by name. `undefined` is how "this deployment has no credential for that
- * provider" arrives, and **the route is mounted anyway** — it answers `502 provider.unavailable`.
- *
- * **This comment said `buildApp` refuses to mount such a route, which is the opposite of what
- * `app.ts` does** (PR #139, F4). Mounting unconditionally is the deliberate choice and
- * `model/providers.ts` carries the reasoning: the route table then does not change shape with the
- * environment, where the alternative is a `404 resource.not_found` — a code the client reads as "no
- * such route", does not retry, and cannot explain — standing in for a deployment missing a key.
+ * The routed operations the gateway serves over HTTP-configured chains: transcription, for
+ * `POST /v1/transcriptions`, and search, for the agents' web search tool. `undefined` is how "this
+ * deployment has no credential for that provider" arrives; the transcription route is mounted anyway
+ * and answers `502 provider.unavailable`.
  */
 export interface ModelProviders {
-  readonly plan: RoutedTextAdapter | undefined;
-  readonly synthesize: RoutedTextAdapter | undefined;
   readonly transcription:
     | ((request: TranscriptionRequest) => Promise<Routed<TranscriptionResult>>)
     | undefined;
   readonly search: ((request: SearchRequest) => Promise<Routed<SearchResult>>) | undefined;
 }
 
-/**
- * **`text` was one entry serving both text routes and is now two** (SONNY-132).
- *
- * §4.2 gives `/v1/plan` and `/v1/research/synthesize` one body shape, and says why: "Keeping them
- * one shape across two paths is what lets the server hold one adapter per provider instead of one
- * per route, while still routing, metering and pricing them separately." One *adapter* per
- * provider, and separate *routing* — which a single `text` entry cannot express, because the two
- * routes would then share one provider chain and `MODEL_ROUTE_SYNTHESIZE` could not mean anything.
- * The adapters are still one per provider: `modelProvidersFrom` builds `makeOpenAITextAdapter` once
- * per chain that names it, from the same settings, and the two entries below differ only in which
- * chain they walked.
- */
-export type RoutedTextAdapter = (request: TextRequest) => Promise<Routed<TextResult>>;
-
-/**
- * What one provider's adapter looks like, before the router wraps it.
- *
- * Named so `model/provider-router.ts` can talk about "a text adapter" without importing four types, and so
- * the difference between an adapter and a routed adapter is visible in the type rather than only in
- * the prose above.
- */
+/** What one provider's adapter looks like, before the router wraps it. */
 export type TextAdapter = (request: TextRequest) => Promise<TextResult>;
 export type TranscriptionAdapter = (request: TranscriptionRequest) => Promise<TranscriptionResult>;
 export type SearchAdapter = (request: SearchRequest) => Promise<SearchResult>;
@@ -372,17 +295,6 @@ export function upstreamStatusError(
 }
 
 /**
- * The detail a thrown upstream failure carries, or `undefined` when it carries none.
- *
- * A function rather than a cast at the call site, so the one place that knows the class hierarchy is
- * this file. `undefined` for anything that is not an `UpstreamError` at all — a bug in this gateway
- * throwing a plain `Error` must not become a content row claiming a provider said something.
- */
-export function detailOf(error: unknown): ProviderErrorDetail | undefined {
-  return error instanceof UpstreamError ? error.detail : undefined;
-}
-
-/**
  * Read a provider's response body as JSON, or fail in the shape the failure actually was.
  *
  * **`await response.json().catch(() => null)` stood at all five call sites and reported a stall as a
@@ -426,15 +338,11 @@ export async function readJSONBody(response: Response, provider: string): Promis
 export const UNPARSEABLE_BODY = Symbol("provider body is not JSON");
 
 /**
- * `readJSONBody`'s underlying read, for the one route that has somewhere to put an unparseable body.
- *
- * **`/v1/search` treats a malformed body as no results, and that is SONNY-130's decision rather than
- * this ticket's to revisit** (`tavily.ts` carries the reasoning: a search that finds nothing is an
- * ordinary outcome the research step already handles, and failing a whole task over telemetry-grade
- * malformation is worse). What PR #143's F2 found is a different case wearing the same coat — a read
- * that was *aborted* rather than a body that was malformed — and only that one is corrected here.
- * The two are told apart by what `json()` rejects with: a `SyntaxError` means the bytes arrived and
- * were not JSON, and anything else means the read did not finish.
+ * `readJSONBody`'s underlying read, for a caller that treats an unparseable body as an answer: the
+ * search adapter reads a malformed body as no results (`tavily.ts` says why). A read that was
+ * *aborted* is still a transport failure. The two are told apart by what `json()` rejects with: a
+ * `SyntaxError` means the bytes arrived and were not JSON, and anything else means the read did not
+ * finish.
  */
 export async function readJSONBodyOrUnparsed(
   response: Response,
@@ -463,7 +371,7 @@ export async function readJSONBodyOrUnparsed(
  * between providers.
  *
  * Tolerant on purpose. Usage is telemetry read beside the answer, and a provider that changes the
- * block's shape must not turn a good plan into a failed request. A missing total stays `null`
+ * block's shape must not turn a good answer into a failed request. A missing total stays `null`
  * rather than being derived from the other two — `source` says `"reported"`, and a number this
  * server added is not one the provider reported.
  */
@@ -495,7 +403,7 @@ export function reportedTokenUsage(body: unknown): UpstreamUsage | null {
 /**
  * Token counts this server derived, for a provider that reported none.
  *
- * The arithmetic was written out at each of the three text adapters and is one function because it
+ * The arithmetic was written out at each text adapter and is one function because it
  * is one rule: estimate the input from what was sent, the output from what came back, and label the
  * result `"estimated"` so §4.2's `usage.source` stays honest about which numbers are measured.
  */

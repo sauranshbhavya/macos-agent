@@ -9,18 +9,11 @@ import {
 } from "./upstream.js";
 
 /**
- * The web-search adapter (`POST /v1/search`).
+ * The web-search adapter, used by the V2 agents' `web_search` tool.
  *
- * **The server does not filter or validate result URLs**, and `docs/sonny-backend-api-contract.md`
- * §4.3 says why in one sentence: real URL policy — `SafeURL`, the path whitelist, the risk engine —
- * is deliberately downstream in the capability adapter on the Mac, and moving any of it here would
- * put a safety decision on the far side of a network call, which is the thing this row's
- * architecture exists not to do.
- *
- * What *is* dropped is response garbage, and only in the one shape the client already dropped it
- * in: an entry whose URL does not parse, or parses without an `http`/`https` scheme. That is a
- * malformed payload with no meaningful downstream handling, not a policy call — and the client
- * keeps its own copy of the same filter, so this is defence in depth rather than a move.
+ * **It does not judge result URLs**: the agents' `read_page` tool checks an address before it fetches
+ * one (`agent/tools/read-page.ts`). What is dropped here is response garbage only — an entry whose URL
+ * does not parse, or parses without an `http`/`https` scheme.
  */
 
 export interface TavilySettings {
@@ -60,8 +53,8 @@ export function makeTavilySearchAdapter(
     }
 
     if (!response.ok) {
-      // Body to the content store, never to the thrown message. `openai.ts` carries the reasoning;
-      // on this route the echoed request is the user's search query.
+      // The body travels on the error's `detail`, never in its message: an echoed request here is
+      // the user's search query.
       throw upstreamStatusError(response.status, "search", await providerErrorDetail(response));
     }
 
@@ -71,17 +64,10 @@ export function makeTavilySearchAdapter(
         ? (parsed as { results?: unknown }).results
         : undefined;
     // A body that parsed but carries no `results` array is an empty result list rather than a
-    // failure, which is what the client did before this route existed: a search that finds nothing
-    // is an ordinary outcome the research step already handles, and turning it into an error would
-    // fail a whole task over telemetry-grade malformation.
-    //
-    // **A body that never finished arriving is no longer collapsed into that** (PR #143, F2). It
-    // used to be, because `response.json().catch(() => null)` could not tell an aborted read from a
-    // malformed one — so a search whose provider stalled after headers reported "nothing found",
-    // which is worse here than on the text routes: a wrong *answer* rather than a wrong error, and
-    // a research task that silently proceeds with no sources. `readJSONBodyOrUnparsed` throws that
-    // case as the transport failure it is, and keeps the malformed-body decision above intact —
-    // the two are told apart by whether `json()` rejected with a `SyntaxError`.
+    // failure: a search that finds nothing is an ordinary outcome the agent already handles, and
+    // turning it into an error would fail a whole task over malformed telemetry. A body that never
+    // finished arriving is different — `readJSONBodyOrUnparsed` throws it as the transport failure
+    // it is, so a stalled provider is not reported as "nothing found" (PR #143, F2).
     if (!Array.isArray(results)) return { items: [] };
 
     const items: SearchResultItem[] = [];
@@ -98,9 +84,6 @@ export function makeTavilySearchAdapter(
         snippet: typeof snippet === "string" ? snippet : null,
       });
     }
-    // `{ items }` rather than the bare array it used to be (SONNY-132): the router adds `served` to
-    // whatever an adapter returns, and an intersection of an array type with an object is a shape
-    // nobody should have to read. `upstream.ts`'s `SearchResult` carries the reasoning.
     return { items };
   };
 }

@@ -13,19 +13,18 @@ import { sendUpstreamFailure, underTotalDeadline } from "../model/routing.js";
  * `GET /v1/account/credits` — **the one number a user tracks**, served (SONNY-212) — and the two
  * routes that let a user buy more of it when it runs out (SONNY-215).
  *
- * SONNY-17 fixed the user-facing unit: "screen-control runs left this month". This is where the Mac
- * reads it. `ScreenControlAllowanceService` on the client is the reader;
- * rendering it is SONNY-214's and refusing on it is SONNY-213's, and neither of those decisions is
- * taken here — the `GET` reports and never refuses.
+ * The unit is credits left this period, spent by tokens on the V2 agents' model calls. The Mac's
+ * Account sheet reads it; the `GET` reports and never refuses — the refusal is the agents' credit
+ * hold (`agent/credits.ts`).
  *
  * ## Why this is not on the entitlement claim
  *
  * The obvious alternative was a field on §5.3's signed claim, and it is wrong for a reason the claim
  * itself states: that claim is cached for **24 hours** and honoured for **72 more** past expiry, so a
  * client can legitimately be acting on one that is four days old. An entitlement survives that
- * because it changes on the order of a subscription; a run count changes on the order of a run. A
- * runs-left figure with a four-day grace window would be wrong most of the time it was read, and it
- * would be wrong in the direction that matters — showing runs to somebody who has none.
+ * because it changes on the order of a subscription; a balance changes on every model call. A
+ * balance with a four-day grace window would be wrong most of the time it was read, and it would be
+ * wrong in the direction that matters — showing credits to somebody who has none.
  *
  * So it is a separate, unsigned, uncached read. **Unsigned is right here and would not be right
  * there**: the claim is signed because the *client* enforces it offline, and nothing offline can be
@@ -140,25 +139,11 @@ function creditsBody(
     plan: balance.plan,
     period_start: balance.periodStart.toISOString(),
     period_end: balance.periodEnd.toISOString(),
-    /** The user-facing unit. Everything below it is the derivation that produced it. */
-    screen_control_runs_left: balance.runsLeft,
-    screen_control_runs_included: balance.runsIncluded,
-    /**
-     * **Diagnostic, and deliberately not a second thing to show a user.** The ticket's own
-     * verification asks the founders to "sanity-check the numbers once measured costs exist", and
-     * a runs figure with no visible derivation cannot be sanity-checked at all — the question is
-     * always whether the weights or the divisor is what moved it. The rounding in `balance.ts`
-     * exists so these five numbers and the run count agree with each other exactly.
-     *
-     * **`remaining` is read by the Mac and the other four are not** (SONNY-213's F1): the gate's
-     * step boundary asks whether the account has actually run out, which `screen_control_runs_left`
-     * cannot answer for a session whose own iterations are already subtracted from it.
-     */
+    /** The user-facing unit: credits, spent by tokens as the account's tasks call models. */
     credits: {
       allowance: balance.credits.allowance,
       drawn: balance.credits.drawn,
       remaining: balance.credits.remaining,
-      per_run: balance.credits.perRun,
       topped_up: balance.credits.toppedUp,
     },
     /**
@@ -358,8 +343,7 @@ export function registerCreditRoutes(app: FastifyInstance, deps: CreditRouteDeps
     const balance = creditBalance({
       catalogue: deps.catalogue,
       planKey: facts.planKey,
-      draw: facts.draw,
-      ...(facts.agentCredits === undefined ? {} : { agentCredits: facts.agentCredits }),
+      agentCredits: facts.agentCredits,
       toppedUpCredits: facts.toppedUpCredits,
       now: at,
     });

@@ -5,8 +5,7 @@ import type { CreditTopUpPack } from "./catalogue.js";
 import type { CreditBalance } from "./balance.js";
 
 /**
- * Buying more screen-control runs when the allowance runs out — **and only if the user asked**
- * (SONNY-215).
+ * Buying more credits when the allowance runs out — **and only if the user asked** (SONNY-215).
  *
  * Spec §16.4 names auto top-up as the mechanism that serves its own mid-task-lapse principle: a user
  * running low tops up rather than hitting a wall. SONNY-17 fixed its shape on 2026-08-16 — opt-in,
@@ -34,17 +33,12 @@ import type { CreditBalance } from "./balance.js";
  * has with the entitlement-side refusal behind it. A modified client that asks anyway is refused
  * here.
  *
- * ## What "low" means, since the ticket says low and the gate says exhausted
+ * ## What "low" means
  *
- * `runsLeft > 0` is the refusal: an account that can still afford a whole run is not topped up. That
- * is the weaker of the gate's two exhaustion conditions and therefore covers both of its moments —
- * `SonnyScreenControlGate` refuses a *new* session on `runsLeft <= 0` and halts a *running* one on
- * `creditsRemaining <= 0`, and the second implies the first. So every moment the gate would
- * otherwise block is a moment this route will consider, and no moment it would not block is.
- *
- * **It also means a client cannot buy credit it does not need.** The condition is recomputed here
- * from the account's own metering rows rather than taken from the request, so "I am low" is not
- * something a caller gets to assert.
+ * `credits.remaining > 0` is the refusal: an account with credits left is not topped up. The
+ * balance is recomputed by the caller from the account's own model-call ledger rather than taken
+ * from the request, so "I am low" is not something a caller gets to assert, and a client cannot buy
+ * credit it does not need.
  */
 
 /** Why no top-up happened. Each case is a different status and a different thing to do about it. */
@@ -53,7 +47,7 @@ export type TopUpRefusal =
   | "not_offered"
   /** **The account has not opted in.** The one refusal this whole mechanism exists to guarantee. */
   | "not_opted_in"
-  /** The account can still afford a run. Nothing to buy. */
+  /** The account still has credits. Nothing to buy. */
   | "not_needed"
   /** This period's attempts are used up. See 0019 for why the bound counts attempts, not grants. */
   | "limit_reached"
@@ -116,7 +110,6 @@ export interface TopUpAttemptStore {
     readonly provider: string;
     readonly periodStart: Date;
     readonly consentedAt: Date;
-    readonly runsLeftAtTrigger: number;
     readonly creditsRemainingAtTrigger: number;
     readonly maxPerPeriod: number;
   }) => Promise<TopUpAttempt | undefined>;
@@ -375,8 +368,8 @@ export async function attemptTopUp(deps: TopUpDeps, input: TopUpInput): Promise<
   const pack = deps.pack;
   if (pack === undefined) return { kind: "refused", refusal: "not_offered" };
   // Recomputed from the account's own rows by the caller. A client does not get to declare that it
-  // is low, and a client that can still afford a run is not charged for one it has not spent.
-  if (input.balance.runsLeft > 0) return { kind: "refused", refusal: "not_needed" };
+  // is low, and an account with credits left is not charged for more.
+  if (input.balance.credits.remaining > 0) return { kind: "refused", refusal: "not_needed" };
 
   // Before the slot is claimed: an account with nothing to charge can never succeed, and burning one
   // of the period's attempts on it would spend the bound on a refusal that costs nobody anything.
@@ -423,7 +416,6 @@ export async function attemptTopUp(deps: TopUpDeps, input: TopUpInput): Promise<
     provider: deps.provider.name,
     periodStart: input.balance.periodStart,
     consentedAt: input.consentedAt,
-    runsLeftAtTrigger: input.balance.runsLeft,
     creditsRemainingAtTrigger: input.balance.credits.remaining,
     maxPerPeriod: pack.maxPerPeriod,
   });
@@ -474,18 +466,17 @@ export async function claimTopUpAttempt(
     const { rows } = await client.query<{ topup_id: string }>(
       `INSERT INTO sonny.credit_topup
               (account_id, provider, period_start, attempt_no, outcome, credits, consented_at,
-               runs_left_at_trigger, credits_remaining_at_trigger)
-       SELECT $1, $2, $3, coalesce(max(attempt_no), 0) + 1, 'attempted', 0, $4, $5, $6
+               credits_remaining_at_trigger)
+       SELECT $1, $2, $3, coalesce(max(attempt_no), 0) + 1, 'attempted', 0, $4, $5
          FROM sonny.credit_topup
         WHERE account_id = $1 AND period_start = $3
-       HAVING count(*) < $7
+       HAVING count(*) < $6
     RETURNING topup_id`,
       [
         input.accountId,
         input.provider,
         input.periodStart,
         input.consentedAt,
-        input.runsLeftAtTrigger,
         input.creditsRemainingAtTrigger,
         input.maxPerPeriod,
       ],

@@ -127,16 +127,16 @@ export function pooledConnections(
      * **It has to arrive in the startup packet and not as a `SET` after connect, and that is the
      * one thing about this line a later simplification must not undo** (SONNY-428's neighbour). A
      * route may set its own bound on a connection it has leased — `model/routing.ts`'s
-     * `withDatabaseDeadline` does, per statement, for the four content-deletion routes and, through
-     * `leasingUnderTotalDeadline`, for the three account routes' leases (SONNY-434) — and clears
-     * it with `RESET statement_timeout` on the way out. `RESET` restores a parameter to its
+     * `withDatabaseDeadline` does, per statement, through `leasingUnderTotalDeadline` for the three
+     * account routes' leases (SONNY-434) — and clears it with `RESET statement_timeout` on the way
+     * out. `RESET` restores a parameter to its
      * *reset value*, which a startup parameter sets and a session `SET` does not. So the two shapes
      * differ in production and in nothing a casual test would show. Measured on `postgres:17`,
      * reading `setting`/`reset_val`/`source` from `pg_settings` around a route's `SET 15000` and its
      * `RESET`: from the startup packet, `10000/10000/client` -> `15000/10000/session` ->
      * `10000/10000/client`, the bound restored; from a `SET` after connect, `10000/0/session` ->
      * `15000/0/session` -> **`0/0/default`**, which is byte-identical to a connection that was never
-     * bounded at all. The first content deletion on a connection would take the bound off it for
+     * bounded at all. The first bounded account read on a connection would take the bound off it for
      * every later lessee.
      *
      * **How the two compose, since both are session settings and the last one wins in either

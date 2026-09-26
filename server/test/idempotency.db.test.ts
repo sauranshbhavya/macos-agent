@@ -19,6 +19,7 @@ import {
   postgresKeyStore,
 } from "../src/idempotency/store.js";
 import { testConfig } from "./support/config.js";
+import { transcriptionBody } from "./support/multipart.js";
 import { accessTokenFor } from "./support/tokens.js";
 import { recordSessionTheGatewayStarted } from "./support/gateway-session.js";
 import { afterAllUnderHangBackstop, beforeAllUnderHangBackstop, beforeEachUnderHangBackstop, itUnderHangBackstop } from "./support/backstop.js";
@@ -46,10 +47,10 @@ const ACCOUNT = "8a1d0c8e-1c5a-4a9f-9f6b-2b6f5f2a77ab";
 const OTHER_ACCOUNT = "9b9b9b9b-4c4c-4d4d-8e8e-5f5f5f5f5f5f";
 const KEY = "6f1b8a2c-0000-4000-8000-abcdefabcdef";
 
-const claim = (fingerprint = "POST /v1/plan\nsha256:aaa", accountScope = ACCOUNT) => ({
+const claim = (fingerprint = "POST /v1/transcriptions\nsha256:aaa", accountScope = ACCOUNT) => ({
   accountScope,
   key: KEY,
-  route: "POST /v1/plan",
+  route: "POST /v1/transcriptions",
   fingerprint,
 });
 const at = (accountScope = ACCOUNT) => ({ accountScope, key: KEY });
@@ -113,8 +114,8 @@ describeDb("the idempotency key store", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({
       state: "in_flight",
-      route: "POST /v1/plan",
-      request_fingerprint: "POST /v1/plan\nsha256:aaa",
+      route: "POST /v1/transcriptions",
+      request_fingerprint: "POST /v1/transcriptions\nsha256:aaa",
       metering_claimed_at: null,
       lease_live: true,
     });
@@ -183,27 +184,27 @@ describeDb("the idempotency key store", () => {
     // §9.2's third guarantee does not depend on what state the row is in, so each state is asked.
     itUnderHangBackstop("conflicts while the first request is in flight", async () => {
       await claimKey(client, claim());
-      expect(await claimKey(client, claim("POST /v1/plan\nsha256:bbb"))).toEqual({ kind: "conflict" });
+      expect(await claimKey(client, claim("POST /v1/transcriptions\nsha256:bbb"))).toEqual({ kind: "conflict" });
     });
 
     itUnderHangBackstop("conflicts against a stored response", async () => {
       const token = grantedTo(await claimKey(client, claim()));
       await completeClaim(client, heldBy(token), response("{}"));
-      expect(await claimKey(client, claim("POST /v1/plan\nsha256:bbb"))).toEqual({ kind: "conflict" });
+      expect(await claimKey(client, claim("POST /v1/transcriptions\nsha256:bbb"))).toEqual({ kind: "conflict" });
     });
 
     itUnderHangBackstop("conflicts against a released key, which is otherwise free", async () => {
       const token = grantedTo(await claimKey(client, claim()));
       await releaseClaim(client, heldBy(token));
       // Free to the same body...
-      expect(await claimKey(client, claim("POST /v1/plan\nsha256:bbb"))).toEqual({ kind: "conflict" });
+      expect(await claimKey(client, claim("POST /v1/transcriptions\nsha256:bbb"))).toEqual({ kind: "conflict" });
     });
 
     itUnderHangBackstop("conflicts even after the response window has passed", async () => {
       const token = grantedTo(await claimKey(client, claim()));
       await completeClaim(client, heldBy(token), response("{}"));
       await backDate("response_expires_at", 1);
-      expect(await claimKey(client, claim("POST /v1/plan\nsha256:bbb"))).toEqual({ kind: "conflict" });
+      expect(await claimKey(client, claim("POST /v1/transcriptions\nsha256:bbb"))).toEqual({ kind: "conflict" });
     });
   });
 
@@ -215,32 +216,32 @@ describeDb("the idempotency key store", () => {
   });
 
   itUnderHangBackstop("keeps one account's key entirely separate from another's", async () => {
-    const mineToken = grantedTo(await claimKey(client, claim("POST /v1/plan\nsha256:aaa", ACCOUNT)));
+    const mineToken = grantedTo(await claimKey(client, claim("POST /v1/transcriptions\nsha256:aaa", ACCOUNT)));
     await completeClaim(client, heldBy(mineToken, ACCOUNT), response('{"mine":true}'));
 
     // The same key under a different scope is a *fresh claim*, never the first account's response —
     // which is the property that stops a stored answer crossing between callers.
     const theirToken = grantedTo(
-      await claimKey(client, claim("POST /v1/plan\nsha256:aaa", OTHER_ACCOUNT)),
+      await claimKey(client, claim("POST /v1/transcriptions\nsha256:aaa", OTHER_ACCOUNT)),
     );
     await completeClaim(client, heldBy(theirToken, OTHER_ACCOUNT), response('{"theirs":true}'));
 
     // And each replays its own.
-    const mine = await claimKey(client, claim("POST /v1/plan\nsha256:aaa", ACCOUNT));
-    const theirs = await claimKey(client, claim("POST /v1/plan\nsha256:aaa", OTHER_ACCOUNT));
+    const mine = await claimKey(client, claim("POST /v1/transcriptions\nsha256:aaa", ACCOUNT));
+    const theirs = await claimKey(client, claim("POST /v1/transcriptions\nsha256:aaa", OTHER_ACCOUNT));
     if (mine.kind !== "replay" || theirs.kind !== "replay") throw new Error("expected two replays");
     expect(mine.response.body.toString("utf8")).toBe('{"mine":true}');
     expect(theirs.response.body.toString("utf8")).toBe('{"theirs":true}');
   });
 
   itUnderHangBackstop("conflicts within a scope without conflicting across one", async () => {
-    await claimKey(client, claim("POST /v1/plan\nsha256:aaa", ACCOUNT));
+    await claimKey(client, claim("POST /v1/transcriptions\nsha256:aaa", ACCOUNT));
     // A different body under the same key and the same account: the conflict §9.2 asks for.
-    expect(await claimKey(client, claim("POST /v1/plan\nsha256:zzz", ACCOUNT))).toEqual({
+    expect(await claimKey(client, claim("POST /v1/transcriptions\nsha256:zzz", ACCOUNT))).toEqual({
       kind: "conflict",
     });
     // The same different body under another account is simply that account's first request.
-    grantedTo(await claimKey(client, claim("POST /v1/plan\nsha256:zzz", OTHER_ACCOUNT)));
+    grantedTo(await claimKey(client, claim("POST /v1/transcriptions\nsha256:zzz", OTHER_ACCOUNT)));
   });
 
   itUnderHangBackstop("holds an unauthenticated key in a scope no account can reach", async () => {
@@ -451,7 +452,7 @@ describeDb("the idempotency key store", () => {
     });
 
     itUnderHangBackstop("drops one account's stored responses and keeps its metering claims", async () => {
-      const mineToken = grantedTo(await claimKey(client, claim("POST /v1/plan\nsha256:aaa", ACCOUNT)));
+      const mineToken = grantedTo(await claimKey(client, claim("POST /v1/transcriptions\nsha256:aaa", ACCOUNT)));
       await claimMeteringEvent(client, at(ACCOUNT));
       await completeClaim(
         client,
@@ -459,7 +460,7 @@ describeDb("the idempotency key store", () => {
         response('{"content":"the user asked something"}'),
       );
       const theirToken = grantedTo(
-        await claimKey(client, claim("POST /v1/plan\nsha256:aaa", OTHER_ACCOUNT)),
+        await claimKey(client, claim("POST /v1/transcriptions\nsha256:aaa", OTHER_ACCOUNT)),
       );
       await completeClaim(
         client,
@@ -470,9 +471,9 @@ describeDb("the idempotency key store", () => {
       expect(await deleteStoredResponsesForAccount(client, ACCOUNT)).toBe(1);
 
       expect(await meteringEventClaimed(client, at(ACCOUNT))).toBe(true);
-      expect((await claimKey(client, claim("POST /v1/plan\nsha256:aaa", ACCOUNT))).kind).toBe("claimed");
+      expect((await claimKey(client, claim("POST /v1/transcriptions\nsha256:aaa", ACCOUNT))).kind).toBe("claimed");
       // The other account is untouched.
-      expect((await claimKey(client, claim("POST /v1/plan\nsha256:aaa", OTHER_ACCOUNT))).kind).toBe("replay");
+      expect((await claimKey(client, claim("POST /v1/transcriptions\nsha256:aaa", OTHER_ACCOUNT))).kind).toBe("replay");
     });
   });
 });
@@ -548,13 +549,11 @@ describeDb("contract §9.2 end to end, over a real Postgres", () => {
     vi.unstubAllGlobals();
     vi.stubGlobal("fetch", async () => {
       upstreamCalls += 1;
-      return new Response(
-        JSON.stringify({
-          output: [{ content: [{ type: "output_text", text: `{"call":${upstreamCalls}}` }] }],
-          usage: { input_tokens: 1, output_tokens: 2, total_tokens: 3 },
-        }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      );
+      // Each call's text names the call, so a replayed body is told apart from a second run.
+      return new Response(JSON.stringify({ text: `call ${upstreamCalls}` }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
     });
   });
 
@@ -568,24 +567,26 @@ describeDb("contract §9.2 end to end, over a real Postgres", () => {
       { idempotencyStore: postgresKeyStore(withConnection) },
     );
 
-  const planBody = (text: string) => ({
-    task_id: "task-1",
-    retention: "standard" as const,
-    messages: [{ role: "user" as const, text }],
-    response_schema_name: "Plan",
-    response_schema: { type: "object" },
-  });
-
-  const post = (app: ReturnType<typeof build>, key: string, text = "hello") =>
-    app.inject({
+  /**
+   * `POST /v1/transcriptions`, the gateway's one metered route. Its body is multipart, which the hook
+   * fingerprints by declared length, so two recordings that must differ as bodies differ in length.
+   */
+  const post = (app: ReturnType<typeof build>, key: string, recording = "a short recording") => {
+    const body = transcriptionBody(
+      { task_id: "task-1", retention: "standard" },
+      Buffer.from(recording, "utf8"),
+    );
+    return app.inject({
       method: "POST",
-      url: "/v1/plan",
+      url: "/v1/transcriptions",
       headers: {
         authorization: `Bearer ${accessTokenFor(SUPABASE_USER)}`,
+        "content-type": body.contentType,
         "idempotency-key": key,
       },
-      payload: planBody(text),
+      payload: body.payload,
     });
+  };
 
   itUnderHangBackstop("returns the stored response to a repeat, and calls the provider once", async () => {
     const app = build();
@@ -594,6 +595,7 @@ describeDb("contract §9.2 end to end, over a real Postgres", () => {
     const second = await post(app, KEY);
 
     expect(first.statusCode).toBe(200);
+    expect(first.json().text).toBe("call 1");
     expect(second.statusCode).toBe(200);
     expect(second.body).toBe(first.body);
     expect(second.headers["sonny-request-id"]).toBe(first.headers["sonny-request-id"]);
@@ -605,8 +607,8 @@ describeDb("contract §9.2 end to end, over a real Postgres", () => {
   itUnderHangBackstop("answers 409 idempotency.conflict when the same key carries a different body", async () => {
     const app = build();
 
-    await post(app, KEY, "the first command");
-    const conflicting = await post(app, KEY, "a different command");
+    await post(app, KEY, "the first recording");
+    const conflicting = await post(app, KEY, "a different, longer recording");
 
     expect(conflicting.statusCode).toBe(409);
     expect(conflicting.json()["error"]["code"]).toBe("idempotency.conflict");
@@ -656,7 +658,7 @@ describeDb("contract §9.2 end to end, over a real Postgres", () => {
     );
     expect(rows).toHaveLength(1);
     expect(rows[0].account_scope).toBe(ACCOUNT);
-    expect(rows[0].route).toBe("POST /v1/plan");
+    expect(rows[0].route).toBe("POST /v1/transcriptions");
     await app.close();
   });
 });

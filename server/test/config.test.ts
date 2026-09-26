@@ -120,8 +120,8 @@ describe("provider credentials — two live keys per provider", () => {
   });
 
   it("returns undefined rather than throwing for a provider with no credential", () => {
-    expect(activeKey(loadConfig({ ...base }), "vision")).toBeUndefined();
-    expect(acceptedKeys(loadConfig({ ...base }), "vision")).toEqual([]);
+    expect(activeKey(loadConfig({ ...base }), "cerebras")).toBeUndefined();
+    expect(acceptedKeys(loadConfig({ ...base }), "cerebras")).toEqual([]);
   });
 
   describe("the Supabase JWT policy", () => {

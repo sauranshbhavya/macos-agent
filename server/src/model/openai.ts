@@ -1,53 +1,32 @@
 import {
-  estimatedTextUsage,
   providerErrorDetail,
   estimateTextTokens,
   ProviderRejected,
   readJSONBody,
-  reportedTokenUsage,
   upstreamStatusError,
   upstreamTransportError,
-  type TextRequest,
-  type TextResult,
   type TranscriptionRequest,
   type TranscriptionResult,
   type UpstreamUsage,
 } from "./upstream.js";
 
 /**
- * The OpenAI adapter: the text routes (`/v1/plan`, `/v1/research/synthesize`) and transcription.
- *
- * **Everything provider-shaped in this repository's request path now lives in this file and
- * `tavily.ts`.** Before SONNY-130 the same three facts — the endpoint, the model identifier and the
- * key — sat in four Swift initializers on the user's Mac, read from the user's own environment. The
- * move is the whole ticket, and the property it buys is stated in `upstream.ts`: the wire shape
- * below can be replaced without any app release, which is what SONNY-110 needs.
- *
- * **The request bodies are the ones the Mac used to build, and that is deliberate rather than
- * incidental.** `docs/sonny-backend-api-contract.md` §4.2 requires the server to forward message
- * text without editing, re-wrapping or re-ordering it — because the text carries
- * `TRUSTED_USER_INSTRUCTION` / `UNTRUSTED_OBSERVED_CONTENT` boundaries that row I's prompt-injection
- * defence depends on, and a server that reflowed them would silently dissolve that defence a long
- * way from where anyone would look for it.
+ * The OpenAI transcription adapter, behind `POST /v1/transcriptions`. The V2 agents call OpenAI
+ * through `agent/model/adapter.ts`.
  */
 
 export interface OpenAISettings {
   /** Newest first; index 0 serves new requests (`config.ts`, `ProviderCredentials`). */
   readonly keys: readonly string[];
-  /** `https://api.openai.com/v1` by default. Configurable so SONNY-110 is a redeploy. */
+  /** `https://api.openai.com/v1` by default. */
   readonly baseUrl: string;
-  /** The model the text routes ask for. Never sent to, or named by, the client. */
-  readonly textModel: string;
-  /** The model transcription asks for. Same rule. */
+  /** The model transcription asks for. Never sent to, or named by, the client. */
   readonly transcriptionModel: string;
 }
 
 /**
- * The key new requests use.
- *
- * Only index 0 is ever *sent*. The later entries exist for the rotation `config.ts` describes —
- * they stay configured so an in-flight deploy is never without a working credential — and this
- * gateway has nothing to do with them beyond not being the reason they are there.
+ * The key new requests use. Only index 0 is ever sent; the later entries exist for the rotation
+ * `config.ts` describes.
  */
 function activeKey(settings: OpenAISettings): string {
   const key = settings.keys[0];
@@ -61,119 +40,7 @@ function endpoint(settings: OpenAISettings, path: string): string {
 }
 
 /**
- * **The local `reportedTokenUsage` that stood here is now `upstream.ts`'s** (SONNY-132). It read
- * `input_tokens` / `output_tokens` / `total_tokens`; the shared one reads those plus Chat
- * Completions' `prompt_tokens` / `completion_tokens`, which is the dialect Cerebras speaks, and is
- * the same alias set `AIUsagePayloadParser.tokenCounts` on the Mac already accepts. Three
- * near-identical readers was three places for one of them to stop matching a provider's block.
- * Its tolerance is unchanged and its reasoning moved with it.
- */
-
-/**
- * The model's text out of a Responses API reply.
- *
- * Mirrors `OpenAIResponseParser.outputText` on the Mac, which is the parser this route replaced:
- * the flattened `output_text` when the provider supplies it, otherwise the first non-empty text
- * part of the structured `output` array. Kept deliberately identical so a reply that used to
- * produce a plan still produces one — a divergence here would look like the model changing.
- */
-function outputText(body: unknown): string | null {
-  if (typeof body !== "object" || body === null) return null;
-  const record = body as Record<string, unknown>;
-  const direct = record["output_text"];
-  if (typeof direct === "string" && direct.length > 0) return direct;
-
-  const output = record["output"];
-  if (!Array.isArray(output)) return null;
-  for (const item of output) {
-    if (typeof item !== "object" || item === null) continue;
-    const content = (item as Record<string, unknown>)["content"];
-    if (!Array.isArray(content)) continue;
-    for (const part of content) {
-      if (typeof part !== "object" || part === null) continue;
-      const text = (part as Record<string, unknown>)["text"];
-      if (typeof text === "string" && text.length > 0) return text;
-    }
-  }
-  return null;
-}
-
-export function makeOpenAITextAdapter(
-  settings: OpenAISettings,
-): (request: TextRequest) => Promise<TextResult> {
-  return async (request) => {
-    const body = {
-      model: settings.textModel,
-      // The same retention control the vision adapter carries, on the same API and for the same
-      // reason (SONNY-513) — `vision.ts` has the full note. This route is the one that fires on
-      // *every ordinary command* rather than only on screen control, so what it would otherwise
-      // leave stored at the provider is the user's typed or spoken command text and the model's
-      // reply, for thirty days, on the Responses API's default.
-      store: false,
-      input: request.messages.map((message) => ({
-        role: message.role,
-        content: [{ type: "input_text", text: message.text }],
-      })),
-      ...(request.reasoningEffort === undefined
-        ? {}
-        : { reasoning: { effort: request.reasoningEffort } }),
-      text: {
-        ...(request.verbosity === undefined ? {} : { verbosity: request.verbosity }),
-        // §4.2: "The server maps it to whichever structured-output mechanism the chosen provider
-        // has." This is that mapping for this provider, and `strict` is the server's call rather
-        // than a client field — a client that could turn strictness off would be a client that can
-        // widen what the model may return, on a route whose output is decoded strictly downstream.
-        format: {
-          type: "json_schema",
-          name: request.responseSchemaName,
-          strict: true,
-          schema: request.responseSchema,
-        },
-      },
-    };
-
-    let response: Response;
-    try {
-      response = await fetch(endpoint(settings, "/responses"), {
-        method: "POST",
-        headers: {
-          authorization: `Bearer ${activeKey(settings)}`,
-          "content-type": "application/json",
-        },
-        body: JSON.stringify(body),
-        signal: request.signal,
-      });
-    } catch (error) {
-      throw upstreamTransportError(error, "openai");
-    }
-
-    if (!response.ok) {
-      // **The body is read now, and it still does not reach the thrown message** (SONNY-134). §7.1
-      // makes `message` a field the support lookup reads, and a provider error body can carry the
-      // request back verbatim — which on these routes is the user's own command — so `message` is
-      // still the status and nothing else. What changed is that the body has somewhere to go:
-      // §10.3 puts it in the content store on the content clock rather than in an unclassified log
-      // or nowhere, and `providerErrorDetail` carries it there on the error itself.
-      throw upstreamStatusError(response.status, "openai", await providerErrorDetail(response));
-    }
-
-    const parsed: unknown = await readJSONBody(response, "openai");
-    const text = outputText(parsed);
-    if (text === null) {
-      // A 2xx whose body holds no text is the provider answering something this adapter cannot
-      // use. `rejected` rather than `unavailable`: a retry produces the same unreadable reply.
-      throw new ProviderRejected("openai answered without text output");
-    }
-
-    return {
-      outputText: text,
-      usage: reportedTokenUsage(parsed) ?? estimatedTextUsage(request.messages, text),
-    };
-  };
-}
-
-/**
- * Transcription's own `usage` block, which is a different shape from the text routes'.
+ * Transcription's own `usage` block.
  *
  * The provider reports one of two forms and says which: `{type: "tokens", input_tokens, …}` or
  * `{type: "duration", seconds}`. The contract's response carries both possibilities in one block
@@ -249,9 +116,8 @@ export function makeOpenAITranscriptionAdapter(
     }
 
     if (!response.ok) {
-      // The body reaches the content store and never the thrown message; the text route above
-      // carries the reasoning. It matters more here than there: this route's request content is the
-      // user's own voice.
+      // The status goes on the thrown message and the body travels only on the error's `detail`: a
+      // provider error body can echo the request back, and here the request is the user's voice.
       throw upstreamStatusError(response.status, "openai", await providerErrorDetail(response));
     }
 

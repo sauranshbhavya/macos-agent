@@ -40,6 +40,7 @@ import { METERED_ROUTES } from "../src/metering/event.js";
 import type { MeteringStore } from "../src/metering/store.js";
 import { testConfig } from "./support/config.js";
 import { fakeEntitlementStore, testSigningKey } from "./support/entitlement.js";
+import { transcriptionBody } from "./support/multipart.js";
 import { accessTokenFor } from "./support/tokens.js";
 import { testDatabaseUrl } from "./support/database.js";
 import { signedInConnectionTo } from "./support/connection.js";
@@ -99,13 +100,32 @@ function build(store = fakeEntitlementStore(), overrides: Record<string, unknown
   );
 }
 
-const planBody = () => ({
-  task_id: "task-1",
-  retention: "standard" as const,
-  messages: [{ role: "user" as const, text: "hello" }],
-  response_schema_name: "Plan",
-  response_schema: { type: "object" },
-});
+const META = { task_id: "task-1", retention: "standard" as const };
+
+/** `POST /v1/transcriptions`, the gateway's one metered route, as the Mac sends it. */
+function transcribe(
+  app: ReturnType<typeof buildApp>,
+  options: { authenticated?: boolean; meta?: unknown; key?: string } = {},
+) {
+  const body = transcriptionBody(options.meta ?? META, Buffer.from("a short recording", "utf8"));
+  return app.inject({
+    method: "POST",
+    url: "/v1/transcriptions",
+    headers: {
+      ...(options.authenticated === false ? {} : { authorization: authorization() }),
+      "content-type": body.contentType,
+      ...(options.key === undefined ? {} : { "idempotency-key": options.key }),
+    },
+    payload: body.payload,
+  });
+}
+
+/** A provider that transcribes, so `meteredUpstreamCall` really opens a call. */
+const transcribing = (async () =>
+  new Response(JSON.stringify({ text: "hello" }), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  })) as typeof globalThis.fetch;
 
 /**
  * A `KeyStore` that claims once and replays afterwards.
@@ -344,12 +364,7 @@ describe("what each refusal tells the client (contract §7.2)", () => {
     store.answerWith({ kind: "rate_limited", retryAfterSeconds: 42 });
     const app = build(store);
 
-    const response = await app.inject({
-      method: "POST",
-      url: "/v1/plan",
-      headers: { authorization: authorization() },
-      payload: planBody(),
-    });
+    const response = await transcribe(app);
 
     expect(response.statusCode).toBe(429);
     expect(response.json().error.code).toBe("limit.rate");
@@ -366,12 +381,7 @@ describe("what each refusal tells the client (contract §7.2)", () => {
     store.answerWith({ kind: "over_cap", capUnits: 1000 });
     const app = build(store);
 
-    const response = await app.inject({
-      method: "POST",
-      url: "/v1/plan",
-      headers: { authorization: authorization() },
-      payload: planBody(),
-    });
+    const response = await transcribe(app);
 
     expect(response.statusCode).toBe(429);
     expect(response.json().error.code).toBe("limit.spend");
@@ -386,12 +396,7 @@ describe("what each refusal tells the client (contract §7.2)", () => {
     store.answerWith({ kind: "not_entitled", capability: "cap.gated" });
     const app = build(store);
 
-    const response = await app.inject({
-      method: "POST",
-      url: "/v1/plan",
-      headers: { authorization: authorization() },
-      payload: planBody(),
-    });
+    const response = await transcribe(app);
 
     expect(response.statusCode).toBe(403);
     expect(response.json().error.code).toBe("entitlement.required");
@@ -405,8 +410,7 @@ describe("what each refusal tells the client (contract §7.2)", () => {
     const codes: string[] = [];
     const unauthenticated = build();
     codes.push(
-      (await unauthenticated.inject({ method: "POST", url: "/v1/plan", payload: planBody() }))
-        .json().error.code,
+      (await transcribe(unauthenticated, { authenticated: false })).json().error.code,
     );
     await unauthenticated.close();
 
@@ -418,16 +422,7 @@ describe("what each refusal tells the client (contract §7.2)", () => {
       const store = fakeEntitlementStore();
       store.answerWith(outcome);
       const app = build(store);
-      codes.push(
-        (
-          await app.inject({
-            method: "POST",
-            url: "/v1/plan",
-            headers: { authorization: authorization() },
-            payload: planBody(),
-          })
-        ).json().error.code,
-      );
+      codes.push((await transcribe(app)).json().error.code);
       await app.close();
     }
 
@@ -448,12 +443,7 @@ describe("what each refusal tells the client (contract §7.2)", () => {
     store.answerWith({ kind: "over_cap", capUnits: 0 });
     const app = build(store);
 
-    const response = await app.inject({
-      method: "POST",
-      url: "/v1/plan",
-      headers: { authorization: authorization() },
-      payload: planBody(),
-    });
+    const response = await transcribe(app);
 
     expect(response.statusCode).toBe(429);
     expect(response.json().error.code).toBe("limit.spend");
@@ -469,18 +459,9 @@ describe("which requests spend against the cap", () => {
       openAIBaseUrl: "https://openai.invalid/v1",
     });
     const original = globalThis.fetch;
-    globalThis.fetch = (async () =>
-      new Response(JSON.stringify({ output_text: "{}", usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      })) as typeof globalThis.fetch;
+    globalThis.fetch = transcribing;
     try {
-      const response = await app.inject({
-        method: "POST",
-        url: "/v1/plan",
-        headers: { authorization: authorization() },
-        payload: planBody(),
-      });
+      const response = await transcribe(app);
       expect(response.statusCode).toBe(200);
     } finally {
       globalThis.fetch = original;
@@ -498,12 +479,8 @@ describe("which requests spend against the cap", () => {
     const store = fakeEntitlementStore();
     const app = build(store);
 
-    const response = await app.inject({
-      method: "POST",
-      url: "/v1/plan",
-      headers: { authorization: authorization() },
-      payload: { task_id: "task-1" },
-    });
+    // The meta part is missing its required `retention`.
+    const response = await transcribe(app, { meta: { task_id: "task-1" } });
 
     expect(response.statusCode).toBe(400);
     expect(store.calls.settled).toEqual([{ reservationId: "reservation-1", charge: false }]);
@@ -516,12 +493,7 @@ describe("which requests spend against the cap", () => {
     const original = globalThis.fetch;
     globalThis.fetch = (async () => new Response("nope", { status: 500 })) as typeof globalThis.fetch;
     try {
-      const response = await app.inject({
-        method: "POST",
-        url: "/v1/plan",
-        headers: { authorization: authorization() },
-        payload: planBody(),
-      });
+      const response = await transcribe(app);
       expect(response.statusCode).toBe(502);
     } finally {
       globalThis.fetch = original;
@@ -537,12 +509,7 @@ describe("which requests spend against the cap", () => {
     const store = fakeEntitlementStore();
     const app = build(store, { credentials: [] });
 
-    const response = await app.inject({
-      method: "POST",
-      url: "/v1/plan",
-      headers: { authorization: authorization() },
-      payload: planBody(),
-    });
+    const response = await transcribe(app);
 
     expect(response.statusCode).toBe(502);
     expect(response.json().error.code).toBe("provider.unavailable");
@@ -576,20 +543,10 @@ describe("which requests spend against the cap", () => {
       { entitlementStore: store, idempotencyStore: replayingKeyStore() },
     );
 
-    const send = () =>
-      app.inject({
-        method: "POST",
-        url: "/v1/plan",
-        headers: { authorization: authorization(), "idempotency-key": "key-1" },
-        payload: planBody(),
-      });
+    const send = () => transcribe(app, { key: "key-1" });
 
     const original = globalThis.fetch;
-    globalThis.fetch = (async () =>
-      new Response(JSON.stringify({ output_text: "{}" }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      })) as typeof globalThis.fetch;
+    globalThis.fetch = transcribing;
     try {
       expect((await send()).statusCode).toBe(200);
       // The repeat: the same key, replayed from the store, handler never run.
@@ -615,47 +572,33 @@ describe("which requests spend against the cap", () => {
   it("spends against the cap on exactly the routes §11 meters, and no others", async () => {
     // **The population, driven rather than described** (PR #152's review, F6). This asserted that
     // `METERED_ROUTES` contained the one route it had sent, which is a claim about a map rather than
-    // about the hook — four of the five were never driven and no unmetered route was checked at all.
+    // about the hook — most metered routes were never driven and no unmetered route was checked.
     // It now sends a request to every metered route and asserts the hook asked for a hold on each,
     // then sends an authenticated *unmetered* route and asserts it asked for none.
     const store = fakeEntitlementStore();
     const app = build(store);
-    const bodies: Record<string, Record<string, unknown>> = {
-      "POST /v1/plan": planBody(),
-      "POST /v1/research/synthesize": planBody(),
-      "POST /v1/search": { task_id: "task-1", retention: "standard", query: "sonny" },
-      "POST /v1/screen/analyze": {
-        task_id: "task-1",
-        retention: "standard",
-        session_id: "session-1",
-        session_iteration: 1,
-        prompt: "what is on screen",
-        image: { media_type: "image/png", data: Buffer.from("not-a-real-png").toString("base64") },
-      },
+    // One sender per metered route. A route added to `METERED_ROUTES` without one here fails the
+    // test by name rather than being skipped, so the population stays driven rather than described.
+    const senders: Record<string, () => Promise<unknown>> = {
+      "POST /v1/transcriptions": () => transcribe(app),
     };
 
-    for (const key of METERED_ROUTES.keys()) {
-      // **`POST /v1/transcriptions` is excluded and is therefore uncovered, which is the honest
-      // wording** (cycle 3, F6's residual). This said it was "exercised by `model.test.ts`", and
-      // that file injects the fake store but never reads `store.calls` — so **no test anywhere
-      // asserts that route takes a hold**. It is multipart, so driving it here means building a
-      // form body for a property every other route states in one line. The implementation is
-      // population-driven (`meteredRouteFor` reads the map), so the route is covered by the code
-      // and not by this test; the assertion below is `size - 1` for exactly that reason.
-      if (key === "POST /v1/transcriptions") continue;
-      const [, url] = key.split(" ") as [string, string];
-      await app.inject({
-        method: "POST",
-        url,
-        headers: { authorization: authorization() },
-        payload: bodies[key]!,
-      });
+    const original = globalThis.fetch;
+    globalThis.fetch = transcribing;
+    try {
+      for (const key of METERED_ROUTES.keys()) {
+        const send = senders[key];
+        if (send === undefined) throw new Error(`no request is built for the metered route ${key}`);
+        await send();
+      }
+    } finally {
+      globalThis.fetch = original;
     }
     // Every admission so far asked for a hold, because every route driven is metered.
     expect(store.calls.admitted.map((call) => call.metered)).toEqual(
       store.calls.admitted.map(() => true),
     );
-    expect(store.calls.admitted).toHaveLength(METERED_ROUTES.size - 1);
+    expect(store.calls.admitted).toHaveLength(METERED_ROUTES.size);
 
     // And an authenticated route that is *not* metered asks for none, which is the half a
     // one-route test could not say anything about.
@@ -701,18 +644,9 @@ describe("which requests spend against the cap", () => {
       { entitlementStore: recordingEntitlements, meteringStore: metering },
     );
     const original = globalThis.fetch;
-    globalThis.fetch = (async () =>
-      new Response(JSON.stringify({ output_text: "{}" }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      })) as typeof globalThis.fetch;
+    globalThis.fetch = transcribing;
     try {
-      const response = await app.inject({
-        method: "POST",
-        url: "/v1/plan",
-        headers: { authorization: authorization() },
-        payload: planBody(),
-      });
+      const response = await transcribe(app);
       expect(response.statusCode).toBe(200);
     } finally {
       globalThis.fetch = original;
@@ -816,7 +750,7 @@ describe("the period and the sweep window", () => {
     // would then settle against a reservation already given back — a double spend, in the direction
     // that costs the founder money. Read off `DEADLINE_MS` rather than written as a literal, so a
     // route whose deadline grows past the window fails here.
-    expect(LONGEST_TOTAL_DEADLINE_MS).toBe(105_000);
+    expect(LONGEST_TOTAL_DEADLINE_MS).toBe(75_000);
     expect(RESERVATION_TTL_SECONDS * 1000).toBeGreaterThan(LONGEST_TOTAL_DEADLINE_MS);
     expect(reservationExpiry(new Date("2026-08-28T09:00:00Z")).toISOString())
       .toBe("2026-08-28T09:05:00.000Z");

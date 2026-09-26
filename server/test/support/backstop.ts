@@ -9,8 +9,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, it } from "vitest";
  * default `testTimeout` of 5000 ms, which nobody chose for them. Under mutation-battery load they
  * met it: SONNY-241 records a sighting at 5014 ms in PR #104's review and a second inside a
  * 17-mutant battery over SONNY-203's branch, and SONNY-335 a third in PR #148's cycle-2 battery,
- * where the two were counted as killing a mutant in `src/content/hook.ts` that their request path
- * cannot reach. That is the shape `scripts/mutate --help` names: a flaky test reads as a kill, and
+ * where the two were counted as killing a mutant in a module their request path cannot reach. That is the shape `scripts/mutate --help` names: a flaky test reads as a kill, and
  * it fails in the reassuring direction, recording a guard that does not exist.
  *
  * Two things were wrong with that deadline and only one of them is its length. Five seconds is a

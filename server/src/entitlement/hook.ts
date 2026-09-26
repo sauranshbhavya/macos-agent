@@ -40,9 +40,8 @@ import type { EntitlementStore } from "./store.js";
  *
  * §5.3: "Which capabilities are gated is row 18's (SONNY-23), not this contract's — this contract
  * fixes only that they are named strings in a list the client reads." This ticket's never-touch list
- * says the same thing in stronger terms: it "must not decide that screen control is gated — it must
- * make it possible to gate it". Under the 2026-08-16 pricing shape screen control is the paid line,
- * and wiring that gate is still row 18's.
+ * says the same thing in stronger terms: it must not decide what is gated, only make it possible to
+ * gate it. Wiring a gate is still row 18's.
  *
  * So the map is empty, `theGatedRouteSetIsEmptyAndBelongsToRowEighteen` asserts that it is, and the
  * 403 path below is driven in tests through the injectable override rather than by gating a real
