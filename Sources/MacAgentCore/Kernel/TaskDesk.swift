@@ -89,7 +89,9 @@ public final class TaskDesk: ObservableObject {
         watchers: ResumableTaskStore,
         pageReader: any StandingWatcherObserving = LiveStandingWatcherObserver(),
         instant: @escaping (String) -> [WireAction]?,
-        routineNamed: @escaping (String, [RoutineGoal]) -> RoutineGoal?,
+        // Defaults to naming no routine, for callers that don't run routines by name. The app
+        // passes the resolver that knows the installed apps (`SonnyKernel`).
+        routineNamed: @escaping (String, [RoutineGoal]) -> RoutineGoal? = { _, _ in nil },
         mode: @escaping () -> AgentInteractionMode,
         context: @escaping () -> TaskStartBody.Context = { .init() },
         now: @escaping () -> Date = Date.init,
