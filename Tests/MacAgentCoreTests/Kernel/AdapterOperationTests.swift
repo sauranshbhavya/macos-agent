@@ -195,6 +195,18 @@ struct AdapterOperationTests {
             #expect(later.targetIdentity != first.targetIdentity)
             #expect(first.targetIdentity.hasSuffix(".zip"))
         }
+
+        // The same action id with different arguments is a different request: nothing pinned
+        // carries over to it.
+        let reused = ActionID()
+        let other = folder.appendingPathComponent("other", isDirectory: true)
+        try FileManager.default.createDirectory(at: other, withIntermediateDirectories: true)
+        try Data(count: 4000).write(to: other.appendingPathComponent("big.bin"))
+        let pinnedHere = try await zip.prepare(actionID: reused, args: ["folder": .string(folder.path)])
+        clock.value = clock.value.addingTimeInterval(5)
+        let elsewhere = try await zip.prepare(actionID: reused, args: ["folder": .string(other.path)])
+        #expect(elsewhere.targetIdentity != pinnedHere.targetIdentity)
+        #expect(elsewhere.targetIdentity.contains("/other/"))
     }
 
     @Test

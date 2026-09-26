@@ -44,7 +44,8 @@ public struct AdapterCapability: Capability {
         let context = self.context()
         let requested = steps
         var steps = steps
-        pins.apply(to: &steps, for: actionID)
+        let request = Self.canonical(args)
+        pins.apply(to: &steps, for: actionID, request: request)
         let plan = AgentPlan(summary: name, requiresConfirmation: false, steps: steps)
         let resolved: AgentPlan
         let previews: [ActionPreview]
@@ -61,7 +62,7 @@ public struct AdapterCapability: Capability {
         } catch {
             throw Self.prepareError(error)
         }
-        pins.record(requested: requested, resolved: resolved.steps, for: actionID)
+        pins.record(requested: requested, resolved: resolved.steps, for: actionID, request: request)
         var effect = floor
         for escalation in risk.escalations {
             switch escalation.consequence {
@@ -139,9 +140,13 @@ public struct AdapterCapability: Capability {
 
 /// What adapters resolve from the clock while preparing a step, kept per action so a second prepare
 /// of the same action reads the same: a reminder's due time, and a default output path whose name
-/// carries a timestamp. Only the most recent actions are kept.
+/// carries a timestamp. A pin holds only for the exact request it was made for: the action id comes
+/// from the gateway, so a reused id with different arguments is prepared afresh. Only the most recent
+/// actions are kept.
 final class PreparePins: @unchecked Sendable {
     private struct Pinned {
+        /// The operation's canonical arguments when the pin was made.
+        var request: String
         var dueDates: [Date?]
         /// Each step's output path as it was asked for, and what it resolved to.
         var outputs: [(asked: String?, resolved: String?)]
@@ -152,8 +157,8 @@ final class PreparePins: @unchecked Sendable {
     private var order: [ActionID] = []
     static let kept = 256
 
-    func apply(to steps: inout [AgentStep], for action: ActionID) {
-        guard let pins = lock.withLock({ pinned[action] }), pins.dueDates.count == steps.count else { return }
+    func apply(to steps: inout [AgentStep], for action: ActionID, request: String) {
+        guard let pins = lock.withLock({ pinned[action] }), pins.request == request, pins.dueDates.count == steps.count else { return }
         for index in steps.indices {
             if steps[index].resolvedReminderDueDate == nil {
                 steps[index].resolvedReminderDueDate = pins.dueDates[index]
@@ -165,7 +170,7 @@ final class PreparePins: @unchecked Sendable {
         }
     }
 
-    func record(requested: [AgentStep], resolved: [AgentStep], for action: ActionID) {
+    func record(requested: [AgentStep], resolved: [AgentStep], for action: ActionID, request: String) {
         guard requested.count == resolved.count else { return }
         let due = resolved.map(\.resolvedReminderDueDate)
         let outputs = zip(requested, resolved).map { (asked: $0.outputPath, resolved: $1.outputPath) }
@@ -173,7 +178,7 @@ final class PreparePins: @unchecked Sendable {
         guard due.contains(where: { $0 != nil }) || movesAnOutput else { return }
         lock.withLock {
             guard pinned[action] == nil else { return }
-            pinned[action] = Pinned(dueDates: due, outputs: outputs)
+            pinned[action] = Pinned(request: request, dueDates: due, outputs: outputs)
             order.append(action)
             if order.count > Self.kept { pinned[order.removeFirst()] = nil }
         }
