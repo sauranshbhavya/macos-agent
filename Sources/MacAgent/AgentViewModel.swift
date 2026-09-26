@@ -797,6 +797,9 @@ final class AgentViewModel: ObservableObject {
     }
 
     let logStore = AgentLogStore()
+    /// The V2 kernel, when the app was launched to try it (`V2KernelBridge`). Temporary: phase 6
+    /// replaces this view model.
+    var v2Kernel: V2KernelBridge?
 
     private var preparedRun: PreparedAgentRun? {
         get { runSlotInScope.preparedRun }
@@ -3437,6 +3440,7 @@ final class AgentViewModel: ObservableObject {
     }
 
     func cancelCurrentRun() {
+        v2Kernel?.cancelLiveTasks()
         // **One press ends the run** — the experiment's Option A, ratified by the founder on
         // 2026-08-14 and inherited here as the semantics of the stop control. The continuation is
         // cleared and resumed *before* the cancel, so `requestVisionActionApproval`'s own handler

@@ -2,6 +2,10 @@ import AppKit
 import MacAgentCore
 import SwiftUI
 
+// cua-driver reads its policy variables once, when screen control first starts. Clearing them here,
+// before any other thread exists, keeps a stray shell setting from stopping it (V2 plan section 12).
+CuaEnvironment.clearManagedVariables()
+
 let app = NSApplication.shared
 // **The one place in the repository that asks for the real local-store locations** (SONNY-240).
 // `AppDelegate.init` takes the view model rather than defaulting it, so the request is written here
@@ -82,6 +86,12 @@ agentViewModel.screenControlGate = SonnyScreenControlGate(
     allowance: screenControlAllowanceService,
     topUp: screenControlAllowanceService
 )
+// The V2 kernel, only when the SonnyV2Kernel default is on (`V2KernelBridge`; phase 6 replaces it).
+Task { @MainActor in
+    agentViewModel.v2Kernel = await V2KernelBridge.make(client: accountModel.backendClient) { [weak agentViewModel] line in
+        agentViewModel?.logStore.append(.observe, line)
+    }
+}
 let delegate = AppDelegate(
     viewModel: agentViewModel,
     accountModel: accountModel,

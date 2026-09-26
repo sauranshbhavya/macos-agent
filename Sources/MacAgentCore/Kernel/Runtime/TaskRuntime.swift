@@ -90,8 +90,8 @@ public struct RuntimeDependencies: Sendable {
     public var send: @Sendable (ClientMessage) async -> Bool
     public var ledgers: any TaskLedgerStoring
     public var capabilities: KernelCapabilities
-    public var screenTools: Set<ScreenToolName>
-    public var observer: any TaskObserver
+    /// This task's screen control, or nil on a Mac that can't control apps.
+    public var screen: (any ScreenControlling)?
     public var broker: ApprovalBroker
     public var publish: @Sendable (TaskSnapshot) async -> Void
     public var now: @Sendable () -> Date
@@ -100,8 +100,7 @@ public struct RuntimeDependencies: Sendable {
         send: @escaping @Sendable (ClientMessage) async -> Bool,
         ledgers: any TaskLedgerStoring,
         capabilities: KernelCapabilities,
-        screenTools: Set<ScreenToolName> = [],
-        observer: any TaskObserver = UnavailableObserver(),
+        screen: (any ScreenControlling)? = nil,
         broker: ApprovalBroker,
         publish: @escaping @Sendable (TaskSnapshot) async -> Void,
         now: @escaping @Sendable () -> Date = { Date() }
@@ -109,8 +108,7 @@ public struct RuntimeDependencies: Sendable {
         self.send = send
         self.ledgers = ledgers
         self.capabilities = capabilities
-        self.screenTools = screenTools
-        self.observer = observer
+        self.screen = screen
         self.broker = broker
         self.publish = publish
         self.now = now
@@ -137,6 +135,8 @@ public actor TaskRuntime {
     private var observationGeneration = 0
     /// A rebuilt outcome waiting for the user to resolve an unknown end, or for the next welcome.
     private var heldOutcome: (re: Int, results: [ActionResult])?
+    /// A consequential action in the proposal now running ended unknown.
+    private var unknownDuringRun: (action: ActionID, effect: Effect, title: String)?
 
     /// A new task.
     public init(id: TaskID, request: TaskStartBody, deps: RuntimeDependencies) {
@@ -282,7 +282,8 @@ public actor TaskRuntime {
             phase = .observing
             await publish()
             observationGeneration += 1
-            let observation = await deps.observer.observe(body, generation: observationGeneration)
+            let observer: any TaskObserver = deps.screen ?? UnavailableObserver()
+            let observation = await observer.observe(body, generation: observationGeneration)
             guard !phase.isTerminal else { return }
             phase = .running
             await sendNew(.observation(observation), re: address.seq)
@@ -387,6 +388,14 @@ public actor TaskRuntime {
         }
         working = nil
         guard !Task.isCancelled, !phase.isTerminal else { return }
+        if let unknown = unknownDuringRun {
+            // It may already have happened: the user checks before anything else is done.
+            unknownDuringRun = nil
+            heldOutcome = (re, results)
+            phase = .paused(.outcomeUnknown(action: unknown.action, effect: unknown.effect, title: unknown.title))
+            await publish()
+            return
+        }
         phase = .running
         await sendNew(.outcome(OutcomeBody(results: results)), re: re, clearingPending: true)
     }
@@ -422,27 +431,33 @@ public actor TaskRuntime {
         agent: ProposingAgent,
         judgedSoFar: inout [Effect]
     ) async -> ActionResult {
-        let capability: any Capability
-        let args: [String: JSONValue]
-        switch ProposalValidator.route(action, capabilities: deps.capabilities, screenTools: deps.screenTools) {
+        let prepareAgain: @Sendable () async throws -> PreparedAction
+        let run: @Sendable (PreparedAction) async -> CapabilityOutcome
+        switch ProposalValidator.route(action, capabilities: deps.capabilities, screenTools: deps.screen?.tools ?? []) {
         case .answer(let result):
             return answered(action, result, title: Self.title(of: action), agent: agent)
-        case .screen:
-            let result = ActionResult(
-                actionID: action.actionID,
-                status: .refused,
-                effect: action.effect,
-                error: OutcomeError(code: .unsupportedOperation, message: "Screen actions aren't available on this Mac yet.")
-            )
-            return answered(action, result, title: Self.title(of: action), agent: agent)
-        case .operation(let found, let foundArgs):
-            capability = found
-            args = foundArgs
+        case .screen(let screenAction):
+            guard let screen = deps.screen else {
+                let result = ActionResult(
+                    actionID: action.actionID,
+                    status: .refused,
+                    effect: action.effect,
+                    error: OutcomeError(code: .unsupportedOperation, message: "This Mac can't control apps.")
+                )
+                return answered(action, result, title: Self.title(of: action), agent: agent)
+            }
+            let actionID = action.actionID
+            prepareAgain = { try await screen.prepare(screenAction, actionID: actionID) }
+            run = { await screen.execute($0) }
+        case .operation(let capability, let args):
+            let actionID = action.actionID
+            prepareAgain = { try await capability.prepare(actionID: actionID, args: args) }
+            run = { await capability.execute($0) }
         }
 
         var prepared: PreparedAction
         do {
-            prepared = try await capability.prepare(actionID: action.actionID, args: args)
+            prepared = try await prepareAgain()
         } catch let error as CapabilityPrepareError {
             let (status, outcomeError) = error.result
             return answered(action, ActionResult(actionID: action.actionID, status: status, effect: action.effect, error: outcomeError), title: Self.title(of: action), agent: agent)
@@ -486,7 +501,7 @@ public actor TaskRuntime {
             // Revalidate the live target and content right before the commit: the approval covers
             // exactly what the user saw, and any change voids it.
             do {
-                let reprepared = try await capability.prepare(actionID: action.actionID, args: args)
+                let reprepared = try await prepareAgain()
                 try await deps.broker.consume(commitID: commit.commitID, task: id, action: action.actionID, reprepared: reprepared)
                 prepared = reprepared
             } catch {
@@ -504,7 +519,10 @@ public actor TaskRuntime {
             // Without a record of the dispatch, a crash could replay this action. It doesn't run.
             return answered(action, ActionResult(actionID: action.actionID, status: .failed, effect: judged, error: OutcomeError(code: .executionError, message: "Sonny couldn't record this action safely, so it didn't run.")), title: title, agent: agent)
         }
-        let outcome = await capability.execute(prepared)
+        let outcome = await run(prepared)
+        if outcome.status == .outcomeUnknown, judged > .navigate {
+            unknownDuringRun = (action.actionID, judged, title)
+        }
         return answered(
             action,
             ActionResult(actionID: action.actionID, status: outcome.status, effect: judged, evidence: outcome.evidence, error: outcome.error),

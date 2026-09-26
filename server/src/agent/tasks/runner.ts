@@ -8,6 +8,7 @@
  */
 import { randomUUID } from "node:crypto";
 import {
+  AgentTurnFailed,
   BudgetExhausted,
   CreditsExhausted,
   ModelUnavailable,
@@ -336,6 +337,9 @@ export class TaskRunner {
       result = await this.deps.agentFor(task).turn(this.contextFor(task, transcript, controller.signal));
     } catch (error) {
       if (controller.signal.aborted) return;
+      if (error instanceof AgentTurnFailed) {
+        return this.endWith(task, trigger.seq, error.notes, this.finishFor(error.cause, task));
+      }
       return this.endWith(task, trigger.seq, [], this.finishFor(error, task));
     } finally {
       this.running.delete(taskId);
@@ -437,13 +441,14 @@ export class TaskRunner {
         if (count > budgets.maxModelCalls) throw new BudgetExhausted("model_calls");
         const rate = rates[spec.tier];
         const stepId = randomUUID();
+        const held = creditsFor(rate, spec.maxInputTokens, spec.maxOutputTokens);
         const hold = await ledger.hold({
           stepId,
           accountId: task.accountId,
           taskId: task.id,
           agent: spec.agent,
           tier: spec.tier,
-          credits: creditsFor(rate, spec.maxInputTokens, spec.maxOutputTokens),
+          credits: held,
           now: now(),
         });
         if (hold.kind !== "held") throw new CreditsExhausted();
@@ -486,7 +491,9 @@ export class TaskRunner {
         await ledger
           .settle({
             stepId,
-            credits: creditsFor(rate, invocation.usage.inputTokens, invocation.usage.outputTokens),
+            // Never more than was held: the hold is the most a call can cost, and an input larger
+            // than its estimate is the gateway's misjudgement, not the account's.
+            credits: Math.min(held, creditsFor(rate, invocation.usage.inputTokens, invocation.usage.outputTokens)),
             provider: invocation.provider,
             model: invocation.model,
             inputTokens: invocation.usage.inputTokens,

@@ -1,6 +1,7 @@
 import { generateKeyPairSync } from "node:crypto";
 import { providers, type Config } from "../../src/config.js";
 import { DEFAULT_ROUTE_CHAINS, UNVERIFIED_DATA_POLICY } from "../../src/model/provider-router.js";
+import { NO_TIER_CHAINS } from "../../src/agent/model/tiers.js";
 import { TEST_CREDIT_PLANS } from "./credit.js";
 import { TEST_SUPABASE_CONFIG } from "./tokens.js";
 
@@ -106,6 +107,7 @@ export function testConfig(overrides: Partial<Config> = {}): Config {
       providers.map((provider) => [provider, UNVERIFIED_DATA_POLICY]),
     ) as Config["dataPolicies"],
     credentials: [],
+    agentTiers: NO_TIER_CHAINS,
     ...overrides,
   };
 }

@@ -1,4 +1,5 @@
 import { isIP } from "node:net";
+import { parseTierChains, type TierChains } from "./agent/model/tiers.js";
 import { z } from "zod";
 import type { AcceptedJwtSecret, SupabaseJwtPolicy } from "./auth/token.js";
 import { entitlementSigningKeyFrom, type EntitlementSigningKey } from "./entitlement/claim.js";
@@ -592,6 +593,12 @@ export interface Config {
   /** Which providers serve which route, in order. `MODEL_ROUTE_*`, validated at startup. */
   readonly routeChains: Readonly<Record<ModelRoute, readonly Provider[]>>;
   /**
+   * Which models serve each V2 agent tier, `AGENT_MODEL_FAST|STANDARD|STRONG`, each a
+   * comma-separated `provider:model` chain (`agent/model/tiers.ts`). Until all three are set, V2
+   * tasks end at once with an honest "not available yet".
+   */
+  readonly agentTiers: TierChains;
+  /**
    * What this deployment has been told about each provider's retention and training terms.
    *
    * §16.5's "provider-specific retention/training configuration", and **the field SONNY-110's
@@ -864,6 +871,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       search: parseRouteChain("search", value.MODEL_ROUTE_SEARCH),
     },
     dataPolicies: providerDataPolicies(env),
+    agentTiers: parseTierChains(env),
     supabaseAnonKey: value.SUPABASE_ANON_KEY,
     supabaseServiceRoleKey: value.SUPABASE_SERVICE_ROLE_KEY,
     billingProvider: value.BILLING_PROVIDER,

@@ -229,7 +229,7 @@ export function makeAnthropicTextAdapter(
 
     const body = {
       model: settings.textModel,
-      max_tokens: settings.maxOutputTokens,
+      max_tokens: Math.min(settings.maxOutputTokens, request.maxOutputTokens ?? settings.maxOutputTokens),
       ...(system.length > 0 ? { system } : {}),
       messages,
       output_config: {

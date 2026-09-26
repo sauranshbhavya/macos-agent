@@ -175,6 +175,7 @@ export function makeCerebrasTextAdapter(
       ...(request.reasoningEffort === undefined
         ? {}
         : { reasoning_effort: request.reasoningEffort }),
+      ...(request.maxOutputTokens === undefined ? {} : { max_completion_tokens: request.maxOutputTokens }),
       // **There is deliberately no `store: false` on this body, and its absence is a decision
       // rather than the oversight it resembles** (SONNY-513). Both Responses adapters in this
       // directory carry one; this does not, for reasons that are about *this provider* rather than

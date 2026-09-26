@@ -1170,6 +1170,8 @@ struct ProductShellTests {
             // `taskUsageRecorder` through their own APIs; the properties themselves are the
             // collaborators, not the state.) A new dependency belongs here.
             "logStore", "currentTask", "audioRecorder", "permissionReadinessService",
+            // The temporary V2 kernel bridge: a collaborator, whose tasks keep their own ledgers.
+            "v2Kernel",
             // `voiceRecordingAutoStopTask` is a task handle beside `currentTask` above and for the
             // same reason (phase 11, the voice lane): it holds no local data, and the wipe guards on
             // `!isRunning` with nothing about a recording able to outlive one (SONNY-283's reasoning
