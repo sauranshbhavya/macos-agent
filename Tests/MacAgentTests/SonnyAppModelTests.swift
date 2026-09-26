@@ -37,21 +37,6 @@ private final class CountingCapability: Capability, @unchecked Sendable {
     }
 }
 
-/// A pasteboard a test copies to.
-@MainActor
-private final class TestPasteboard: PasteboardReading {
-    var changeCount = 0
-    private var text: String?
-
-    func copy(_ value: String) {
-        text = value
-        changeCount += 1
-    }
-
-    func typeIdentifiers() -> [String] { ["public.utf8-plain-text"] }
-    func stringValue() -> String? { text }
-}
-
 @MainActor
 private struct AppFixture {
     let gateway = ScriptedGateway()
@@ -133,6 +118,19 @@ struct SonnyAppModelTests {
     }
 
     @Test
+    func aFollowUpIsUsedByTheNextRequestAndOnlyThatOne() async throws {
+        let fixture = try AppFixture()
+        let earlier = TaskID()
+        fixture.model.followUp(on: earlier, goal: "Draft the invite")
+        fixture.model.composerText = "Now send it to Sam"
+        fixture.model.submitComposer()
+        let (_, body) = try await fixture.start()
+        #expect(body.origin == .followUp)
+        #expect(body.priorTask == earlier)
+        #expect(fixture.model.followUp == nil)
+    }
+
+    @Test
     func whatIsCopiedWhileAPrivateTaskRunsIsNeverKept() async throws {
         let fixture = try AppFixture()
         try fixture.stores.clipboardSettings.save(ClipboardHistorySettings(isEnabled: true))
@@ -155,19 +153,6 @@ struct SonnyAppModelTests {
         fixture.pasteboard.copy("the shopping list")
         fixture.model.pollClipboard()
         #expect(try fixture.stores.clipboard.loadAll().map(\.text) == ["the shopping list"])
-    }
-
-    @Test
-    func aFollowUpIsUsedByTheNextRequestAndOnlyThatOne() async throws {
-        let fixture = try AppFixture()
-        let earlier = TaskID()
-        fixture.model.followUp(on: earlier, goal: "Draft the invite")
-        fixture.model.composerText = "Now send it to Sam"
-        fixture.model.submitComposer()
-        let (_, body) = try await fixture.start()
-        #expect(body.origin == .followUp)
-        #expect(body.priorTask == earlier)
-        #expect(fixture.model.followUp == nil)
     }
 
     @Test
@@ -212,4 +197,19 @@ struct SonnyAppModelTests {
         _ = try await fixture.gateway.next("task.cancel")
         #expect(await eventually { fixture.model.controller.snapshot(task)?.phase == .cancelled })
     }
+}
+
+/// A pasteboard a test copies to.
+@MainActor
+private final class TestPasteboard: PasteboardReading {
+    var changeCount = 0
+    private var text: String?
+
+    func copy(_ value: String) {
+        text = value
+        changeCount += 1
+    }
+
+    func typeIdentifiers() -> [String] { ["public.utf8-plain-text"] }
+    func stringValue() -> String? { text }
 }
