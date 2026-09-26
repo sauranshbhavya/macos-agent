@@ -20,8 +20,14 @@ export type RobotsRules = readonly RobotsRule[];
 export const ALLOW_ALL: RobotsRules = [];
 export const DISALLOW_ALL: RobotsRules = [{ allow: false, pattern: "/" }];
 
-/** Longer patterns are cut here, so matching stays cheap whatever a site writes. */
+/** Longer patterns are cut here, and rules past the limit are dropped, so a site can't make one check expensive. */
 const PATTERN_LIMIT = 2_000;
+const RULE_LIMIT = 2_000;
+/**
+ * The most character comparisons one check may make. A check that would need more is answered
+ * "disallowed", so a hostile file and a very long address can't hold up the gateway.
+ */
+const MATCH_BUDGET = 2_000_000;
 
 export function parseRobots(text: string, tokens: readonly string[] = ROBOTS_PRODUCT_TOKENS): RobotsRules {
   const named: RobotsRule[] = [];
@@ -55,8 +61,8 @@ export function parseRobots(text: string, tokens: readonly string[] = ROBOTS_PRO
       // An empty Disallow allows everything, which is what no rule already means.
       if (value === "") continue;
       const rule = { allow: key === "allow", pattern: value.slice(0, PATTERN_LIMIT) };
-      if (groupNamesUs) named.push(rule);
-      if (groupIsAnyone) anyone.push(rule);
+      if (groupNamesUs && named.length < RULE_LIMIT) named.push(rule);
+      if (groupIsAnyone && anyone.length < RULE_LIMIT) anyone.push(rule);
     }
   }
   return sawNamedGroup ? named : anyone;
@@ -65,9 +71,12 @@ export function parseRobots(text: string, tokens: readonly string[] = ROBOTS_PRO
 export function robotsAllow(rules: RobotsRules, url: URL): boolean {
   if (url.pathname === "/robots.txt") return true;
   const target = url.pathname + url.search;
+  const budget = { left: MATCH_BUDGET };
   let best: RobotsRule | undefined;
   for (const rule of rules) {
-    if (!patternMatches(rule.pattern, target)) continue;
+    const matched = patternMatches(rule.pattern, target, budget);
+    if (budget.left < 0) return false;
+    if (!matched) continue;
     if (
       best === undefined ||
       rule.pattern.length > best.pattern.length ||
@@ -82,9 +91,10 @@ export function robotsAllow(rules: RobotsRules, url: URL): boolean {
 /**
  * Whether `target` starts with `pattern`, where `*` stands for any run of characters and a closing
  * `$` means the target ends there. A greedy match with one backtrack point: at most pattern length
- * times target length steps, however many `*`s there are.
+ * times target length steps, however many `*`s there are, and fewer than `budget.left`: the match
+ * stops once that runs out.
  */
-export function patternMatches(pattern: string, target: string): boolean {
+export function patternMatches(pattern: string, target: string, budget: { left: number } = { left: Infinity }): boolean {
   const anchored = pattern.endsWith("$");
   const glob = anchored ? pattern.slice(0, -1) : `${pattern}*`;
   let t = 0;
@@ -92,6 +102,8 @@ export function patternMatches(pattern: string, target: string): boolean {
   let star = -1;
   let resume = 0;
   while (t < target.length) {
+    budget.left -= 1;
+    if (budget.left < 0) return false;
     if (p < glob.length && glob[p] !== "*" && glob[p] === target[t]) {
       t += 1;
       p += 1;

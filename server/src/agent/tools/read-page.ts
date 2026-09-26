@@ -184,7 +184,8 @@ export function robotsChecker(options: { resolve?: AddressResolver; fetcher?: Pi
 
 /**
  * RFC 9309 §2.3.1: a robots.txt that isn't there (4xx) allows everything, and one that can't be
- * reached (5xx, a network error, a redirect to somewhere no page may live) disallows everything.
+ * reached (5xx, a network error, a redirect to somewhere no page may live, more than five
+ * redirects) disallows everything.
  */
 async function fetchRobots(
   page: URL,
@@ -226,8 +227,9 @@ async function fetchRobots(
     }
     return { rules: parseRobots(await readCapped(response, ROBOTS_BYTE_LIMIT)), reachable: true };
   }
-  // §2.3.1.2: past five redirects the file may be treated as unavailable.
-  return { rules: ALLOW_ALL, reachable: true };
+  // §2.3.1.2 lets a crawler treat this as a missing file. Sonny treats it as one it couldn't reach:
+  // the product rule is not to read what a site may have asked it not to.
+  return { rules: DISALLOW_ALL, reachable: false };
 }
 
 const sharedRobots = robotsChecker();

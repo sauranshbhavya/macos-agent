@@ -322,7 +322,9 @@ public struct RobotsTXTPolicy: Equatable, Sendable {
                 let agent = normalizeAgent(value)
                 if agent == "*" {
                     groupIsAnyone = true
-                } else if !agent.isEmpty, normalizedUserAgent.contains(agent) {
+                } else if !agent.isEmpty, productToken(agent) == productToken(normalizedUserAgent) {
+                    // The product token alone, versions stripped on both sides: a group naming
+                    // "1.0" or "s" is not a group naming Sonny.
                     groupNamesUs = true
                     sawNamedGroup = true
                 }
@@ -344,6 +346,10 @@ public struct RobotsTXTPolicy: Equatable, Sendable {
 
     private static func normalizeAgent(_ value: String) -> String {
         value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    private static func productToken(_ agent: String) -> Substring {
+        agent.split(separator: "/", maxSplits: 1, omittingEmptySubsequences: false).first ?? ""
     }
 }
 

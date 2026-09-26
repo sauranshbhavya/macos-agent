@@ -153,6 +153,13 @@ describe("robots.txt", () => {
     expect(Date.now() - started).toBeLessThan(1000);
   });
 
+  it("answers disallowed, quickly, when a hostile file and a long address would take too long", () => {
+    const hostile = `User-agent: *\n${Array.from({ length: 2_000 }, () => `Allow: /${"*a".repeat(900)}$`).join("\n")}\n`;
+    const started = Date.now();
+    expect(robotsAllow(parseRobots(hostile), new URL(`https://example.com/${"a".repeat(8_000)}b`))).toBe(false);
+    expect(Date.now() - started).toBeLessThan(2_000);
+  });
+
   /** A site whose robots.txt is a fresh answer from `robots` each time it is asked. */
   function site(robots: () => Response | Error, pages: string[] = []): PinnedFetcher {
     return (url) => {
@@ -179,6 +186,18 @@ describe("robots.txt", () => {
     expect(pages).toEqual([]);
     expect((await read("/public", fetcher)).text).toBe("the page");
     expect(pages).toEqual(["/public"]);
+  });
+
+  it("reads nothing when robots.txt redirects more than five times", async () => {
+    let hops = 0;
+    const fetcher: PinnedFetcher = (url) => {
+      if (url.pathname.startsWith("/robots")) {
+        hops += 1;
+        return Promise.resolve(new Response(null, { status: 301, headers: { location: `/robots-${hops}.txt` } }));
+      }
+      return Promise.resolve(page("<p>the page</p>"));
+    };
+    await expect(read("/x", fetcher)).rejects.toThrow("robots.txt");
   });
 
   it("reads everything when there is no robots.txt, and nothing when it can't be reached", async () => {
