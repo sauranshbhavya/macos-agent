@@ -286,3 +286,74 @@ struct MailKernelTests {
         #expect(fixture.mail.sent.isEmpty)
     }
 }
+
+/// The translation every adapter-backed operation makes: its contract fixtures' typed arguments
+/// become the step the V1 adapter reads. The adapters' own bodies are covered by their V1 tests.
+@Suite
+@MainActor
+struct AdapterArgumentTests {
+    static let fixtures = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        .appendingPathComponent("contracts/v2/fixtures/operations")
+
+    static func args(_ operation: String, _ kind: String) throws -> [[String: JSONValue]] {
+        let directory = fixtures.appendingPathComponent("\(operation).v1/\(kind)")
+        return try FileManager.default.contentsOfDirectory(atPath: directory.path).sorted().map { name in
+            try JSONDecoder().decode([String: JSONValue].self, from: Data(contentsOf: directory.appendingPathComponent(name)))
+        }
+    }
+
+    func adapterCapability(_ name: String) throws -> AdapterCapability {
+        let found = try CapabilityFixture().capabilities.capability(name: name, version: 1)
+        guard let adapter = found as? AdapterCapability else { throw KernelTestFailure("\(name) is not adapter-backed") }
+        return adapter
+    }
+
+    @Test(arguments: [
+        "switch_app", "open_url", "open_app_search", "play_media", "open_file", "reveal_in_finder",
+        "get_finder_selection", "find_largest_files", "zip_largest_files", "find_docx", "convert_docx_to_pdf",
+        "write_file", "rename", "read_calendar", "create_reminder", "run_shortcut", "save_snippet",
+        "check_permissions", "start_watching",
+    ])
+    func everyValidFixtureBecomesASteps(_ operation: String) throws {
+        let capability = try adapterCapability(operation)
+        for args in try Self.args(operation, "valid") {
+            let steps = try capability.steps(args)
+            #expect(!steps.isEmpty, "\(operation) produced no step for \(args)")
+            #expect(steps.allSatisfy { capability.adapter.metadata.operations.contains($0.operation) })
+        }
+    }
+
+    @Test
+    func theArgumentsLandInTheFieldsTheAdaptersRead() throws {
+        let rename = try adapterCapability("rename").steps(["path": .string("~/a.pdf"), "new_name": .string("b.pdf")])
+        #expect(rename.map(\.operation) == [.rename])
+        #expect(rename.first?.inputPath == "~/a.pdf")
+        #expect(rename.first?.newName == "b.pdf")
+
+        let zip = try adapterCapability("zip_largest_files").steps(["folder": .string("~/Downloads"), "count": .number(5), "output_path": .string("~/big.zip")])
+        #expect(zip.map(\.operation) == [.scanSelectLargestFiles, .createZip])
+        #expect(zip.first?.inputPath == "~/Downloads")
+        #expect(zip.first?.count == 5)
+        #expect(zip.last?.outputPath == "~/big.zip")
+
+        let reminder = try adapterCapability("create_reminder").steps(["title": .string("Call"), "time": .string("09:00"), "day": .string("Monday")])
+        #expect(reminder.first?.reminderTitle == "Call")
+        #expect(reminder.first?.reminderTime == "09:00")
+        #expect(reminder.first?.calendarDay == "Monday")
+
+        let media = try adapterCapability("play_media").steps(["provider": .string("apple_music"), "title": .string("Blue")])
+        #expect(media.first?.mediaProvider == .appleMusic)
+
+        let snippet = try adapterCapability("save_snippet").steps(["trigger": .string(";addr"), "text": .string("1 Loop")])
+        #expect(snippet.first?.searchQuery == ";addr")
+        #expect(snippet.first?.draftContent == "1 Loop")
+    }
+
+    @Test
+    func aMissingRequiredArgumentIsRefusedBeforeTheAdapterSeesIt() throws {
+        #expect(throws: CapabilityPrepareError.self) { try adapterCapability("rename").steps(["path": .string("~/a.pdf")]) }
+        #expect(throws: CapabilityPrepareError.self) { try adapterCapability("play_media").steps(["provider": .string("tidal"), "title": .string("x")]) }
+        #expect(throws: CapabilityPrepareError.self) { try adapterCapability("create_reminder").steps(["title": .string("x"), "minutes_from_now": .number(1.5)]) }
+    }
+}
